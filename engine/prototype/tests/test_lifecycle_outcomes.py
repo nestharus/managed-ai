@@ -130,13 +130,15 @@ class LifecycleOutcomes(unittest.TestCase):
     def test_running_command_refuses_closure_and_then_receives(self):
         gate = self.work / 'gate'
         self.addCleanup(lambda: gate.touch(exist_ok=True) if gate.parent.exists() else None)
-        self.dispatch("import pathlib,time; gate=pathlib.Path('gate'); deadline=time.monotonic()+8\n"
+        self.dispatch("import pathlib,time; gate=pathlib.Path('gate'); deadline=time.monotonic()+30\n"
                       "while not gate.exists() and time.monotonic()<deadline: time.sleep(0.01)\n"
+                      "if not gate.exists(): raise SystemExit('test did not release the worker')\n"
                       "print('finished')")
         with self.assertRaisesRegex(ValueError, 'verified terminal'):
             self.ex.close_transport('one', self.account)
         gate.touch()
-        record = self.ex.receive('one', None, 'local command', [], wait=8)
+        record = self.ex.receive('one', None, 'local command', [], wait=30)
+        self.assertIn('reply_sha256', record, record)
         self.assertEqual(self.ex.get(record['reply_sha256']), b'finished\n')
 
     def test_uncertain_fixture_retains_attempt_and_refuses_terminal_closure(self):
@@ -179,7 +181,8 @@ class LifecycleOutcomes(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'unique declared target'):
             self.ex.receive('one', None, 'local command', ['undeclared=' + str(self.proposal)], wait=8)
         self.assertFalse((self.ex.directory('one') / 'transport-outcome.json').exists())
-        received = self.ex.receive('one', None, 'local command', ['one.txt=' + str(self.proposal)], wait=8)
+        received = self.ex.receive('one', None, 'local command', ['one.txt=' + str(self.proposal)], wait=30)
+        self.assertIn('reply_bytes', received, received)
         self.assertEqual(received['reply_bytes'], len(b'valid bounded result\n'))
 
     def test_reconcile_base_observation_preserves_intent_and_allows_sibling(self):

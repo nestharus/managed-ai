@@ -252,9 +252,9 @@
       "sha256": "2fc36ffe69e25e69942e605cc936adf726bf7e2476543ec9c31280e832220814"
     },
     "prototype/agent-system/check_system.py": {
-      "bytes": 26085,
+      "bytes": 26140,
       "mode": 420,
-      "sha256": "3c6a880cf6de67f81fcdb4d181aa5345f090b35c6dd7f88da4921cc8f4c2ef98"
+      "sha256": "8f7e8af531c476dc3595bd72a752dbda8e41aeb79b802b5e92c9f5973d60c086"
     },
     "prototype/agent-system/check_turns.py": {
       "bytes": 7949,
@@ -1127,9 +1127,9 @@
       "sha256": "b4c6729b5f52aa1f7a3539f81c9bb23ecd55117c706d7a7644d105ac9ca4ced8"
     },
     "prototype/tests/test_lifecycle_outcomes.py": {
-      "bytes": 13983,
+      "bytes": 14197,
       "mode": 420,
-      "sha256": "e13d799147176d5ea9177e24321c416fdec5c262044b24f83b1ebdee929d6863"
+      "sha256": "1adb91cd4383c6618dd3c79407c4c49908fa7f95ffc58df4d17573572e28c020"
     },
     "prototype/tests/test_receiving_views.py": {
       "bytes": 9057,

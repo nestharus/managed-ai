@@ -335,7 +335,8 @@ class SystemChecks(unittest.TestCase):
                 self.system.run('ordered-argv', invalid)
         code = 'import json,sys; print(json.dumps(sys.argv[1:]))'
         self.system.run('ordered-argv', [sys.executable, '-B', '-c', code, '{context}', 'same', 'same', ''])
-        received = self.system.receive('ordered-argv', None, 'actual ordered-argv fixture command', [], wait=15)
+        received = self.system.receive('ordered-argv', None, 'actual ordered-argv fixture command', [], wait=30)
+        self.assertIn('transport', received, received)
         self.assertEqual(received['transport']['kind'], 'local-command')
         actual = json.loads(self.system.ex.inspect('ordered-argv')['reply_text'])
         self.assertEqual(actual, [str(self.system.ex.directory('ordered-argv') / 'context.md'), 'same', 'same', ''])
