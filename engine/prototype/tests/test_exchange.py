@@ -153,11 +153,17 @@ class ExchangeTests(unittest.TestCase):
         self.ex.publish('one', 'other.txt', 'second file')
         self.assertEqual((self.work/'other.txt').read_text(), 'new result')
 
-    def test_interrupted_publication_blocks_automatic_replay(self):
-        self.prepare(); self.received()
-        (self.ex.directory('one')/'publish-interrupted.json').write_text(json.dumps({'phase':'intent','path':'result.txt'}))
-        with self.assertRaisesRegex(ValueError, 'manual reconciliation'):
-            self.ex.publish('one', 'result.txt', 'attempt')
+    def test_existing_bound_publication_reports_already_attempted(self):
+        self.prepare()
+        returned = self.received()
+        published = self.ex.publish('one', 'result.txt', 'Use the reviewed proposal.')
+        self.assertEqual(published['phase'], 'complete')
+        self.assertEqual(published['return_sha256'], returned['return_sha256'])
+        before = self.ex.inspect('one')['publications']
+        with self.assertRaisesRegex(ValueError, '^publication already attempted; inspect its receipt, do not replay$'):
+            Exchange(self.root).publish('one', 'result.txt', 'Repeat the same target.')
+        self.assertEqual(self.ex.inspect('one')['publications'], before)
+        self.assertEqual((self.work / 'result.txt').read_bytes(), self.proposal.read_bytes())
 
     def test_dispatch_really_delivers_context_and_collects_return(self):
         self.prepare()
@@ -191,7 +197,9 @@ class ExchangeTests(unittest.TestCase):
         restarted = Exchange(self.root)
         view = restarted.inspect('one')
         self.assertIsNotNone(view['return'])
-        self.assertTrue(any(not r['unchanged'] for r in view['basis']))
+        self.assertIsNone(view['basis'])
+        self.assertTrue(view['basis_error'])
+        self.assertEqual(restarted.get(view['return']['reply_sha256']), self.reply.read_bytes())
         self.assertEqual(restarted.list()[0]['transport'], 'returned')
 
     def test_packet_and_runtime_bounds(self):

@@ -52,6 +52,31 @@ python3 -B engine/prototype/deploy.py --deployment deployments/work system statu
 
 Record the archive digest, Git commits, selected engine digest, and store and domain identities in the release record. Refer to the [package producer](engine/release/README.md) for maintenance of the canonical registrations.
 
+## Accept the exported edition
+
+Record the tested ZIP digest before promotion. Verify its actual membership, modes,
+body digests, component registrations and source pins. Extract the same bytes
+into a fresh receiving directory and follow the documented entries. For a guide
+that draws on an outside source, verify the owner's commit, path and body.
+For a retained store example, verify the full release digest, member and body.
+Publish the receiving result alongside the digest of the archive it qualifies.
+
+- For a full release, verify every intended store and deployment, the original
+  ordered selections and retained evidence. Use current deployment commands to
+  inspect a historical capture at the receiving location.
+- For a working release, exercise the selected task and dependency domains. If
+  the receiver creates the store, package the initialization entry, run it at the
+  extracted root and verify the resulting store there. An external pinned verifier
+  can qualify a working release whose selected domains omit AI-system-building.
+- For the focused operating edition, require one shared engine and the ordered
+  research and AI-system-building selections. From the extracted package root
+  run `python3 -B start_operation.py`, inspect `system view start` through its
+  deployment, and exercise the reading guides, source verifier and companion.
+  Check the companion with `--engine engine/prototype`.
+- For a domain release, qualify the actual export in the disposable compatible
+  receiver described below. Exercise its entry sources and tools at the declared
+  domain mount with its exact dependency commits.
+
 ## Export one domain
 
 From the domain's repository, set `domain` to its declared ID, `commit` to its reviewed commit and `archive` to the output ZIP.

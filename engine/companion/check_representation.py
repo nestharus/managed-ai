@@ -10,7 +10,8 @@ import unittest
 
 
 arguments = argparse.ArgumentParser()
-arguments.add_argument('--engine', required=True, type=Path)
+arguments.add_argument('--engine', required=True, type=Path, metavar='PROTOTYPE',
+                       help='native prototype directory, for example engine/prototype')
 args, rest = arguments.parse_known_args()
 sys.path.insert(0, str(args.engine.resolve() / 'agent-system'))
 from system import System

@@ -26,6 +26,8 @@ obligations and explicitly selected material still participate in native guards.
 
 ## Prepare the actual operation
 
+In a shared package, `PROTOTYPE` is `engine/prototype`. Both the adapter and `check_representation.py` take this directory.
+
 Call `representation.py --engine PROTOTYPE --root RUNTIME prepare --spec FILE`.
 The specification has format `g60-representation-operation/1` and these fields:
 

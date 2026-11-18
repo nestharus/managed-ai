@@ -285,7 +285,8 @@ class RepresentationOperations:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--engine', required=True, type=Path, help='complete unchanged native prototype root')
+    parser.add_argument('--engine', required=True, type=Path, metavar='PROTOTYPE',
+                        help='native prototype directory, for example engine/prototype')
     parser.add_argument('--root', required=True, type=Path)
     actions = parser.add_subparsers(dest='action', required=True)
     actions.add_parser('prepare').add_argument('--spec', required=True, type=Path)

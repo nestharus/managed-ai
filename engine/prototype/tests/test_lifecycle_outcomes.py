@@ -179,7 +179,7 @@ class LifecycleOutcomes(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'unique declared target'):
             self.ex.receive('one', None, 'local command', ['undeclared=' + str(self.proposal)], wait=8)
         self.assertFalse((self.ex.directory('one') / 'transport-outcome.json').exists())
-        received = self.ex.receive('one', None, 'local command', ['one.txt=' + str(self.proposal)])
+        received = self.ex.receive('one', None, 'local command', ['one.txt=' + str(self.proposal)], wait=8)
         self.assertEqual(received['reply_bytes'], len(b'valid bounded result\n'))
 
     def test_reconcile_base_observation_preserves_intent_and_allows_sibling(self):

@@ -52,16 +52,22 @@ class TransportReceiptTests(unittest.TestCase):
     def collect(self, code, packet='one', proposals=None):
         self.ex.dispatch(packet, [sys.executable, '-B', '-c', code, '{context}'])
         captured = {}
-        original = self.ex.transport.collect
+        original = self.ex.transport.collect_marked
 
         def observe(*args):
             data, view = original(*args)
             captured['view'] = deepcopy(view)
             return data, view
 
-        with patch.object(self.ex.transport, 'collect', side_effect=observe):
+        with patch.object(self.ex.transport, 'collect_marked', side_effect=observe):
             record = self.ex.receive(packet, None, 'actual test command', proposals or [], wait=8)
         return record, captured['view']
+
+    def test_completed_carrier_view_survives_receiving(self):
+        self.prepare()
+        record, collected = self.collect('print("normal contribution")')
+        self.assertEqual(self.ex.get(record['reply_sha256']), b'normal contribution\n')
+        self.assertEqual(self.ex.recover_transport('one'), collected)
 
     def rewrite_return(self, record, packet='one'):
         record['return_sha256'] = sha(encode({k: v for k, v in record.items() if k != 'return_sha256'}))

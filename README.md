@@ -26,6 +26,7 @@ The store guides explain source selection, current work and receiving. A deploym
 | --- | --- |
 | Understand the arrangement and its contracts | [Architecture](ARCHITECTURE.md) |
 | Read the general theory and method | [Theory](domains/research/sources/knowledge/research/current/overview.md), [method](domains/research/sources/knowledge/research/current/method.md) |
+| Browse maintained AI-system architecture, patterns, practices and tools | [AI-system catalogue](domains/ai-system-building/sources/CATALOGUE.json) |
 | Continue the general research | [Research store](stores/research/README.md) |
 | Continue the novel | [Novel store](stores/novel/README.md) |
 | Develop signals, domains and discovery systems | [Discovery store](stores/discovery/README.md), [current construction/discovery synthesis](stores/research/work/findings/field-frontiers.md) |

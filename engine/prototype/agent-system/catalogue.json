@@ -461,7 +461,7 @@
       "bytes": 15753,
       "body_role": "complete-current-source-reference",
       "availability": "available",
-      "purpose": "Use this operation when a requested contribution still needs constructive development. Use an understood adequate operation directly when it already supplies the contribution. The general method is [the current concise guide](../research/current/method.md); [G42](../research/patterns/g42-artifact-led-discovery.md), [G43](../research/patterns/g43-artifact-composition.md) and [G45](../research/patterns/g45-developing-dimensions.md) retain the complete mechanisms and their limits. These are semantic operations performed by the capable participant, supported by actual tools and materials. Their names are not an implemented autonomous planner.",
+      "purpose": "Use this operation when a requested contribution still needs constructive development. Use an understood adequate operation directly when it already supplies the contribution. The general method is [the current concise guide](../../domains/research/sources/knowledge/research/current/method.md); [G42](../../domains/research/sources/knowledge/research/patterns/g42-artifact-led-discovery.md), [G43](../../domains/research/sources/knowledge/research/patterns/g43-artifact-composition.md) and [G45](../../domains/research/sources/knowledge/research/patterns/g45-developing-dimensions.md) retain the complete mechanisms and their limits. These are semantic operations performed by the capable participant, supported by actual tools and materials. Their names are not an implemented autonomous planner.",
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
