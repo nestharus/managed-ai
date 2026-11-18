@@ -61,7 +61,7 @@
       "bytes": 49738,
       "body_role": "complete-current-source-reference",
       "availability": "available",
-      "purpose": "This application joins persistent goals and extensible JSON records to captured context, actual returns, guarded artifact adoption, attention feedback and a source-bound research catalogue. It is a small work environment for an existing capable agent. It does not provide a model, infer every relevant relationship or make alignment judgments automatically.",
+      "purpose": "This application joins persistent goals and extensible JSON records to captured context, actual returns, guarded artifact adoption, attention feedback and a source-bound research catalogue. It is a small work environment for an existing capable agent. It does not provide a model, infer every relevant relationship or make alignment judgments automatically. For a shared change, distinguish a received proposal from the current workspace target and the native owner's guarded adoption.",
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
