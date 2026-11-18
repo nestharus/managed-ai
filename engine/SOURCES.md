@@ -5,7 +5,7 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-7876ad26fe587946f43e"></a>
 ## prototype/agent-system/GUIDE.md
 
-[prototype/agent-system/GUIDE.md](prototype/agent-system/GUIDE.md) — 8207 bytes; SHA-256 `50dbb2754873926ecb275dd49bb52d65b7d789e14e3fbd86ddf7005499593928`.
+[prototype/agent-system/GUIDE.md](prototype/agent-system/GUIDE.md) — 8352 bytes; SHA-256 `b04d4c8ba0295df0af5a237213d5dab9fd1b90c53c1aa40f2cbd19eadebc9711`.
 
 <a id="source-a5cc137786c3ed585692"></a>
 ## prototype/agent-system/COMPOSITION.md
