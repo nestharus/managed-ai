@@ -1,0 +1,40 @@
+{
+  "schema": "peer-harness-config/1",
+  "run_id": "declared-useful-construction",
+  "brief": "Replace this brief with the actual useful whole and receiving conditions. The two owner inputs name independently useful responsibilities; they may derive their joining agreement through actual work.",
+  "workers": [
+    {
+      "owner": "observer",
+      "command": [
+        "/__PYTHON__",
+        "/__PRODUCT_ROOT__/peer_workbench.py",
+        "--config",
+        "/__WORK_ROOT__/owner-config.json"
+      ],
+      "input": {
+        "commission": "Replace with the actual observation-owner contribution."
+      }
+    },
+    {
+      "owner": "receiver",
+      "command": [
+        "/__PYTHON__",
+        "/__PRODUCT_ROOT__/peer_workbench.py",
+        "--config",
+        "/__WORK_ROOT__/owner-config.json"
+      ],
+      "input": {
+        "commission": "Replace with the actual receiving-owner contribution."
+      }
+    }
+  ],
+  "limits": {
+    "parallelism": 2,
+    "max_turns": 12,
+    "max_output_bytes": 4194304,
+    "max_artifact_bytes": 2097152,
+    "wall_seconds": 3600,
+    "turn_seconds": 1200,
+    "terminate_grace_seconds": 2
+  }
+}

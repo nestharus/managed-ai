@@ -1,0 +1,21 @@
+{
+  "run_id": "mailbox-example-01",
+  "controller_dir": "/__PRODUCT_ROOT__/controller",
+  "corpus_root": "/__CORPUS_ROOT__",
+  "workspace": "/__WORK_ROOT__/workspace",
+  "state_dir": "/__WORK_ROOT__/state",
+  "task": "Write NOTES.md describing the supplied launch-note source, then report its relative path.",
+  "requirements": "NOTES.md must state both rules in launch-note. Model completion alone does not accept the output.",
+  "sources": {
+    "launch-note": "Use one cooperative local owner per occurrence. Retain the state and relevant workspace across a restart."
+  },
+  "obligations": [],
+  "max_steps": 12,
+  "max_cache_bytes": 65536,
+  "model": {
+    "kind": "mailbox",
+    "directory": "/__WORK_ROOT__/state/model",
+    "timeout_seconds": 900
+  },
+  "receivers": {}
+}

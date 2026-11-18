@@ -1,0 +1,28 @@
+{
+  "tag": {
+    "owner_file": "owner.txt",
+    "source": "Fictional dispatch owner",
+    "source_sha256": "a7abfb2a5b6a865b4cd84535586655dfb61d3993ff37a8fb8bef9e775ef0f81d",
+    "lines": [
+      1,
+      1
+    ],
+    "exact_lines_sha256": "df6f25e83a23371dc6051654292a82d24c62d800ca0fea2781bafb40f5d395d2",
+    "unit": "each physical parcel",
+    "contrast": "hold unreadable versus load all blue parcels",
+    "interpretation": "The load decision applies to each physical tag independently."
+  },
+  "destination": {
+    "owner_file": "owner.txt",
+    "source": "Fictional dispatch owner",
+    "source_sha256": "a7abfb2a5b6a865b4cd84535586655dfb61d3993ff37a8fb8bef9e775ef0f81d",
+    "lines": [
+      2,
+      2
+    ],
+    "exact_lines_sha256": "20b9dd16d0c44f8cdb0f706c754ddc9493a8546a130a201453cd0441688b2ba3",
+    "unit": "eligible parcel destination",
+    "contrast": "north versus east vehicle",
+    "interpretation": "Choose the destination after the eligibility check."
+  }
+}

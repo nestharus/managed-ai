@@ -1,0 +1,15 @@
+# Construct a temporal model for a new observer
+
+Use this operation when an existing finite linear consumer needs the model of a new polynomial observation. Supply known exact rational response models with a common action interpretation, plus a finite expression. Receive a model of that expression for every word in the same interface.
+
+[Product and API](product/README.md) · [Implementation](product/observer_models.py) · [Research argument and actual use](../../evidence/constructing-observer-models.md) · [Exact occurrence](../../state/observer-model-records.md).
+
+From this directory:
+
+```bash
+python -B product/observer_models.py --input product/example-input.json --output compiled.json
+```
+
+The bundled input is the actual arbitrary-basis model learned in the recorded increment/negate example. The square expression is authored input. The output is the generated temporal model; a later consumer still supplies its own useful question and source correspondence. For one requested value, direct leaf evaluation and arithmetic may already complete the duty.
+
+Python 3.10 or later and the standard library suffice for this compiler. The optional G22 adapter consumes a separately supplied original G22 module; the exact occurrence includes its complete unchanged import chain and the performed consumer script. This research operation is separate from Prototype 0.4.0.

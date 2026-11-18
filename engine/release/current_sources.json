@@ -1,0 +1,287 @@
+{
+  "format": "g60-current-consumer-selection/1",
+  "edition": "managed-ai-shared-engine-1",
+  "purpose": "One shared domain-neutral engine with per-store domain, schema and source selection.",
+  "bodies": [
+    {
+      "id": "prototype/agent-system/GUIDE.md",
+      "source": "prototype/agent-system/GUIDE.md",
+      "link_base": "prototype/agent-system/GUIDE.md",
+      "presentation": "prototype/agent-system/GUIDE.md",
+      "kind": "guide",
+      "sha256": "50dbb2754873926ecb275dd49bb52d65b7d789e14e3fbd86ddf7005499593928",
+      "bytes": 8207,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/agent-system/COMPOSITION.md",
+      "source": "prototype/agent-system/COMPOSITION.md",
+      "link_base": "prototype/agent-system/COMPOSITION.md",
+      "presentation": "prototype/agent-system/COMPOSITION.md",
+      "kind": "guide",
+      "sha256": "8c7d656be3fb7f6871fee1244b889c2d92dd7985361c4148769c5ebfaa61553f",
+      "bytes": 19061,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/agent-system/README.md",
+      "source": "prototype/agent-system/README.md",
+      "link_base": "prototype/agent-system/README.md",
+      "presentation": "prototype/agent-system/README.md",
+      "kind": "guide",
+      "sha256": "52f2d468fcd5fe22a07e939a669de74dd6a40666f1f21e79e5fd4dad458cf3b7",
+      "bytes": 49738,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/docs/attention.md",
+      "source": "prototype/docs/attention.md",
+      "link_base": "prototype/docs/attention.md",
+      "presentation": "prototype/docs/attention.md",
+      "kind": "guide",
+      "sha256": "65cf8ecec459b2b24f35e7c1a64a48937787de974b046a8795a1d3674297fa24",
+      "bytes": 14211,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/collective-work/README.md",
+      "source": "prototype/collective-work/README.md",
+      "link_base": "prototype/collective-work/README.md",
+      "presentation": "prototype/collective-work/README.md",
+      "kind": "guide",
+      "sha256": "20b6dffeb7fbc8f4fbe8f828175fc42b022419e5e59c5f233bfd5930d94c51ee",
+      "bytes": 34305,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/knowledge-system/README.md",
+      "source": "prototype/knowledge-system/README.md",
+      "link_base": "prototype/knowledge-system/README.md",
+      "presentation": "prototype/knowledge-system/README.md",
+      "kind": "guide",
+      "sha256": "401b764f1cea8d9ac63f85e9de285d3b87fea47c4a68f22d190912bde46ad1f9",
+      "bytes": 8371,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/knowledge-system/CONTRACT.md",
+      "source": "prototype/knowledge-system/CONTRACT.md",
+      "link_base": "prototype/knowledge-system/CONTRACT.md",
+      "presentation": "prototype/knowledge-system/CONTRACT.md",
+      "kind": "guide",
+      "sha256": "fada3e9ddd1f512c1fbd11a81ce5c85c9ef3130193b08b6a55d6ff18af711121",
+      "bytes": 23819,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/knowledge-system/MIGRATION.md",
+      "source": "prototype/knowledge-system/MIGRATION.md",
+      "link_base": "prototype/knowledge-system/MIGRATION.md",
+      "presentation": "prototype/knowledge-system/MIGRATION.md",
+      "kind": "guide",
+      "sha256": "c4d186c61c7db6cd6aed46e133663b3d2e76c83967ecee013f7a44300ad1c605",
+      "bytes": 5931,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/knowledge-system/RESEARCH.md",
+      "source": "prototype/knowledge-system/RESEARCH.md",
+      "link_base": "prototype/knowledge-system/RESEARCH.md",
+      "presentation": "prototype/knowledge-system/RESEARCH.md",
+      "kind": "guide",
+      "sha256": "14f47be0806906c0c4cdc7799e343aedf35b44fe4e4a76a2e9557236e4b01570",
+      "bytes": 15081,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "MODEL-BOUND-COMPOSITION.md",
+      "source": "MODEL-BOUND-COMPOSITION.md",
+      "link_base": "MODEL-BOUND-COMPOSITION.md",
+      "presentation": "MODEL-BOUND-COMPOSITION.md",
+      "kind": "guide",
+      "sha256": "f750de811cb7a81e371dc316a80b2e7ce7208ffea66c7cb67421561f172b508d",
+      "bytes": 9673,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "CLI-FIELD-REFERENCE.md",
+      "source": "CLI-FIELD-REFERENCE.md",
+      "link_base": "CLI-FIELD-REFERENCE.md",
+      "presentation": "CLI-FIELD-REFERENCE.md",
+      "kind": "guide",
+      "sha256": "880965eca5a11e0c1ba52ee57f9362060b9aeaa07f8bf2eda6286ca3a5293152",
+      "bytes": 19777,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "host/OPERATION.md",
+      "source": "host/OPERATION.md",
+      "link_base": "host/OPERATION.md",
+      "presentation": "host/OPERATION.md",
+      "kind": "guide",
+      "sha256": "4d27f5055de9192c480ebf1a1ce4cec4c918fe28b2e7fdf6906a7cec12f7c632",
+      "bytes": 7538,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/patterns/continuous-consolidation/README.md",
+      "source": "prototype/patterns/continuous-consolidation/README.md",
+      "link_base": "prototype/patterns/continuous-consolidation/README.md",
+      "presentation": "prototype/patterns/continuous-consolidation/README.md",
+      "kind": "guide",
+      "sha256": "9418cd013feed4c144390ef433fa544d59d7987ac252aba3ad7b841d5f47c3c2",
+      "bytes": 7132,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/patterns/continuous-consolidation/inventory.md",
+      "source": "prototype/patterns/continuous-consolidation/inventory.md",
+      "link_base": "prototype/patterns/continuous-consolidation/inventory.md",
+      "presentation": "prototype/patterns/continuous-consolidation/inventory.md",
+      "kind": "guide",
+      "sha256": "94c9670b79ba7566caecb466d99c8fb92f4e01d13050882d2272ffc28410c470",
+      "bytes": 10629,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/patterns/continuous-consolidation/prompts/branch.md",
+      "source": "prototype/patterns/continuous-consolidation/prompts/branch.md",
+      "link_base": "prototype/patterns/continuous-consolidation/prompts/branch.md",
+      "presentation": "prototype/patterns/continuous-consolidation/prompts/branch.md",
+      "kind": "guide",
+      "sha256": "948ef150b4b9fd23eb69271d137f2b0b392a5d5ea1a0944f934e25a03e1b8afb",
+      "bytes": 2041,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/patterns/continuous-consolidation/prompts/coordinator.md",
+      "source": "prototype/patterns/continuous-consolidation/prompts/coordinator.md",
+      "link_base": "prototype/patterns/continuous-consolidation/prompts/coordinator.md",
+      "presentation": "prototype/patterns/continuous-consolidation/prompts/coordinator.md",
+      "kind": "guide",
+      "sha256": "3ab5e4d378b8fcadbda581bcc1d1e28c757c059b70aca68f95d3ac65875a64bb",
+      "bytes": 4034,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/patterns/continuous-consolidation/prompts/integrator.md",
+      "source": "prototype/patterns/continuous-consolidation/prompts/integrator.md",
+      "link_base": "prototype/patterns/continuous-consolidation/prompts/integrator.md",
+      "presentation": "prototype/patterns/continuous-consolidation/prompts/integrator.md",
+      "kind": "guide",
+      "sha256": "6ac829ef43189ecffd8ae7882268bc121dc99ff697820c10037c79eb4022f48b",
+      "bytes": 2598,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/patterns/continuous-consolidation/prompts/proposer.md",
+      "source": "prototype/patterns/continuous-consolidation/prompts/proposer.md",
+      "link_base": "prototype/patterns/continuous-consolidation/prompts/proposer.md",
+      "presentation": "prototype/patterns/continuous-consolidation/prompts/proposer.md",
+      "kind": "guide",
+      "sha256": "857cdf11a1d5b2f3cf81caf41b8faa4eef459f2c242fc9ce2b39d8c5ca84bc76",
+      "bytes": 2072,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/patterns/continuous-consolidation/prompts/qa.md",
+      "source": "prototype/patterns/continuous-consolidation/prompts/qa.md",
+      "link_base": "prototype/patterns/continuous-consolidation/prompts/qa.md",
+      "presentation": "prototype/patterns/continuous-consolidation/prompts/qa.md",
+      "kind": "guide",
+      "sha256": "2317943324c8c3b6e6aa5330911274eec6345683feb7d70d37b587d884629a12",
+      "bytes": 1576,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/patterns/continuous-consolidation/prompts/review.md",
+      "source": "prototype/patterns/continuous-consolidation/prompts/review.md",
+      "link_base": "prototype/patterns/continuous-consolidation/prompts/review.md",
+      "presentation": "prototype/patterns/continuous-consolidation/prompts/review.md",
+      "kind": "guide",
+      "sha256": "1e4f9b9d3adf964705caf8f39b7b9994fd8a888e663889ca03ff15f37bf0027d",
+      "bytes": 1814,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "prototype/patterns/continuous-consolidation/prompts/root-build.md",
+      "source": "prototype/patterns/continuous-consolidation/prompts/root-build.md",
+      "link_base": "prototype/patterns/continuous-consolidation/prompts/root-build.md",
+      "presentation": "prototype/patterns/continuous-consolidation/prompts/root-build.md",
+      "kind": "guide",
+      "sha256": "1a4b58f465787cf33aeeebfcf99ad74910bca717df46f165023aba5be3b33c33",
+      "bytes": 1918,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "host/README.md",
+      "source": "host/README.md",
+      "link_base": "host/README.md",
+      "presentation": "host/README.md",
+      "kind": "guide",
+      "sha256": "d436ccbe5ead43052a0f6d894e365b45e29626a5d05903de085bae77824c9f2c",
+      "bytes": 23916,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "host/CONSTRUCTION.md",
+      "source": "host/CONSTRUCTION.md",
+      "link_base": "host/CONSTRUCTION.md",
+      "presentation": "host/CONSTRUCTION.md",
+      "kind": "guide",
+      "sha256": "f3504e4a51c5f6068dd25c5a8aeb1f1c37876a7cfaade1f5fbf370c4013e23ae",
+      "bytes": 15753,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "host/MATERIAL-MAINTENANCE.md",
+      "source": "host/MATERIAL-MAINTENANCE.md",
+      "link_base": "host/MATERIAL-MAINTENANCE.md",
+      "presentation": "host/MATERIAL-MAINTENANCE.md",
+      "kind": "guide",
+      "sha256": "fe9f900aad063189e7912e9c1b1f4245b6e9c4349f65ef9e16c326ee4f4b3263",
+      "bytes": 22854,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "host/RELATION-COMPOSITION.md",
+      "source": "host/RELATION-COMPOSITION.md",
+      "link_base": "host/RELATION-COMPOSITION.md",
+      "presentation": "host/RELATION-COMPOSITION.md",
+      "kind": "guide",
+      "sha256": "d528f5080fe7288addb6d11f997a782eeb9b6ca1691878c6d99a9c4ba2f45f63",
+      "bytes": 6974,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "host/PEER-COMMUNICATION.md",
+      "source": "host/PEER-COMMUNICATION.md",
+      "link_base": "host/PEER-COMMUNICATION.md",
+      "presentation": "host/PEER-COMMUNICATION.md",
+      "kind": "guide",
+      "sha256": "2b7373ebd791979e5aa795d80ad35e93d0541e09f09e69fec96ce03004b5a5d0",
+      "bytes": 2448,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    },
+    {
+      "id": "INSTANCES.md",
+      "source": "INSTANCES.md",
+      "link_base": "INSTANCES.md",
+      "presentation": "INSTANCES.md",
+      "kind": "guide",
+      "sha256": "540b97fae017f08b163bb397b7f5066c22ee4cdf489c2e756966e879533e82da",
+      "bytes": 12125,
+      "provenance": "Canonical current shared-engine, store, schema and domain contract."
+    },
+    {
+      "id": "host/SIGNAL-FIELD.md",
+      "source": "host/SIGNAL-FIELD.md",
+      "link_base": "host/SIGNAL-FIELD.md",
+      "presentation": "host/SIGNAL-FIELD.md",
+      "kind": "guide",
+      "sha256": "d7529ded83c529851d450987a440394601af5748a782cb5664877efa8dc7f1ad",
+      "bytes": 17378,
+      "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
+    }
+  ]
+}

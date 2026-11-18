@@ -1,0 +1,2 @@
+Check each parcel tag before loading. Hold unreadable tags.
+Load eligible parcels in the north vehicle.

@@ -1,0 +1,307 @@
+"""Native record heads, revision checks, basis and retained history."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from continuation_support.ownership import packet_id, relative_path
+from continuation_support.storage import MAX_BYTES, atomic_bytes, encode, now, read_bytes, sha
+from feedback import KIND as FEEDBACK_KIND
+from native_runtime.head_receipts import HeadReceipts, MIN_BYTES
+from native_runtime.identities import digest, exact_fields, identity, record_identity, require, strict_json
+from native_runtime.inputs import accounted_closure, fields, integer, read_input, strings, text
+
+
+class RecordStore:
+    def __init__(self, exchange, record_format, envelope):
+        self.ex = exchange
+        self.work = exchange.workspace
+        self.objects = exchange.objects
+        self.receipts = HeadReceipts(exchange.root)
+        self.format = record_format
+        self.envelope = envelope
+        self.payload_validator = None
+        self.retention_policy = 'append-history'
+
+    @staticmethod
+    def goal_record(goal: dict) -> dict:
+        if 'id' not in goal:
+            goal = {'id': 'goal', 'kind': 'goal', 'content': goal}
+        if goal.get('id') != 'goal' or goal.get('kind') != 'goal':
+            raise ValueError('the initial record must have id=goal and kind=goal')
+        if not isinstance(goal.get('content'), dict):
+            raise ValueError('goal content must be an object')
+        text(goal['content'].get('contribution'), 'goal contribution')
+        return goal
+
+    def path(self, ident: str) -> Path:
+        return self.ex.path('records/' + packet_id(ident) + '.json')
+
+    def material(self, ident: str) -> str:
+        return self.path(ident).relative_to(self.work).as_posix()
+
+    def size(self, ident: str) -> int:
+        return self.path(ident).stat().st_size
+
+    def show(self, ident: str) -> dict:
+        return self.read(ident)[0]
+
+    def read(self, ident: str, *, byte_limit: int | None = None) -> tuple[dict, bytes]:
+        record, raw = read_input(self.path(ident), byte_limit=byte_limit)
+        if record.get('id') != ident or record.get('format') != self.format:
+            raise ValueError('record identity or format changed')
+        if record.get('sha256') != sha(encode({k: v for k, v in record.items() if k != 'sha256'})):
+            raise ValueError('record digest changed')
+        return record, raw
+
+    def scoped_heads(self, needs_body):
+        """Yield validated scope/status fields and complete records for the nominated roles."""
+        for ident in self.ids():
+            path = self.path(ident)
+            projection = self.receipts.projection(path, ident, self.format)
+            if projection is not None:
+                summary, raw_digest = projection
+                if not needs_body(ident, summary['kind']) and self.receipts.matches(path, raw_digest):
+                    yield summary
+                    continue
+            yield self.show(ident)
+
+    def index_scope(self, ident):
+        path = self.path(ident)
+        if self.size(ident) < MIN_BYTES:
+            return {'id': ident, 'indexed': False, 'reason': 'below size threshold'}
+        record, raw = self.read(ident)
+        return {'id': ident, 'revision': record['revision'],
+                'indexed': self.receipts.issue(path, record, raw)}
+
+    def all(self) -> list[dict]:
+        return [self.show(ident) for ident in self.ids()]
+
+    def ids(self):
+        return [p.stem for p in sorted((self.work / 'records').glob('*.json'))]
+
+    def _obligations(self, content: dict, previous: dict | None):
+        rows = content.get('obligations', [])
+        if not isinstance(rows, list):
+            raise ValueError('goal obligations must be a list of {id, text, disposition?} objects')
+        merged = {r['id']: r for r in (previous or {}).get('content', {}).get('obligations', [])}
+        seen = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError('each goal obligation must be an object')
+            ident = packet_id(row.get('id', ''))
+            if ident in seen:
+                raise ValueError('duplicate goal obligation')
+            seen.add(ident)
+            text(row.get('text'), 'obligation text')
+            disposition = text(row.get('disposition', 'open'), 'obligation disposition')
+            if disposition in {'fulfilled', 'released'}:
+                text(row.get('account'), 'closed obligation account')
+            merged[ident] = dict(row, disposition=disposition)
+        content['obligations'] = list(merged.values())
+
+    def _normalize_record(self, record: dict, previous: dict | None, *, retain_basis=True) -> dict:
+        json.dumps(record, allow_nan=False)
+        fields(record, {'id', 'kind', 'content', 'relations', 'basis', 'active'}, 'record')
+        ident, kind = packet_id(record.get('id', '')), text(record.get('kind'), 'record kind')
+        if 'content' not in record:
+            raise ValueError('record content is required')
+        active = record.get('active', True)
+        if type(active) is not bool:
+            raise ValueError('active must be Boolean navigation metadata')
+        relations = record.get('relations', [])
+        if not isinstance(relations, list):
+            raise ValueError('relations must be a list of objects')
+        for relation in relations:
+            if not isinstance(relation, dict):
+                raise ValueError('relation must be an object')
+            text(relation.get('relation'), 'relation label')
+            text(relation.get('target'), 'relation target')
+        content = record['content']
+        if kind == 'obligation' and isinstance(content, dict) and content.get('disposition') in ('fulfilled', 'released'):
+            text(content.get('account'), 'closed obligation account')
+        prior_owed = previous and previous['kind'] == 'obligation' and not accounted_closure(previous['content'])
+        owed = kind == 'obligation' and not accounted_closure(content)
+        if prior_owed and kind != 'obligation':
+            raise ValueError('account for the owed obligation before reclassification')
+        if ident == 'goal':
+            self.goal_record(record)
+            if not active:
+                raise ValueError('the current goal cannot be hidden by navigation metadata')
+            content = dict(content)
+            self._obligations(content, previous)
+        if prior_owed and owed and 'basis' not in record:
+            basis = previous['basis']
+        else:
+            paths = map(relative_path, strings(record.get('basis', []), 'record basis'))
+            basis = [self.ex.snapshot(path, optional=True) if retain_basis else self._preview_basis(path)
+                     for path in paths]
+        if prior_owed and owed:
+            current = {r['path']: r['sha256'] for r in basis}
+            if any(r['path'] not in current or current[r['path']] != r['sha256'] for r in previous['basis']):
+                change = content.get('basis_change') if isinstance(content, dict) else None
+                if (not isinstance(change, dict) or type(change.get('from_revision')) is not int or
+                        change['from_revision'] != previous['revision']):
+                    raise ValueError('changed obligation basis requires an account for the previous revision')
+                text(change.get('account'), 'account for changed obligation basis')
+        return {'id': ident, 'kind': kind, 'content': content, 'relations': relations,
+                'basis': basis, 'active': active}
+
+    def _preview_basis(self, source: str) -> dict:
+        path = self.ex.path(source)
+        if not path.exists():
+            return {'path': source, 'sha256': None, 'bytes': 0}
+        raw = read_bytes(path)
+        digest = sha(raw)
+        if (self.objects.directory / digest).exists() and self.objects.read(digest) != raw:
+            raise ValueError('content object changed')
+        return {'path': source, 'sha256': digest, 'bytes': len(raw)}
+
+    def validate_import(self, record: dict) -> None:
+        """Qualify a new write or a matching current head without retaining evidence."""
+        path = self.path(record['id'])
+        if not path.exists():
+            self._prepare_write(record, None, None, retain_basis=False)
+            return
+        previous = self.show(record['id'])
+        self._validate_payload(record, previous)
+        normalized = self._normalize_record(record, previous, retain_basis=False)
+        if normalized != {key: previous[key] for key in normalized}:
+            raise ValueError('current import conflicts with existing record: ' + record['id'])
+
+    def put(self, record: dict, expected: int) -> dict:
+        return self._replace(record, expected)
+
+    def put_feedback(self, record: dict, expected: int) -> dict:
+        return self._replace(record, expected, feedback_write=True)
+
+    def put_information(self, record: dict, expected: int, mode: str) -> dict:
+        return self._replace(record, expected, information_mode=mode)
+
+    def _replace(self, record: dict, expected: int, *, information_mode: str | None = None,
+                 feedback_write: bool = False, observation_write: bool = False) -> dict:
+        integer(expected, 'expected revision')
+        path = self.path(record.get('id', ''))
+        previous, previous_raw = self.read(record['id']) if path.exists() else (None, None)
+        revision = previous['revision'] if previous else 0
+        if revision != expected:
+            raise ValueError(f'record revision conflict: expected {expected}, current {revision}')
+        body, raw = self._prepare_write(record, previous, previous_raw, information_mode=information_mode,
+                                        feedback_write=feedback_write, observation_write=observation_write)
+        old = body['previous_object']
+        if old is not None:
+            if len(previous_raw) <= MAX_BYTES:
+                self.objects.put(previous_raw)
+            else:
+                # Preserve a verified legacy head larger than today's transport limit.
+                self.objects.put_retained(previous_raw, max_bytes=len(previous_raw))
+        atomic_bytes(path, raw)
+        self.receipts.issue(path, body, raw)
+        return {'id': body['id'], 'revision': body['revision'], 'sha256': body['sha256'],
+                'path': str(path), 'previous_object': old}
+
+    def _validate_payload(self, record, previous, *, information_mode=None):
+        self.envelope.validate_write(record, previous, mode=information_mode)
+        if self.payload_validator is not None:
+            self.payload_validator(record, previous)
+
+    def _prepare_write(self, record, previous, previous_raw, *, information_mode=None,
+                       feedback_write=False, observation_write=False, retain_basis=True):
+        if (record.get('kind') == FEEDBACK_KIND or (previous and previous['kind'] == FEEDBACK_KIND)) and not feedback_write:
+            raise ValueError('feedback records must be changed through feedback operations')
+        if (record.get('kind') == 'source-observation' or (previous and previous['kind'] == 'source-observation')) and not observation_write:
+            raise ValueError('cross-instance observations must be received through transfer operations')
+        self._validate_payload(record, previous, information_mode=information_mode)
+        normalized = self._normalize_record(record, previous, retain_basis=retain_basis)
+        revision = previous['revision'] if previous else 0
+        if normalized['kind'] == FEEDBACK_KIND and self.retention_policy == 'current-use':
+            if any(row.get('route') not in {'work', 'hold'} for row in normalized['content'].get('carried_returns', [])):
+                raise ValueError('resolve legacy carried feedback dispositions before ending predecessor retention')
+        retain = self.retention_policy == 'append-history'
+        old = sha(previous_raw) if previous_raw is not None and retain else None
+        body = {'format': self.format, **normalized, 'revision': revision + 1,
+                'previous_object': old, 'updated_at': now(),
+                'retention': {'policy': self.retention_policy,
+                              'retained_from_revision': (previous.get('retention', {}).get('retained_from_revision', 1)
+                                                         if previous and retain else revision + 1)}}
+        body['sha256'] = sha(encode(body))
+        raw = encode(body)
+        if len(raw) > MAX_BYTES:
+            raise ValueError(f'complete encoded record exceeds {MAX_BYTES} bytes; reduce the record or nominate external evidence')
+        return body, raw
+
+    def basis_changes(self, record: dict) -> list[dict]:
+        changes = []
+        for item in record['basis']:
+            path = self.ex.path(item['path'])
+            current = sha(path.read_bytes()) if path.is_file() else None
+            if current != item['sha256']:
+                changes.append({'path': item['path'], 'captured': item['sha256'], 'current': current})
+        return changes
+
+    def head(self, wanted: dict) -> dict:
+        identity(wanted)
+        current = self.show(wanted['id'])
+        require(record_identity(current) == wanted, 'information source or contract revision conflict')
+        return current
+
+    def pin(self, record: dict) -> dict:
+        data = self.path(record['id']).read_bytes()
+        parsed = strict_json(data)
+        require(parsed == record, 'information record changed during pinning')
+        return dict(record_identity(record), object=self.objects.put(data))
+
+    def _historical_object(self, ident, revision, key):
+        # Older releases could retain larger heads than today's transport maximum.
+        digest(key, 'retained record object')
+        record = strict_json(self.objects.read(key, retained=True))
+        require(record.get('format') == self.format and record.get('id') == ident and
+                type(record.get('revision')) is int and record['revision'] == revision,
+                'broken record lineage')
+        require(record.get('sha256') == sha(encode({k: v for k, v in record.items() if k != 'sha256'})),
+                'retained record digest changed')
+        return record
+
+    def history_pages(self, ident, *, limit=8, cursor=None):
+        """Yield descending verified pages. Reauthenticate the prefix once on external restart."""
+        require(type(limit) is int and 1 <= limit <= 32, 'history page limit must be 1..32')
+        current, raw = self.read(ident)
+        head = dict(record_identity(current), object=sha(raw))
+        identity(head, object_pin=True)
+        if cursor is not None:
+            exact_fields(cursor, {'head', 'next_revision', 'next_object'}, set(), 'history cursor')
+            captured = identity(cursor['head'], object_pin=True)
+            require(captured['id'] == ident, 'history cursor record changed')
+            target = cursor['next_revision']
+            require(type(target) is int and 1 <= target < captured['revision'], 'invalid cursor revision')
+            digest(cursor['next_object'], 'cursor next object')
+            if head != captured:
+                current = self._historical_object(ident, captured['revision'], captured['object'])
+                require(record_identity(current) == record_identity(captured),
+                        'history cursor head changed')
+            head = captured
+            while current['revision'] > target:
+                key = current['previous_object']
+                if current['revision'] == target + 1:
+                    require(key == cursor['next_object'], 'history cursor is off the captured chain')
+                current = self._historical_object(ident, current['revision'] - 1, key)
+        page = []
+        while True:
+            revision = current['revision']
+            key = current['previous_object']
+            boundary = key is None and revision > 1 and current.get('retention', {}).get('policy') == 'current-use'
+            if revision == 1:
+                require(key is None, 'unexpected predecessor on first revision')
+            elif not boundary:
+                digest(key, 'record predecessor')
+            page.append(current)
+            if len(page) == limit or revision == 1 or boundary:
+                continuation = None if revision == 1 or boundary else dict(head=head, next_revision=revision - 1, next_object=key)
+                yield dict(head=head, records=page, cursor=continuation, complete=revision == 1,
+                           retention_boundary=({'policy': 'current-use', 'retained_from_revision': revision,
+                                                'scope': 'Earlier ordinary revisions were not retained by this chain; separately selected evidence pins remain independent.'}
+                                               if boundary else None))
+                if revision == 1 or boundary:
+                    return
+                page = []
+            current = self._historical_object(ident, revision - 1, key)

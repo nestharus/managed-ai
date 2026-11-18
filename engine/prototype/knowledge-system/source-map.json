@@ -1,0 +1,116 @@
+{
+  "format": "knowledge-source-map/1",
+  "families": [],
+  "additional": [],
+  "overrides": {
+    "prototype/agent-system/GUIDE.md": {
+      "owner": "prototype/agent-system/GUIDE.md",
+      "link_base": "prototype/agent-system/GUIDE.md"
+    },
+    "prototype/agent-system/COMPOSITION.md": {
+      "owner": "prototype/agent-system/COMPOSITION.md",
+      "link_base": "prototype/agent-system/COMPOSITION.md"
+    },
+    "prototype/agent-system/README.md": {
+      "owner": "prototype/agent-system/README.md",
+      "link_base": "prototype/agent-system/README.md"
+    },
+    "prototype/docs/attention.md": {
+      "owner": "prototype/docs/attention.md",
+      "link_base": "prototype/docs/attention.md"
+    },
+    "prototype/collective-work/README.md": {
+      "owner": "prototype/collective-work/README.md",
+      "link_base": "prototype/collective-work/README.md"
+    },
+    "prototype/knowledge-system/README.md": {
+      "owner": "prototype/knowledge-system/README.md",
+      "link_base": "prototype/knowledge-system/README.md"
+    },
+    "prototype/knowledge-system/CONTRACT.md": {
+      "owner": "prototype/knowledge-system/CONTRACT.md",
+      "link_base": "prototype/knowledge-system/CONTRACT.md"
+    },
+    "prototype/knowledge-system/MIGRATION.md": {
+      "owner": "prototype/knowledge-system/MIGRATION.md",
+      "link_base": "prototype/knowledge-system/MIGRATION.md"
+    },
+    "prototype/knowledge-system/RESEARCH.md": {
+      "owner": "prototype/knowledge-system/RESEARCH.md",
+      "link_base": "prototype/knowledge-system/RESEARCH.md"
+    },
+    "MODEL-BOUND-COMPOSITION.md": {
+      "owner": "MODEL-BOUND-COMPOSITION.md",
+      "link_base": "MODEL-BOUND-COMPOSITION.md"
+    },
+    "CLI-FIELD-REFERENCE.md": {
+      "owner": "CLI-FIELD-REFERENCE.md",
+      "link_base": "CLI-FIELD-REFERENCE.md"
+    },
+    "host/OPERATION.md": {
+      "owner": "host/OPERATION.md",
+      "link_base": "host/OPERATION.md"
+    },
+    "prototype/patterns/continuous-consolidation/README.md": {
+      "owner": "prototype/patterns/continuous-consolidation/README.md",
+      "link_base": "prototype/patterns/continuous-consolidation/README.md"
+    },
+    "prototype/patterns/continuous-consolidation/inventory.md": {
+      "owner": "prototype/patterns/continuous-consolidation/inventory.md",
+      "link_base": "prototype/patterns/continuous-consolidation/inventory.md"
+    },
+    "prototype/patterns/continuous-consolidation/prompts/branch.md": {
+      "owner": "prototype/patterns/continuous-consolidation/prompts/branch.md",
+      "link_base": "prototype/patterns/continuous-consolidation/prompts/branch.md"
+    },
+    "prototype/patterns/continuous-consolidation/prompts/coordinator.md": {
+      "owner": "prototype/patterns/continuous-consolidation/prompts/coordinator.md",
+      "link_base": "prototype/patterns/continuous-consolidation/prompts/coordinator.md"
+    },
+    "prototype/patterns/continuous-consolidation/prompts/integrator.md": {
+      "owner": "prototype/patterns/continuous-consolidation/prompts/integrator.md",
+      "link_base": "prototype/patterns/continuous-consolidation/prompts/integrator.md"
+    },
+    "prototype/patterns/continuous-consolidation/prompts/proposer.md": {
+      "owner": "prototype/patterns/continuous-consolidation/prompts/proposer.md",
+      "link_base": "prototype/patterns/continuous-consolidation/prompts/proposer.md"
+    },
+    "prototype/patterns/continuous-consolidation/prompts/qa.md": {
+      "owner": "prototype/patterns/continuous-consolidation/prompts/qa.md",
+      "link_base": "prototype/patterns/continuous-consolidation/prompts/qa.md"
+    },
+    "prototype/patterns/continuous-consolidation/prompts/review.md": {
+      "owner": "prototype/patterns/continuous-consolidation/prompts/review.md",
+      "link_base": "prototype/patterns/continuous-consolidation/prompts/review.md"
+    },
+    "prototype/patterns/continuous-consolidation/prompts/root-build.md": {
+      "owner": "prototype/patterns/continuous-consolidation/prompts/root-build.md",
+      "link_base": "prototype/patterns/continuous-consolidation/prompts/root-build.md"
+    },
+    "host/README.md": {
+      "owner": "host/README.md",
+      "link_base": "host/README.md"
+    },
+    "host/CONSTRUCTION.md": {
+      "owner": "host/CONSTRUCTION.md",
+      "link_base": "host/CONSTRUCTION.md"
+    },
+    "host/MATERIAL-MAINTENANCE.md": {
+      "owner": "host/MATERIAL-MAINTENANCE.md",
+      "link_base": "host/MATERIAL-MAINTENANCE.md"
+    },
+    "host/RELATION-COMPOSITION.md": {
+      "owner": "host/RELATION-COMPOSITION.md",
+      "link_base": "host/RELATION-COMPOSITION.md"
+    },
+    "host/PEER-COMMUNICATION.md": {
+      "owner": "host/PEER-COMMUNICATION.md",
+      "link_base": "host/PEER-COMMUNICATION.md"
+    },
+    "INSTANCES.md": {
+      "owner": "INSTANCES.md",
+      "link_base": "INSTANCES.md"
+    }
+  },
+  "modules": []
+}

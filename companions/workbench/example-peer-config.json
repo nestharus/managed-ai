@@ -1,0 +1,18 @@
+{
+  "schema": "peer-workbench-config/1",
+  "task": "Construct the useful contribution commissioned in peer-request.input, using the declared shared brief and relevant complete sources. Coordinate actual joining questions with peers through the peer tools. Stage your complete owned return and then finish this model turn.",
+  "sources": {
+    "caller-guidance": "The actual task is supplied in the harness brief and this owner's input. Keep exact continuing duties separate from the finite peer-owner completion inventory. A captured peer artifact is a source under its recorded owner/revision, not an automatic semantic acceptance."
+  },
+  "corpus_root": "/__CORPUS_ROOT__",
+  "evidence_root": "/__WORK_ROOT__/evidence",
+  "model": {
+    "kind": "mailbox",
+    "timeout_seconds": 900
+  },
+  "max_steps": 16,
+  "max_file_bytes": 2097152,
+  "max_cache_bytes": 65536,
+  "receivers": {},
+  "obligations": []
+}

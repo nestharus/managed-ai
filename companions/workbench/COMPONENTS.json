@@ -1,0 +1,41 @@
+{
+  "schema": "peer-workbench-acquired-components/1",
+  "scope": "Current shared implementations after consolidation; one canonical body per component. Shared import routing, bundled search routing, and preservation of the relocated study exposure boundary are explicit parts of this release.",
+  "files": {
+    "workbench_agent.py": {
+      "source": "workbench_agent.py",
+      "identity": {
+        "bytes": 26657,
+        "sha256": "e9ceeeda150e5dc85d29964f3ed2d971e3869c2b07e07d85e40e022bea5c0ab0"
+      }
+    },
+    "source_tools.py": {
+      "source": "source_tools.py",
+      "identity": {
+        "bytes": 19137,
+        "sha256": "d8036644bee5a11ce7f5a4f0fa6ff0dbced1b23099801f2f58231aef5fb52016"
+      }
+    },
+    "model_bridges.py": {
+      "source": "model_bridges.py",
+      "identity": {
+        "bytes": 5964,
+        "sha256": "a0fe252412c0ae6725aa4510ed486e571ed71bbad8fd6c16581b80803efda48b"
+      }
+    },
+    "controller/agent_runtime.py": {
+      "source": "controller/agent_runtime.py",
+      "identity": {
+        "bytes": 6748,
+        "sha256": "ccc7c71f74ec62470db48536d024b409ad01dedce24a5aee887909241dc7a211"
+      }
+    },
+    "controller/evidence_support.py": {
+      "source": "controller/evidence_support.py",
+      "identity": {
+        "bytes": 3699,
+        "sha256": "66562f88424f04c1bb98026c10f5beab8769b98fe6d78a65dca1e8511fb52547"
+      }
+    }
+  }
+}

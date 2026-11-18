@@ -1,0 +1,69 @@
+{
+  "repository": "nestharus/cognition-workflows",
+  "commit": "3525b5fdf39756ac7c109af0058bcaafec1a4d00",
+  "scope": "Exact source identities of the inspected Python runner and Claude method launch path. This is not a complete runtime distribution or a live router receipt.",
+  "delivery_files": [
+    {
+      "path": "cognition/loop.py",
+      "bytes": 102973,
+      "sha256": "e7462275262d96dcac5d84942cade255c913278f4bd802700f36e941430ec8f3",
+      "git_blob_sha1": "fbd4d2c23b0db29f5cdbcddaec0c17fda4921d8f"
+    },
+    {
+      "path": "cognition/environment.py",
+      "bytes": 20725,
+      "sha256": "b6b0815064353947c591933916923a4996496f296ba202920876abf0d13dea68",
+      "git_blob_sha1": "8b5cae3201e0efaf851dd1adc70427062b68e4d6"
+    },
+    {
+      "path": "cognition/config.py",
+      "bytes": 612,
+      "sha256": "18d7a5813ab66f7690998e01b1b974b7901537e1416370d7575d58dbcac2bb6c",
+      "git_blob_sha1": "dbdec30dbc6cb39fa3a34f253d6d8941a43d4d41"
+    },
+    {
+      "path": "cognition/seat_prompt.py",
+      "bytes": 1801,
+      "sha256": "0e673030a827f3bc766607f031cd59ae46972eebaf11b96529922a5a3258b4ec",
+      "git_blob_sha1": "38624c5cc191cec4771df717920fadd545671613"
+    },
+    {
+      "path": "cognition/dependencies.py",
+      "bytes": 12880,
+      "sha256": "842df859ba63f94473017fce56ec8bf8f0483831b430efc3d38a69a980b5bf9c",
+      "git_blob_sha1": "cbda431bc3c96062b065671dfc2309f0f6b48b30"
+    },
+    {
+      "path": "cognition/model_catalog.py",
+      "bytes": 21919,
+      "sha256": "a02e0403b5521bcf4d125b2005b1d62688b7f1e4e3c101aeb29c26e132003791",
+      "git_blob_sha1": "63f3ebf2918cbf1b1e8c450f2949dc2e2919c2b5"
+    },
+    {
+      "path": "tools/cli/load_paths.sh",
+      "bytes": 1790,
+      "sha256": "09ec8eb8e7fd388a5e3b1b231beb38e967eabc48cfa93412fd1d67bae016f546",
+      "git_blob_sha1": "719fded810da529596895411e93db0023bfde99a"
+    },
+    {
+      "path": "tools/cli/seat.sh",
+      "bytes": 11894,
+      "sha256": "23fd8fa44b84a20d2794030a18e846352e364136e0362c11639975c2df74883c",
+      "git_blob_sha1": "a3c88c0ecc30d138395188d31009c52e35505c89"
+    },
+    {
+      "path": "tools/cli/seat_class.sh",
+      "bytes": 3492,
+      "sha256": "90ac7aa274e6759222f3f98053142ccc731db7d056af1b55b8af58cad523b5b9",
+      "git_blob_sha1": "8259be1a784f2490eff630c928951291d1da8801"
+    },
+    {
+      "path": "cognition/command_environment.py",
+      "bytes": 1972,
+      "sha256": "f0a016f297980d8616d815ffac1bd6c3ffdecdc4abae08b3f4ea21826edb8b93",
+      "git_blob_sha1": "2703097c639e2518d2336d27addb2a14f9a5e5ba"
+    }
+  ],
+  "source_receipts": "G60 exposure-development/application-source/body-verification.json and comparison-receipt.json",
+  "route": "Explicit paths > manifest brief+inputs > nonfixture delivery_context > seat_argv > declared-Claude class > seat.sh method working directory."
+}
