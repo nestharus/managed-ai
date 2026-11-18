@@ -1,16 +1,16 @@
 # Shared knowledge system
 
-**Package scope.** This directory retains selected authoring sources and contracts. The prepared CLI and catalogue are in the separate [operating release — additional source](../../SOURCES.md#source-dbcc210d7f4962499db6). Publishing and rebuild commands below describe the original source workflow and can require its full source workspace.
+**Managed AI store.** From the package root, read a registered source with `python3 -B engine/knowledge.py --store STORE show SOURCE_ID --text`. Search the selected registrations with `python3 -B engine/knowledge.py --store STORE discover --query TEXT`. The [instance contract](../../INSTANCES.md) describes store and domain selection.
 
-In the v28 working source, publish the current knowledge catalogue into a new local destination with `python3 -B prototype/knowledge-system/publish.py --root . publish --edition local --output ../my-knowledge`. Then pass `--library ../my-knowledge` to the reader. The installed compact includes its selected published library.
+In the v28 working source, publish the current knowledge catalogue into a new local destination with `python3 -B prototype/knowledge-system/publish.py --root . publish --edition local --output ../my-knowledge`. Then pass `--library ../my-knowledge` to the reader. That workflow requires the authoring inputs and an explicitly selected published library.
 
 An AI system joins a capable interpreter, useful information, operations and actual receiving work. A contribution can be an explanation, a design, a review, code or a new system. Predict what the contribution needs; discover or construct that understanding; project the effect forward and its necessary participation backward. Select a representation that supplies the needed distinctions, use it, and let the return change both the work and the means available for later work.
 
-**Start here for agent understanding and continued research.** This expandable library supplies complete research explanations, operating knowledge and pattern bodies. Its Python adapter supplies bounded discovery, exact acquisition and data interchange. Your capable host supplies interpretation, further inquiry and authorized effects. The [working contract](CONTRACT.md) distinguishes those contributions; [research participation](RESEARCH.md) carries current questions and returned improvements through the same system.
+**Working with a published library.** This expandable library supplies complete research explanations, operating knowledge and pattern bodies. Its Python adapter supplies bounded discovery, exact acquisition and data interchange. Your capable host supplies interpretation, further inquiry and authorized effects. The [working contract](CONTRACT.md) distinguishes those contributions; [research participation](RESEARCH.md) carries current questions and returned improvements through the same system.
 
-For ordinary general-system adoption, `G60-system-release.zip` provides a smaller selection with direct readable files, complete pinned originals and an optional runtime. This full library retains wider current research and source discovery. A logical identity such as `research/current/method.md` names a body for `knowledge.py show`; it does not promise that the author's research directory exists beside a copied library. The release supplies local reading paths for its default uses.
+In the earlier G60 distribution, `G60-system-release.zip` provided a smaller selection with direct readable files, complete pinned originals and an optional runtime. This full library retains wider current research and source discovery. A logical identity such as `research/current/method.md` names a body for `knowledge.py show`; it does not promise that the author's research directory exists beside a copied library. The release supplies local reading paths for its default uses.
 
-From the prepared operating release, or a complete published library with its catalogue and object bodies, use Python 3.10 or later:
+The following examples use the library reader with a complete library selected as its working library. When calling the Managed AI wrapper, pass `--library LIBRARY` before the library subcommand.
 
 ```bash
 python3 -B knowledge.py discover --query "shared work changed interpretation"

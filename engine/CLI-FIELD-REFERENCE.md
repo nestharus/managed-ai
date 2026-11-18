@@ -2,7 +2,13 @@
 
 Runtime state, source derivatives, indexes and outputs belong to selected stores outside the engine directory. In the commands below, `G60_BASE` names the selected unchanged prototype directory; other uppercase tokens name caller-selected paths or retained IDs. In this package, select `engine/prototype`. The underlying field contracts remain useful; [instance contracts](INSTANCES.md) add the current deployment, domain, typed-record, import and retention interfaces.
 
-## Publish and discover addressable source bodies
+## Read the configured store
+
+From the package root, use `python3 -B engine/knowledge.py --store STORE discover --query TEXT` for selected metadata and `python3 -B engine/knowledge.py --store STORE show SOURCE_ID --text` for exact acquisition.
+
+## Publish and discover bodies in an explicit knowledge library
+
+The following source-map and indexing examples require the separate library workflow and its authoring inputs. A configured store can serve its registered bodies directly.
 
 ```json
 {

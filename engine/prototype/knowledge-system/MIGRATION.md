@@ -1,8 +1,10 @@
-# Current entrance and source maintenance
+# Library migration and current source maintenance
 
-## What changes
+For a Managed AI store, [the instance contract](../../INSTANCES.md) identifies its ordered catalogues and domain descriptors. Read the selected ID with `engine/knowledge.py --store STORE show SOURCE_ID`. For a change, update the registered owner, qualify the affected descriptor and use reviewed configure at each intended receiver. The library migration below records the earlier authoring arrangement.
 
-The active general entrance is the short [overview](README.md) and the callable knowledge adapter. Agent understanding and research continuation use the same expandable complete-body library. The former `agent/` folder and research startup files become compatibility routes. They are no longer separately maintained general manuals or independent products. The independently usable products remain the human explanation and the prototype, which includes this complete standalone knowledge folder.
+## Earlier library entrance
+
+For that edition the general entrance was the short [overview](README.md) and the callable knowledge adapter. Agent understanding and research continuation use the same expandable complete-body library. The former `agent/` folder and research startup files become compatibility routes. They are no longer separately maintained general manuals or independent products. The independently usable products remain the human explanation and the prototype, which includes this complete standalone knowledge folder.
 
 This changes the distribution arrangement, not the canonical research method or earlier evidence. Original accepted releases, historical source identities, published human bodies, exact occurrence archives and recovery maps retain their bytes and scope. The research tree remains current authoring, instrument and history custody. Storage at a research path does not create a separate general agent/research entrance.
 

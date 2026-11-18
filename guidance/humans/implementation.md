@@ -1,6 +1,6 @@
 # What is built and how to use it
 
-The project contains one shared AI-system implementation and two initialized stores. The research and novel instances use the same engine. Reusable domains supply knowledge, payload schemas and explicitly invoked tools; an instance supplies its current goal, records, artifacts and receiving history.
+The full release includes three initialized stores sharing one engine: research, novel and discovery. The walkthrough below uses research and novel. The focused operating package has a separate deployment and source selection. Reusable domains supply knowledge, payload schemas and explicitly invoked tools. Each store owns its current goal, records, artifacts and receiving history.
 
 ## Choose support by its contribution
 
@@ -16,7 +16,7 @@ The project contains one shared AI-system implementation and two initialized sto
 
 ## Read the actual initialized state
 
-Run from the extracted package root with the supported Python environment:
+Run from a package root that includes the named stores, with the supported Python environment:
 
 ```bash
 python engine/prototype/system.py --root stores/research status

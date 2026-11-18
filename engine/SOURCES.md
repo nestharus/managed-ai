@@ -30,22 +30,22 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-53cca3885001b6f38c30"></a>
 ## prototype/knowledge-system/README.md
 
-[prototype/knowledge-system/README.md](prototype/knowledge-system/README.md) — 8371 bytes; SHA-256 `401b764f1cea8d9ac63f85e9de285d3b87fea47c4a68f22d190912bde46ad1f9`.
+[prototype/knowledge-system/README.md](prototype/knowledge-system/README.md) — 8424 bytes; SHA-256 `07b88766cbcb84ceab9e0f278f157a2950ed52879680fbc0d84791456159e1d8`.
 
 <a id="source-fee751dc881d0860bdb7"></a>
 ## prototype/knowledge-system/CONTRACT.md
 
-[prototype/knowledge-system/CONTRACT.md](prototype/knowledge-system/CONTRACT.md) — 23819 bytes; SHA-256 `fada3e9ddd1f512c1fbd11a81ce5c85c9ef3130193b08b6a55d6ff18af711121`.
+[prototype/knowledge-system/CONTRACT.md](prototype/knowledge-system/CONTRACT.md) — 24119 bytes; SHA-256 `1dd6cfb3bc4248fffad2e69032e0ce91a46e6fb683a6246de54072f467e73343`.
 
 <a id="source-abb12435fcf333967237"></a>
 ## prototype/knowledge-system/MIGRATION.md
 
-[prototype/knowledge-system/MIGRATION.md](prototype/knowledge-system/MIGRATION.md) — 5931 bytes; SHA-256 `c4d186c61c7db6cd6aed46e133663b3d2e76c83967ecee013f7a44300ad1c605`.
+[prototype/knowledge-system/MIGRATION.md](prototype/knowledge-system/MIGRATION.md) — 6368 bytes; SHA-256 `695cb0500a863ff287d5b674d4feb63a79def9ac6b5e7063b55b4047663b1e9a`.
 
 <a id="source-973adf08e936e3795b8f"></a>
 ## prototype/knowledge-system/RESEARCH.md
 
-[prototype/knowledge-system/RESEARCH.md](prototype/knowledge-system/RESEARCH.md) — 15081 bytes; SHA-256 `14f47be0806906c0c4cdc7799e343aedf35b44fe4e4a76a2e9557236e4b01570`.
+[prototype/knowledge-system/RESEARCH.md](prototype/knowledge-system/RESEARCH.md) — 15366 bytes; SHA-256 `c8828ea963404a38b95290ac6b4766791746576353f1c8e6900c926f300a1d94`.
 
 <a id="source-ebb2cb11e60bb0995683"></a>
 ## MODEL-BOUND-COMPOSITION.md
@@ -55,7 +55,7 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-158a5fd9fcbc684322e8"></a>
 ## CLI-FIELD-REFERENCE.md
 
-[CLI-FIELD-REFERENCE.md](CLI-FIELD-REFERENCE.md) — 19777 bytes; SHA-256 `880965eca5a11e0c1ba52ee57f9362060b9aeaa07f8bf2eda6286ca3a5293152`.
+[CLI-FIELD-REFERENCE.md](CLI-FIELD-REFERENCE.md) — 20209 bytes; SHA-256 `accce14d166fd7f8addcf6a4d85ab8c8f1dfba9274cda435819e2a0b0e69e8cb`.
 
 <a id="source-f2707b3e30027aeb2192"></a>
 ## host/OPERATION.md

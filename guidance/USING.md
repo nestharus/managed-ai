@@ -4,7 +4,7 @@ Start with a decision or contribution someone needs. A source can settle part of
 
 ## Use an initialized instance
 
-Run commands from the package root. Both instances use the single shared engine:
+In the full release, research, novel and discovery are initialized stores on the same shared engine. The commands below use the research and novel stores from the full package root. The focused operating package has its own deployment and source selection:
 
 ```bash
 python engine/prototype/system.py --root stores/research status
@@ -30,7 +30,7 @@ For example, a shift note saying that lower steps are wet can change the questio
 
 ## Prepare useful work and preserve an actual return
 
-The engine's `context TURN --request FILE` prepares the declared task with selected records, workspace sources, catalogue techniques and targets. The current focused `current-continuation` context in each delivered instance is prepared for its actual loaded state. `recover current-continuation --text` reads that exact preparation. It is ready for a participant; preparation alone claims no model reply or completion.
+The engine's `context TURN --request FILE` prepares the declared task with selected records, workspace sources, catalogue techniques and targets. The current focused `current-continuation` context in each of these two walkthrough stores is prepared for its actual loaded state. `recover current-continuation --text` reads that exact preparation. It is ready for a participant; preparation alone claims no model reply or completion.
 
 Initialization also prepared `start` before the data import. That earlier input remains an accurate record of preparation, but it is superseded as the continuation entrance by `current-continuation`. It has no provider return or carrier failure to close. A pending prepared packet is not an additional research obligation, and its presence does not authorize dispatching the obsolete task.
 

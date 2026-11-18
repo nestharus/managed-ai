@@ -1,5 +1,7 @@
 # Knowledge acquisition and product contract
 
+From the Managed AI package root, `engine/knowledge.py --store STORE discover --query TEXT` searches the selected store catalogue and `show SOURCE_ID` reads a selected body. The library operations below use `engine/knowledge.py --library LIBRARY` and require that library’s catalogue and objects.
+
 ## Participation and source identity
 
 This is a small information component for an AI system whose capable model or human already exists. It supplies complete source exposure, authored module views, bounded lexical discovery and data-only interchange. It does not invoke a model, infer semantic completeness, select a current deployment, perform research by itself or grant effects. A capable host can use the bodies directly, use the separately supplied agent-system or compose another arrangement.
