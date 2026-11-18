@@ -1,4 +1,6 @@
 """Contract checks for the explicit exchange, not semantic efficacy trials."""
+import errno
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -9,7 +11,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
-from continuation_support.exchange import Exchange
+from continuation_support.exchange import Exchange, main
 
 
 class ExchangeTests(unittest.TestCase):
@@ -59,6 +61,28 @@ class ExchangeTests(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(json.loads(p.stdout)['consumer'], 'reader')
         self.assertTrue(all(x['unchanged'] for x in json.loads(p.stdout)['basis']))
+
+    def test_inspect_opens_existing_lock_read_only_after_append_denial(self):
+        self.prepare()
+        self.received()
+        expected = self.ex.inspect('one')
+        lock = self.root / 'owner.lock'
+        original_open = Path.open
+        modes = []
+
+        def restricted_open(path, mode='r', *args, **kwargs):
+            if path == lock:
+                modes.append(mode)
+                if mode == 'a+b':
+                    raise PermissionError(errno.EACCES, 'Permission denied', str(path))
+            return original_open(path, mode, *args, **kwargs)
+
+        argv = ['work.py', '--root', str(self.root), 'inspect', 'one']
+        with patch.object(Path, 'open', restricted_open), patch.object(sys, 'argv', argv), \
+                patch.object(sys, 'stdout', new_callable=io.StringIO) as output:
+            main()
+        self.assertEqual(modes, ['a+b', 'rb'])
+        self.assertEqual(json.loads(output.getvalue()), expected)
 
     def test_method_and_material_are_frozen_not_live_links(self):
         self.prepare()

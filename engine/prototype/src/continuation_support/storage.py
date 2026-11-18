@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import errno
 import fcntl
 import hashlib
 import json
@@ -60,8 +61,17 @@ def read_json(path: Path) -> dict[str, Any]:
 
 
 @contextmanager
-def exclusive(path: Path) -> Iterator[None]:
-    with path.open("a+b") as stream:
+def exclusive(path: Path, *, allow_readonly_open: bool = False) -> Iterator[None]:
+    try:
+        stream = path.open("a+b")
+    except OSError as open_error:
+        if not allow_readonly_open or open_error.errno not in (errno.EACCES, errno.EPERM, errno.EROFS):
+            raise
+        try:
+            stream = path.open("rb")
+        except OSError as read_error:
+            raise open_error from read_error
+    with stream:
         try:
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:

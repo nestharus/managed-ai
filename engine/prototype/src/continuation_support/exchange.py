@@ -1174,7 +1174,7 @@ def main() -> None:
             result = Exchange.initialize(root, **args)
         else:
             ex = Exchange(root)
-            with exclusive(ex.root / 'owner.lock'):
+            with exclusive(ex.root / 'owner.lock', allow_readonly_open=(action == 'inspect')):
                 if action == 'dispatch' and args['argv'][:1] == ['--']:
                     args['argv'] = args['argv'][1:]
                 result = getattr(ex, action)(**args)
