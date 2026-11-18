@@ -1,4 +1,4 @@
-> Current native entry. Acquire complete sources with `catalogue LOGICAL_ID --text` or the release `knowledge.py show LOGICAL_ID --text`. [Current construction](../../host/CONSTRUCTION.md), [conditional peer communication](../../host/PEER-COMMUNICATION.md), and [material maintenance](../../host/MATERIAL-MAINTENANCE.md) describe optional operations. Choose the operation for the actual contribution.
+> Current native entry. In the selected deployment use `system catalogue LOGICAL_ID --text`. From the package root use `python3 -B engine/knowledge.py --store STORE show LOGICAL_ID --text` for that store's domain and core sources. Omitting `--store` selects only the core catalogue. [Current construction](../../host/CONSTRUCTION.md), [conditional peer communication](../../host/PEER-COMMUNICATION.md), and [material maintenance](../../host/MATERIAL-MAINTENANCE.md) describe optional operations. Choose the operation for the actual contribution.
 
 Read the [current instance and domain contract](../../INSTANCES.md) when selecting stores, schemas, domain sources or retention.
 

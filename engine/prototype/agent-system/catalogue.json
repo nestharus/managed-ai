@@ -3,7 +3,7 @@
   "source_root": "managed-ai-shared-engine-1",
   "snapshot": {
     "edition": "managed-ai-shared-engine-1",
-    "selection_sha256": "e775143144f669c84145ab4f1964a06d8ae4f15f553aa01ed230fbb69d9f924d",
+    "selection_sha256": "d536a620f030c0bb4278b6d455e81a3cde3f5b16c382479120f777be89b8ba93",
     "relationship": "References to one canonical source body; domain sources are selected per store."
   },
   "entries": [
@@ -14,11 +14,11 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "prototype/agent-system/GUIDE.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:50dbb2754873926ecb275dd49bb52d65b7d789e14e3fbd86ddf7005499593928",
+      "body_id": "sha256:b04d4c8ba0295df0af5a237213d5dab9fd1b90c53c1aa40f2cbd19eadebc9711",
       "body_path": "prototype/agent-system/GUIDE.md",
-      "sha256": "50dbb2754873926ecb275dd49bb52d65b7d789e14e3fbd86ddf7005499593928",
-      "source_sha256": "50dbb2754873926ecb275dd49bb52d65b7d789e14e3fbd86ddf7005499593928",
-      "bytes": 8207,
+      "sha256": "b04d4c8ba0295df0af5a237213d5dab9fd1b90c53c1aa40f2cbd19eadebc9711",
+      "source_sha256": "b04d4c8ba0295df0af5a237213d5dab9fd1b90c53c1aa40f2cbd19eadebc9711",
+      "bytes": 8352,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "Name the person or program that needs the result and the action, artifact or understanding it must obtain. Use an adequate direct read, edit or call when that completes the duty. For unresolved work, retain a prospective contribution, follow its implications back to the missing relationship, and obtain the observation, proof, construction or participation that could change the next decision. Let actual returns revise the containing question.",

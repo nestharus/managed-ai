@@ -14,7 +14,7 @@
     "CURRENT-RELEASE.json": {
       "bytes": 559,
       "mode": 420,
-      "sha256": "73cb2c47fccd4e88184e4a850370f57a2187b45f017fa0d7ac6bcaa302985c0d"
+      "sha256": "5f9f649730fe0ad7dc60cefc2a189ac7bd47fb0af32d073b2c89b513f1492d3f"
     },
     "INSTANCES.md": {
       "bytes": 12125,
@@ -167,9 +167,9 @@
       "sha256": "8c7d656be3fb7f6871fee1244b889c2d92dd7985361c4148769c5ebfaa61553f"
     },
     "prototype/agent-system/GUIDE.md": {
-      "bytes": 8207,
+      "bytes": 8352,
       "mode": 420,
-      "sha256": "50dbb2754873926ecb275dd49bb52d65b7d789e14e3fbd86ddf7005499593928"
+      "sha256": "b04d4c8ba0295df0af5a237213d5dab9fd1b90c53c1aa40f2cbd19eadebc9711"
     },
     "prototype/agent-system/README.md": {
       "bytes": 49738,
@@ -189,7 +189,7 @@
     "prototype/agent-system/catalogue.json": {
       "bytes": 42340,
       "mode": 420,
-      "sha256": "4ccfad76525f0bd5f768d7e8603fa91ae36ed8cac5b7f7289eaa4eadec72f6c6"
+      "sha256": "a40d5657b644714b89967e3385ab6b04d8a6a522b618592cff827ab7bcb61ae3"
     },
     "prototype/agent-system/change_notice.py": {
       "bytes": 4758,
@@ -1164,7 +1164,7 @@
     "release/current_sources.json": {
       "bytes": 14419,
       "mode": 420,
-      "sha256": "e775143144f669c84145ab4f1964a06d8ae4f15f553aa01ed230fbb69d9f924d"
+      "sha256": "d536a620f030c0bb4278b6d455e81a3cde3f5b16c382479120f777be89b8ba93"
     },
     "release/navigation.json": {
       "bytes": 25601,
