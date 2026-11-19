@@ -25,6 +25,11 @@ def anchor(ident):
     return 'source-' + digest(ident.encode())[:20]
 
 
+def source_identity_line(row):
+    return (f"[{row['source']}]({row['source']}) — {row['bytes']} bytes; "
+            f"SHA-256 `{row['sha256']}`.")
+
+
 def render(root):
     """Read canonical UTF-8 inputs and prepare each projection without writing."""
     selection_name = 'release/current_sources.json'
@@ -75,8 +80,7 @@ def render(root):
     for row in selected['bodies']:
         selected_ids.add(row['id'])
         lines += ['<a id="' + anchor(row['id']) + '"></a>', '## ' + row['id'], '',
-                  '[' + row['source'] + '](' + row['source'] + ') — ' + str(row['bytes']) +
-                  ' bytes; SHA-256 `' + row['sha256'] + '`.', '']
+                  source_identity_line(row), '']
     for ident, route in sorted(nav.get('reference_routes', {}).items()):
         if ident in selected_ids:
             continue

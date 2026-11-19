@@ -2,6 +2,7 @@
 """Package the one current source tree, without inherited release directories."""
 import argparse
 import hashlib
+from itertools import zip_longest
 import json
 import os
 from pathlib import Path
@@ -201,6 +202,33 @@ def verify_core_selection(core, native, *, prefix=""):
                 or (entry.get("sha256"), entry.get("bytes")) != (row["sha256"], row["bytes"])):
             raise ValueError(f"Current source catalogue reference differs for {row['id']}. "
                              f"Run release guidance refresh for the exact body member {member}.")
+    return selection["bodies"]
+
+
+def displayed_source_rows(page, selected_ids):
+    """Read the selected identity under each heading, ignoring navigation prose."""
+    for section in ("\n" + page).split("\n## ")[1:]:
+        ident, _, body = section.partition("\n")
+        lines = iter(body.lstrip("\n").splitlines())
+        first = next(lines, "<missing identity>")
+        if ident in selected_ids:
+            yield f"{ident}: {first}"
+            for line in lines:
+                if line.startswith("[") and " bytes; SHA-256 `" in line:
+                    yield f"{ident}: {line}"
+        elif first.startswith("[") and " bytes; SHA-256 `" in first:
+            yield f"{ident}: {first}"
+
+
+def verify_source_list(path, bodies):
+    guidance = runpy.run_path(str(Path(__file__).with_name("refresh_guidance.py")))
+    format_identity = guidance["source_identity_line"]
+    expected = (f"{row['id']}: {format_identity(row)}" for row in bodies)
+    displayed = displayed_source_rows(path.read_text(encoding="utf-8"), {row["id"] for row in bodies})
+    for wanted, found in zip_longest(expected, displayed, fillvalue="<no selected row>"):
+        if wanted != found:
+            raise ValueError(f"Stale engine/SOURCES.md\nExpected {wanted}\nObserved {found}\n"
+                             "Run release guidance refresh.")
 
 
 def descriptors(root, directory, filename):
@@ -217,7 +245,9 @@ def descriptors(root, directory, filename):
 
 
 def verify_sources(root, core, native):
-    verify_core_selection(core, native, prefix="engine/")
+    bodies = verify_core_selection(core, native, prefix="engine/")
+    if "SOURCES.md" in native:
+        verify_source_list(core / "SOURCES.md", bodies)
     component_root = root / "companions/workbench"
     components = read_json(component_root / "COMPONENTS.json")
     for name, row in components["files"].items():
