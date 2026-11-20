@@ -31,7 +31,6 @@ from continuation_support.ownership import NativeLayout, packet_id
 from continuation_support.storage import encode, exclusive, shared, now, sha, write_json
 from feedback import Feedback
 from information import InformationEnvelope
-from native_runtime.capture import TurnCapture
 from native_runtime.projects import ProjectSelection
 from native_runtime.catalogue import InstalledCatalogue
 from native_runtime.cli import act, emit, parser
@@ -221,6 +220,8 @@ class System:
         return self.ex.context(turn)
 
     def context(self, turn: str, request: dict) -> dict:
+        from native_runtime.capture import TurnCapture
+
         request = dict(request)
         explicit_techniques = tuple(request.get('techniques', []))
         request['techniques'] = list(dict.fromkeys([*self.domain_selection.entry_sources,

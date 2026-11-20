@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-import shutil
 import uuid
-import zipfile
 
 from continuation_support.ownership import packet_id, relative_path
 from continuation_support.storage import sha
@@ -107,6 +105,9 @@ class InstalledCatalogue:
         return {'paths': paths, 'selected': selected, 'outside': [e['id'] for e in entries if e['id'] not in identities]}
 
     def materialize(self, operation: str, exchange) -> dict:
+        import shutil
+        import zipfile
+
         operation = operation if operation.startswith('operation:') else 'operation:' + operation
         catalogue = self.index()
         asset = next((a for a in catalogue.get('assets', []) if a.get('kind') == 'operation-archive'

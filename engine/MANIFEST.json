@@ -317,14 +317,14 @@
       "sha256": "85eeecd807abfafb0ae1564b2c593a7295171b19839dc96ef6fe5e143ef63885"
     },
     "prototype/agent-system/native_runtime/catalogue.py": {
-      "bytes": 8956,
+      "bytes": 8973,
       "mode": 420,
-      "sha256": "7a83c9db7478f189b9960d338c9f3571f35851d8ff48f59c02f32fa211a3dd3e"
+      "sha256": "a5986548c03641846e9e82c34c695cb02a224b7ec8b78b12ccc0703e71784965"
     },
     "prototype/agent-system/native_runtime/cli.py": {
-      "bytes": 17937,
+      "bytes": 17942,
       "mode": 420,
-      "sha256": "ec40bde179e7a75a11f6589a233c93b6d996efbccae36128ad54c1ebfb1d3083"
+      "sha256": "9910fcbebb56215bb6b1af398520d69a49dfe0ac0c7af8a54ed10e8893cc7549"
     },
     "prototype/agent-system/native_runtime/context_explanation.py": {
       "bytes": 8236,
@@ -387,14 +387,14 @@
       "sha256": "b9b9b4f0636685aab9f8c10245f126d32b2018bab8a236a7325b60990453a8e0"
     },
     "prototype/agent-system/system.py": {
-      "bytes": 22534,
+      "bytes": 22543,
       "mode": 420,
-      "sha256": "9275c51be03c96ad953c90f0073d139a2985dfe0882b966cb6572c3f524248c6"
+      "sha256": "afc6ba82817866b39d55196943d71f1b901373bb6aeada206002779acb3d704e"
     },
     "prototype/agent-system/turns.py": {
-      "bytes": 5252,
+      "bytes": 5276,
       "mode": 420,
-      "sha256": "77970188884c58bc84b33acd052a4696c94231708cbc32134da4cf8be8e22345"
+      "sha256": "4a28593f0f6c329fe7f4da9eec5e0d2b998d62badd96fb491d974e39da45f1dc"
     },
     "prototype/attend.py": {
       "bytes": 354,

@@ -16,7 +16,6 @@ import sys
 from feedback import Feedback
 from information import Information
 from native_runtime.inputs import read, strings, text
-from native_runtime.loading import REVIEWED_CONFIGURE
 
 
 def _file_argument(value):
@@ -25,6 +24,8 @@ def _file_argument(value):
 
 
 def parser() -> argparse.ArgumentParser:
+    from native_runtime.loading import REVIEWED_CONFIGURE
+
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--root', required=True, type=Path)
     sub = p.add_subparsers(dest='action', required=True)
