@@ -1082,9 +1082,9 @@
       "sha256": "d59718ce3cd6e098a501d296f286581550e016c2687fcc5e56efe7ac766cc4bd"
     },
     "prototype/src/continuation_support/packet_transport.py": {
-      "bytes": 5355,
+      "bytes": 5597,
       "mode": 420,
-      "sha256": "cca73b6948181e0e25b08f5398d9ef076b08087e94a1b6c7c2505bf4aabf05a6"
+      "sha256": "f60c0867a202ebc06ed8f675fae049b6227619542471e97f3d8c66cd7772af61"
     },
     "prototype/src/continuation_support/storage.py": {
       "bytes": 4906,
@@ -1137,9 +1137,9 @@
       "sha256": "1adb91cd4383c6618dd3c79407c4c49908fa7f95ffc58df4d17573572e28c020"
     },
     "prototype/tests/test_receiving_views.py": {
-      "bytes": 9057,
+      "bytes": 10726,
       "mode": 420,
-      "sha256": "105ff86992f6a5bfeaf3cb86d59b34eaf6713f4a724b584a989c4e25260ffacb"
+      "sha256": "e452b86e72e83430d9cde38bab46a1ef88c52f534949aeabd0e7c014afe776b2"
     },
     "prototype/tests/test_returned_artifacts.py": {
       "bytes": 8024,

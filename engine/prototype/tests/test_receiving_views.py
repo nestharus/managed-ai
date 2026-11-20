@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from unittest.mock import patch
 
@@ -62,6 +63,40 @@ class ReceivingViewTests(unittest.TestCase):
         streams = [c.args[0] for c in material.call_args_list if c.args[0].suffix == '.bin']
         self.assertEqual(streams, [target / 'stdout.bin', target / 'stderr.bin'])
         self.assertFalse(any(carrier.jobs.glob('*/started.json')))
+
+    def test_carrier_import_is_needed_only_at_dispatch_or_collection(self):
+        self.queued_carrier_fixture()
+        probe = textwrap.dedent("""
+            from pathlib import Path
+            import sys
+
+            sys.path.insert(0, sys.argv[1])
+            name = 'continuation_support.collector'
+            sys.modules[name] = None
+            from continuation_support.exchange import Exchange
+            from continuation_support import packet_transport
+            owner = Exchange(Path(sys.argv[2]))
+            transport = owner.transport
+            assert 'ORIGINAL-BRIEF' in owner.context('origin')['context']
+            for use in (lambda: owner.dispatch('origin', ['worker', '{context}']),
+                        lambda: owner.receive('origin', None, 'fixture', [], wait=0)):
+                try:
+                    use()
+                except ModuleNotFoundError as exc:
+                    assert exc.name == name
+                else:
+                    raise AssertionError('carrier operation ignored the missing collector')
+
+            del sys.modules[name]
+            result = owner.receive('origin', None, 'fixture', [], wait=0)
+            assert result['carrier']['status'] == 'queued'
+            from continuation_support.collector import Collector
+            assert packet_transport.Collector is Collector
+            assert owner.transport is transport
+        """)
+        result = subprocess.run([sys.executable, '-B', '-c', probe, str(ROOT / 'src'), str(self.root)],
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.ex.directory('origin') / 'return.json').exists())
 
     def test_malformed_target_keeps_collector_diagnostic(self):

@@ -6,9 +6,14 @@ from pathlib import Path
 import time
 from typing import Any
 
-from .collector import Collector
 from .ownership import EffectAuthority, NativeLayout
 from .storage import encode, exclusive, read_json, sha, sync_dir, write_json
+
+def __getattr__(name):
+    if name == 'Collector':
+        from .collector import Collector
+        return Collector
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
 
 
 class PacketTransport:
@@ -45,6 +50,7 @@ class PacketTransport:
                 raise ValueError('carrier and workspace belong to different native owners')
             self.authority.authorize_dispatch(carrier_owner or workspace_owner, packet)
 
+        from .collector import Collector
         carrier = Collector(self.carrier_root, check_job_owner=check_owner)
         with exclusive(carrier.root / 'owner.lock'):
             path = self._marker(directory)
@@ -83,6 +89,7 @@ class PacketTransport:
         return self.collect_marked(self.bound_marker(packet, directory, request), wait)
 
     def collect_marked(self, marker: dict, wait: float) -> tuple[bytes | None, dict[str, Any]]:
+        from .collector import Collector
         job_id = marker['job_id']
         carrier = Collector(self.carrier_root)
         deadline = time.monotonic() + max(0.0, wait)
