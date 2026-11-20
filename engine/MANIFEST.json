@@ -247,9 +247,9 @@
       "sha256": "7487c94cb7ce73bfe51a68f9310c6f9da14d996f9a3740c48859a8ec21c28b04"
     },
     "prototype/agent-system/check_shared_instances.py": {
-      "bytes": 19587,
+      "bytes": 20703,
       "mode": 420,
-      "sha256": "2fc36ffe69e25e69942e605cc936adf726bf7e2476543ec9c31280e832220814"
+      "sha256": "a27764790fb99c6b976b33535d6e56ab9bd83f6894c1e1a761b0745a8a94bdf2"
     },
     "prototype/agent-system/check_system.py": {
       "bytes": 26140,
@@ -307,9 +307,9 @@
       "sha256": "85eeecd807abfafb0ae1564b2c593a7295171b19839dc96ef6fe5e143ef63885"
     },
     "prototype/agent-system/native_runtime/catalogue.py": {
-      "bytes": 8650,
+      "bytes": 8956,
       "mode": 420,
-      "sha256": "231cb500cfc9e065675aec38872f0dd2bd2cb766f76f56a02c062e079c05b635"
+      "sha256": "7a83c9db7478f189b9960d338c9f3571f35851d8ff48f59c02f32fa211a3dd3e"
     },
     "prototype/agent-system/native_runtime/cli.py": {
       "bytes": 16925,

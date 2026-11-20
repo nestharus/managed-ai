@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Eight bounded behavioral acceptance cases for one engine and independent stores."""
+"""Bounded behavioral acceptance cases for one engine and independent stores."""
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import base64
@@ -179,6 +179,29 @@ class SharedInstances(unittest.TestCase):
         source = self.domain_a.parent / 'source.md'; source.write_text('Changed without selection.\n')
         with self.assertRaisesRegex(ValueError, 'source reference changed'):
             self.sa.catalogue('alpha-source')
+
+    def test_installed_catalogue_rebinds_roots_on_each_read(self):
+        from native_runtime.catalogue import InstalledCatalogue
+
+        app = self.bundle / 'sample-app'
+        app.mkdir()
+        first, second = (self.bundle / name for name in ('first', 'second'))
+        first.mkdir()
+        second.mkdir()
+        selected = app / 'selected'
+        selected.symlink_to(first, target_is_directory=True)
+        entries = [{'id': ident, 'source_root_relative': 'selected'} for ident in ('a', 'b')]
+        entries.append({'id': 'c', 'source_root_relative': '../second'})
+        write(app / 'catalogue.json', {'entries': entries, 'aliases': [{'id': 'alias', 'target': 'a'}]})
+        catalogue = InstalledCatalogue(app)
+
+        def roots():
+            return {e['id']: e['source_root'] for e in catalogue.index()['entries']}
+
+        self.assertEqual(roots(), {'a': str(first), 'b': str(first), 'c': str(second), 'alias': str(first)})
+        selected.unlink()
+        selected.symlink_to(second, target_is_directory=True)
+        self.assertEqual(roots(), dict.fromkeys(('a', 'b', 'c', 'alias'), str(second)))
 
     def test_06_portable_archive_uses_relocated_shared_engine(self):
         # An isolated release fixture, not a deployment-produced engine copy.

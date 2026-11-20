@@ -21,8 +21,15 @@ class InstalledCatalogue:
         if not path.is_file():
             return {'format': 'pending-catalogue', 'entries': []}
         result = read(path)
-        result['entries'] = [dict(e, source_root=str((self.root / e['source_root_relative']).resolve()))
-                             if 'source_root_relative' in e else e for e in result.get('entries', [])]
+        # Bind each declared root once for this read of the installed catalogue.
+        # Keep the bindings local so the next index observes a relocated source.
+        roots = {}
+        for entry in result.setdefault('entries', []):
+            if 'source_root_relative' in entry:
+                relative = entry['source_root_relative']
+                if relative not in roots:
+                    roots[relative] = str((self.root / relative).resolve())
+                entry['source_root'] = roots[relative]
         if self.selection is not None:
             entries = result.get('entries', []) + self.selection.entries
             ids = [e['id'] for e in entries]
