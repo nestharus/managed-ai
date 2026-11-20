@@ -107,6 +107,12 @@ A receipt names each delivered item actually being credited:
 
 ## Composition and factorized overlap
 
+When reviewing a child edit, a `recompose` request can include `"consumer_scope": ["named-lot", "count"]`. Supply the local record IDs authorized for this decision. The review reads those heads under the target's owner guard and reports their identities against the request's remaining scan and byte budgets. A missing record or exhausted budget requires a fresh selection. An exact source digest in a records-only body search can help locate candidates when the names are unknown.
+
+In `consumer_scope.candidates`, each binding locates a consumer row and its captured source pin. The projection compares the value at that coordinate with the proposed child content. For a composition collection it follows the authored row ID across a reorder. A missing value, a different captured edition or a pointer to the future record envelope needs interpretation. Array indices inside arbitrary row data retain their positional meaning. The `affected` list follows the consumer's declared row dependencies from changed, relocated and unresolved coordinates. An unchanged value still carries its original edition.
+
+The accepted child and each parent have separate decisions. To revise a parent, use its returned `target`, the newly installed child head and the verified coordinate in an ordinary parent proposal. A maximum count can survive a change that invalidates a named release. A matching binding locates the decision and the source needed to check it. A parent whose use was never recorded still needs direct investigation.
+
 Put an ordinary record with `content.format: "g60-composition/1"` and a free-text `purpose`. Supported collections are `elements`, `relations`, `premises`, `opportunities`; `unknowns`, `coverage` and arbitrary `content` are optional. All row IDs are participant-authored.
 
 - Element: `id`, required `account`, optional `content`.

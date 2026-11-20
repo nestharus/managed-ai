@@ -88,6 +88,91 @@ class SystemChecks(unittest.TestCase):
         self.assertEqual(self.system.show('plan')['basis'][0]['sha256'], sha(source.read_bytes()))
         self.assertEqual(accepted['head']['revision'], 2)
 
+    def test_recomposition_locates_consumers_by_edition_and_typed_row(self):
+        from composition_revision import revise
+        from native_runtime.identities import record_identity
+
+        def put(name, content, revision=0):
+            self.system.put(dict(id=name, kind='note', content=content), revision)
+            return record_identity(self.system.show(name))
+
+        profile = dict(format='g60-composition/1', purpose='Compare service grants.')
+        source = dict(profile, elements=[{'id': name, 'account': name, 'content': {'value': value}}
+                                         for name, value in [('grant', 1), ('other', 0)]])
+        target = put('service', source)
+        pin = dict(target, instance_id=self.system.instance_id, pointer='/content/elements/0/content/value')
+        bound = dict(id='menu', account='Uses the named grant.',
+                     content={'composition_use': {'sources': [pin, dict(pin, pointer='')]}})
+        parent = dict(profile, elements=[bound], opportunities=[dict(id='release', contribution='Release L',
+                                                                    at=['element:menu'])])
+        put('named', parent)
+        put('other-owner', dict(parent, elements=[dict(bound, content={'composition_use': {
+            'sources': [dict(pin, instance_id='another-owner')]}})]))
+        put('remarks', dict(source=pin))
+        goal = dict(record_identity(self.system.show('goal')), instance_id=self.system.instance_id, pointer='/content')
+        q = dict(format='g60-recomposition/1', instance_id=self.system.instance_id, target=target,
+                 fields={}, rows={}, sources=[goal], bounds=dict(scan_limit=4, max_bytes=100000),
+                 judgment='Check the named grant.', consumer_scope=['named', 'other-owner', 'remarks'])
+        steady = revise(self.system, q)['consumer_scope']['candidates']
+        self.assertEqual([r['target']['id'] for r in steady], ['named'])
+        self.assertEqual(steady[0]['affected'], [])
+        self.assertEqual([b['status'] for b in steady[0]['bindings']], ['unchanged', 'unchanged'])
+        q['order'] = {'elements': ['other', 'grant']}
+        review = revise(self.system, q)
+        candidate, = review['consumer_scope']['candidates']
+        self.assertEqual(candidate['affected'], ['element:menu', 'opportunity:release'])
+        binding, envelope = candidate['bindings']
+        self.assertEqual(envelope['status'], 'unprojected-envelope')
+        self.assertEqual((binding['source_row'], binding['proposed_pointer'], binding['status']),
+                         ('element:grant', '/content/elements/1/content/value', 'relocated'))
+        with self.assertRaisesRegex(ValueError, 'scan limit'):
+            revise(self.system, dict(q, bounds=dict(q['bounds'], scan_limit=3)))
+        with self.assertRaisesRegex(ValueError, 'byte bound'):
+            revise(self.system, dict(q, bounds=dict(q['bounds'], max_bytes=self.system.record_store.size('goal') + 1)))
+        with patch('composition_revision.MAX_VIEW_BYTES', 128):
+            with self.assertRaisesRegex(ValueError, 'view byte bound'):
+                revise(self.system, q)
+        put('remarks', parent, 1)
+        with self.assertRaisesRegex(ValueError, 'reviewed composition'):
+            revise(self.system, q, accept=review['review_sha256'], reason='Use the old review.')
+        fresh = revise(self.system, q)
+        result = revise(self.system, q, accept=fresh['review_sha256'], reason='Accept the order.')
+        self.assertEqual(result['head']['revision'], 2)
+        stale = revise(self.system, dict(q, target=result['head']))['consumer_scope']['candidates']
+        self.assertEqual(stale[0]['bindings'][0]['status'], 'unresolved-edition')
+        self.assertEqual(self.system.show('named')['revision'], 1)
+
+    def test_recomposition_rechecks_external_original_at_reviewed_write(self):
+        from composition_revision import revise
+        from native_runtime.identities import record_identity
+
+        self.system.put(dict(id='plan', kind='note', content=dict(format='g60-composition/1', purpose='Read grant.')), 0)
+        target = record_identity(self.system.show('plan'))
+        source = self.fixture('grant', 'A')
+        pin = dict(owner='desk', path='grant', pointer='', bytes=1, sha256=sha(b'A'))
+        proposal = dict(format='g60-recomposition/1', instance_id=self.system.instance_id, target=target,
+                        fields={'purpose': 'Use the grant.'}, rows={}, sources=[pin],
+                        bounds=dict(scan_limit=1, max_bytes=1), judgment='Accept the witnessed grant.')
+
+        def read_original(pins, bounds):
+            if pins[0]['sha256'] != sha(source.read_bytes()):
+                raise ValueError('changed source edition')
+            return 1, 1
+
+        review = revise(self.system, proposal, external_reader=read_original)
+        prepare = self.system.record_store._prepare_write
+
+        def prepare_then_change(*args, **kwargs):
+            result = prepare(*args, **kwargs)
+            source.write_bytes(b'B')
+            return result
+
+        with patch.object(self.system.record_store, '_prepare_write', prepare_then_change):
+            with self.assertRaisesRegex(ValueError, 'changed source edition'):
+                revise(self.system, proposal, external_reader=read_original,
+                       accept=review['review_sha256'], reason='Use the grant.')
+        self.assertEqual(record_identity(self.system.show('plan')), target)
+
     def test_context_captures_the_canonical_source_guide(self):
         guide = Path(__file__).with_name('GUIDE.md').read_bytes()
         request = self.system.ex.load('start')[1]

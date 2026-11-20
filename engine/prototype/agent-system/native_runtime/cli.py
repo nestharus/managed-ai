@@ -116,7 +116,8 @@ def parser() -> argparse.ArgumentParser:
     composition.add_argument('--limit', type=int, default=20)
     composition.add_argument('--pair-limit', type=int, default=200)
     revision = sub.add_parser('recompose', help='Review one composition revision against current, selected evidence')
-    revision.add_argument('--request', type=Path, required=True)
+    revision.add_argument('--request', type=Path, required=True,
+                          help='Proposal JSON. Optional consumer_scope lists local record IDs to inspect for bound uses.')
     revision.add_argument('--proof-store', type=Path, help='Current external owner bound by this composition')
     decision = revision.add_mutually_exclusive_group()
     decision.add_argument('--accept', metavar='REVIEW_SHA256')
