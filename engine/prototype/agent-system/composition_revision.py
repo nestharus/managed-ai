@@ -1,5 +1,6 @@
 """Compare and receive one authored composition under its native owner guard."""
 from collections import defaultdict
+from contextlib import ExitStack
 from types import SimpleNamespace
 
 from composition import COLLECTIONS, PREFIXES, Composition
@@ -180,9 +181,10 @@ def read_evidence(system, req, row_sources, external_reader):
 
 def revise(system, req, *, accept=None, retain=None, reason=None, external_reader=None,
            request_format='g60-recomposition/1', view_format='g60-recomposition-view/1',
-           binding_keys=('composition_use',)):
+           binding_keys=('composition_use',), proof_store=None, proof_routes=None):
     """Caller owns the store guard. A domain reader qualifies its external editions."""
-    optional = {'order', 'focus'}
+    optional = {'order', 'focus', 'proof_preservation'}
+    require(proof_store is None or 'proof_preservation' in req, 'proof store requires a preservation claim')
     if external_reader is not None:
         optional.add('withheld')
     exact_fields(req, {'format', 'instance_id', 'target', 'fields', 'rows', 'sources', 'bounds',
@@ -214,17 +216,67 @@ def revise(system, req, *, accept=None, retain=None, reason=None, external_reade
               'request_sha256': sha(canonical(req)), 'content_sha256': sha(canonical(staged['content'])),
               'judgment': req['judgment'], 'diff': delta, 'affected': impact,
               'previous_inputs': inherited, 'current_inputs': used, 'read_set': read_set, 'projection': view}
-    basis = sha(canonical(review))
+    with ExitStack() as stack:
+        bound = None
+        if 'proof_preservation' in req:
+            from composition_opportunities import BoundOpportunities, guarded_inventory
+            try:
+                before = original['content']['content']
+                after = staged['content']['content']
+                binding = before['proof_use']
+                require(binding == after['proof_use'], 'proposed proof authority differs')
+                # This contract interprets a tree rotation. A changed surrounding use
+                # needs its own qualified interpretation before a current claim.
+                comparable = dict(staged['content'], content=dict(after, tree=before['tree']))
+                require(canonical(original['content']) == canonical(comparable),
+                        'changed receiving contract outside the bound tree')
+                require(read_set['external_files'] + read_set['native_heads'] < req['bounds']['scan_limit'],
+                        'inventory exceeds evidence scan limit')
+                remaining = req['bounds']['max_bytes'] - read_set['native_bytes'] - read_set['external_bytes']
+                owner = stack.enter_context(guarded_inventory(system, binding, proof_store))
+                bound = BoundOpportunities(system, owner, binding, req['proof_preservation'],
+                                           original, staged, remaining, proof_routes)
+                review['proof_preservation'] = bound.observe()
+            except (KeyError, TypeError, ValueError, OSError) as exc:
+                review['proof_preservation'] = {'outcome': 'unresolved', 'preserves': False,
+                                                'coverage': {'complete': False, 'unknowns': [str(exc)]}}
+        def current_read_set():
+            return read_evidence(system, req, evidence, external_reader)
+
+        return receive(system, review, original, staged, delta, bound, current_read_set, accept, retain, reason)
+
+
+def receive(system, review, original, staged, delta, bound, current_read_set, accept, retain, reason):
+    certificate = canonical(review)
+    basis = sha(certificate)
     review.update(review_sha256=basis, status='proposed')
     if accept is not None or retain is not None:
         require((accept if accept is not None else retain) == basis, 'reviewed composition or read set differs')
         review['decision_reason'] = nonempty(reason, 'owner decision reason')
+        proof = review.get('proof_preservation')
+
+        def verify_at_use():
+            require(current_read_set() == review['read_set'], 'selected evidence changed at publication')
+            require(bound is not None and canonical(bound.observe()) == canonical(proof),
+                    'proof inventory or receiving contract changed at publication')
+            require(proof['preserves'], 'current complete proof preservation required: ' + proof['outcome'])
+            bound.retain_inputs()
+            review['certificate_object'] = system.ex.objects.put(certificate)
+
         if retain is not None or not any(delta.values()):
+            if proof is not None:
+                if accept is not None:
+                    verify_at_use()
+                else:
+                    if bound is not None:
+                        bound.retain_inputs()
+                    review['certificate_object'] = system.ex.objects.put(certificate)
             review.update(status='retained', head=record_identity(original))
         else:
             record = {k: staged[k] for k in ('id', 'kind', 'active', 'relations', 'content')}
             record['basis'] = [b['path'] for b in original['basis']]
-            written = system.record_store.put_reviewed(record, original['revision'], original['basis'])
+            options = {'verify': verify_at_use} if proof is not None else {}
+            written = system.record_store.put_reviewed(record, original['revision'], original['basis'], **options)
             installed = system.record_store.head(record_identity(written))
             require(canonical(installed['content']) == canonical(staged['content']),
                     'published head differs from reviewed content')

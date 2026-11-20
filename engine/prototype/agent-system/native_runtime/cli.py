@@ -117,6 +117,7 @@ def parser() -> argparse.ArgumentParser:
     composition.add_argument('--pair-limit', type=int, default=200)
     revision = sub.add_parser('recompose', help='Review one composition revision against current, selected evidence')
     revision.add_argument('--request', type=Path, required=True)
+    revision.add_argument('--proof-store', type=Path, help='Current external owner bound by this composition')
     decision = revision.add_mutually_exclusive_group()
     decision.add_argument('--accept', metavar='REVIEW_SHA256')
     decision.add_argument('--retain', metavar='REVIEW_SHA256')
@@ -237,7 +238,8 @@ def act(system, args):
         from composition_revision import revise
         from native_runtime.inputs import read_input
         proposal, _ = read_input(args.request, byte_limit=4 * 1024 * 1024)
-        return revise(system, proposal, accept=args.accept, retain=args.retain, reason=args.reason)
+        return revise(system, proposal, accept=args.accept, retain=args.retain, reason=args.reason,
+                      proof_store=getattr(args, 'proof_store', None))
     if action == 'compose':
         if args.interaction_map:
             if any(x is not None for x in (args.boundary, args.changed_since, args.repo, args.focus)) or args.pair_limit != 200:

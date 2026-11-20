@@ -172,9 +172,9 @@ class RecordStore:
     def put(self, record: dict, expected: int) -> dict:
         return self._replace(record, expected)
 
-    def put_reviewed(self, record: dict, expected: int, basis: list) -> dict:
+    def put_reviewed(self, record: dict, expected: int, basis: list, *, verify=None) -> dict:
         """Admit only the composition body and basis actually prepared for this write."""
-        return self._replace(record, expected, reviewed_basis=basis)
+        return self._replace(record, expected, reviewed_basis=basis, verify=verify)
 
     def put_feedback(self, record: dict, expected: int) -> dict:
         return self._replace(record, expected, feedback_write=True)
@@ -183,7 +183,7 @@ class RecordStore:
         return self._replace(record, expected, information_mode=mode)
 
     def _replace(self, record: dict, expected: int, *, information_mode: str | None = None,
-                 feedback_write: bool = False, observation_write: bool = False, reviewed_basis: list | None = None) -> dict:
+                 feedback_write: bool = False, observation_write: bool = False, reviewed_basis: list | None = None, verify=None) -> dict:
         integer(expected, 'expected revision')
         path = self.path(record.get('id', ''))
         previous, previous_raw = self.read(record['id']) if path.exists() else (None, None)
@@ -200,6 +200,8 @@ class RecordStore:
             require(all(row['sha256'] is None or (self.objects.directory / row['sha256']).is_file()
                         for row in reviewed_basis), 'reviewed basis object is unavailable')
             require(encode(body['content']) == encode(record['content']), 'normalized composition differs from reviewed body')
+        if verify is not None:
+            verify()
         old = body['previous_object']
         if old is not None:
             if len(previous_raw) <= MAX_BYTES:

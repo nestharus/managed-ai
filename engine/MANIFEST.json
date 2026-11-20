@@ -266,10 +266,15 @@
       "mode": 420,
       "sha256": "80d1de0748531dd9abe0ffa5c58a01c6ef6b5db3af749247ba5c9a06a678b1b0"
     },
-    "prototype/agent-system/composition_revision.py": {
-      "bytes": 12294,
+    "prototype/agent-system/composition_opportunities.py": {
+      "bytes": 14940,
       "mode": 420,
-      "sha256": "c508f6b83de265390c982fe5885a48ca1f656ca49e3ce5da00eae49aa2c24ada"
+      "sha256": "fc4aba45e4472f50f93b315cc093908ded7d9da4a9294c8d094a3a06a96f50c6"
+    },
+    "prototype/agent-system/composition_revision.py": {
+      "bytes": 15575,
+      "mode": 420,
+      "sha256": "33e58e3fe7a312d4d3b2f6ba22604d76b88a73f1a5e2d6e15ac6e91d3fcca447"
     },
     "prototype/agent-system/deployment.py": {
       "bytes": 19235,
@@ -317,9 +322,9 @@
       "sha256": "7a83c9db7478f189b9960d338c9f3571f35851d8ff48f59c02f32fa211a3dd3e"
     },
     "prototype/agent-system/native_runtime/cli.py": {
-      "bytes": 17633,
+      "bytes": 17814,
       "mode": 420,
-      "sha256": "4e2e75a1d7df618ff175822be3156a393b274ba752dbe273b283c39c8b48730d"
+      "sha256": "069838d4daff5a4e9f8a00581ce3a20569697c53403a5cabb18a24740d656ad3"
     },
     "prototype/agent-system/native_runtime/context_explanation.py": {
       "bytes": 8236,
@@ -367,9 +372,9 @@
       "sha256": "74a728c71c4abe464a106030d2d3731fc06bf912f4bf1a86c92e7c86978db278"
     },
     "prototype/agent-system/native_runtime/records.py": {
-      "bytes": 18021,
+      "bytes": 18117,
       "mode": 420,
-      "sha256": "5b9c2b26923c3de4d24e86a3726ca354554d9b56fbc01799e46a5666c2ea7d95"
+      "sha256": "19b8cf3bef26a61a66d3bfa5fbffd3d6398284a1a57b40657033e310dbcd3101"
     },
     "prototype/agent-system/native_runtime/scope.py": {
       "bytes": 7680,
