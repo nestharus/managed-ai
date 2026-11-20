@@ -88,6 +88,33 @@ class SystemChecks(unittest.TestCase):
         self.assertEqual(self.system.show('plan')['basis'][0]['sha256'], sha(source.read_bytes()))
         self.assertEqual(accepted['head']['revision'], 2)
 
+    def test_selected_receiver_reuses_one_guarded_read_and_pays_both_charges(self):
+        from composition_revision import revise
+        from native_runtime.identities import record_identity
+
+        store = self.system.record_store
+        target = self.system.put(dict(id='plan', kind='note', content=dict(
+            format='g60-composition/1', purpose='Check the selected receiver.')), 0)
+        target = record_identity(target)
+        goal = record_identity(store.show('goal'))
+        pin = dict(goal, instance_id=self.system.instance_id, pointer='/content')
+        size = store.size('goal')
+        q = dict(format='g60-recomposition/1', instance_id=self.system.instance_id, target=target,
+                 fields={}, rows={}, sources=[pin, dict(pin, pointer='/kind')], consumer_scope=['goal'],
+                 bounds=dict(scan_limit=2, max_bytes=2 * size), judgment='Check both uses of the goal.')
+        with patch.object(store, 'read', wraps=store.read) as reads:
+            review = revise(self.system, q)
+            self.assertEqual([call.args[0] for call in reads.call_args_list], ['plan', 'goal'])
+        self.assertEqual(review['read_set']['native_bytes'], size)
+        self.assertEqual(review['read_set']['native_heads'], 1)
+        self.assertEqual(review['consumer_scope'], dict(examined=[goal], bytes=size, candidates=[]))
+        for bounds in (dict(scan_limit=1, max_bytes=2 * size), dict(scan_limit=2, max_bytes=2 * size - 1)):
+            with self.assertRaisesRegex(ValueError, 'scan limit|byte bound'):
+                revise(self.system, dict(q, bounds=bounds))
+        self.system.put(dict(id='goal', kind='goal', content=dict(contribution='A later goal.')), goal['revision'])
+        with self.assertRaisesRegex(ValueError, 'native evidence head revision conflict'):
+            revise(self.system, q, accept=review['review_sha256'], reason='Use the checked goal.')
+
     def test_delayed_consumer_uses_only_a_verified_selected_capture(self):
         from composition_revision import revise
         from native_runtime.identities import record_identity

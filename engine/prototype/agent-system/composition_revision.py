@@ -197,7 +197,7 @@ def read_capture(store, ident, basis):
 
 
 def inspect_consumers(system, ids, original, staged, new_tables, keys, scan_limit, max_bytes,
-                      selected_basis=(), transfers=None):
+                      selected_basis=(), transfers=None, *, evidence_heads=None):
     """Locate authored same-instance row uses within the explicitly supplied records."""
     require(isinstance(ids, list) and ids and all(isinstance(i, str) and i for i in ids)
             and len(ids) == len(set(ids)), 'consumer_scope needs distinct record IDs')
@@ -262,8 +262,16 @@ def inspect_consumers(system, ids, original, staged, new_tables, keys, scan_limi
         return {'status': 'unresolved-edition', 'reason': reason}
 
     for ident in ids:
-        record, raw = system.record_store.read(ident, byte_limit=max_bytes - used_bytes)
-        used_bytes += len(raw)
+        remaining = max_bytes - used_bytes
+        if evidence_heads and ident in evidence_heads:
+            # Same owner guard and verified head. The receiver still spends its own budget.
+            record, size = evidence_heads[ident]
+            if size > remaining:
+                raise ValueError(f'source exceeds byte bound: {system.record_store.path(ident)}')
+        else:
+            record, raw = system.record_store.read(ident, byte_limit=remaining)
+            size = len(raw)
+        used_bytes += size
         head = record_identity(record)
         charge(head)
         checked.append(head)
@@ -312,7 +320,8 @@ def inspect_consumers(system, ids, original, staged, new_tables, keys, scan_limi
     return scope
 
 
-def read_evidence(system, req, row_sources, external_reader, selected_basis=None, transfers=None):
+def read_evidence(system, req, row_sources, external_reader, selected_basis=None, transfers=None,
+                  *, evidence_heads=None):
     selected = req['sources']
     require(isinstance(selected, list) and selected, 'select evidence for the decision')
     allowed = {canonical(pin) for pin in selected}
@@ -338,9 +347,9 @@ def read_evidence(system, req, row_sources, external_reader, selected_basis=None
         if pin['id'] not in heads:
             require(files + len(heads) < bounds['scan_limit'], 'evidence scan limit')
             record, raw = system.record_store.read(pin['id'], byte_limit=bounds['max_bytes'] - external_bytes - native_bytes)
-            heads[pin['id']] = record
+            heads[pin['id']] = record, len(raw)
             native_bytes += len(raw)
-        record = heads[pin['id']]
+        record, _ = heads[pin['id']]
         require(wanted == record_identity(record), 'native evidence head revision conflict: ' + pin['id'])
         require(isinstance(pin['pointer'], str), 'expected native evidence pointer')
         value = pointer(record, pin['pointer'])
@@ -355,6 +364,11 @@ def read_evidence(system, req, row_sources, external_reader, selected_basis=None
         if selected_basis is not None and pin['pointer'].split('/')[:-1] == ['', 'basis']:
             if value['path'] == system.record_store.relative_name(req['target']['id']):
                 selected_basis.append((dict(wanted, pointer=pin['pointer']), value))
+    if evidence_heads is not None:
+        ids = req['consumer_scope']
+        # Leave scope validation to its owner and carry only overlapping bodies into projection.
+        if isinstance(ids, list) and len(ids) <= bounds['scan_limit']:
+            evidence_heads.update((i, heads[i]) for i in ids if isinstance(i, str) and i in heads)
     return {'sources': pins, 'external_files': files, 'native_heads': len(heads),
             'external_bytes': external_bytes, 'native_bytes': native_bytes}
 
@@ -383,8 +397,9 @@ def revise(system, req, *, accept=None, retain=None, reason=None, external_reade
     if req.get('focus') is not None:
         require(req['focus'] in new, 'requested focus is absent from proposed composition')
     evidence = [pin for ref in used for pin in row_use(new[ref], binding_keys).get('sources', [])]
-    selected_basis, transfers = ([], {}) if 'consumer_scope' in req else (None, None)
-    read_set = read_evidence(system, req, evidence, external_reader, selected_basis, transfers)
+    selected_basis, transfers, evidence_heads = ([], {}, {}) if 'consumer_scope' in req else (None, None, None)
+    read_set = read_evidence(system, req, evidence, external_reader, selected_basis, transfers,
+                             evidence_heads=evidence_heads)
     # Use the shared bounded reader on the staged body, without publishing a speculative head.
     view = Composition(SimpleNamespace(ex=system.ex, show=lambda _: staged)).inspect(
         original['id'], focus=req.get('focus'), limit=10, pair_limit=0)
@@ -402,7 +417,9 @@ def revise(system, req, *, accept=None, retain=None, reason=None, external_reade
     if 'consumer_scope' in req:
         projected = staged if any(delta.values()) else original
         scope = inspect_consumers(system, req['consumer_scope'], original, projected, new_tables, binding_keys,
-                                  remaining_heads, remaining_bytes, selected_basis, transfers)
+                                  remaining_heads, remaining_bytes, selected_basis, transfers,
+                                  evidence_heads=evidence_heads)
+        del evidence_heads
         review['consumer_scope'] = scope
         remaining_heads -= len(scope['examined']) + len(scope.get('retained_objects', ()))
         remaining_bytes -= scope['bytes']

@@ -252,9 +252,9 @@
       "sha256": "f17eedc012a50d99cbefd176e47d39e9a2c63941a5a456c692db76647f952795"
     },
     "prototype/agent-system/check_system.py": {
-      "bytes": 40322,
+      "bytes": 42230,
       "mode": 420,
-      "sha256": "6bcc2e94e31fff74a40f16beb00bf56790b46ce5589bd113247d54442a91a13a"
+      "sha256": "b60de85ca6b2e19f6571475198c272367c759a3138dcda63ed6832a7b0d4a353"
     },
     "prototype/agent-system/check_turns.py": {
       "bytes": 7949,
@@ -272,9 +272,9 @@
       "sha256": "fc4aba45e4472f50f93b315cc093908ded7d9da4a9294c8d094a3a06a96f50c6"
     },
     "prototype/agent-system/composition_revision.py": {
-      "bytes": 26340,
+      "bytes": 27334,
       "mode": 420,
-      "sha256": "19ef3101154392f1ced6be59dba67ddf03acd72768381764ff75fa7082d58c72"
+      "sha256": "d6d3174b14322027b04ad0a8784b91e1d298d9f15d3e6b7c33416d2a36f042bc"
     },
     "prototype/agent-system/deployment.py": {
       "bytes": 19235,
