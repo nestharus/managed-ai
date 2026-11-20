@@ -115,6 +115,12 @@ def parser() -> argparse.ArgumentParser:
     composition.add_argument('--focus')
     composition.add_argument('--limit', type=int, default=20)
     composition.add_argument('--pair-limit', type=int, default=200)
+    revision = sub.add_parser('recompose', help='Review one composition revision against current, selected evidence')
+    revision.add_argument('--request', type=Path, required=True)
+    decision = revision.add_mutually_exclusive_group()
+    decision.add_argument('--accept', metavar='REVIEW_SHA256')
+    decision.add_argument('--retain', metavar='REVIEW_SHA256')
+    revision.add_argument('--reason')
     inquiry = sub.add_parser('inquiry').add_subparsers(dest='inquiry_action', required=True)
     for name in ('open', 'evidence'):
         inquiry.add_parser(name).add_argument('--spec', required=True, type=Path)
@@ -227,6 +233,11 @@ def act(system, args):
         return system.catalogue(args.id, args.query, args.kind, args.limit, args.offset, args.content)
     if action == 'materialize': return system.materialize(args.operation)
     if action == 'discover': return system.discover(read(args.request))
+    if action == 'recompose':
+        from composition_revision import revise
+        from native_runtime.inputs import read_input
+        proposal, _ = read_input(args.request, byte_limit=4 * 1024 * 1024)
+        return revise(system, proposal, accept=args.accept, retain=args.retain, reason=args.reason)
     if action == 'compose':
         if args.interaction_map:
             if any(x is not None for x in (args.boundary, args.changed_since, args.repo, args.focus)) or args.pair_limit != 200:

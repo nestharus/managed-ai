@@ -56,6 +56,38 @@ class SystemChecks(unittest.TestCase):
         return self.system.receive(turn, reply, 'caller-authored integration fixture',
                                    [target + '=' + str(proposal)])
 
+    def test_recomposition_rejects_different_basis_captured_by_put(self):
+        from composition import Composition
+        from composition_revision import revise
+        from native_runtime.identities import record_identity
+
+        source = self.write('sources/contract', 'Both obligations apply.')
+        profile = {'format': 'g60-composition/1', 'purpose': 'Check an allocation.'}
+        self.system.put({'id': 'plan', 'kind': 'note', 'content': profile, 'basis': ['sources/contract']}, 0)
+        target = record_identity(self.system.show('plan'))
+        goal = record_identity(self.system.show('goal'))
+        pin = dict(instance_id=self.system.instance_id, **goal, pointer='/content/contribution')
+        proposal = dict(format='g60-recomposition/1', instance_id=self.system.instance_id, target=target,
+                        fields={'purpose': 'Preserve each named obligation.'}, rows={}, sources=[pin],
+                        bounds={'scan_limit': 1, 'max_bytes': 8192}, judgment='Compare the complete allocation.')
+        review = revise(self.system, proposal)
+        original_projection = Composition.inspect
+
+        def change_after_projection(instance, *args, **options):
+            projection = original_projection(instance, *args, **options)
+            source.write_text('One obligation applies.', encoding='utf-8')
+            return projection
+
+        with patch.object(Composition, 'inspect', change_after_projection):
+            with self.assertRaisesRegex(ValueError, 'basis changed at publication'):
+                revise(self.system, proposal, accept=review['review_sha256'], reason='Use the contract.')
+        self.assertEqual(record_identity(self.system.show('plan')), target)
+        self.assertFalse((self.system.ex.objects.directory / sha(source.read_bytes())).exists())
+        source.write_text('Both obligations apply.', encoding='utf-8')
+        accepted = revise(self.system, proposal, accept=review['review_sha256'], reason='Use the contract.')
+        self.assertEqual(self.system.show('plan')['basis'][0]['sha256'], sha(source.read_bytes()))
+        self.assertEqual(accepted['head']['revision'], 2)
+
     def test_context_captures_the_canonical_source_guide(self):
         guide = Path(__file__).with_name('GUIDE.md').read_bytes()
         request = self.system.ex.load('start')[1]

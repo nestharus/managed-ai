@@ -64,6 +64,35 @@ The latest [reader-encounter model](stores/novel/work/models/reader-encounter.js
 
 The current stores were loaded from selected maintained material. This is a new current-use arrangement, not a reconstruction of missing original native events. The eight missing world-reference bodies and inherited novel generation history remain missing. Original-duty identity records retain their exact qualifications.
 
+## Revise a composition at its owner
+
+Use `system recompose --request proposal.json` through the selected deployment. Read the current head with `system show ID`, inspect it with `system compose --record ID`, and nominate a source that bears on the decision. A source can come from outside the existing relationships. For another store's observation, use the existing transfer route and select the received local occurrence. A claim about its origin's current state requires the origin's participation.
+
+The proposal below assumes a current composition with a `service` relation. Fill in the identities from local reads of the composition and the receipt.
+
+```json
+{
+  "format": "g60-recomposition/1",
+  "instance_id": "desk",
+  "target": {"id":"comparison","revision":1,"sha256":"<composition digest>"},
+  "sources": [{"instance_id":"desk","id":"receipt","revision":1,"sha256":"<receipt digest>","pointer":"/content/first"}],
+  "bounds": {"scan_limit":4,"max_bytes":131072},
+  "judgment": "Retain the buyer's delivery and distinguish the additional duty to the standby.",
+  "fields": {},
+  "rows": {
+    "relation:service": {"id":"service","from":["receipt"],"to":["decision"],
+      "prediction":"One delivery preserves both duties.","observation":"contradicted",
+      "account":"The buyer received the product and the standby lost its place."}
+  }
+}
+```
+
+`rows` maps typed references to complete replacements or null for deletion. `fields` can change purpose, unknowns, coverage or profile content. Optional `order` names every resulting ID of a reordered collection. Optional `focus` selects a row in the proposed projection. The review computes changes to old and new placements, potentially affected consumers, their inputs, and the nominated source read set. Whole-profile changes conservatively implicate all rows. These are candidates for interpretation. The domain supplies the meaning of a joint observation, alternatives and the consumer that can distinguish them.
+
+Native dependencies include endpoints, premises, opportunity placement, conflicts and declared resources. To persist extra dependencies or evidence, place typed row references in `content.composition_use.uses` and exact source pins in `content.composition_use.sources` on the consuming row. Select every pin required by implicated current rows in the proposal. Other row content remains domain-defined. Use a domain's entry when its evidence requires a domain reader, including existing research profiles with `research_use` or external file coordinates. Each domain controls what the common head means and how it is used.
+
+To commit or retain the reviewed arrangement, repeat the command with `--accept DIGEST --reason TEXT` or `--retain DIGEST --reason TEXT`. The store guard covers policy selection, target and local evidence reads, recomputation, and the expected-revision decision. Publication also compares the normalized content and captured basis that will enter the new head. A changed owner-held source, target or exposed basis needs a fresh review. A retained head keeps its original identity. A further composition can consume this head through a separate nominated source and its own owner decision. Each decision covers one nominated head.
+
 ## From a novel finding to a repair
 
 The novel owns a finding and the evidence that supports it. It distinguishes the manuscript edition and receiving scope from an unqualified external criticism. When that finding matters to general research or system construction, it exports a pinned record observation. The pin names the source instance, record identity, revision and digest.

@@ -172,6 +172,10 @@ class RecordStore:
     def put(self, record: dict, expected: int) -> dict:
         return self._replace(record, expected)
 
+    def put_reviewed(self, record: dict, expected: int, basis: list) -> dict:
+        """Admit only the composition body and basis actually prepared for this write."""
+        return self._replace(record, expected, reviewed_basis=basis)
+
     def put_feedback(self, record: dict, expected: int) -> dict:
         return self._replace(record, expected, feedback_write=True)
 
@@ -179,7 +183,7 @@ class RecordStore:
         return self._replace(record, expected, information_mode=mode)
 
     def _replace(self, record: dict, expected: int, *, information_mode: str | None = None,
-                 feedback_write: bool = False, observation_write: bool = False) -> dict:
+                 feedback_write: bool = False, observation_write: bool = False, reviewed_basis: list | None = None) -> dict:
         integer(expected, 'expected revision')
         path = self.path(record.get('id', ''))
         previous, previous_raw = self.read(record['id']) if path.exists() else (None, None)
@@ -187,7 +191,15 @@ class RecordStore:
         if revision != expected:
             raise ValueError(f'record revision conflict: expected {expected}, current {revision}')
         body, raw = self._prepare_write(record, previous, previous_raw, information_mode=information_mode,
-                                        feedback_write=feedback_write, observation_write=observation_write)
+                                        feedback_write=feedback_write, observation_write=observation_write,
+                                        retain_basis=reviewed_basis is None)
+        if reviewed_basis is not None:
+            require(body['basis'] == reviewed_basis, 'captured workspace basis changed at publication')
+            # Reuse the incumbent's already captured objects. A rejected write
+            # must not retain newly encountered workspace material.
+            require(all(row['sha256'] is None or (self.objects.directory / row['sha256']).is_file()
+                        for row in reviewed_basis), 'reviewed basis object is unavailable')
+            require(encode(body['content']) == encode(record['content']), 'normalized composition differs from reviewed body')
         old = body['previous_object']
         if old is not None:
             if len(previous_raw) <= MAX_BYTES:

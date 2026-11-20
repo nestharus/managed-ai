@@ -391,7 +391,7 @@ def main():
             # Select the descriptor and complete sources inside the same read guard.
             with shared(external(args.root) / 'exchange' / 'owner.lock'):
                 result = act(System(args.root), args)
-        elif args.action == 'put':
+        elif args.action in {'put', 'recompose'}:
             from continuation_support.exchange import _external as external_exchange
             root = external(args.root)
             exchange_root = external_exchange(NativeLayout(root).exchange)

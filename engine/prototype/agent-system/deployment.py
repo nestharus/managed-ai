@@ -231,7 +231,7 @@ class Deployment:
         if not arguments or any(v == '--root' or v.startswith('--root=') for v in arguments):
             raise ValueError('supply a native command; deployment owns its selected store')
         self._verify_engine()
-        if arguments[0] in {'adopt', 'reconcile-publication'}:
+        if arguments[0] in {'adopt', 'reconcile-publication', 'recompose'}:
             return self._selected_publication(arguments)
         return self._system_action(arguments)
 
@@ -271,7 +271,7 @@ class Deployment:
         if args.action == 'configure':
             with exclusive(self.runtime / 'exchange' / 'owner.lock'):
                 return self._system(api, args)
-        if args.action == 'put':
+        if args.action in {'put', 'recompose'}:
             # Resolve the selected store owner before opening its guard. Construct
             # the policy-bearing System only after admission, as direct put does.
             layout = api['NativeLayout'](api['external'](self.runtime))
@@ -311,7 +311,7 @@ class Deployment:
                              'selection_scope': 'Per-store catalogues and domains are selected by the native store descriptor.'}
         system.command_prefix = [sys.executable, '-B', str(self.engine / 'prototype/deploy.py'),
                                  '--deployment', str(self.root), 'system']
-        if args.action in {'catalogue', 'configure', 'put', 'explain-context'}:
+        if args.action in {'catalogue', 'configure', 'put', 'recompose', 'explain-context'}:
             return api['act'](system, args), args, api
         with exclusive(system.ex.root / 'owner.lock'):
             return api['act'](system, args), args, api
