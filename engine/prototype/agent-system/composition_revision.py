@@ -181,7 +181,23 @@ def projected_coordinate(original, staged, positions, path):
     return dict(row, proposed_pointer=proposed, status=status)
 
 
-def inspect_consumers(system, ids, original, staged, new_tables, keys, scan_limit, max_bytes):
+def read_capture(store, ident, basis):
+    """Report the native object actually consulted, including a failed capture."""
+    observed = dict(sha256=basis['sha256'], bytes=basis['bytes'])
+    try:
+        record = store.captured_record(ident, basis)
+    except FileNotFoundError:
+        observed['reason'] = 'captured record object is missing'
+    except (OSError, ValueError, KeyError):
+        observed['reason'] = 'captured record object failed verification'
+    else:
+        observed['record'] = record_identity(record)
+        return observed, record
+    return observed, None
+
+
+def inspect_consumers(system, ids, original, staged, new_tables, keys, scan_limit, max_bytes,
+                      selected_basis=(), transfers=None):
     """Locate authored same-instance row uses within the explicitly supplied records."""
     require(isinstance(ids, list) and ids and all(isinstance(i, str) and i for i in ids)
             and len(ids) == len(set(ids)), 'consumer_scope needs distinct record IDs')
@@ -189,6 +205,9 @@ def inspect_consumers(system, ids, original, staged, new_tables, keys, scan_limi
     positions = {c: {ident: i for i, ident in enumerate(new_tables[c])} for c in COLLECTIONS}
     incumbent = record_identity(original)
     coordinates, checked, candidates = {}, [], []
+    objects, editions = {}, {}
+    material = system.record_store.relative_name(incumbent['id'])
+    validated = set()
     used_bytes = 0
     # Charge each output fragment once, including its separator, before accumulating it.
     view_bytes = len(canonical({'examined': [], 'bytes': max_bytes, 'candidates': []}))
@@ -197,6 +216,50 @@ def inspect_consumers(system, ids, original, staged, new_tables, keys, scan_limi
         nonlocal view_bytes
         view_bytes += len(canonical(fragment)) + 1
         require(view_bytes <= MAX_VIEW_BYTES, 'consumer scope exceeds composition view byte bound')
+
+    def project_retained(record, key, path):
+        coord = (key, path)
+        if coord not in coordinates:
+            if key not in validated:
+                try:
+                    Composition(None).profile(record)
+                except ValueError:
+                    return {'status': 'unresolved-edition', 'reason': 'captured edition has no valid typed composition'}
+                validated.add(key)
+            coordinates[coord] = projected_coordinate(record, staged, positions, path)
+        return coordinates[coord]
+
+    def historical(captured, authorities, path):
+        nonlocal used_bytes
+        reason = 'no selected basis or native transfer supplies this local record edition'
+        if captured['revision'] >= incumbent['revision']:
+            return {'status': 'unresolved-edition', 'reason': 'pin conflicts with the current revision'}
+        # An explicitly located transfer has already supplied and paid for its complete body.
+        transfer = (transfers or {}).get((captured['revision'], captured['sha256']))
+        if transfer:
+            authority, key, record = transfer
+            return dict(project_retained(record, key, path), transfer_source=authority, object_sha256=key)
+        for authority, basis in authorities:
+            key, size = basis['sha256'], basis['bytes']
+            if key is None:
+                reason = 'source path was absent at capture'
+                continue
+            if key not in objects:
+                require(len(ids) + len(objects) < scan_limit, 'retained source exceeds evidence scan limit')
+                require(type(size) is int and 0 <= size <= max_bytes - used_bytes,
+                        'retained source exceeds evidence byte bound')
+                # Reserve the declared length even for a failed integrity check.
+                used_bytes += size
+                item, editions[key] = read_capture(system.record_store, incumbent['id'], basis)
+                charge(item)
+                objects[key] = item
+            item = objects[key]
+            require(item['bytes'] == size, 'conflicting lengths for retained source object')
+            if item.get('record') != captured:
+                reason = item.get('reason', 'captured basis holds a different record edition')
+                continue
+            return dict(project_retained(editions[key], key, path), basis_source=authority, object_sha256=key)
+        return {'status': 'unresolved-edition', 'reason': reason}
 
     for ident in ids:
         record, raw = system.record_store.read(ident, byte_limit=max_bytes - used_bytes)
@@ -209,6 +272,9 @@ def inspect_consumers(system, ids, original, staged, new_tables, keys, scan_limi
             continue
         _, tables, _, _ = Composition(None).profile(record)
         rows = row_map(tables)
+        own_basis = [(dict(head, pointer='/basis/' + str(i)), basis)
+                     for i, basis in enumerate(record['basis']) if basis['path'] == material]
+        authorities = own_basis + list(selected_basis)
         bindings, seeds = [], set()
         for ref, row in rows.items():
             for pin in row_use(row, keys)['sources']:
@@ -221,7 +287,7 @@ def inspect_consumers(system, ids, original, staged, new_tables, keys, scan_limi
                 path = pin['pointer']
                 require(isinstance(path, str), 'expected native evidence pointer')
                 if captured != incumbent:
-                    result = {'status': 'unresolved-edition'}
+                    result = historical(captured, authorities, path)
                 else:
                     if path not in coordinates:
                         coordinates[path] = projected_coordinate(original, staged, positions, path)
@@ -239,10 +305,14 @@ def inspect_consumers(system, ids, original, staged, new_tables, keys, scan_limi
             charge(candidate)
             candidate['bindings'] = bindings
             candidates.append(candidate)
-    return {'examined': checked, 'bytes': used_bytes, 'candidates': candidates}
+    scope = {'examined': checked, 'bytes': used_bytes, 'candidates': candidates}
+    if objects:
+        scope['retained_objects'] = list(objects.values())
+        require(len(canonical(scope)) <= MAX_VIEW_BYTES, 'consumer scope exceeds composition view byte bound')
+    return scope
 
 
-def read_evidence(system, req, row_sources, external_reader):
+def read_evidence(system, req, row_sources, external_reader, selected_basis=None, transfers=None):
     selected = req['sources']
     require(isinstance(selected, list) and selected, 'select evidence for the decision')
     allowed = {canonical(pin) for pin in selected}
@@ -273,7 +343,18 @@ def read_evidence(system, req, row_sources, external_reader):
         record = heads[pin['id']]
         require(wanted == record_identity(record), 'native evidence head revision conflict: ' + pin['id'])
         require(isinstance(pin['pointer'], str), 'expected native evidence pointer')
-        pointer(record, pin['pointer'])
+        value = pointer(record, pin['pointer'])
+        if transfers is not None and isinstance(value, dict) and value.get('format') == 'managed-ai-transfer/1':
+            source = value.get('source')
+            if isinstance(source, dict) and (source.get('instance_id'), source.get('record_id')) == (
+                    system.instance_id, req['target']['id']):
+                from native_runtime.loading import unpack_transfer
+                _, edition, _ = unpack_transfer(value, system.record_store)
+                transfers.setdefault((edition['revision'], edition['sha256']),
+                                     (pin, value['object_sha256'], edition))
+        if selected_basis is not None and pin['pointer'].split('/')[:-1] == ['', 'basis']:
+            if value['path'] == system.record_store.relative_name(req['target']['id']):
+                selected_basis.append((dict(wanted, pointer=pin['pointer']), value))
     return {'sources': pins, 'external_files': files, 'native_heads': len(heads),
             'external_bytes': external_bytes, 'native_bytes': native_bytes}
 
@@ -302,7 +383,8 @@ def revise(system, req, *, accept=None, retain=None, reason=None, external_reade
     if req.get('focus') is not None:
         require(req['focus'] in new, 'requested focus is absent from proposed composition')
     evidence = [pin for ref in used for pin in row_use(new[ref], binding_keys).get('sources', [])]
-    read_set = read_evidence(system, req, evidence, external_reader)
+    selected_basis, transfers = ([], {}) if 'consumer_scope' in req else (None, None)
+    read_set = read_evidence(system, req, evidence, external_reader, selected_basis, transfers)
     # Use the shared bounded reader on the staged body, without publishing a speculative head.
     view = Composition(SimpleNamespace(ex=system.ex, show=lambda _: staged)).inspect(
         original['id'], focus=req.get('focus'), limit=10, pair_limit=0)
@@ -320,9 +402,9 @@ def revise(system, req, *, accept=None, retain=None, reason=None, external_reade
     if 'consumer_scope' in req:
         projected = staged if any(delta.values()) else original
         scope = inspect_consumers(system, req['consumer_scope'], original, projected, new_tables, binding_keys,
-                                  remaining_heads, remaining_bytes)
+                                  remaining_heads, remaining_bytes, selected_basis, transfers)
         review['consumer_scope'] = scope
-        remaining_heads -= len(scope['examined'])
+        remaining_heads -= len(scope['examined']) + len(scope.get('retained_objects', ()))
         remaining_bytes -= scope['bytes']
     with ExitStack() as stack:
         bound = None
@@ -347,7 +429,15 @@ def revise(system, req, *, accept=None, retain=None, reason=None, external_reade
                 review['proof_preservation'] = {'outcome': 'unresolved', 'preserves': False,
                                                 'coverage': {'complete': False, 'unknowns': [str(exc)]}}
         def current_read_set():
-            return read_evidence(system, req, evidence, external_reader)
+            current = read_evidence(system, req, evidence, external_reader)
+            # Receiving heads share the writer guard. Reopen only the independently
+            # stored objects consulted at review, including unsuccessful reads.
+            for item in review.get('consumer_scope', {}).get('retained_objects', ()):
+                basis = dict(path=system.record_store.relative_name(original['id']),
+                             bytes=item['bytes'], sha256=item['sha256'])
+                observed, _ = read_capture(system.record_store, original['id'], basis)
+                require(observed == item, 'retained composition evidence changed at publication')
+            return current
 
         return receive(system, review, original, staged, delta, bound, current_read_set, accept, retain, reason)
 
@@ -371,7 +461,8 @@ def receive(system, review, original, staged, delta, bound, current_read_set, ac
                 review['certificate_object'] = system.ex.objects.put(certificate)
 
         # Native heads share our owner guard. External originals can advance independently.
-        verify = verify_at_use if proof is not None or review['read_set']['external_files'] else None
+        observed_objects = review.get('consumer_scope', {}).get('retained_objects')
+        verify = verify_at_use if proof is not None or review['read_set']['external_files'] or observed_objects else None
         if retain is not None or not any(delta.values()):
             if accept is not None and verify is not None:
                 verify()

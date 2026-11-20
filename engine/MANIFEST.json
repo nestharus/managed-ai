@@ -7,14 +7,14 @@
       "sha256": "1b4e84c86c44c4279906134daed8366a7b1d0cf592af940309911b391a4b925f"
     },
     "CLI-FIELD-REFERENCE.md": {
-      "bytes": 21731,
+      "bytes": 22868,
       "mode": 420,
-      "sha256": "478c7039ec541baf8e661c1c05cbfa4bfed3f68d5917185c8aa2ee39e6dd32c3"
+      "sha256": "df26241b16c102ca9a4b6edfaaead25043f6adaa2421fc1e06618a852dd185c2"
     },
     "CURRENT-RELEASE.json": {
       "bytes": 559,
       "mode": 420,
-      "sha256": "cab15c0fb3929304f3939acb020247363d9baec23ea85944c3b71161a1cebc16"
+      "sha256": "525a5521bd075eed1353de7926c178844e9a48bff046f80276db64fdcc9acd84"
     },
     "INSTANCES.md": {
       "bytes": 12125,
@@ -34,7 +34,7 @@
     "SOURCES.md": {
       "bytes": 31710,
       "mode": 420,
-      "sha256": "c2003493b7dd20db1db9e85761bb98bdb15a53ab4ebd2773736f85f0da8c449c"
+      "sha256": "886f17d06deb360f3f76f96977773dc1e105787d60ea6294fd5aa3a2fa542afe"
     },
     "companion/CONTRACT.md": {
       "bytes": 5692,
@@ -189,7 +189,7 @@
     "prototype/agent-system/catalogue.json": {
       "bytes": 42468,
       "mode": 420,
-      "sha256": "e0d5a14095c87d6b20be83a5c6ed1ff5a4fbc7e9731fe84d0268124ad84f8a14"
+      "sha256": "b95cee863c638d1fd07748e8e39c8b451be7363f823acef5a724a285417d5550"
     },
     "prototype/agent-system/change_notice.py": {
       "bytes": 4758,
@@ -252,9 +252,9 @@
       "sha256": "f17eedc012a50d99cbefd176e47d39e9a2c63941a5a456c692db76647f952795"
     },
     "prototype/agent-system/check_system.py": {
-      "bytes": 33794,
+      "bytes": 40322,
       "mode": 420,
-      "sha256": "8b42dc799c52b81379fffd31aee57aabb4d27bc9a62cbde9898d3183524a521a"
+      "sha256": "6bcc2e94e31fff74a40f16beb00bf56790b46ce5589bd113247d54442a91a13a"
     },
     "prototype/agent-system/check_turns.py": {
       "bytes": 7949,
@@ -272,9 +272,9 @@
       "sha256": "fc4aba45e4472f50f93b315cc093908ded7d9da4a9294c8d094a3a06a96f50c6"
     },
     "prototype/agent-system/composition_revision.py": {
-      "bytes": 20836,
+      "bytes": 26340,
       "mode": 420,
-      "sha256": "fa851d863e488f07921e787d760a8e80be9ac9c47e4e5496e1a2039452893381"
+      "sha256": "19ef3101154392f1ced6be59dba67ddf03acd72768381764ff75fa7082d58c72"
     },
     "prototype/agent-system/deployment.py": {
       "bytes": 19235,
@@ -362,9 +362,9 @@
       "sha256": "216809615f3b199e6a6d78d882a04ba5e1a121c2b91ddaa9a2250ddc53596e78"
     },
     "prototype/agent-system/native_runtime/loading.py": {
-      "bytes": 12297,
+      "bytes": 13002,
       "mode": 420,
-      "sha256": "eb3ee640b15950abb09345d2c232615731b93adb90276b1e74a0a267ae4e4bd4"
+      "sha256": "defe6d61dcd661acf77e504958af24639efbede7210e1605b5799efbc9c74df6"
     },
     "prototype/agent-system/native_runtime/projects.py": {
       "bytes": 2244,
@@ -372,9 +372,9 @@
       "sha256": "74a728c71c4abe464a106030d2d3731fc06bf912f4bf1a86c92e7c86978db278"
     },
     "prototype/agent-system/native_runtime/records.py": {
-      "bytes": 18117,
+      "bytes": 18787,
       "mode": 420,
-      "sha256": "19b8cf3bef26a61a66d3bfa5fbffd3d6398284a1a57b40657033e310dbcd3101"
+      "sha256": "94b1ad713356d67066bf4beb3f456b88b074b664585defed3a9bc5c066ceee46"
     },
     "prototype/agent-system/native_runtime/scope.py": {
       "bytes": 7680,
@@ -1174,7 +1174,7 @@
     "release/current_sources.json": {
       "bytes": 14419,
       "mode": 420,
-      "sha256": "796c6675ef690f3f7fc28cea63464944e0f86f218472f5436b24a6d34ef9add6"
+      "sha256": "d3d9c48be355de0b4ab4a17efebb83df16451fb448bc4a0bf7ba19ecff2f9cc9"
     },
     "release/navigation.json": {
       "bytes": 25601,

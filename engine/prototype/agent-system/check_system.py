@@ -88,6 +88,110 @@ class SystemChecks(unittest.TestCase):
         self.assertEqual(self.system.show('plan')['basis'][0]['sha256'], sha(source.read_bytes()))
         self.assertEqual(accepted['head']['revision'], 2)
 
+    def test_delayed_consumer_uses_only_a_verified_selected_capture(self):
+        from composition_revision import revise
+        from native_runtime.identities import record_identity
+        from native_runtime.loading import Loading
+
+        store = self.system.record_store
+        def put(ident, content, rev=0, basis=()):
+            self.system.put(dict(id=ident, kind='note', content=content, basis=list(basis)), rev)
+            return record_identity(store.show(ident))
+
+        def pin(head, path):
+            return dict(head, instance_id=self.system.instance_id, pointer=path)
+
+        def element(ident, value):
+            return dict(id=ident, account=ident, content=value)
+
+        original = dict(format='g60-composition/1', purpose='Check the grant.',
+                        elements=[element('grant', True), element('other', False)])
+        first = put('service', original)
+        holder1 = put('first-capture', {}, basis=['records/service.json'])
+        old = put('service', original, 1)
+        holder2 = put('second-capture', {}, basis=['records/service.json'])
+        transfer_path = self.base / 'service-transfer.json'
+        Loading(self.system).export('service', transfer_path)
+        selected = pin(holder2, '/basis/0')
+        path = '/content/elements/0/content'
+        use = pin(old, path)
+        consumer = dict(original, elements=[element('use', {'composition_use': {'sources': [use]}})])
+        put('reader', consumer)
+        new = put('service', dict(original, elements=[element('other', True), element('grant', False)]), 2)
+        q = dict(format='g60-recomposition/1', instance_id=self.system.instance_id, target=new,
+                 fields={}, rows={}, sources=[selected], consumer_scope=['reader'],
+                 bounds=dict(scan_limit=3, max_bytes=100000), judgment='Compare the earlier grant.')
+        def binding(req):
+            return revise(self.system, req)['consumer_scope']['candidates'][0]['bindings'][0]
+
+        review = revise(self.system, q)
+        scope = review['consumer_scope']
+        item, = scope['retained_objects']
+        self.assertEqual(item['record'], old)
+        found = binding(q)
+        self.assertEqual((found['source_row'], found['proposed_pointer'], found['status']),
+                         ('element:grant', '/content/elements/1/content', 'relocated-and-changed'))
+        self.assertEqual(found['basis_source'], dict(holder2, pointer='/basis/0'))
+        self.assertEqual(binding(dict(q, rows={'element:grant': None}))['status'], 'removed')
+        self.assertEqual(binding(dict(q, sources=[pin(holder1, '/basis/0')]))['reason'],
+                         'captured basis holds a different record edition')
+        self.assertEqual(binding(dict(q, sources=[pin(holder2, '/content')]))['reason'],
+                         'no selected basis or native transfer supplies this local record edition')
+        ambiguous = dict(q, sources=[pin(holder1, '/basis/0'), selected],
+                         bounds=dict(scan_limit=5, max_bytes=100000))
+        self.assertEqual(binding(ambiguous), found)
+        transfer = json.loads(transfer_path.read_bytes())
+        filed = put('filed', {'export': transfer})
+        offered = pin(filed, '/content/export')
+        located = binding(dict(q, sources=[offered]))
+        self.assertEqual((located['source_row'], located['status'], located['transfer_source']),
+                         ('element:grant', 'relocated-and-changed', offered))
+        other = dict(transfer, source=dict(transfer['source'], instance_id='outside'))
+        filed = put('filed', {'export': other}, 1)
+        self.assertEqual(binding(dict(q, sources=[pin(filed, '/content/export')]))['status'], 'unresolved-edition')
+        filed = put('filed', {'export': dict(transfer, object_sha256='0' * 64)}, 2)
+        with self.assertRaisesRegex(ValueError, 'transferred source bytes differ'):
+            binding(dict(q, sources=[pin(filed, '/content/export')]))
+        # Wrong current-edition and future pins cannot select the body at the old array index.
+        for wrong in (dict(use, revision=new['revision']), dict(use, revision=new['revision']+1),
+                      dict(use, sha256=first['sha256'])):
+            bad = dict(consumer, elements=[element('use', {'composition_use': {'sources': [wrong]}})])
+            put('reader', bad, store.show('reader')['revision'])
+            unresolved = binding(q)
+            self.assertEqual(unresolved['status'], 'unresolved-edition')
+            self.assertNotIn('source_row', unresolved)
+        put('reader', consumer, store.show('reader')['revision'])
+        with self.assertRaisesRegex(ValueError, 'reviewed composition'):
+            revise(self.system, q, retain=review['review_sha256'], reason='Old receiver head.')
+        total = review['read_set']['native_bytes'] + store.size('reader') + item['bytes']
+        self.assertEqual(binding(dict(q, bounds=dict(scan_limit=3, max_bytes=total))), found)
+        for bounds in (dict(scan_limit=2, max_bytes=total), dict(scan_limit=3, max_bytes=total-1)):
+            with self.assertRaisesRegex(ValueError, 'scan limit|byte bound'):
+                binding(dict(q, bounds=bounds))
+
+        # Real object read and integrity check, while the proposed writer is between
+        # normalization and replacement. Preserve the incumbent on loss or corruption.
+        claim = dict(q, fields={'purpose': 'Publish the checked grant.'})
+        decision = revise(self.system, claim)
+        captured = store.objects.directory / item['sha256']
+        raw = captured.read_bytes()
+        prepare = store._prepare_write
+        def damage_after_prepare(*args, **kwargs):
+            prepared = prepare(*args, **kwargs)
+            captured.write_bytes(b' ' * len(raw))
+            return prepared
+        with patch.object(store, '_prepare_write', damage_after_prepare):
+            with self.assertRaisesRegex(ValueError, 'retained composition evidence changed'):
+                revise(self.system, claim, accept=decision['review_sha256'], reason='Use this edition.')
+        self.assertEqual(record_identity(store.show('service')), new)
+        self.assertEqual(binding(q)['reason'], 'captured record object failed verification')
+        captured.rename(captured.with_suffix('.held'))
+        missing = binding(q)
+        self.assertEqual(missing['reason'], 'captured record object is missing')
+        self.assertNotIn('source_row', missing)
+        captured.write_bytes(raw)
+        self.assertEqual(binding(q), found)
+
     def test_recomposition_locates_consumers_by_edition_and_typed_row(self):
         from composition_revision import revise
         from native_runtime.identities import record_identity

@@ -55,7 +55,7 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-158a5fd9fcbc684322e8"></a>
 ## CLI-FIELD-REFERENCE.md
 
-[CLI-FIELD-REFERENCE.md](CLI-FIELD-REFERENCE.md) — 21731 bytes; SHA-256 `478c7039ec541baf8e661c1c05cbfa4bfed3f68d5917185c8aa2ee39e6dd32c3`.
+[CLI-FIELD-REFERENCE.md](CLI-FIELD-REFERENCE.md) — 22868 bytes; SHA-256 `df26241b16c102ca9a4b6edfaaead25043f6adaa2421fc1e06618a852dd185c2`.
 
 <a id="source-f2707b3e30027aeb2192"></a>
 ## host/OPERATION.md

@@ -34,8 +34,12 @@ class RecordStore:
         text(goal['content'].get('contribution'), 'goal contribution')
         return goal
 
+    @staticmethod
+    def relative_name(ident: str) -> str:
+        return 'records/' + packet_id(ident) + '.json'
+
     def path(self, ident: str) -> Path:
-        return self.ex.path('records/' + packet_id(ident) + '.json')
+        return self.ex.path(self.relative_name(ident))
 
     def material(self, ident: str) -> str:
         return self.path(ident).relative_to(self.work).as_posix()
@@ -48,11 +52,23 @@ class RecordStore:
 
     def read(self, ident: str, *, byte_limit: int | None = None) -> tuple[dict, bytes]:
         record, raw = read_input(self.path(ident), byte_limit=byte_limit)
+        self._verify_record(ident, record)
+        return record, raw
+
+    def _verify_record(self, ident, record):
         if record.get('id') != ident or record.get('format') != self.format:
             raise ValueError('record identity or format changed')
         if record.get('sha256') != sha(encode({k: v for k, v in record.items() if k != 'sha256'})):
             raise ValueError('record digest changed')
-        return record, raw
+
+    def captured_record(self, ident, basis):
+        """Open the exact local record object named by an already qualified native basis."""
+        require(basis['path'] == self.relative_name(ident), 'basis belongs to a different source path')
+        raw = self.objects.read(basis['sha256'], retained=True, expected_bytes=basis['bytes'])
+        record = strict_json(raw)
+        self._verify_record(ident, record)
+        identity(record_identity(record))
+        return record
 
     def scoped_heads(self, needs_body):
         """Yield validated scope/status fields and complete records for the nominated roles."""

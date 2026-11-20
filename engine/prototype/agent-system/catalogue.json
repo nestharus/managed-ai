@@ -3,7 +3,7 @@
   "source_root": "managed-ai-shared-engine-1",
   "snapshot": {
     "edition": "managed-ai-shared-engine-1",
-    "selection_sha256": "796c6675ef690f3f7fc28cea63464944e0f86f218472f5436b24a6d34ef9add6",
+    "selection_sha256": "d3d9c48be355de0b4ab4a17efebb83df16451fb448bc4a0bf7ba19ecff2f9cc9",
     "relationship": "References to one canonical source body; domain sources are selected per store."
   },
   "entries": [
@@ -214,11 +214,11 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "CLI-FIELD-REFERENCE.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:478c7039ec541baf8e661c1c05cbfa4bfed3f68d5917185c8aa2ee39e6dd32c3",
+      "body_id": "sha256:df26241b16c102ca9a4b6edfaaead25043f6adaa2421fc1e06618a852dd185c2",
       "body_path": "CLI-FIELD-REFERENCE.md",
-      "sha256": "478c7039ec541baf8e661c1c05cbfa4bfed3f68d5917185c8aa2ee39e6dd32c3",
-      "source_sha256": "478c7039ec541baf8e661c1c05cbfa4bfed3f68d5917185c8aa2ee39e6dd32c3",
-      "bytes": 21731,
+      "sha256": "df26241b16c102ca9a4b6edfaaead25043f6adaa2421fc1e06618a852dd185c2",
+      "source_sha256": "df26241b16c102ca9a4b6edfaaead25043f6adaa2421fc1e06618a852dd185c2",
+      "bytes": 22868,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "Read a configured store directly through its native catalogue. The separate library commands require an authoring source or a published library.",
