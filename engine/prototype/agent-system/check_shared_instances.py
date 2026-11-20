@@ -12,10 +12,11 @@ import shutil
 import subprocess
 import sys
 import unittest
+from contextlib import contextmanager
 from unittest.mock import patch
 
 from system import System
-from deployment import Deployment, code_identity, encode, sha
+from deployment import Deployment, code_identity, encode, exclusive, sha
 from feedback import Feedback
 from information import Information, record_identity
 from native_runtime.loading import Loading
@@ -79,6 +80,32 @@ class SharedInstances(unittest.TestCase):
         self.assertFalse((self.b / 'work/records/result.json').exists())
         self.assertFalse((da / 'editions').exists())
         self.assertEqual(list(da.glob('*.py')), [])
+
+    def test_deployed_put_uses_policy_current_at_owner_admission(self):
+        deployment = self.bundle / 'deployments/a'
+        Deployment.initialize(deployment, self.a, ENGINE)
+        value = {'id': 'decision', 'kind': 'sample-a-judgment', 'content': {'answer': 'First'}}
+        self.sa.put(value, 0)
+        prior = self.sa.record_store.path('decision').read_bytes()
+        update = write(self.bundle / 'update.json', dict(value, content={'answer': 'Second'}))
+        spec = write(self.bundle / 'policy.json', {
+            'expected_sha256': sha((self.a / 'system.json').read_bytes()),
+            'record_retention': 'append-history', 'account': 'Retain the predecessor.'})
+
+        @contextmanager
+        def configure_then_lock(path):
+            self.assertEqual(path, self.a / 'exchange/owner.lock')
+            subprocess.run([sys.executable, '-B', ENGINE / 'prototype/system.py', '--root', self.a,
+                            'configure', '--spec', spec], check=True, capture_output=True)
+            with exclusive(path):
+                yield
+
+        with patch('deployment.exclusive', configure_then_lock):
+            result, _, _ = Deployment(deployment).system(['put', '--record', str(update), '--expected', '1'])
+        self.assertEqual(result['record']['previous_object'], sha(prior))
+        page = next(System(self.a).record_store.history_pages('decision'))
+        self.assertEqual([row['revision'] for row in page['records']], [2, 1])
+        self.assertTrue(page['complete'])
 
     def test_02_schema_enforcement_without_generic_ontology(self):
         good = {'id': 'typed', 'kind': 'sample-a-judgment', 'content': {'answer': 'Qualified.'}}

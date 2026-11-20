@@ -247,9 +247,9 @@
       "sha256": "7487c94cb7ce73bfe51a68f9310c6f9da14d996f9a3740c48859a8ec21c28b04"
     },
     "prototype/agent-system/check_shared_instances.py": {
-      "bytes": 19587,
+      "bytes": 21146,
       "mode": 420,
-      "sha256": "2fc36ffe69e25e69942e605cc936adf726bf7e2476543ec9c31280e832220814"
+      "sha256": "525e23a38627005487af238f535c579353866fa4d3433fbbdeeb10a81d593984"
     },
     "prototype/agent-system/check_system.py": {
       "bytes": 26140,
@@ -267,9 +267,9 @@
       "sha256": "80d1de0748531dd9abe0ffa5c58a01c6ef6b5db3af749247ba5c9a06a678b1b0"
     },
     "prototype/agent-system/deployment.py": {
-      "bytes": 18631,
+      "bytes": 19194,
       "mode": 420,
-      "sha256": "cf6f31d8df5336342c2b58f243633c0684da716ed21316d23e44fb8559925cc5"
+      "sha256": "af5b71a8f0001284a54eb551dc8cffac30ae1403b4aeede6767cc0c4b2f2bed9"
     },
     "prototype/agent-system/discovery.py": {
       "bytes": 31909,

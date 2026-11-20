@@ -271,6 +271,15 @@ class Deployment:
         if args.action == 'configure':
             with exclusive(self.runtime / 'exchange' / 'owner.lock'):
                 return self._system(api, args)
+        if args.action == 'put':
+            # Resolve the selected store owner before opening its guard. Construct
+            # the policy-bearing System only after admission, as direct put does.
+            layout = api['NativeLayout'](api['external'](self.runtime))
+            owner = api['Exchange'](layout.exchange)
+            if owner.workspace != layout.workspace.resolve():
+                raise ValueError('system workspace binding changed')
+            with exclusive(owner.root / 'owner.lock'):
+                return self._system(api, args)
         if args.action == 'adopt':
             try:
                 return self._system(api, args)
@@ -302,7 +311,7 @@ class Deployment:
                              'selection_scope': 'Per-store catalogues and domains are selected by the native store descriptor.'}
         system.command_prefix = [sys.executable, '-B', str(self.engine / 'prototype/deploy.py'),
                                  '--deployment', str(self.root), 'system']
-        if args.action in {'catalogue', 'configure', 'explain-context'}:
+        if args.action in {'catalogue', 'configure', 'put', 'explain-context'}:
             return api['act'](system, args), args, api
         with exclusive(system.ex.root / 'owner.lock'):
             return api['act'](system, args), args, api
