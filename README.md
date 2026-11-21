@@ -1,10 +1,21 @@
 # managed-ai
 
-One maintained AI-system implementation, three current native stores, and loadable domains. Research, novel and discovery deployments select the same engine. Their state, source accounts and authority remain separate.
+This repository owns the shared engine, optional companions and operator guidance. Three domain repositories are pinned in [.gitmodules](.gitmodules). An assembled release adds its selected stores and deployment descriptors.
 
-## Start
+## Start in a source checkout
 
-Extract this archive into one directory. From that directory, inspect the three deployments:
+Run `git submodule update --init --recursive` to populate the domains at the commits selected here. Each repository preserves the tracked bytes used by catalogue and release pins. If an older checkout already converted line endings, verify pins in a fresh checkout before carrying over local edits. Use Linux or WSL for native commands.
+
+| Contributor task | Entry, implementation and check |
+| --- | --- |
+| Change how a deployed store runs a command | [Deployment entry](engine/prototype/deploy.py) → [selection and dispatch](engine/prototype/agent-system/deployment.py) → [native command handler](engine/prototype/agent-system/native_runtime/cli.py). Exercise [selected deployment cases](engine/prototype/agent-system/check_deployment.py). |
+| Change how a peer acquires a component | [Peer Workbench](companions/workbench/PEER-CONTRACT.md) → [component manifest](companions/workbench/COMPONENTS.json) → [loader](companions/workbench/peer_workbench.py). Run [shared-layout tests](companions/workbench/test_shared_layout.py). The [representation adapter](engine/companion/CONTRACT.md) binds artifacts to native turns. |
+| Change a domain operation or practice | Open its descriptor for the tool entry and contract IDs: [research](domains/research/domain.json), [writing](domains/writing/domain.json), [AI-system building](domains/ai-system-building/domain.json). Change the source in that repository, refresh its registrations, then select its commit here. |
+| Build or check a release | Follow [the release procedure](RELEASING.md) from pinned tracked exports to a clean assembly. The [package producer](engine/release/README.md) owns member verification. The [native component map](engine/prototype/README.md) locates the code shipped under `prototype/`. |
+
+## Start in an assembled release
+
+The store links and application accounts below describe a full release. A working release supplies its own store and entrance. From an extracted full release, inspect the three deployments:
 
 ```sh
 python -B engine/prototype/deploy.py --deployment deployments/research status

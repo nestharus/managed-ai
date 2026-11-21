@@ -2,7 +2,7 @@
 
 This optional worker connects the existing finite peer harness to the accepted model/tool workbench. A capable model can construct an owned contribution, read a peer's captured contribution, negotiate through messages and revise its own output. The supplied model performs the interpretation. The harness still schedules the workers and admits their exact structural returns.
 
-Keep this complete directory together: `peer_workbench.py`, the initial public interface, clarification and amendment, `COMPONENTS.json` and the exact `` components. The accepted harness is supplied separately by the operating release at `companions/harness/peer_harness.py`. The source corpus is the separately unpacked current research archive.
+Keep this complete directory together: `peer_workbench.py`, its peer contract, `COMPONENTS.json` and the components registered there. Keep the Workbench in its bundle-relative location for access to the shared knowledge reader. The accepted harness is supplied separately by the operating release at `companions/harness/peer_harness.py`. The source corpus is the separately unpacked current research archive.
 
 ## Start a declared peer construction
 

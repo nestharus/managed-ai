@@ -1162,9 +1162,9 @@
       "sha256": "a68fbdb7c0666a5d2f91c9324524001d5c6f2448bd3b91bbe427ebfe332de827"
     },
     "release/README.md": {
-      "bytes": 3095,
+      "bytes": 3270,
       "mode": 420,
-      "sha256": "f649c47bd563c2f0220ab434ff19ece17421f7ba7ec55b0dc2118dc6b2189205"
+      "sha256": "45eaa6466a18550a36c9887fa261273b123a3771cf3c349f006a96846d43f94b"
     },
     "release/check_current.py": {
       "bytes": 1301,
@@ -1182,9 +1182,9 @@
       "sha256": "cbdf500521e2ed2374d38903c97717c2967a948dcc04cadb477707ebf2797064"
     },
     "release/package.py": {
-      "bytes": 15568,
+      "bytes": 15839,
       "mode": 420,
-      "sha256": "d72b007c4ceab501bd21973f0133e370e934e1295922a7710b0a7bd11a648fae"
+      "sha256": "c9918ada3ebd683fde7d5367d07c35a9060587d32ddd6e345db13c86925c1faf"
     },
     "release/refresh_guidance.py": {
       "bytes": 7048,
@@ -1192,9 +1192,9 @@
       "sha256": "02dcbada9f4136b275c9189cd8aca9342ec4b99296999dfb085a07cbfdbf4547"
     },
     "release/test_source_list.py": {
-      "bytes": 2744,
+      "bytes": 4239,
       "mode": 420,
-      "sha256": "747bfd94cab7f3527ae7563ddd1ae331df1416bbff3b17eba6d7698237f94679"
+      "sha256": "955df005dff0c610da9ae5e49cdd40c7cd88a3f6cf75116c46ef0f055b44c701"
     }
   }
 }

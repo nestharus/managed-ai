@@ -120,22 +120,27 @@ def write_json(path, value):
 def components():
     global _MODULES
     manifest = decode_json((HERE / 'COMPONENTS.json').read_bytes())
+    # Import order follows the component dependencies. COMPONENTS owns file placement.
+    roles = ('model_bridges', 'source_tools', 'evidence_support', 'agent_runtime', 'workbench_agent')
+    aliases = {}
     for name, item in manifest['files'].items():
-        need(identity((HERE / name).read_bytes()) == item['identity'],
+        path = scoped_file(HERE, name)
+        need(identity(path.read_bytes()) == item['identity'],
              'Acquired component differs from accepted body: ' + name)
-    if _MODULES is not None:
-        return _MODULES, manifest
+        role = path.stem
+        if role in roles:
+            need(role not in aliases and path.suffix == '.py', 'Ambiguous peer component: ' + role)
+            aliases[role] = name
+    missing = [role for role in roles if role not in aliases]
+    need(not missing, 'Missing peer component: ' + ', '.join(missing))
+    basis = (HERE, digest(canonical(manifest['files'])))
+    if _MODULES is not None and _MODULES[0] == basis:
+        return _MODULES[1], manifest
     loaded = {}
-    aliases = {
-        'model_bridges': 'model_bridges.py',
-        'source_tools': 'source_tools.py',
-        'evidence_support': 'controller/evidence_support.py',
-        'agent_runtime': 'controller/agent_runtime.py',
-        'workbench_agent': 'workbench_agent.py',
-    }
     prior = {name: sys.modules.get(name) for name in aliases}
     try:
-        for name, rel in aliases.items():
+        for name in roles:
+            rel = aliases[name]
             key = '_g60_peer86_' + digest(str(HERE).encode())[:16] + '_' + name
             spec = importlib.util.spec_from_file_location(key, HERE / rel)
             module = importlib.util.module_from_spec(spec)
@@ -149,7 +154,7 @@ def components():
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = module
-    _MODULES = loaded
+    _MODULES = (basis, loaded)
     return loaded, manifest
 
 

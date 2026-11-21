@@ -20,7 +20,7 @@ of these absolute path prefixes in its JSON string values:
 | Prefix | Replace with |
 | --- | --- |
 | `/__PRODUCT_ROOT__` | The installed product root containing `resumable_workbench.py`, its companion modules, and `controller/` |
-| `/__CORPUS_ROOT__` | The optimized research archive root containing `../../engine/prototype/knowledge-system/knowledge.py` |
+| `/__CORPUS_ROOT__` | The directory of Markdown sources to read. The installed Workbench locates the trusted reader in the package’s shared engine. |
 | `/__WORK_ROOT__` | A fresh user-controlled root outside both packages, containing distinct `workspace` and `state` locations |
 
 Use actual absolute paths. The example places the mailbox at `state/model` and
@@ -44,7 +44,7 @@ resolved on `PATH`.
 | --- | --- |
 | Core data | JSON object; string task; sources mapping string IDs to string bodies; reserved `workbench-tool-contract` ID excluded; list of obligations; string run ID if supplied; finite JSON values |
 | Limits | Integer `max_steps` and `max_cache_bytes` at least 0; positive integer `max_file_bytes`; positive finite numeric timeouts; booleans rejected as limits |
-| Required code | Existing controller directory with readable `agent_runtime.py` and `evidence_support.py`; existing corpus and its named ordinary trusted `knowledge.py` file |
+| Required code | Existing controller directory with readable `agent_runtime.py` and `evidence_support.py`; existing corpus directory and the ordinary trusted `knowledge.py` in the installed engine |
 | Model | Mailbox or command kind and transport directory; nonempty command argv; available executable, directly named Python script and declared fixed input files; suitable optional working directory |
 | Receivers | Named command specifications, fixed input files, positive timeouts and nonempty lists of clean relative artifact paths; duplicate, escaping or existing symlink artifact paths reported |
 | Placement | Editable workspace disjoint from retained state, source-state and transport storage; mutable storage disjoint from corpus and controller; named fixed command/input files outside the workspace |

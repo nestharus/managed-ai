@@ -38,6 +38,13 @@ class SharedLayout(unittest.TestCase):
                 result = service.discover('protected')
                 self.assertEqual(result['hits'], [])
 
+    def test_peer_requires_a_registered_file_for_each_loaded_role(self):
+        manifest = json.loads((peer_workbench.HERE / 'COMPONENTS.json').read_bytes())
+        del manifest['files']['controller/agent_runtime.py']
+        with patch.object(peer_workbench, 'decode_json', return_value=manifest):
+            with self.assertRaisesRegex(ValueError, 'Missing peer component: agent_runtime'):
+                peer_workbench.components()
+
     def test_peer_turn_uses_shared_code_and_captures_exact_return(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

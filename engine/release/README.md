@@ -20,7 +20,7 @@ Run the bounded native acceptance cases with:
 python3 -B engine/prototype/agent-system/check_shared_instances.py
 ```
 
-Package the single current tree from its parent or another working directory:
+Export the pinned tracked files and assemble the selected stores as described in [the release procedure](../../RELEASING.md). The producer refuses Git checkout metadata in a package input. From the assembly’s parent or another working directory, run:
 
 ```sh
 python3 -B /absolute/managed-ai/engine/release/package.py \
