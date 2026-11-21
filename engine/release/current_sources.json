@@ -279,8 +279,8 @@
       "link_base": "host/SIGNAL-FIELD.md",
       "presentation": "host/SIGNAL-FIELD.md",
       "kind": "guide",
-      "sha256": "d7529ded83c529851d450987a440394601af5748a782cb5664877efa8dc7f1ad",
-      "bytes": 17378,
+      "sha256": "0d236f590b5550f9136e60e07ea3257d7ec214b5e3170c344ddb68a6c53f202f",
+      "bytes": 17391,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     }
   ]

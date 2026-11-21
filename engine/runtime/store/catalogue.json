@@ -3,7 +3,7 @@
   "source_root": "managed-ai-shared-engine-1",
   "snapshot": {
     "edition": "managed-ai-shared-engine-1",
-    "selection_sha256": "8d0c22186b4bf68a899cb9173a96fcee99c25a44fa9d1d40c15d8cc8b7a8f194",
+    "selection_sha256": "959ee1fed74e5098e20fd540fbc8884b5f0e26d66898111204349b82276e33e0",
     "relationship": "References to one canonical source body; domain sources are selected per store."
   },
   "entries": [
@@ -552,11 +552,11 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "host/SIGNAL-FIELD.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:d7529ded83c529851d450987a440394601af5748a782cb5664877efa8dc7f1ad",
+      "body_id": "sha256:0d236f590b5550f9136e60e07ea3257d7ec214b5e3170c344ddb68a6c53f202f",
       "body_path": "host/SIGNAL-FIELD.md",
-      "sha256": "d7529ded83c529851d450987a440394601af5748a782cb5664877efa8dc7f1ad",
-      "source_sha256": "d7529ded83c529851d450987a440394601af5748a782cb5664877efa8dc7f1ad",
-      "bytes": 17378,
+      "sha256": "0d236f590b5550f9136e60e07ea3257d7ec214b5e3170c344ddb68a6c53f202f",
+      "source_sha256": "0d236f590b5550f9136e60e07ea3257d7ec214b5e3170c344ddb68a6c53f202f",
+      "bytes": 17391,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "Serve explicitly supplied receiving uses across source changes and restart with bounded recovery, qualified live/historical/occurrence lifetimes and an actual capable callback; service is distinct from semantic acceptance.",

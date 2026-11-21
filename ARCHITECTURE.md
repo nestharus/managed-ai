@@ -54,7 +54,7 @@ The earlier complete-field construction is also retained: 110 source identities 
 
 ## Artifact composition and selective current use
 
-The shared engine already owns the optional `g60-composition/1` profile and its relation, premise and interaction views. The writing domain's [artifact-composition operation](domains/writing/operations/ARTIFACT-COMPOSITION.md) projects authored relationships, exact chapter units and attributed source-use pointers into that profile. The novel's native graph owns its current state. The domain does not introduce a second graph engine or teach the core about particular characters, chapters or writing criteria.
+The shared engine already owns the optional `g60-composition/1` profile and its relation, premise and interaction views. The writing domain's [artifact-composition operation](domains/writing/operations/artifact_composition/ARTIFACT-COMPOSITION.md) projects authored relationships, exact chapter units and attributed source-use pointers into that profile. The novel's native graph owns its current state. The domain does not introduce a second graph engine or teach the core about particular characters, chapters or writing criteria.
 
 A guarded focused selection carries its exact parent identity, selected relations, complete useful chapter/account units and selected source bodies. It checks the parent and evidence before native preparation and adoption without expanding every ancestor into the participant's context. An unchanged chapter can need renewed receiving when an earlier chapter or the question changes. Exact byte currency and current meaning remain different judgments.
 

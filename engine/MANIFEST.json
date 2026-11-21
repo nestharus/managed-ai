@@ -14,7 +14,7 @@
     "CURRENT-RELEASE.json": {
       "bytes": 559,
       "mode": 420,
-      "sha256": "8d7afe061c6c2ee8619f8a9440505d55f74c712c4ac7398fd748f614df0cd555"
+      "sha256": "91ba882a6089bce59322e226c6728ef2e4468310e11ee7d20dcac5798b1eb228"
     },
     "INSTANCES.md": {
       "bytes": 12115,
@@ -34,7 +34,7 @@
     "SOURCES.md": {
       "bytes": 31559,
       "mode": 420,
-      "sha256": "c8f695d786fb2c39151670526d3ff924709403dcd669a1e7d24d668d357a9e13"
+      "sha256": "deaccd238f1e43a48225972e3693b8624597811986040d8dd8d41ec3e572c772"
     },
     "companion/CONTRACT.md": {
       "bytes": 5805,
@@ -112,9 +112,9 @@
       "sha256": "d528f5080fe7288addb6d11f997a782eeb9b6ca1691878c6d99a9c4ba2f45f63"
     },
     "host/SIGNAL-FIELD.md": {
-      "bytes": 17378,
+      "bytes": 17391,
       "mode": 420,
-      "sha256": "d7529ded83c529851d450987a440394601af5748a782cb5664877efa8dc7f1ad"
+      "sha256": "0d236f590b5550f9136e60e07ea3257d7ec214b5e3170c344ddb68a6c53f202f"
     },
     "host/capture_native.py": {
       "bytes": 6070,
@@ -179,7 +179,7 @@
     "release/current_sources.json": {
       "bytes": 14248,
       "mode": 420,
-      "sha256": "8d0c22186b4bf68a899cb9173a96fcee99c25a44fa9d1d40c15d8cc8b7a8f194"
+      "sha256": "959ee1fed74e5098e20fd540fbc8884b5f0e26d66898111204349b82276e33e0"
     },
     "release/navigation.json": {
       "bytes": 25601,
@@ -1059,7 +1059,7 @@
     "runtime/store/catalogue.json": {
       "bytes": 42411,
       "mode": 420,
-      "sha256": "fcde111875f0408dd1a2378d43c87e08de09f954a0e025b178f2066a427b728f"
+      "sha256": "f9f935e09d114470af456c96c41da42f355f26e4cc69659edb2ed966d155c41e"
     },
     "runtime/store/change_notice.py": {
       "bytes": 4758,

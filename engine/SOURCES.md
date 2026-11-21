@@ -140,7 +140,7 @@ Headings show stable source IDs. Each link points to the canonical file verified
 <a id="source-73692ee93d0b96260539"></a>
 ## host/SIGNAL-FIELD.md
 
-[host/SIGNAL-FIELD.md](host/SIGNAL-FIELD.md) — 17378 bytes; SHA-256 `d7529ded83c529851d450987a440394601af5748a782cb5664877efa8dc7f1ad`.
+[host/SIGNAL-FIELD.md](host/SIGNAL-FIELD.md) — 17391 bytes; SHA-256 `0d236f590b5550f9136e60e07ea3257d7ec214b5e3170c344ddb68a6c53f202f`.
 
 <a id="source-5de2e61e25c2b74e8603"></a>
 ## agent/shared-systems.md
