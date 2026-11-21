@@ -352,9 +352,9 @@
       "sha256": "b09910ffe8e012b7c01e4c2ae967f6aaa35a41095248ec42850780c4110a7bd6"
     },
     "prototype/agent-system/native_runtime/inputs.py": {
-      "bytes": 3656,
+      "bytes": 4407,
       "mode": 420,
-      "sha256": "fd565cb03d9b86d16a5d425d3674b7582c261971b151a8b226723ab9e7a5f355"
+      "sha256": "c746b1317f1f10a6ec36a70ea818f37de44ce5e91d2d4dfdf69453be6e66a432"
     },
     "prototype/agent-system/native_runtime/inquiry.py": {
       "bytes": 5903,
