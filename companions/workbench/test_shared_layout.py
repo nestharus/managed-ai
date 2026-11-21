@@ -9,10 +9,21 @@ from unittest.mock import patch
 
 import peer_workbench
 import resumable_workbench
-from source_tools import SourceService
+from source_tools import SourceService, bundled_search_module_path
 
 
 class SharedLayout(unittest.TestCase):
+    def test_reader_layout_selection_prefers_the_current_edition(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine = Path(directory) / 'engine'
+            old = engine / 'prototype/knowledge-system/knowledge.py'
+            old.parent.mkdir(parents=True)
+            old.write_bytes(bundled_search_module_path().read_bytes())
+            self.assertEqual(bundled_search_module_path(engine), old)
+            (engine / 'runtime').mkdir()
+            self.assertEqual(bundled_search_module_path(engine),
+                             engine / 'runtime/knowledge-system/knowledge.py')
+
     def test_relocated_exposure_boundary_blocks_read_and_discovery(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -123,6 +134,21 @@ class SharedLayout(unittest.TestCase):
             self.assertEqual(second["status"], "complete", second)
             self.assertEqual(dispatches, [1, 2])
             self.assertEqual(second["durable"]["actual_dispatches_this_invocation"], {"model": 0, "tool": 0})
+
+            manifest = root / 'state/durable/manifest.json'
+            retained = manifest.read_bytes()
+            reader = bundled_search_module_path()
+            pins = json.loads(retained)['contract']['binding']['source_search_code']
+            self.assertEqual(pins, {str(reader): {'bytes': reader.stat().st_size,
+                                                  'sha256': hashlib.sha256(reader.read_bytes()).hexdigest()}})
+            alternate = root / 'engine/prototype/knowledge-system/knowledge.py'
+            alternate.parent.mkdir(parents=True)
+            alternate.write_bytes(reader.read_bytes())
+            with patch('source_tools.bundled_search_module_path', return_value=alternate):
+                refused = resumable_workbench.run_workbench(config, resume=True, model=model)
+            self.assertEqual(refused['status'], 'binding_mismatch', refused)
+            self.assertEqual(dispatches, [1, 2])
+            self.assertEqual(manifest.read_bytes(), retained)
 
 
 if __name__ == "__main__":

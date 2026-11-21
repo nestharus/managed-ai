@@ -10,12 +10,11 @@ import unittest
 
 
 arguments = argparse.ArgumentParser()
-arguments.add_argument('--engine', required=True, type=Path, metavar='PROTOTYPE',
-                       help='native prototype directory, for example engine/prototype')
+arguments.add_argument('--engine', required=True, type=Path, metavar='ENGINE',
+                       help='engine directory, for example engine; a selected runtime directory is also accepted')
 args, rest = arguments.parse_known_args()
-sys.path.insert(0, str(args.engine.resolve() / 'agent-system'))
-from system import System
-from representation import RepresentationOperations, OPERATION, encoded
+from representation import RepresentationOperations, OPERATION, encoded, load_system
+System = load_system(args.engine).System
 
 
 class NativeRepresentationChecks(unittest.TestCase):

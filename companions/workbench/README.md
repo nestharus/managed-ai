@@ -11,7 +11,7 @@ One canonical implementation serves direct source work, restartable work and pee
 | Contribute to a finite peer run | `peer_workbench.py`, [use](PEERS.md), [contract](PEER-CONTRACT.md), [harness](../harness/PROTOCOL.md) |
 | Observe changed declared dependencies | `publication_review.py`, [use](PUBLICATION.md), [observation contract](OBSERVATION-CONTRACT.md) |
 
-Supply `corpus_root` as the current source corpus, usually `domains/research/sources` in the package. Source discovery uses the bundled trusted lexical implementation at `../../engine/prototype/knowledge-system/knowledge.py`; the corpus contains source data and needs no duplicate reader code. Known-path reads acquire complete Markdown bodies before an index is needed. Lexical discovery supplies nominations, not semantic applicability.
+Supply `corpus_root` as the current source corpus, usually `domains/research/sources` in the package. Source discovery uses the bundled trusted lexical implementation at `../../engine/runtime/knowledge-system/knowledge.py`; the corpus contains source data and needs no duplicate reader code. Known-path reads acquire complete Markdown bodies before an index is needed. Lexical discovery supplies nominations, not semantic applicability.
 
 Set `__PRODUCT_ROOT__` in examples to this directory, `__CORPUS_ROOT__` to the corpus, and `__WORK_ROOT__` to caller-owned work outside both packages. The examples contain empty duty arrays; supply the actual commissioned duties. They use a mailbox transport and no configured semantic receiver. An actual model and receiver remain caller-supplied.
 

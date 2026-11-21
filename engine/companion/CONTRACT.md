@@ -26,9 +26,9 @@ obligations and explicitly selected material still participate in native guards.
 
 ## Prepare the actual operation
 
-In a shared package, `PROTOTYPE` is `engine/prototype`. Both the adapter and `check_representation.py` take this directory.
+In a shared package, `ENGINE` is the top-level `engine/` directory of the selected edition. Both the adapter and `check_representation.py` take it. An explicit runtime directory, including an older edition's `prototype/`, is also accepted.
 
-Call `representation.py --engine PROTOTYPE --root RUNTIME prepare --spec FILE`.
+Call `representation.py --engine ENGINE --root RUNTIME prepare --spec FILE`.
 The specification has format `g60-representation-operation/1` and these fields:
 
 - `turn`, `task`, `consumer`: the actual native occurrence and receiving task.

@@ -1,6 +1,6 @@
 # Selected existing CLI and field reference
 
-Runtime state, source derivatives, indexes and outputs belong to selected stores outside the engine directory. In the commands below, `G60_BASE` names the selected unchanged prototype directory; other uppercase tokens name caller-selected paths or retained IDs. In this package, select `engine/prototype`. The underlying field contracts remain useful; [instance contracts](INSTANCES.md) add the current deployment, domain, typed-record, import and retention interfaces.
+Runtime state, source derivatives, indexes and outputs belong to selected stores outside the engine directory. In the commands below, `G60_BASE` names the selected runtime directory; other uppercase tokens name caller-selected paths or retained IDs. In this package, select `engine/runtime`. The underlying field contracts remain useful; [instance contracts](INSTANCES.md) add the current deployment, domain, typed-record, import and retention interfaces.
 
 ## Read the configured store
 
@@ -34,15 +34,15 @@ Keep the exact preparation receipt. Both index preparation and discovery accept 
 ## Native runtime, Attention and receiving
 
 ```bash
-python3 -B "$G60_BASE/agent-system/system.py" --root RUNTIME init --goal-text CONTRIBUTION
-python3 -B "$G60_BASE/agent-system/system.py" --root RUNTIME put --record RECORD_JSON --expected 0
-python3 -B "$G60_BASE/agent-system/system.py" --root RUNTIME track --spec ATTENTION_SPEC
-python3 -B "$G60_BASE/agent-system/system.py" --root RUNTIME context TURN --request CONTEXT_REQUEST
-python3 -B "$G60_BASE/agent-system/system.py" --root RUNTIME recover TURN --text
-python3 -B "$G60_BASE/agent-system/system.py" --root RUNTIME view TURN
-python3 -B "$G60_BASE/agent-system/system.py" --root RUNTIME receive TURN --reply ACTUAL_REPLY --producer ATTRIBUTION --proposal outputs/result.md=ACTUAL_PROPOSAL --assessment ASSESSMENT
-python3 -B "$G60_BASE/agent-system/system.py" --root RUNTIME assess TURN --receipt ASSESSMENT --producer ATTRIBUTION
-python3 -B "$G60_BASE/agent-system/system.py" --root RUNTIME adopt TURN --target outputs/result.md --reason CURRENT_RECEIVING_REASON
+python3 -B "$G60_BASE/system.py" --root RUNTIME init --goal-text CONTRIBUTION
+python3 -B "$G60_BASE/system.py" --root RUNTIME put --record RECORD_JSON --expected 0
+python3 -B "$G60_BASE/system.py" --root RUNTIME track --spec ATTENTION_SPEC
+python3 -B "$G60_BASE/system.py" --root RUNTIME context TURN --request CONTEXT_REQUEST
+python3 -B "$G60_BASE/system.py" --root RUNTIME recover TURN --text
+python3 -B "$G60_BASE/system.py" --root RUNTIME view TURN
+python3 -B "$G60_BASE/system.py" --root RUNTIME receive TURN --reply ACTUAL_REPLY --producer ATTRIBUTION --proposal outputs/result.md=ACTUAL_PROPOSAL --assessment ASSESSMENT
+python3 -B "$G60_BASE/system.py" --root RUNTIME assess TURN --receipt ASSESSMENT --producer ATTRIBUTION
+python3 -B "$G60_BASE/system.py" --root RUNTIME adopt TURN --target outputs/result.md --reason CURRENT_RECEIVING_REASON
 ```
 
 `receive --assessment` and a later `assess` are alternatives for recording that account, not two independent observations. Source and target paths inside requests are relative to `RUNTIME/work`; CLI JSON/reply paths are host-selected. The supplied record uses existing `id`, `kind`, `content`, optional `basis` and other ordinary record fields. Updating a record requires its actual current revision in `--expected`.
@@ -159,8 +159,8 @@ The `elements`, `relations`, `premises` and `opportunities` collections are list
 `--focus` accepts an explicit `element:`, `relation:`, `premise:` or `opportunity:` reference; `at` specifically locates elements or relations. A record's successful `put` only stores ordinary content; `compose` validates this optional profile. Missing references remain unresolved rather than becoming valid dependencies. An interaction map is a bounded declared-resource projection; use the ordinary composition projection when the question also needs prerequisite and `at` reference qualification.
 
 ```bash
-python3 -B "$G60_BASE/agent-system/system.py" --root RUNTIME compose --record COMPOSITION_ID --interaction-map --limit 12
-python3 -B "$G60_BASE/agent-system/system.py" --root RUNTIME compose --record COMPOSITION_ID --focus relation:RELATION_ID --limit 6 --pair-limit 0
+python3 -B "$G60_BASE/system.py" --root RUNTIME compose --record COMPOSITION_ID --interaction-map --limit 12
+python3 -B "$G60_BASE/system.py" --root RUNTIME compose --record COMPOSITION_ID --focus relation:RELATION_ID --limit 6 --pair-limit 0
 ```
 
 `--interaction-map` accepts `--record` and optional `--limit`; it cannot be combined with focus, changed-since or a nondefault pair-limit. It factors shared resources without all-pairs enumeration. A direct context `compositions` selector also selects the **complete record and basis**, even with a small focus projection. Use it for an intentionally small current composition, or deliver an explicitly qualified standalone bounded projection as ordinary material.

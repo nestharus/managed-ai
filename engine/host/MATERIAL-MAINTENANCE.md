@@ -59,7 +59,7 @@ Write a `managed-material-selection/1` JSON specification. `roots` is a delibera
   "current": [
     {
       "role": "selected-engine",
-      "path": "project/active-system/prototype/system.py",
+      "path": "project/active-system/engine/runtime/system.py",
       "expected_sha256": "REPLACE_WITH_ACTUAL_VERIFIED_HASH"
     }
   ],

@@ -21,17 +21,17 @@ Deployment status verifies the engine pin and the store binding. Native `system 
 From the package root:
 
 ```sh
-python3 -B engine/prototype/deploy.py --deployment deployments/research system status
-python3 -B engine/prototype/deploy.py --deployment deployments/novel system status
+python3 -B engine/runtime/deploy.py --deployment deployments/research system status
+python3 -B engine/runtime/deploy.py --deployment deployments/novel system status
 ```
 
 Create an additional instance only in a new location:
 
 ```sh
-python3 -B engine/prototype/system.py --root stores/example init \
+python3 -B engine/runtime/system.py --root stores/example init \
   --instance-id example-instance --goal-text "Actual receiving contribution" \
   --domain /absolute/domain/domain.json --catalogue /absolute/instance-sources.json
-python3 -B engine/prototype/deploy.py --deployment deployments/example init \
+python3 -B engine/runtime/deploy.py --deployment deployments/example init \
   --engine engine --store stores/example
 ```
 
@@ -45,7 +45,7 @@ A reference catalogue has `format: managed-ai-source-catalogue/1` and `sources`.
 
 ```sh
 python3 -B engine/knowledge.py --store stores/research show SOURCE_ID --text
-python3 -B engine/prototype/deploy.py --deployment deployments/novel system catalogue SOURCE_ID --text
+python3 -B engine/runtime/deploy.py --deployment deployments/novel system catalogue SOURCE_ID --text
 ```
 
 The source catalogue records availability and custody. Registration, hashing, importing metadata and building a source index do not establish a participant's acquisition or application. Existing acquisition counts remain owned by their source-account records.

@@ -3,7 +3,7 @@
 `source_tools.py` supplies complete Markdown acquisition, lexical nomination and
 durable source/use records for a capable caller. It reuses the accepted v63
 `FtsAnalyzer` and `search_query` implementation from the research archive's
-`../../engine/prototype/knowledge-system/knowledge.py`. That is a trusted code
+`../../engine/runtime/knowledge-system/knowledge.py`. That is a trusted code
 dependency selected by the host; Markdown content is evidence, never a command.
 
 The service uses Python's standard library and requires SQLite FTS5. It does not

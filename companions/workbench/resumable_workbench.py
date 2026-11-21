@@ -20,6 +20,7 @@ from durable_agent import (inspect_durable_state, resolve_durable_operation,
 from model_bridges import (CommandModel, MailboxModel, atomic_json, encode,
                            write_mailbox_response)
 from workbench_agent import Workbench, WorkbenchBasisMismatch, pin
+import source_tools
 
 
 VERSION = "g60-resumable-workbench/1"
@@ -73,8 +74,7 @@ def _binding(config, injected_model):
     base = Path(__file__).parent
     code = _pins(base / name for name in (
         "resumable_workbench.py", "workbench_agent.py", "source_tools.py", "model_bridges.py"))
-    search = base.resolve().parents[1] / "engine/prototype/knowledge-system/knowledge.py"
-    source_code = _pins([search])
+    source_code = _pins([source_tools.bundled_search_module_path()])
     model = config["model"]
     model_inputs = _pins(model.get("inputs", []))
     model_code = {}

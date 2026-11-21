@@ -1,14 +1,6 @@
-#!/usr/bin/env python3
-"""Standalone entry point for explicit continuation exchange."""
-import os
+"""Compatibility entrance for earlier operating commands."""
 from pathlib import Path
-import sys
+import runpy
 
-if __name__ == '__main__':
-    if os.name != 'posix':
-        raise SystemExit('Continuation exchange requires POSIX.')
-    sys.dont_write_bytecode = True
-    os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
-    sys.path.insert(0, str(Path(__file__).resolve().parent / 'src'))
-    from continuation_support.exchange import main
-    main()
+if __name__ == "__main__":
+    runpy.run_path(str(Path(__file__).resolve().parents[1] / "runtime/work.py"), run_name="__main__")

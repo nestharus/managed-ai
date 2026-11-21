@@ -33,7 +33,7 @@ def source_identity_line(row):
 def render(root):
     """Read canonical UTF-8 inputs and prepare each projection without writing."""
     selection_name = 'release/current_sources.json'
-    catalogue_name = 'prototype/agent-system/catalogue.json'
+    catalogue_name = 'runtime/store/catalogue.json'
     selected = json.loads((root / selection_name).read_text(encoding='utf-8'))
     catalogue = json.loads((root / catalogue_name).read_text(encoding='utf-8'))
     prior = {e['id']: e for e in catalogue['entries']}
@@ -74,8 +74,8 @@ def render(root):
                              'relationship': 'References to one canonical source body; domain sources are selected per store.'}
     nav = json.loads((root / 'release/navigation.json').read_text(encoding='utf-8'))
     lines = ['# Current source owners', '',
-             'The native catalogue verifies the same canonical files linked here. Domain sources are selected by each store. '
-             'No second library of source copies or predecessor runtime is required.', '']
+             'Headings show stable source IDs. Each link points to the canonical file verified by the native catalogue. '
+             'Each store selects its domain sources.', '']
     selected_ids = set()
     for row in selected['bodies']:
         selected_ids.add(row['id'])

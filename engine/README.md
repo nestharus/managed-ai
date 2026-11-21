@@ -5,11 +5,11 @@ This is the single executable engine for every instance in the package. The nati
 [Stores, domains and deployments](INSTANCES.md) defines their actual contract. From the package root, operate the selected store through the same code:
 
 ```sh
-python3 -B engine/prototype/deploy.py --deployment deployments/research system status
-python3 -B engine/prototype/deploy.py --deployment deployments/novel system status
+python3 -B engine/runtime/deploy.py --deployment deployments/research system status
+python3 -B engine/runtime/deploy.py --deployment deployments/novel system status
 ```
 
-The [native operating contract](prototype/agent-system/README.md), [CLI field reference](CLI-FIELD-REFERENCE.md) and [capability map](CAPABILITIES.md) explain source capture, real returns, guarded adoption and current-use interpretation. [Construction](host/CONSTRUCTION.md) supplies general operating guidance. [Peer communication](host/PEER-COMMUNICATION.md) applies when a comparison needs an exposure boundary.
+The [native operating contract](runtime/store/README.md), [CLI field reference](CLI-FIELD-REFERENCE.md) and [capability map](CAPABILITIES.md) explain source capture, real returns, guarded adoption and current-use interpretation. [Construction](host/CONSTRUCTION.md) supplies general operating guidance. [Peer communication](host/PEER-COMMUNICATION.md) applies when a comparison needs an exposure boundary.
 
 [Material maintenance](host/MATERIAL-MAINTENANCE.md) selects current useful content and deliberately selected evidence. Native record replacement also defaults to current-use retention. Schema validation, source custody, semantic adequacy and completion remain distinct judgments.
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -283,10 +284,30 @@ class RepresentationOperations:
         return self.system.adopt(turn, target, reason)
 
 
+def load_system(engine):
+    """Load the store implementation from the explicitly selected engine edition."""
+    root = engine.resolve(strict=True)
+    if (root / 'runtime').exists() or (root / 'runtime').is_symlink():
+        store = root / 'runtime/store'
+    elif (root / 'prototype').exists() or (root / 'prototype').is_symlink():
+        store = root / 'prototype/agent-system'
+    elif root.name == 'runtime' or (root / 'store').exists():
+        store = root / 'store'
+    else:
+        store = root / 'agent-system'
+    path = store / 'system.py'
+    if not path.is_file():
+        raise ValueError('Selected engine has no native store implementation: ' + str(path))
+    spec = importlib.util.spec_from_file_location('_representation_native_system', path)
+    native = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(native)
+    return native
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--engine', required=True, type=Path, metavar='PROTOTYPE',
-                        help='native prototype directory, for example engine/prototype')
+    parser.add_argument('--engine', required=True, type=Path, metavar='ENGINE',
+                        help='engine directory, for example engine; a selected runtime directory is also accepted')
     parser.add_argument('--root', required=True, type=Path)
     actions = parser.add_subparsers(dest='action', required=True)
     actions.add_parser('prepare').add_argument('--spec', required=True, type=Path)
@@ -300,13 +321,11 @@ def main():
     adopt = actions.add_parser('adopt'); adopt.add_argument('turn')
     adopt.add_argument('--target', required=True); adopt.add_argument('--reason', required=True)
     args = parser.parse_args()
-    sys.path.insert(0, str(args.engine.resolve() / 'agent-system'))
-    from system import System
-    from continuation_support.storage import exclusive
     try:
-        system = System(args.root)
+        native = load_system(args.engine)
+        system = native.System(args.root)
         adapter = RepresentationOperations(system)
-        with exclusive(system.ex.root / 'owner.lock'):
+        with native.exclusive(system.ex.root / 'owner.lock'):
             if args.action == 'prepare':
                 result = adapter.prepare(read_json(args.spec))
             elif args.action == 'template':

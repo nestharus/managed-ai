@@ -16,7 +16,12 @@ from pathlib import Path
 import sys
 
 
-REVIEWED_NATIVE_PROFILE = 'f65119d9a2751f7927ecfb502df1f26c07ee1c958c9b219aeb13f6efc1c6565e'
+REVIEWED_RUNTIME_PROFILE = '295a39216ece6b44ab0a0a83332bbc0880eff8e6a770ffe778e5ddd0d876fffc'
+REVIEWED_PROTOTYPE_PROFILE = 'f65119d9a2751f7927ecfb502df1f26c07ee1c958c9b219aeb13f6efc1c6565e'
+REVIEWED_NATIVE_STORES = {
+    REVIEWED_RUNTIME_PROFILE: 'store',
+    REVIEWED_PROTOTYPE_PROFILE: 'agent-system',
+}
 PROFILE_ERROR = ('Selected native engine does not match the reviewed capture adapter; '
                  'requalify this adapter before capture')
 RETURN_ERROR = 'Native return already exists; use its retained body or a new current occurrence'
@@ -30,9 +35,9 @@ def reviewed_engine(engine: Path):
                 for p in sorted(root.rglob('*.py')) if '__pycache__' not in p.parts}
     profile = hashlib.sha256(json.dumps(programs, sort_keys=True,
                                        separators=(',', ':')).encode()).hexdigest()
-    if engine.name != 'system.py' or profile != REVIEWED_NATIVE_PROFILE:
+    if engine.name != 'system.py' or profile not in REVIEWED_NATIVE_STORES:
         raise ValueError(PROFILE_ERROR)
-    path = root / 'agent-system' / 'system.py'
+    path = root / REVIEWED_NATIVE_STORES[profile] / 'system.py'
     spec = importlib.util.spec_from_file_location('reviewed_capture_engine', path)
     if spec is None or spec.loader is None:
         raise ValueError(PROFILE_ERROR)

@@ -54,6 +54,15 @@ def relative(value):
     return value
 
 
+def bundled_search_module_path(engine=None):
+    """Locate the trusted lexical reader in the selected bundle."""
+    engine = Path(engine) if engine is not None else Path(__file__).resolve().parents[2] / 'engine'
+    runtime = engine / 'runtime'
+    if not (runtime.exists() or runtime.is_symlink()):
+        runtime = engine / 'prototype'
+    return runtime / 'knowledge-system/knowledge.py'
+
+
 class SourceService:
     """Scoped source service; body cache bounds do not bound the derived index/RSS."""
 
@@ -88,8 +97,7 @@ class SourceService:
                     need(identity(record) == ident, 'Receipt identity mismatch: ' + ident)
         else:
             self.ledger = {'schema': VERSION, 'inventories': {}, 'selections': {}, 'sources': {}, 'uses': {}}
-        module_path = (Path(search_module_path) if search_module_path else
-                       Path(__file__).resolve().parents[2] / 'engine/prototype/knowledge-system/knowledge.py')
+        module_path = Path(search_module_path) if search_module_path else bundled_search_module_path()
         need(module_path.is_file() and not module_path.is_symlink(), 'Select the bundled trusted knowledge.py search implementation.')
         module_bytes = module_path.read_bytes()
         spec = importlib.util.spec_from_file_location('_g60_acquired_knowledge_' + digest(module_bytes)[:16], module_path)

@@ -11,7 +11,7 @@ not execute the candidate or judge the account's adequacy.
 Import `prepare(engine, db, spec)` or run:
 
 ```sh
-python -B receiving_example.py --engine /path/to/prototype --db /path/to/runtime/use.sqlite --operation prepare --input prepare.json
+python -B receiving_example.py --engine /path/to/runtime --db /path/to/runtime/use.sqlite --operation prepare --input prepare.json
 ```
 
 `prepare.json` supplies the following fields. Substitute actual bodies and an
@@ -62,7 +62,7 @@ assert that the approval is still usable now.
 Import `take(engine, db, spec)` or run:
 
 ```sh
-python -B receiving_example.py --engine /path/to/prototype --db /path/to/runtime/use.sqlite --operation take --input take.json
+python -B receiving_example.py --engine /path/to/runtime --db /path/to/runtime/use.sqlite --operation take --input take.json
 ```
 
 The request contains the receiving owner, a stable command identity for this
@@ -89,7 +89,7 @@ changed request under an existing command conflicts. For uncertain delivery,
 inspect the authoritative result through:
 
 ```sh
-python -B /path/to/prototype/collective.py --db /path/to/runtime/use.sqlite receipt --actor receiving-owner --command this-exact-admission-attempt
+python -B /path/to/runtime/collective.py --db /path/to/runtime/use.sqlite receipt --actor receiving-owner --command this-exact-admission-attempt
 ```
 
 A root receipt lookup that recovers a recorded refusal returns that refused

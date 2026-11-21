@@ -8,27 +8,27 @@ Run `git submodule update --init --recursive` to populate the domains at the com
 
 | Contributor task | Entry, implementation and check |
 | --- | --- |
-| Change how a deployed store runs a command | [Deployment entry](engine/prototype/deploy.py) → [selection and dispatch](engine/prototype/agent-system/deployment.py) → [native command handler](engine/prototype/agent-system/native_runtime/cli.py). Exercise [selected deployment cases](engine/prototype/agent-system/check_deployment.py). |
+| Change how a deployed store runs a command | [Deployment entry](engine/runtime/deploy.py) → [selection and dispatch](engine/runtime/store/deployment.py) → [native command handler](engine/runtime/store/native_runtime/cli.py). Exercise [selected deployment cases](engine/runtime/checks/store/check_deployment.py). |
 | Change how a peer acquires a component | [Peer Workbench](companions/workbench/PEER-CONTRACT.md) → [component manifest](companions/workbench/COMPONENTS.json) → [loader](companions/workbench/peer_workbench.py). Run [shared-layout tests](companions/workbench/test_shared_layout.py). The [representation adapter](engine/companion/CONTRACT.md) binds artifacts to native turns. |
 | Change a domain operation or practice | Open its descriptor for the tool entry and contract IDs: [research](domains/research/domain.json), [writing](domains/writing/domain.json), [AI-system building](domains/ai-system-building/domain.json). Change the source in that repository, refresh its registrations, then select its commit here. |
-| Build or check a release | Follow [the release procedure](RELEASING.md) from pinned tracked exports to a clean assembly. The [package producer](engine/release/README.md) owns member verification. The [native component map](engine/prototype/README.md) locates the code shipped under `prototype/`. |
+| Build or check a release | Follow [the release procedure](RELEASING.md) from pinned tracked exports to a clean assembly. The [package producer](engine/release/README.md) owns member verification. The [native component map](engine/runtime/README.md) locates the code under `engine/runtime/`. |
 
 ## Start in an assembled release
 
 The store links and application accounts below describe a full release. A working release supplies its own store and entrance. From an extracted full release, inspect the three deployments:
 
 ```sh
-python -B engine/prototype/deploy.py --deployment deployments/research status
-python -B engine/prototype/deploy.py --deployment deployments/novel status
-python -B engine/prototype/deploy.py --deployment deployments/discovery status
+python -B engine/runtime/deploy.py --deployment deployments/research status
+python -B engine/runtime/deploy.py --deployment deployments/novel status
+python -B engine/runtime/deploy.py --deployment deployments/discovery status
 ```
 
 Then enter the required store through the same command:
 
 ```sh
-python -B engine/prototype/deploy.py --deployment deployments/research system status
-python -B engine/prototype/deploy.py --deployment deployments/novel system status
-python -B engine/prototype/deploy.py --deployment deployments/discovery system status
+python -B engine/runtime/deploy.py --deployment deployments/research system status
+python -B engine/runtime/deploy.py --deployment deployments/novel system status
+python -B engine/runtime/deploy.py --deployment deployments/discovery system status
 ```
 
 The store guides explain source selection, current work and receiving. A deployment points to its engine and storage; it does not create an engine copy. Keep the package's relative directory structure when moving it.

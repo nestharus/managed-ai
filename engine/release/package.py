@@ -15,10 +15,9 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 SELECTION = Path("release/current_sources.json")
-CATALOGUE = Path("prototype/agent-system/catalogue.json")
+CATALOGUE = Path("runtime/store/catalogue.json")
+LEGACY_CATALOGUE = Path("prototype/agent-system/catalogue.json")
 MARKER = Path("CURRENT-RELEASE.json")
-# refresh_guidance stages each projection in an adjacent TemporaryDirectory.
-STAGED_PROJECTIONS = (SELECTION, CATALOGUE, Path("SOURCES.md"), MARKER)
 
 
 def identity(path):
@@ -67,6 +66,13 @@ def inventory_engine(root):
     return None
 
 
+def catalogue_path(engine):
+    # Older exported editions carry their own native entry and catalogue.
+    if observed_path(engine, Path("runtime"), stat.S_ISDIR) is None:
+        return LEGACY_CATALOGUE
+    return CATALOGUE
+
+
 def reserved_stage(path, info, prefixes):
     for prefix in prefixes:
         name = path.name
@@ -86,7 +92,8 @@ def source_paths(root, engine):
     ordinary(root, root.lstat(), stat.S_ISDIR)
     staging = {}
     if engine is not None:
-        for target in STAGED_PROJECTIONS:
+        # Guidance refresh stages each projection in an adjacent directory.
+        for target in (SELECTION, catalogue_path(engine), Path("SOURCES.md"), MARKER):
             parent = engine
             if target.parent.parts:
                 parent = observed_path(engine, target.parent, stat.S_ISDIR)
@@ -159,7 +166,8 @@ def read_catalogue(path):
 
 
 def verify_core_selection(core, native, *, prefix=""):
-    catalogue_member = CATALOGUE.as_posix()
+    catalogue_pathname = catalogue_path(core)
+    catalogue_member = catalogue_pathname.as_posix()
     if catalogue_member not in native:
         raise ValueError(f"Package inventory requires the exact catalogue member {prefix}{catalogue_member}. "
                          "Correct the on-disk spelling before running release guidance refresh.")
@@ -169,7 +177,7 @@ def verify_core_selection(core, native, *, prefix=""):
     current = read_json(core / MARKER)
     if current["selection_sha256"] != identity(selection_path)["sha256"]:
         raise ValueError("Current release names a different source selection")
-    catalogue = read_catalogue(core / CATALOGUE)
+    catalogue = read_catalogue(core / catalogue_pathname)
     entries = {}
     for entry in catalogue["entries"]:
         ident = entry["id"]
@@ -247,23 +255,41 @@ def descriptors(root, directory, filename):
                 yield descriptor
 
 
-def verify_sources(root, core, native):
+def verify_sources(root, core, native, tree):
     bodies = verify_core_selection(core, native, prefix="engine/")
     if "SOURCES.md" in native:
         verify_source_list(core / "SOURCES.md", bodies)
-    component_root = root / "companions/workbench"
-    components = read_json(component_root / "COMPONENTS.json")
+    component_prefix = "companions/workbench/"
+    registration = component_prefix + "COMPONENTS.json"
+    if registration not in tree:
+        raise ValueError("Package inventory requires the exact component registration " + registration)
+    components = read_json(root / registration)
     for name, row in components["files"].items():
-        actual = identity(component_root / name)
-        if {k: actual[k] for k in ("sha256", "bytes")} != row["identity"]:
+        actual = tree.get(component_prefix + name)
+        if actual is None or {k: actual[k] for k in ("sha256", "bytes")} != row["identity"]:
             raise ValueError("Shared component identity changed: " + name)
-    api = runpy.run_path(str(core / 'prototype/agent-system/system.py'))
-    for descriptor in descriptors(root, 'stores', 'system.json'):
-        system = api['System'](descriptor.parent)
+    app = catalogue_path(core).parent
+    system_path = app / "system.py"
+    controller_path = app / "deployment.py"
+    for path in (system_path, controller_path, app.parent / "system.py", app.parent / "deploy.py"):
+        if path.as_posix() not in native:
+            raise ValueError(f"Package inventory requires the exact runtime member engine/{path.as_posix()}.")
+    api = runpy.run_path(str(core / system_path))
+    stores = {descriptor.parent for descriptor in descriptors(root, 'stores', 'system.json')}
+    for store in sorted(stores):
+        system = api['System'](store)
         for record in system.records():
             system.domain_selection.validate_record(record)
-    deployment_api = runpy.run_path(str(core / 'prototype/agent-system/deployment.py'))
+    deployment_api = runpy.run_path(str(core / controller_path))
     for descriptor in descriptors(root, 'deployments', 'deployment.json'):
+        selection = deployment_api['read'](descriptor)
+        engine_path = Path(selection['engine']['path'])
+        store_path = Path(selection['store']['path'])
+        if engine_path != Path(os.path.relpath(core, descriptor.parent)):
+            raise ValueError(f"Bundled deployment {descriptor.parent.name} must select the bundled engine by relative path.")
+        store = Path(os.path.normpath(descriptor.parent / store_path))
+        if store not in stores or store_path != Path(os.path.relpath(store, descriptor.parent)):
+            raise ValueError(f"Bundled deployment {descriptor.parent.name} must select a bundled store by relative path.")
         deployment_api['Deployment'](descriptor.parent).verify()
 
 
@@ -284,7 +310,7 @@ def refresh_manifests(root, core):
         native = {name[len(prefix):]: row for name, row in tree.items() if name.startswith(prefix)}
         inner = manifest_name(core)
         native.pop(inner, None)
-        verify_sources(root, core, native)
+        verify_sources(root, core, native, tree)
         write_json(core / inner, {"format": "managed-ai-engine-manifest/1", "members": native})
         tree[prefix + inner] = identity(core / inner)
     write_json(root / "MANIFEST.json", {"format": "managed-ai-current-package/1", "members": tree,

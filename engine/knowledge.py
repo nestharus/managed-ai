@@ -12,11 +12,11 @@ import sys
 ROOT = Path(__file__).resolve().parent
 sys.dont_write_bytecode = True
 if '--library' in sys.argv or any(a.startswith('--library=') for a in sys.argv):
-    runpy.run_path(str(ROOT / 'prototype/knowledge-system/knowledge.py'), run_name='__main__')
+    runpy.run_path(str(ROOT / 'runtime/knowledge-system/knowledge.py'), run_name='__main__')
     raise SystemExit(0)
 
-sys.path.insert(0, str(ROOT / 'prototype/agent-system'))
-sys.path.insert(0, str(ROOT / 'prototype/src'))
+sys.path.insert(0, str(ROOT / 'runtime/store'))
+sys.path.insert(0, str(ROOT / 'runtime'))
 from native_runtime.catalogue import InstalledCatalogue
 
 
@@ -31,10 +31,10 @@ def main():
     discover.add_argument('--offset', type=int, default=0); discover.add_argument('--content', action='store_true')
     args = parser.parse_args()
     if args.store:
-        api = runpy.run_path(str(ROOT / 'prototype/agent-system/system.py'))
+        api = runpy.run_path(str(ROOT / 'runtime/store/system.py'))
         catalogue = api['System'](args.store).techniques
     else:
-        catalogue = InstalledCatalogue(ROOT / 'prototype/agent-system')
+        catalogue = InstalledCatalogue(ROOT / 'runtime/store')
     if args.action == 'show':
         result = catalogue.search(args.identity)
         if args.text:

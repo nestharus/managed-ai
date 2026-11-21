@@ -6,10 +6,10 @@ For repeated broad, local or joint observing work, the optional [continuing obse
 
 ## Start one continuing commission
 
-Use a new host root outside the delivered system. An `init` specification supplies an absolute `engine` path to the delivered `prototype/system.py`, the exact `commission` file, and `duties` as `{id, text}` objects. The initial host receipt records enrollment only. The actual capable participant must read each producing context.
+Use a new host root outside the delivered system. An `init` specification supplies an absolute `engine` path to the delivered `engine/runtime/system.py`, the exact `commission` file, and `duties` as `{id, text}` objects. The initial host receipt records enrollment only. The actual capable participant must read each producing context.
 
 ```bash
-python -B host/continuing_work.py --root /absolute/work/novel init --spec /absolute/init.json
+python -B engine/host/continuing_work.py --root /absolute/work/novel init --spec /absolute/init.json
 ```
 
 Keep this host root for successive narrower contributions. Starting a new unrelated runtime with a narrowed goal does not carry the earlier commission. The adapter cannot recover a duty that was never supplied.
@@ -127,8 +127,8 @@ The host also nominates exact shared source bytes under different labels and act
 A `receive` specification supplies an actual `reply` path, attributed `producer`, `account`, and `proposals` mapping the selected output filenames to new generated files. An optional native Attention `assessment` can account for delivered questions. The output is retained and then adopted through native current-basis checks. Local receipt never fulfills a parent duty.
 
 ```bash
-python -B host/continuing_work.py --root /absolute/work/novel prepare --spec /absolute/contribution.json
-python -B host/continuing_work.py --root /absolute/work/novel receive contribution-id --spec /absolute/return.json
+python -B engine/host/continuing_work.py --root /absolute/work/novel prepare --spec /absolute/contribution.json
+python -B engine/host/continuing_work.py --root /absolute/work/novel receive contribution-id --spec /absolute/return.json
 ```
 
 Serial custody operations may surround parallel model construction. The adapter holds a local host lock while refreshing resources and preparing or admitting output. It does not appoint one permanent semantic merger. If publication refuses after receive, preserve the returned contribution and inspect the native result. Prepare a new current receiving occasion; never overwrite the original turn or blindly repeat an uncertain effect.
@@ -196,7 +196,7 @@ Write a host specification that identifies that receipt and its actual producer:
 Invoke the selected host against the existing host root:
 
 ```bash
-python -B /installed/managed-ai/host/continuing_work.py --root /work/host \
+python -B /installed/managed-ai/engine/host/continuing_work.py --root /work/host \
   capture CURRENT-SCOPE --spec /work/partial-first-capture.json
 ```
 
@@ -227,8 +227,9 @@ uncertain response; native receipt identities remain single-use.
 
 The adapter is qualified to an exact native Python program profile. It verifies
 every native Python program before importing the selected engine or recording a
-receipt. Any program edit, addition or removal refuses capture until this adapter
-is separately requalified. Existing host `upgrade` still requires byte-identical
+receipt. The current runtime and the previously reviewed prototype edition have
+separate exact profiles. Any program edit, addition or removal refuses capture
+until this adapter is separately requalified. Host `upgrade` requires byte-identical
 native programs; this adapter does not weaken that guard. `System.assess` and
 selected `Exchange.inspect` keep their supported behavior. Exact dispatch-state
 reporting additionally uses the reviewed implementation's
@@ -245,9 +246,9 @@ of history or establish a measured wall-time improvement. Ordinary native
 Recover the receipt and then its product through the existing supported route:
 
 ```bash
-python -B /installed/managed-ai/prototype/attend.py --root /work/host/native/exchange \
+python -B /installed/managed-ai/engine/runtime/attend.py --root /work/host/native/exchange \
   object RECEIPT-OBJECT --text
-python -B /installed/managed-ai/prototype/attend.py --root /work/host/native/exchange \
+python -B /installed/managed-ai/engine/runtime/attend.py --root /work/host/native/exchange \
   object PRODUCT-OBJECT --text
 ```
 

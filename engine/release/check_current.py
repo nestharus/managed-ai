@@ -11,11 +11,15 @@ parser.add_argument('--product', type=Path, default=Path(__file__).resolve().par
 parser.add_argument('--records', type=Path)
 parser.add_argument('--work', type=Path, help='Compatibility argument; tests own isolated temporary stores')
 args = parser.parse_args()
-program = args.product.resolve() / 'prototype/agent-system/check_shared_instances.py'
+product = args.product.resolve()
+if (product / 'runtime').is_dir():
+    program = product / 'runtime/checks/store/check_shared_instances.py'
+else:
+    program = product / 'prototype/agent-system/check_shared_instances.py'
 run = subprocess.run([sys.executable, '-B', str(program)], capture_output=True, text=True)
 report = {'status': 'passed' if run.returncode == 0 else 'failed', 'program': str(program),
           'returncode': run.returncode, 'stdout': run.stdout, 'stderr': run.stderr,
-          'scope': 'Eight bounded shared-code, store/schema/domain, portability, receiving and retention cases; no broad scientific-efficacy claim.'}
+          'scope': 'Bounded shared-code, store/schema/domain, portability, receiving and retention cases.'}
 if args.records:
     args.records.mkdir(parents=True, exist_ok=True)
     (args.records / 'ACCEPTANCE.json').write_text(json.dumps(report, indent=2) + '\n')

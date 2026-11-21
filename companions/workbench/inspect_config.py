@@ -215,7 +215,11 @@ class Inspection:
             for name in ("agent_runtime.py", "evidence_support.py"):
                 self.file("controller_dir/" + name, str(controller / name))
         if corpus is not None:
-            search = Path(__file__).resolve().parents[2] / "engine/prototype/knowledge-system/knowledge.py"
+            engine = Path(__file__).resolve().parents[2] / "engine"
+            runtime = engine / "runtime"
+            if not (runtime.exists() or runtime.is_symlink()):
+                runtime = engine / "prototype"
+            search = runtime / "knowledge-system/knowledge.py"
             self.file("bundled_search_implementation", str(search), ordinary_link=True)
 
         source_state = None

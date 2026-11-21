@@ -16,7 +16,7 @@ files together:
 - `controller/agent_runtime.py` and `controller/evidence_support.py`.
 
 Python's standard library and SQLite FTS5 suffice. The system bundle supplies the trusted search implementation at
-`../../engine/prototype/knowledge-system/knowledge.py`; the selected domain supplies source data. A known source-body read
+`../../engine/runtime/knowledge-system/knowledge.py`; the selected domain supplies source data. A known source-body read
 does not require full search preparation.
 
 ## Start a construction
@@ -135,7 +135,10 @@ artifacts.
 Resume requires the original declared inputs and relevant code/receiver
 identities. A changed task, requirement, model contract, tool implementation,
 receiver input or original limit produces `binding_mismatch` before any new
-callback. This disposition preserves the earlier occurrence. Use an explicitly
+callback. The binding records the selected reader's absolute path and exact
+bytes. A fresh occurrence uses the current bundle's reader. An older occurrence
+can be inspected as retained and resumed with its original bound edition.
+Use an explicitly
 new occurrence for a changed commission, carrying the still-owed work and
 qualified prior artifacts into it as appropriate; there is no force-resume flag.
 
