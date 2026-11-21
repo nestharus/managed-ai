@@ -7,6 +7,7 @@ retain the selected occurrence needed by their receiving work.
 from pathlib import Path
 import argparse
 import ast
+import errno
 import hashlib
 import json
 import os
@@ -86,12 +87,29 @@ def code_identity(engine):
                 elif path.match('*.py'):
                     paths.append(path)
     rows, declarations = [], {}
-    for path in sorted(paths):
-        relative = path.relative_to(engine)
-        raw = path.read_bytes()
-        rows.append({'path': relative.as_posix(), 'sha256': sha(raw)})
-        if relative in (NATIVE_ENTRY, NATIVE_CONTRACT):
-            declarations[relative] = raw
+    # Keeping the directory open amortizes pathname I/O on shared volumes.
+    # Each source is still opened by its full current path, in the original order.
+    try:
+        directory_fd = os.open(engine, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        directory_fd = None
+    try:
+        for path in sorted(paths):
+            relative = path.relative_to(engine)
+            try:
+                raw = path.read_bytes()
+            except OSError as exc:
+                if directory_fd is None or exc.errno not in (errno.EMFILE, errno.ENFILE):
+                    raise
+                os.close(directory_fd)
+                directory_fd = None
+                raw = path.read_bytes()
+            rows.append({'path': relative.as_posix(), 'sha256': sha(raw)})
+            if relative in (NATIVE_ENTRY, NATIVE_CONTRACT):
+                declarations[relative] = raw
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
     if NATIVE_ENTRY not in declarations or NATIVE_CONTRACT not in declarations:
         raise ValueError('select the current engine root containing its native entry and API declarations')
 

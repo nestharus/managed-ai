@@ -277,9 +277,9 @@
       "sha256": "d6d3174b14322027b04ad0a8784b91e1d298d9f15d3e6b7c33416d2a36f042bc"
     },
     "prototype/agent-system/deployment.py": {
-      "bytes": 19235,
+      "bytes": 19937,
       "mode": 420,
-      "sha256": "81fd803f8fc0a9f2eb06440926b1cc6e50c81ec541a124400fc515ab02209ce3"
+      "sha256": "2b52e5f960349066bbf914b5272aa73c855e1c5b126f994141a021d9dbbc88b1"
     },
     "prototype/agent-system/discovery.py": {
       "bytes": 31909,
