@@ -1,39 +1,103 @@
-"""Validate complete import batches and resume acknowledgements against verified heads."""
+"""Own native import receipts and resume acknowledgements against verified heads."""
 from continuation_support.ownership import packet_id
 from continuation_support.storage import encode, sha, sync_dir, write_json
-from native_runtime.domains import load_json
+from native_runtime.identities import digest, exact_fields, identity, record_identity, require, strict_json
+
+RECEIPT_DIRECTORY = '.system/imports'
+RECEIPT_FORMAT = 'managed-ai-import-receipt/1'
+RECEIPT_FIELDS = {'format', 'id', 'instance_id', 'spec_sha256', 'complete', 'records'}
 
 
-def import_records(system, spec):
+def _specification_identity(spec):
     if spec.get('format') != 'managed-ai-import/1':
         raise ValueError('unsupported current import format')
     ident = packet_id(spec['id'])
-    rows = spec['records']
-    ids = [r['id'] for r in rows]
+    ids = [packet_id(row['id']) for row in spec['records']]
     if len(ids) != len(set(ids)) or 'goal' in ids:
         raise ValueError('import needs unique non-goal record identities')
-    receipt = system.work / '.system/imports' / (ident + '.json')
-    spec_sha = sha(encode(spec))
-    old = load_json(receipt) if receipt.exists() else None
-    if old is not None:
-        if old['instance_id'] != system.instance_id or old['id'] != ident:
-            raise ValueError('import receipt belongs to another store or import identity')
-        if old['spec_sha256'] != spec_sha:
-            raise ValueError('import identity already binds different current input')
+    return ident, ids, sha(encode(spec))
+
+
+def _receipt_path(system, ident):
+    return system.ex.path(f'{RECEIPT_DIRECTORY}/{packet_id(ident)}.json')
+
+
+def _load_receipt(path):
+    try:
+        return strict_json(path.read_bytes())
+    except FileNotFoundError:
+        return None
+
+
+def _validate_receipt(receipt, ident, instance_id):
+    exact_fields(receipt, RECEIPT_FIELDS, set(), 'native import receipt')
+    require(receipt['format'] == RECEIPT_FORMAT, 'unsupported native import receipt format')
+    require(receipt['instance_id'] == instance_id and receipt['id'] == ident,
+            'import receipt belongs to another store or import identity')
+    digest(receipt['spec_sha256'], 'import receipt specification digest')
+    require(type(receipt['complete']) is bool, 'import receipt completion state must be Boolean')
+    require(isinstance(receipt['records'], list), 'import receipt records must be a list')
+    ids = [identity(record)['id'] for record in receipt['records']]
+    require(len(ids) == len(set(ids)) and 'goal' not in ids,
+            'import receipt needs unique non-goal record identities')
+    return ids
+
+
+def _bound_receipt(path, instance_id, ident, ids, spec_sha):
+    receipt = _load_receipt(path)
+    if receipt is None:
+        return None
+    accepted = _validate_receipt(receipt, ident, instance_id)
+    require(receipt['spec_sha256'] == spec_sha, 'import identity already binds different current input')
+    require(accepted == ids[:len(accepted)], 'import receipt progress differs from specification')
+    require(not receipt['complete'] or len(accepted) == len(ids), 'completed import receipt does not cover specification')
+    return receipt
+
+
+def _verify_progress(system, acknowledged):
+    for accepted in acknowledged:
+        ident = accepted['id']
+        current = system.record_store.show(ident)
+        require(accepted == record_identity(current), 'import acknowledged head changed: ' + ident)
+
+
+def read_receipt(system, spec):
+    """Read the original acknowledgements bound to an exact batch, or None if absent.
+
+    The caller holds the store owner guard. Acknowledgements identify accepted
+    revisions; a caller verifying content must open those editions separately.
+    """
+    ident, ids, spec_sha = _specification_identity(spec)
+    receipt = _bound_receipt(_receipt_path(system, ident), system.instance_id, ident, ids, spec_sha)
+    if receipt is not None and not receipt['complete']:
+        _verify_progress(system, receipt['records'])
+    return receipt
+
+
+def completed_receipt_records(system):
+    """Enumerate the exact record identities acknowledged by this store's complete imports."""
+    directory = system.ex.path(RECEIPT_DIRECTORY)
+    for path in sorted(directory.glob('*.json')):
+        receipt = _load_receipt(_receipt_path(system, path.stem))
+        if receipt is None or receipt.get('format') != RECEIPT_FORMAT or receipt.get('instance_id') != system.instance_id:
+            continue
+        _validate_receipt(receipt, path.stem, system.instance_id)
+        if receipt['complete']:
+            yield from receipt['records']
+
+
+def import_records(system, spec):
+    ident, ids, spec_sha = _specification_identity(spec)
+    receipt = _receipt_path(system, ident)
+    old = _bound_receipt(receipt, system.instance_id, ident, ids, spec_sha)
+    rows = spec['records']
     # Qualify all rows without capturing basis objects or changing any head.
     for row in rows:
         system.record_store.validate_import(row)
     recorded = old['records'] if old is not None else []
     prefix = recorded if old is not None and not old['complete'] else []
-    if len(prefix) > len(rows):
-        raise ValueError('import receipt progress exceeds specification')
-    remaining = iter(rows)
-    for acknowledged in prefix:
-        row = next(remaining)
-        current = system.record_store.show(row['id'])
-        if acknowledged != {key: current[key] for key in ('id', 'revision', 'sha256')}:
-            raise ValueError('import acknowledged head changed: ' + row['id'])
-    result = {'format': 'managed-ai-import-receipt/1', 'id': ident,
+    _verify_progress(system, prefix)
+    result = {'format': RECEIPT_FORMAT, 'id': ident,
               'spec_sha256': spec_sha, 'instance_id': system.instance_id, 'records': list(prefix)}
     receipt.parent.mkdir(parents=True, exist_ok=True)
     sync_dir(receipt.parent.parent)
@@ -42,11 +106,11 @@ def import_records(system, spec):
     else:
         # A previous replacement may have become visible before its sync was confirmed.
         sync_dir(receipt.parent)
-    for row in remaining:
+    for row in rows[len(prefix):]:
         if not system.record_store.path(row['id']).exists():
             system.put(row, 0)
         current = system.record_store.show(row['id'])
-        result['records'].append({key: current[key] for key in ('id', 'revision', 'sha256')})
+        result['records'].append(record_identity(current))
         if len(result['records']) > len(recorded):
             write_json(receipt, dict(result, complete=False))
     result['complete'] = True
