@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Package the one current source tree, without inherited release directories."""
 import argparse
+import codecs
+import gzip
+import re
 import hashlib
 from itertools import zip_longest
 import json
@@ -108,17 +111,67 @@ def source_paths(root, engine):
                 yield path
 
 
+def received_compressed_text(system):
+    """Select complete, source-bound compressed data from native import receipts."""
+    accepted = set()
+    for receipt_path in (system.work / ".system/imports").glob("*.json"):
+        receipt = read_json(receipt_path)
+        if (receipt.get("format") == "managed-ai-import-receipt/1" and receipt.get("complete") is True
+                and receipt["instance_id"] == system.instance_id):
+            accepted.update((item["id"], item["revision"], item["sha256"]) for item in receipt["records"])
+    evidence = set()
+    for head in system.records():
+        if (head["id"], head["revision"], head["sha256"]) not in accepted:
+            continue
+        basis = {(item["path"], item["sha256"], item["bytes"]) for item in head["basis"]}
+        for link in head["relations"]:
+            if (link["relation"] != "grounded in original edition"
+                    or not link.get("origin", "").lower().endswith((".json.gz", ".jsonl.gz", ".tsv.gz"))
+                    or "ordered_materials" in link):
+                continue
+            pin = (link["target"], link["sha256"], link["bytes"])
+            if pin in basis:
+                evidence.add(pin)
+    return evidence
+
+
+def check_compressed_text(path):
+    """Read a complete gzip stream and reject binary payloads, including nested archives."""
+    decode = codecs.getincrementaldecoder("utf-8-sig")()
+    with gzip.open(path, "rb") as source:
+        for chunk in iter(lambda: source.read(65536), b""):
+            if re.search(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]", chunk):
+                raise ValueError("Binary content in compressed research data: " + str(path))
+            decode.decode(chunk)
+        decode.decode(b"", final=True)
+
+
 def members(root, engine=...):
     if engine is ...:
         engine = inventory_engine(root)
     result = {}
+    research = None
     for path in sorted(source_paths(root, engine), key=lambda path: (path, path.as_posix())):
         relative = path.relative_to(root).as_posix()
         if "\\" in relative or ".." in Path(relative).parts:
             raise ValueError("Unsafe archive member path: " + relative)
         if path.suffix.lower() in {".zip", ".tar", ".gz"}:
-            raise ValueError("Select extracted useful source instead of nested transport: " + str(path))
-        result[relative] = identity(path)
+            match = re.fullmatch(r"stores/research/work/(evidence/research-originals/([a-f0-9]{2})/([a-f0-9]{64})\.gz)", relative)
+            if not match or match[2] != match[3][:2] or engine is None or engine == root:
+                raise ValueError("Select extracted useful source instead of nested transport: " + str(path))
+            if research is None:
+                native = runpy.run_path(str(engine / "prototype/agent-system/system.py"))
+                store = native["System"](root / "stores/research")
+                research = (store, received_compressed_text(store))
+            store, allowed = research
+            current = identity(path)
+            if current["sha256"] != match[3] or (match[1], match[3], current["bytes"]) not in allowed:
+                raise ValueError("Missing accepted research evidence for compressed source: " + relative)
+            store.ex.objects.read(match[3], expected_bytes=current["bytes"])
+            check_compressed_text(path)
+            result[relative] = current
+        else:
+            result[relative] = identity(path)
     return result
 
 
