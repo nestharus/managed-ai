@@ -28,6 +28,42 @@ def emit(result, args):
             print(rendered)
 
 
+def _context_request(args):
+    request = read(args.request) if args.request else {}
+    if args.task:
+        request['task'] = args.task
+    if args.without_feedback:
+        if request.get('feedback_uses'):
+            raise ValueError('--without-feedback conflicts with selected feedback_uses')
+        request['feedback_uses'] = []
+    if args.feedback:
+        selected = strings(request.get('feedback_uses', []), 'feedback_uses')
+        request['feedback_uses'] = list(dict.fromkeys([*selected, *args.feedback]))
+    if args.project_source:
+        selected = strings(request.get('project_sources', []), 'project_sources')
+        request['project_sources'] = list(dict.fromkeys([*selected, *args.project_source]))
+    return request
+
+
+def _compose(system, args):
+    if args.interaction_map:
+        if any(x is not None for x in (args.boundary, args.changed_since, args.repo, args.focus)) or args.pair_limit != 200:
+            raise ValueError('interaction map takes --record and optional --limit')
+        from composition import Composition
+        return Composition(system).interaction_map(args.record, args.limit)
+    if args.boundary is not None:
+        if args.changed_since is not None or args.repo is not None or args.focus is not None or args.pair_limit != 200:
+            raise ValueError('boundary inspection takes --record, --boundary and optional --limit')
+        from composition_boundary import inspect_boundary
+        return inspect_boundary(system, args.record, args.boundary, args.limit)
+    if args.changed_since is not None or args.repo is not None:
+        if not args.changed_since or args.repo is None or args.focus or args.pair_limit != 200:
+            raise ValueError('change notice requires --changed-since BASE and --repo CHECKOUT; use --limit for detail')
+        from composition_change_notice import notice
+        return notice(system, args.record, args.repo, args.changed_since, args.limit)
+    return system.compose(args.record, args.focus, args.limit, args.pair_limit)
+
+
 def act(system, args):
     action = args.action
     if action in {'import', 'configure', 'transfer'}:
@@ -58,19 +94,7 @@ def act(system, args):
     if action == 'view': return system.view(args.turn)
     if action == 'explain-context': return system.explain_context(args.turn)
     if action == 'context':
-        request = read(args.request) if args.request else {}
-        if args.task: request['task'] = args.task
-        if args.without_feedback:
-            if request.get('feedback_uses'):
-                raise ValueError('--without-feedback conflicts with selected feedback_uses')
-            request['feedback_uses'] = []
-        if args.feedback:
-            selected = strings(request.get('feedback_uses', []), 'feedback_uses')
-            request['feedback_uses'] = list(dict.fromkeys([*selected, *args.feedback]))
-        if args.project_source:
-            selected = strings(request.get('project_sources', []), 'project_sources')
-            request['project_sources'] = list(dict.fromkeys([*selected, *args.project_source]))
-        return system.context(args.turn, request)
+        return system.context(args.turn, _context_request(args))
     if action == 'receive':
         result = system.receive(args.turn, args.reply, args.producer, args.proposal, args.assessment, args.wait,
                                 run_nominations=args.run_nominations)
@@ -106,22 +130,7 @@ def act(system, args):
         return revise(system, proposal, accept=args.accept, retain=args.retain, reason=args.reason,
                       proof_store=getattr(args, 'proof_store', None))
     if action == 'compose':
-        if args.interaction_map:
-            if any(x is not None for x in (args.boundary, args.changed_since, args.repo, args.focus)) or args.pair_limit != 200:
-                raise ValueError('interaction map takes --record and optional --limit')
-            from composition import Composition
-            return Composition(system).interaction_map(args.record, args.limit)
-        if args.boundary is not None:
-            if args.changed_since is not None or args.repo is not None or args.focus is not None or args.pair_limit != 200:
-                raise ValueError('boundary inspection takes --record, --boundary and optional --limit')
-            from composition_boundary import inspect_boundary
-            return inspect_boundary(system, args.record, args.boundary, args.limit)
-        if args.changed_since is not None or args.repo is not None:
-            if not args.changed_since or args.repo is None or args.focus or args.pair_limit != 200:
-                raise ValueError('change notice requires --changed-since BASE and --repo CHECKOUT; use --limit for detail')
-            from composition_change_notice import notice
-            return notice(system, args.record, args.repo, args.changed_since, args.limit)
-        return system.compose(args.record, args.focus, args.limit, args.pair_limit)
+        return _compose(system, args)
     if action == 'inquiry':
         from native_runtime.inquiry import Inquiry
         inquiry = Inquiry(system)

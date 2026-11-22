@@ -311,24 +311,40 @@ def descriptors(root, directory, filename):
                 yield descriptor
 
 
-def verify_sources(root, core, native):
-    bodies = verify_core_selection(core, native, prefix="engine/")
-    if "SOURCES.md" in native:
-        verify_source_list(core / "SOURCES.md", bodies)
+def verify_workbench_components(root):
     component_root = root / "companions/workbench"
     components = read_json(component_root / "COMPONENTS.json")
     for name, row in components["files"].items():
         actual = identity(component_root / name)
         if {k: actual[k] for k in ("sha256", "bytes")} != row["identity"]:
             raise ValueError("Shared component identity changed: " + name)
+
+
+def verify_store_schemas(root, core):
     api = runpy.run_path(str(core / 'prototype/agent-system/system.py'))
     for descriptor in descriptors(root, 'stores', 'system.json'):
         system = api['System'](descriptor.parent)
         for record in system.records():
             system.domain_selection.validate_record(record)
+
+
+def verify_deployment_bindings(root, core):
     deployment_api = runpy.run_path(str(core / 'prototype/agent-system/deployment.py'))
     for descriptor in descriptors(root, 'deployments', 'deployment.json'):
         deployment_api['Deployment'](descriptor.parent).verify()
+
+
+def verify_bundle(root, core, native):
+    bodies = verify_core_selection(core, native, prefix="engine/")
+    if "SOURCES.md" in native:
+        verify_source_list(core / "SOURCES.md", bodies)
+    verify_workbench_components(root)
+    verify_store_schemas(root, core)
+    verify_deployment_bindings(root, core)
+
+
+# Retain the original callable for release tooling.
+verify_sources = verify_bundle
 
 
 def manifest_name(root):
@@ -348,7 +364,7 @@ def refresh_manifests(root, core):
         native = {name[len(prefix):]: row for name, row in tree.items() if name.startswith(prefix)}
         inner = manifest_name(core)
         native.pop(inner, None)
-        verify_sources(root, core, native)
+        verify_bundle(root, core, native)
         write_json(core / inner, {"format": "managed-ai-engine-manifest/1", "members": native})
         tree[prefix + inner] = identity(core / inner)
     write_json(root / "MANIFEST.json", {"format": "managed-ai-current-package/1", "members": tree,

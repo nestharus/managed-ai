@@ -11,55 +11,69 @@ REVIEWED_CONFIGURE = 'managed-ai-reviewed-configure/1'
 SELECTION_KEYS = ('domains', 'catalogues')
 
 
-def configuration_descriptor(root, spec):
-    root = Path(root).resolve()
-    if 'format' in spec:
-        if spec['format'] != REVIEWED_CONFIGURE:
-            raise ValueError('unsupported native configure format')
-        # Omit the mandatory legacy guard at top level so old receivers refuse.
-        if set(spec) != {'format', 'prior', 'selection', 'account'}:
-            raise ValueError('reviewed configure requires its own envelope')
-        prior = spec['prior']
-        selection = spec['selection']
-        if not isinstance(prior, dict) or set(prior) != {'instance_id', 'descriptor_sha256'}:
-            raise ValueError('reviewed configure needs a prior instance and descriptor digest')
-        if not isinstance(selection, dict) or set(selection) != set(SELECTION_KEYS):
-            raise ValueError('reviewed configure needs ordered domain and catalogue bindings')
-        expected = prior['descriptor_sha256']
-    else:
-        expected = spec['expected_sha256']
+def _reviewed_prior_digest(spec):
+    if spec['format'] != REVIEWED_CONFIGURE:
+        raise ValueError('unsupported native configure format')
+    # Omit the mandatory legacy guard at top level so old receivers refuse.
+    if set(spec) != {'format', 'prior', 'selection', 'account'}:
+        raise ValueError('reviewed configure requires its own envelope')
+    prior = spec['prior']
+    selection = spec['selection']
+    if not isinstance(prior, dict) or set(prior) != {'instance_id', 'descriptor_sha256'}:
+        raise ValueError('reviewed configure needs a prior instance and descriptor digest')
+    if not isinstance(selection, dict) or set(selection) != set(SELECTION_KEYS):
+        raise ValueError('reviewed configure needs ordered domain and catalogue bindings')
+    return prior['descriptor_sha256']
+
+
+def _read_current_descriptor(root, expected, account):
     raw = ordinary(root / 'system.json').read_bytes()
     if sha(raw) != expected:
         raise ValueError('store selection revision conflict')
-    if not isinstance(spec.get('account'), str) or not spec['account'].strip():
+    if not isinstance(account, str) or not account.strip():
         raise ValueError('selection change needs a receiving account')
-    current = dict(json.loads(raw))
+    return dict(json.loads(raw))
+
+
+def _refresh_reviewed_bindings(root, current, spec):
+    instance = spec['prior']['instance_id']
+    if not isinstance(instance, str) or packet_id(instance) != current.get('instance_id'):
+        raise ValueError('reviewed configure receiving instance differs')
+    for key in SELECTION_KEYS:
+        reviewed = spec['selection'][key]
+        if not isinstance(reviewed, list):
+            raise ValueError('reviewed configure bindings must be ordered lists')
+        actual = [{'path': binding['path'], 'sha256': pin(root, root / binding['path'])['sha256']}
+                  for binding in current.get(key, [])]
+        if len(reviewed) != len(actual):
+            raise ValueError(f'reviewed {key} binding count differs: '
+                             f'expected {len(reviewed)}, current {len(actual)}')
+        for index, (wanted, observed) in enumerate(zip(reviewed, actual), 1):
+            if wanted != observed:
+                raise ValueError(f'reviewed {key} postimage differs at ordered row {index}: '
+                                 f'expected {wanted!r}, current {observed!r}')
+        current[key] = actual
+
+
+def _apply_selection_changes(root, current, spec):
+    if 'record_retention' in spec:
+        if spec['record_retention'] not in {'current-use', 'append-history'}:
+            raise ValueError('unsupported native record retention policy')
+        current['record_retention'] = spec['record_retention']
+    for key in SELECTION_KEYS:
+        if key in spec:
+            current[key] = [pin(root, Path(path)) for path in spec[key]]
+
+
+def configuration_descriptor(root, spec):
+    root = Path(root).resolve()
     if 'format' in spec:
-        instance = prior['instance_id']
-        if not isinstance(instance, str) or packet_id(instance) != current.get('instance_id'):
-            raise ValueError('reviewed configure receiving instance differs')
-        for key in SELECTION_KEYS:
-            reviewed = selection[key]
-            if not isinstance(reviewed, list):
-                raise ValueError('reviewed configure bindings must be ordered lists')
-            actual = [{'path': binding['path'], 'sha256': pin(root, root / binding['path'])['sha256']}
-                      for binding in current.get(key, [])]
-            if len(reviewed) != len(actual):
-                raise ValueError(f'reviewed {key} binding count differs: '
-                                 f'expected {len(reviewed)}, current {len(actual)}')
-            for index, (wanted, observed) in enumerate(zip(reviewed, actual), 1):
-                if wanted != observed:
-                    raise ValueError(f'reviewed {key} postimage differs at ordered row {index}: '
-                                     f'expected {wanted!r}, current {observed!r}')
-            current[key] = actual
+        expected = _reviewed_prior_digest(spec)
+        current = _read_current_descriptor(root, expected, spec.get('account'))
+        _refresh_reviewed_bindings(root, current, spec)
     else:
-        if 'record_retention' in spec:
-            if spec['record_retention'] not in {'current-use', 'append-history'}:
-                raise ValueError('unsupported native record retention policy')
-            current['record_retention'] = spec['record_retention']
-        for key in SELECTION_KEYS:
-            if key in spec:
-                current[key] = [pin(root, Path(path)) for path in spec[key]]
+        current = _read_current_descriptor(root, spec['expected_sha256'], spec.get('account'))
+        _apply_selection_changes(root, current, spec)
     selected = DomainSelection(root, current)
     current['schema_bindings'] = {kind: sha(encode(schema)) for kind, schema in selected.schemas.items()}
     current['selection_account'] = spec['account']

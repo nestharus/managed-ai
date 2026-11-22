@@ -4,6 +4,7 @@
 Deployment metadata never copies an engine, project or store. Native captures
 retain the selected occurrence needed by their receiving work.
 """
+from contextlib import contextmanager
 from pathlib import Path
 import argparse
 import ast
@@ -277,42 +278,52 @@ class Deployment:
         args = api['parser']().parse_args(['--root', str(self.runtime), *arguments])
         if args.action == 'init':
             raise ValueError('initialize a store through the central system entrance before deployment')
-        if args.action == 'catalogue':
-            # Hold the owner observation before reading its selected descriptor.
-            with shared(self.runtime / 'exchange' / 'owner.lock'):
-                return self._system(api, args)
-        if args.action == 'configure':
-            with exclusive(self.runtime / 'exchange' / 'owner.lock'):
-                return self._system(api, args)
-        if args.action in {'put', 'recompose'}:
-            # Resolve the selected store owner before opening its guard. Construct
-            # the policy-bearing System only after admission, as direct put does.
+        try:
+            with self._guarded_system(api, args) as system:
+                return api['act'](system, args), args, api
+        except ValueError as exc:
+            if args.action == 'adopt':
+                basis = self._adopt_basis(api, exc)
+                if basis is not None:
+                    raise DeploymentAdoptBasisChanged(str(exc), basis) from exc
+            raise
+
+    @staticmethod
+    def _adopt_basis(api, exc):
+        describe = api.get('adopt_basis')
+        if describe is not None:
+            try:
+                basis = describe(exc)
+                if type(basis) is dict:
+                    json.dumps(basis, allow_nan=False)
+                    return basis
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                pass
+        return None
+
+    @contextmanager
+    def _guarded_system(self, api, args):
+        if args.action in {'catalogue', 'configure'}:
+            guard = shared if args.action == 'catalogue' else exclusive
+            with guard(self.runtime / 'exchange' / 'owner.lock'):
+                yield self._open_selected_store(api, args)
+        elif args.action in {'put', 'recompose'}:
+            # Resolve the owner before admission. Read its current policy inside the guard.
             layout = api['NativeLayout'](api['external'](self.runtime))
             owner = api['Exchange'](layout.exchange)
             if owner.workspace != layout.workspace.resolve():
                 raise ValueError('system workspace binding changed')
             with exclusive(owner.root / 'owner.lock'):
-                return self._system(api, args)
-        if args.action == 'adopt':
-            try:
-                return self._system(api, args)
-            except ValueError as exc:
-                describe = api.get('adopt_basis')
-                basis = None
-                if describe is not None:
-                    try:
-                        projection = describe(exc)
-                        if type(projection) is dict:
-                            json.dumps(projection, allow_nan=False)
-                            basis = projection
-                    except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-                        pass
-                if basis is not None:
-                    raise DeploymentAdoptBasisChanged(str(exc), basis) from exc
-                raise
-        return self._system(api, args)
+                yield self._open_selected_store(api, args)
+        else:
+            system = self._open_selected_store(api, args)
+            if args.action == 'explain-context':
+                yield system
+            else:
+                with exclusive(system.ex.root / 'owner.lock'):
+                    yield system
 
-    def _system(self, api, args):
+    def _open_selected_store(self, api, args):
         if args.action == 'configure':
             from native_runtime.loading import Loading
             system = api['System'](self.runtime, _selection_override=Loading.configuration_descriptor(self.runtime, read(args.spec)))
@@ -324,10 +335,7 @@ class Deployment:
                              'selection_scope': 'Per-store catalogues and domains are selected by the native store descriptor.'}
         system.command_prefix = [sys.executable, '-B', str(self.engine / 'prototype/deploy.py'),
                                  '--deployment', str(self.root), 'system']
-        if args.action in {'catalogue', 'configure', 'put', 'recompose', 'explain-context'}:
-            return api['act'](system, args), args, api
-        with exclusive(system.ex.root / 'owner.lock'):
-            return api['act'](system, args), args, api
+        return system
 
 
 def parser():
