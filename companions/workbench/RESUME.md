@@ -13,6 +13,7 @@ files together:
 
 - `resumable_workbench.py`, `durable_agent.py` and `workbench_agent.py`;
 - `source_tools.py` and `model_bridges.py`;
+- `PREDECESSOR-RESUME.json`, which identifies the exact adapter repair qualified for legacy journals;
 - `controller/agent_runtime.py` and `controller/evidence_support.py`.
 
 Python's standard library and SQLite FTS5 suffice. The system bundle supplies the

@@ -1,0 +1,17 @@
+{
+  "schema": "g60-workbench-predecessor-repair/1",
+  "adapter_code": {
+    "resumable_workbench.py": {
+      "bytes": 15444,
+      "sha256": "eb887fd7ffda7cf4331f15bff5a8f234ecd6f0b099df854eaa95e7ede102e849"
+    },
+    "source_tools.py": {
+      "bytes": 24569,
+      "sha256": "cfc4362e29cd68cf288096bb71cd9e8469317bffd1e15b828ad7b310705db903"
+    },
+    "workbench_agent.py": {
+      "bytes": 26836,
+      "sha256": "0c86dc7e6f843c8c8a0a4019a84d6fbc02c7f311d9345aad9aa76c1785dcf995"
+    }
+  }
+}

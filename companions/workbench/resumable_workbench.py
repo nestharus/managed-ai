@@ -116,6 +116,25 @@ def _binding(config, injected_model, search):
 def _compatible_predecessor_binding(state, binding, search):
     if not search.is_predecessor:
         return None
+
+    # Qualification is tied to this exact repair, including this module. Future
+    # edits need their own qualification before admitting predecessor journals.
+    registry = Path(__file__).with_name("PREDECESSOR-RESUME.json")
+    if registry.is_symlink() or not registry.is_file():
+        return None
+    try:
+        with registry.open("rb") as stream:
+            data = stream.read(4097)
+        if len(data) > 4096:
+            return None
+        qualified = json.loads(data)
+    except (OSError, ValueError):
+        return None
+    observed = {Path(path).name: pin for path, pin in binding["adapter_code"].items()
+                if Path(path).name in _PREDECESSOR_ADAPTER}
+    if qualified != {"schema": "g60-workbench-predecessor-repair/1", "adapter_code": observed}:
+        return None
+
     previous = dict(binding)
     del previous["source_search_analyzer"]
     # The issued journal named the predecessor's standalone entrance. That
