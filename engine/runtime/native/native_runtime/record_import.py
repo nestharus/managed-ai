@@ -1,4 +1,6 @@
 """Own native import receipts and resume acknowledgements against verified heads."""
+import stat
+
 from continuation_support.ownership import packet_id
 from continuation_support.storage import encode, sha, sync_dir, write_json
 from native_runtime.identities import digest, exact_fields, identity, record_identity, require, strict_json
@@ -24,9 +26,11 @@ def _receipt_path(system, ident):
 
 def _load_receipt(path):
     try:
-        return strict_json(path.read_bytes())
+        mode = path.stat().st_mode
     except FileNotFoundError:
         return None
+    require(stat.S_ISREG(mode), 'ordinary native import receipt required: ' + str(path))
+    return strict_json(path.read_bytes())
 
 
 def _validate_receipt(receipt, ident, instance_id):
