@@ -122,9 +122,9 @@
       "sha256": "a1d53eef77a1795c95fd92c88eb96520752a8bb78f4f8c3d2bbbabe8f85a4aff"
     },
     "host/continuing_work/continuing_work.py": {
-      "bytes": 44291,
+      "bytes": 44906,
       "mode": 420,
-      "sha256": "04d0bfa98d51630cc82efa548a7009ca80aaeefac3e3fd53ebd03ff5400cb344"
+      "sha256": "f6a110f5114fbd32665aa59a134d7c221c53dfd187a0f89b1beaa786a8c48d23"
     },
     "host/continuing_work/occurrence_files.py": {
       "bytes": 955,
@@ -137,9 +137,9 @@
       "sha256": "674aa0e12cd1cadd6a690a1112ec5eb33979668fa4cddb5ebbbdf59c14340119"
     },
     "host/continuing_work/test_prepare.py": {
-      "bytes": 3122,
+      "bytes": 3301,
       "mode": 420,
-      "sha256": "5abd2e18e9567b38800ce29c8cabcf62d6c9a0c58aa7da373dfb1cd9aa8f65c1"
+      "sha256": "1445c3186fe5c4aa7383a7a61552d8386904e17bc89aed2d8c8cfd444baadef9"
     },
     "host/material_retention/MATERIAL-MAINTENANCE.md": {
       "bytes": 23397,

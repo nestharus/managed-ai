@@ -348,35 +348,8 @@ class Host(RepairCustody):
     def scopes(self):
         return [read(p) for p in sorted((self.root/'scopes').glob('*.json'))]
 
-    def prepare(self, spec):
-        sid=ident(spec['id']); saved=self.root/'scopes'/f'{sid}.json'
-        if saved.exists(): raise ValueError('A scope is one immutable occurrence; select a fresh identity')
-        task=nonempty(spec['task'],'task'); prediction=nonempty(spec['prediction'],'prediction')
-        selected_sources = spec.get('sources', [])
-        questions = prepare_questions(spec.get('questions', []), selected_sources, task)
-        for ordinal, question in enumerate(questions, 1):
-            question['id'] = ident(f'{sid}-q{ordinal}')
-        resource_paths = [(item, Path(item['path'])) for item in selected_sources]
-        attention = prepare_attention_selection(spec)
-        overlap_limit=spec.get('overlap_limit',8)
-        if type(overlap_limit) is not int or not 1<=overlap_limit<=200:
-            raise ValueError('overlap_limit must be an integer from1through200')
-        outnames=[ident(n) for n in spec['outputs']]
-        if not outnames or len(set(outnames))!=len(outnames): raise ValueError('Select distinct new output names')
-        targets=['outputs/'+sid+'/'+n for n in outnames]
-        reads=list(dict.fromkeys([*spec.get('reads',[]),*(r['id'] for r in selected_sources)]))
-        writes=list(dict.fromkeys(spec.get('writes',[])))
-
-        self.current(self.config['commission'],'Current commission')
-        goal=self.goal(); duty_ids=spec['duty_ids']
-        known={r['id']:r for r in goal['content']['obligations']}
-        if not duty_ids or set(duty_ids)-known.keys(): raise ValueError('Bind actual current parent duties')
-        sources=[]; changed=[]
-        for item, path in resource_paths:
-            row,old=self.refresh_resource(item['id'],path)
-            row=dict(row,role=item.get('role','source'))
-            sources.append(row)
-            if old: changed.append({'resource':row['id'],'before':old,'current':row})
+    def _write_overlap_index(self, sid, sources, resource_changes, reads, writes, overlap_limit):
+        changed = list(resource_changes)
         previous_scopes=self.scopes()
         for source in sources:
             if any(c['resource']==source['id'] for c in changed): continue
@@ -399,17 +372,57 @@ class Host(RepairCustody):
         write(index,{'scope':sid,'previous_scope_count':len(previous_scopes),'rows':all_overlaps,
                      'meaning':'Author-declared footprints plus exact same-source/received-output identity. Shared reading need not conflict. Disjoint identities do not establish semantic independence.'})
         overlap_pin=self.pin(index)
-        if any((self.work/p).exists() for p in targets): raise ValueError('Fresh generation targets must be absent')
-        # Native publication deliberately requires an existing parent at capture.
-        for target in targets: (self.work/target).parent.mkdir(parents=True,exist_ok=True)
-        repairs = self._generation_repairs(spec.get('repairs', []), sources)
-        source_note={'scope':sid,'prediction':prediction,'duty_ids':duty_ids,
-            'changed_sources':changed,'overlap_nominations':overlaps,
-            'overlap_coverage':{'previous_scopes':len(previous_scopes),'matching_scopes':len(all_overlaps),
+        coverage = {'previous_scopes':len(previous_scopes),'matching_scopes':len(all_overlaps),
                 'delivered':len(overlaps),'omitted':len(all_overlaps)-len(overlaps),'limit':overlap_limit,
                 'omitted_scope_sample':[r['scope']for r in all_overlaps[overlap_limit:overlap_limit+20]],
                 'complete_index':overlap_pin,
-                'meaning':'Nominations, not inferred conflicts, automatic scheduling or semantic completeness. Acquire the complete index when omitted or new relationships matter.'},
+                'meaning':'Nominations, not inferred conflicts, automatic scheduling or semantic completeness. Acquire the complete index when omitted or new relationships matter.'}
+        return changed, overlaps, coverage
+
+    def prepare(self, spec):
+        sid=ident(spec['id']); saved=self.root/'scopes'/f'{sid}.json'
+        if saved.exists(): raise ValueError('A scope is one immutable occurrence; select a fresh identity')
+        task=nonempty(spec['task'],'task'); prediction=nonempty(spec['prediction'],'prediction')
+        selected_sources = spec.get('sources', [])
+        questions = prepare_questions(spec.get('questions', []), selected_sources, task)
+        for ordinal, question in enumerate(questions, 1):
+            question['id'] = ident(f'{sid}-q{ordinal}')
+        resource_paths = [(item, Path(item['path'])) for item in selected_sources]
+        attention = prepare_attention_selection(spec)
+        overlap_limit=spec.get('overlap_limit',8)
+        if type(overlap_limit) is not int or not 1<=overlap_limit<=200:
+            raise ValueError('overlap_limit must be an integer from1through200')
+        outnames=[ident(n) for n in spec['outputs']]
+        if not outnames or len(set(outnames))!=len(outnames): raise ValueError('Select distinct new output names')
+        targets=['outputs/'+sid+'/'+n for n in outnames]
+        reads=list(dict.fromkeys([*spec.get('reads',[]),*(r['id'] for r in selected_sources)]))
+        writes=list(dict.fromkeys(spec.get('writes',[])))
+
+        duty_ids = spec['duty_ids']
+        requested_duties = set(duty_ids)
+        if not requested_duties:
+            raise ValueError('Bind actual current parent duties')
+        repair_ids = [ident(value) for value in spec.get('repairs', [])]
+
+        self.current(self.config['commission'],'Current commission')
+        goal=self.goal()
+        known={r['id']:r for r in goal['content']['obligations']}
+        if requested_duties-known.keys(): raise ValueError('Bind actual current parent duties')
+        sources=[]; resource_changes=[]
+        for item, path in resource_paths:
+            row,old=self.refresh_resource(item['id'],path)
+            row=dict(row,role=item.get('role','source'))
+            sources.append(row)
+            if old: resource_changes.append({'resource':row['id'],'before':old,'current':row})
+        changed, overlaps, coverage = self._write_overlap_index(sid, sources, resource_changes,
+                                                               reads, writes, overlap_limit)
+        if any((self.work/p).exists() for p in targets): raise ValueError('Fresh generation targets must be absent')
+        # Native publication deliberately requires an existing parent at capture.
+        for target in targets: (self.work/target).parent.mkdir(parents=True,exist_ok=True)
+        repairs = self._generation_repairs(repair_ids, sources)
+        source_note={'scope':sid,'prediction':prediction,'duty_ids':duty_ids,
+            'changed_sources':changed,'overlap_nominations':overlaps,
+            'overlap_coverage':coverage,
             'authored_relations':spec.get('relations',[]),
             'selected_treatments':spec.get('treatments',[]),
             'unknowns':spec.get('unknowns',['Unnominated semantic dependencies may remain.']),

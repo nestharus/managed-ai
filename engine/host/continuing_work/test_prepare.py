@@ -34,6 +34,8 @@ class PrepareScope(unittest.TestCase):
         before = self.host_files()
         for fields, error in (({'outputs': ['same', 'same']}, 'distinct new output names'),
                               ({'overlap_limit': 0}, 'overlap_limit'),
+                              ({'duty_ids': []}, 'Bind actual current parent duties'),
+                              ({'repairs': ['../invalid']}, 'Use a simple local identity'),
                               ({'questions': [{'question': 'Which edition?', 'sources': ['absent']}]},
                                'unselected resource IDs')):
             with self.subTest(fields=fields):
