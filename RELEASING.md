@@ -52,6 +52,24 @@ python3 -B engine/prototype/deploy.py --deployment deployments/work system statu
 
 Record the archive digest, Git commits, selected engine digest, and store and domain identities in the release record. Refer to the [package producer](engine/release/README.md) for maintenance of the canonical registrations.
 
+
+### Research evidence in a working release
+
+Select the research deployment and its current instance descriptor from the
+same receiving cut. Include completed native import receipts, their record
+heads, the workspace basis and the retained objects. Keep required catalogue
+dependencies under their declared paths. Package verification starts from
+the selected research domain and its registered tools.
+
+After extraction, repeat an exact research-origin lookup in the received
+workspace and open its head. Check the accepted revision and native digest,
+the original source coordinates, and every basis object's bytes against the
+selected cut. Reassemble a partitioned original in its declared order and
+verify its full digest. For a scope-specific signed evidence request, the
+research operation's `verify` command checks the original native receipt.
+The scoped research guide describes native discovery and receipt-bound
+intake in `domains/research/operations/CURRENT-WORK.md`.
+
 ## Accept the exported edition
 
 Record the tested ZIP digest before promotion. Verify its actual membership, modes,
