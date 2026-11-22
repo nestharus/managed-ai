@@ -117,9 +117,9 @@
       "sha256": "2b7373ebd791979e5aa795d80ad35e93d0541e09f09e69fec96ce03004b5a5d0"
     },
     "host/continuing_work/capture_native.py": {
-      "bytes": 6877,
+      "bytes": 7003,
       "mode": 420,
-      "sha256": "a1d53eef77a1795c95fd92c88eb96520752a8bb78f4f8c3d2bbbabe8f85a4aff"
+      "sha256": "5ddd545837d667796fa90cdd999850e3df9923554fd0d11d6cb699f183c70ee5"
     },
     "host/continuing_work/continuing_work.py": {
       "bytes": 44906,
