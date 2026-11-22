@@ -1,19 +1,6 @@
-#!/usr/bin/env python3
-"""Run the included carrier without installation; runtime roots must be external."""
+"""Portable entrance for callers of the original source distribution."""
 from pathlib import Path
-import os
-import sys
+import runpy
 
-def main() -> None:
-    if os.name != "posix":
-        raise SystemExit("This local return carrier requires POSIX (fcntl and detached workers).")
-    sys.dont_write_bytecode = True
-    os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
-    root = Path(__file__).resolve().parent
-    sys.path.insert(0, str(root / "src"))
-    from continuation_support.collector import main as run
-    from continuation_support.ownership import external_root
-    run(validate_root=external_root)
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    runpy.run_path(str((Path(__file__).resolve().parent / '../runtime/collect_returns.py').resolve()), run_name='__main__')

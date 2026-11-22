@@ -6,10 +6,10 @@ For repeated broad, local or joint observing work, the optional [continuing obse
 
 ## Start one continuing commission
 
-Use a new host root outside the delivered system. An `init` specification supplies an absolute `engine` path to the delivered `prototype/system.py`, the exact `commission` file, and `duties` as `{id, text}` objects. The initial host receipt records enrollment only. The actual capable participant must read each producing context.
+Use a new host root outside the delivered system. An `init` specification supplies an absolute `engine` path to the delivered `runtime/manage_store.py`, the exact `commission` file, and `duties` as `{id, text}` objects. The initial host receipt records enrollment only. The actual capable participant must read each producing context.
 
 ```bash
-python -B host/continuing_work.py --root /absolute/work/novel init --spec /absolute/init.json
+python -B host/continuing_work/continuing_work.py --root /absolute/work/novel init --spec /absolute/init.json
 ```
 
 Keep this host root for successive narrower contributions. Starting a new unrelated runtime with a narrowed goal does not carry the earlier commission. The adapter cannot recover a duty that was never supplied.
@@ -127,8 +127,8 @@ The host also nominates exact shared source bytes under different labels and act
 A `receive` specification supplies an actual `reply` path, attributed `producer`, `account`, and `proposals` mapping the selected output filenames to new generated files. An optional native Attention `assessment` can account for delivered questions. The output is retained and then adopted through native current-basis checks. Local receipt never fulfills a parent duty.
 
 ```bash
-python -B host/continuing_work.py --root /absolute/work/novel prepare --spec /absolute/contribution.json
-python -B host/continuing_work.py --root /absolute/work/novel receive contribution-id --spec /absolute/return.json
+python -B host/continuing_work/continuing_work.py --root /absolute/work/novel prepare --spec /absolute/contribution.json
+python -B host/continuing_work/continuing_work.py --root /absolute/work/novel receive contribution-id --spec /absolute/return.json
 ```
 
 Serial custody operations may surround parallel model construction. The adapter holds a local host lock while refreshing resources and preparing or admitting output. It does not appoint one permanent semantic merger. If publication refuses after receive, preserve the returned contribution and inspect the native result. Prepare a new current receiving occasion; never overwrite the original turn or blindly repeat an uncertain effect.
@@ -196,7 +196,7 @@ Write a host specification that identifies that receipt and its actual producer:
 Invoke the selected host against the existing host root:
 
 ```bash
-python -B /installed/managed-ai/host/continuing_work.py --root /work/host \
+python -B /installed/managed-ai/host/continuing_work/continuing_work.py --root /work/host \
   capture CURRENT-SCOPE --spec /work/partial-first-capture.json
 ```
 
@@ -245,9 +245,9 @@ of history or establish a measured wall-time improvement. Ordinary native
 Recover the receipt and then its product through the existing supported route:
 
 ```bash
-python -B /installed/managed-ai/prototype/attend.py --root /work/host/native/exchange \
+python -B /installed/managed-ai/runtime/track_attention.py --root /work/host/native/exchange \
   object RECEIPT-OBJECT --text
-python -B /installed/managed-ai/prototype/attend.py --root /work/host/native/exchange \
+python -B /installed/managed-ai/runtime/track_attention.py --root /work/host/native/exchange \
   object PRODUCT-OBJECT --text
 ```
 
@@ -268,7 +268,7 @@ pipeline is required.
 
 ## Maintain shared material and current selections
 
-For repeated source captures, releases and evidence products, `managed_material.py` provides a separate managed-material maintenance route. It reuses raw SHA-256 identities, retains occurrence and current-selection manifests, decomposes historical ZIPs into exact reconstruction recipes, exports a self-contained recovery closure, and supports verified retirement of explicitly selected obsolete copies. See [MATERIAL-MAINTENANCE.md](MATERIAL-MAINTENANCE.md) for the encoder boundary, cutoff, recovery and lifecycle contracts. It does not migrate the host or native exchange.
+For repeated source captures, releases and evidence products, `managed_material.py` provides a separate managed-material maintenance route. It reuses raw SHA-256 identities, retains occurrence and current-selection manifests, decomposes historical ZIPs into exact reconstruction recipes, exports a self-contained recovery closure, and supports verified retirement of explicitly selected obsolete copies. See [MATERIAL-MAINTENANCE.md](material_retention/MATERIAL-MAINTENANCE.md) for the encoder boundary, cutoff, recovery and lifecycle contracts. It does not migrate the host or native exchange.
 
 ## Retain a failure and exercise changed means
 

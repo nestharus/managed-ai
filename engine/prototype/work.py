@@ -1,14 +1,6 @@
-#!/usr/bin/env python3
-"""Standalone entry point for explicit continuation exchange."""
-import os
+"""Portable entrance for callers of the original source distribution."""
 from pathlib import Path
-import sys
+import runpy
 
 if __name__ == '__main__':
-    if os.name != 'posix':
-        raise SystemExit('Continuation exchange requires POSIX.')
-    sys.dont_write_bytecode = True
-    os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
-    sys.path.insert(0, str(Path(__file__).resolve().parent / 'src'))
-    from continuation_support.exchange import main
-    main()
+    runpy.run_path(str((Path(__file__).resolve().parent / '../runtime/exchange_packets.py').resolve()), run_name='__main__')

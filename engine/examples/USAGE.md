@@ -89,7 +89,7 @@ changed request under an existing command conflicts. For uncertain delivery,
 inspect the authoritative result through:
 
 ```sh
-python -B /path/to/prototype/collective.py --db /path/to/runtime/use.sqlite receipt --actor receiving-owner --command this-exact-admission-attempt
+python -B /path/to/runtime/manage_collective.py --db /path/to/runtime/use.sqlite receipt --actor receiving-owner --command this-exact-admission-attempt
 ```
 
 A root receipt lookup that recovers a recorded refusal returns that refused

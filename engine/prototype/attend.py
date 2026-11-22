@@ -1,13 +1,6 @@
-#!/usr/bin/env python3
-"""Run the local attention interface from a standalone source distribution."""
+"""Portable entrance for callers of the original source distribution."""
 from pathlib import Path
-import sys
+import runpy
 
 if __name__ == '__main__':
-    sys.dont_write_bytecode = True
-
-sys.path.insert(0, str(Path(__file__).resolve().parent / 'src'))
-from continuation_support.attention import main
-
-if __name__ == '__main__':
-    main()
+    runpy.run_path(str((Path(__file__).resolve().parent / '../runtime/track_attention.py').resolve()), run_name='__main__')

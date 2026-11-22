@@ -1,0 +1,143 @@
+"""Execute parsed native store operations and render their public results."""
+from __future__ import annotations
+
+import json
+import math
+from pathlib import Path
+import sys
+
+from feedback import Feedback
+from information import Information
+from native_runtime.inputs import read, strings, text
+
+def emit(result, args):
+    if getattr(args, 'text', False):
+        if args.action == 'catalogue':
+            if 'body' not in result: raise ValueError('catalogue --text requires an identity')
+            sys.stdout.write(result['body'])
+        else:
+            context = result.get('context')
+            sys.stdout.write(context if args.action == 'recover' else Path(context).read_text(encoding='utf-8'))
+    else:
+        public_return = getattr(args, 'action', None) in {'run', 'receive'}
+        ascii_json = public_return or getattr(args, 'changed_since', None) is not None
+        rendered = json.dumps(result, ensure_ascii=ascii_json, indent=2, allow_nan=False)
+        if public_return and hasattr(sys.stdout, 'buffer'):
+            sys.stdout.buffer.write((rendered + '\n').encode('ascii'))
+        else:
+            print(rendered)
+
+
+def act(system, args):
+    action = args.action
+    if action in {'import', 'configure', 'transfer'}:
+        from native_runtime import record_import, record_transfer, store_configuration
+        if action == 'import': return record_import.import_records(system, read(args.spec))
+        if action == 'configure': return store_configuration.configure(system, read(args.spec))
+        if args.transfer_action == 'inspect': return record_transfer.inspect(system, args.id)
+        if args.transfer_action == 'export': return record_transfer.export(system, args.record, args.output)
+        return record_transfer.receive(system, args.bundle, args.id, args.account, args.expected)
+    if action == 'put':
+        return {'record': system.put(read(args.record), args.expected), 'status': system.status()}
+    if action == 'show': return system.show(args.id)
+    if action == 'pin': return system.record_store.pin(system.show(args.id))
+    if action == 'history':
+        return next(system.record_store.history_pages(args.id, limit=args.limit,
+                                                     cursor=read(args.cursor) if args.cursor else None))
+    if action == 'index-head': return system.record_store.index_scope(args.id)
+    if action == 'status': return system.status()
+    if action == 'abandon-context': return system.abandon_context(args.turn, args.account)
+    if action == 'recover': return system.recover(args.turn)
+    if action == 'recover-transport': return system.recover_transport(args.turn)
+    if action == 'close-transport':
+        return {'transport_outcome': system.close_transport(args.turn, args.account), 'status': system.status()}
+    if action == 'reconcile-publication':
+        result = system.reconcile_publication(args.turn, args.target, args.expected_sha256, args.account)
+        return {'reconciliation': result, 'status': system.status()}
+    if action == 'resume-context': return system.resume_context(args.turn)
+    if action == 'view': return system.view(args.turn)
+    if action == 'explain-context': return system.explain_context(args.turn)
+    if action == 'context':
+        request = read(args.request) if args.request else {}
+        if args.task: request['task'] = args.task
+        if args.without_feedback:
+            if request.get('feedback_uses'):
+                raise ValueError('--without-feedback conflicts with selected feedback_uses')
+            request['feedback_uses'] = []
+        if args.feedback:
+            selected = strings(request.get('feedback_uses', []), 'feedback_uses')
+            request['feedback_uses'] = list(dict.fromkeys([*selected, *args.feedback]))
+        if args.project_source:
+            selected = strings(request.get('project_sources', []), 'project_sources')
+            request['project_sources'] = list(dict.fromkeys([*selected, *args.project_source]))
+        return system.context(args.turn, request)
+    if action == 'receive':
+        result = system.receive(args.turn, args.reply, args.producer, args.proposal, args.assessment, args.wait,
+                                run_nominations=args.run_nominations)
+        return {'return': result, 'status': system.status()}
+    if action == 'track': return {'attention': system.track(args.spec), 'status': system.status()}
+    if action == 'assess':
+        return {'attention': system.assess(args.turn, args.receipt, args.producer), 'status': system.status()}
+    if action == 'adopt':
+        return {'publication': system.adopt(args.turn, args.target, args.reason), 'status': system.status()}
+    if action == 'interpret':
+        result = system.interpret(args.goal_revision, args.disposition, args.account, args.evidence, args.condition)
+        return {'interpretation': result, 'status': system.status()}
+    if action == 'run':
+        if not math.isfinite(args.wait) or args.wait < 0:
+            raise ValueError('run --wait must be finite and nonnegative')
+        if args.proposal and args.wait == 0:
+            raise ValueError('run --proposal requires a positive --wait')
+        producer = text(args.producer, 'positive run --wait producer') if args.wait > 0 else None
+        argv = json.loads(args.argv_json.read_text(encoding='utf-8'))
+        if args.wait > 0:
+            result = system.run(args.turn, argv, proposals=args.proposal, producer=producer, wait=args.wait)
+        else:
+            result = {'dispatch': system.run(args.turn, argv)}
+        return dict(result, status=system.status())
+    if action == 'catalogue':
+        return system.catalogue(args.id, args.query, args.kind, args.limit, args.offset, args.content)
+    if action == 'materialize': return system.materialize(args.operation)
+    if action == 'discover': return system.discover(read(args.request))
+    if action == 'recompose':
+        from composition_revision import revise
+        from native_runtime.inputs import read_input
+        proposal, _ = read_input(args.request, byte_limit=4 * 1024 * 1024)
+        return revise(system, proposal, accept=args.accept, retain=args.retain, reason=args.reason,
+                      proof_store=getattr(args, 'proof_store', None))
+    if action == 'compose':
+        if args.interaction_map:
+            if any(x is not None for x in (args.boundary, args.changed_since, args.repo, args.focus)) or args.pair_limit != 200:
+                raise ValueError('interaction map takes --record and optional --limit')
+            from composition import Composition
+            return Composition(system).interaction_map(args.record, args.limit)
+        if args.boundary is not None:
+            if args.changed_since is not None or args.repo is not None or args.focus is not None or args.pair_limit != 200:
+                raise ValueError('boundary inspection takes --record, --boundary and optional --limit')
+            from composition_boundary import inspect_boundary
+            return inspect_boundary(system, args.record, args.boundary, args.limit)
+        if args.changed_since is not None or args.repo is not None:
+            if not args.changed_since or args.repo is None or args.focus or args.pair_limit != 200:
+                raise ValueError('change notice requires --changed-since BASE and --repo CHECKOUT; use --limit for detail')
+            from composition_change_notice import notice
+            return notice(system, args.record, args.repo, args.changed_since, args.limit)
+        return system.compose(args.record, args.focus, args.limit, args.pair_limit)
+    if action == 'inquiry':
+        from native_runtime.inquiry import Inquiry
+        inquiry = Inquiry(system)
+        if args.inquiry_action == 'stages':
+            return {'stages': inquiry.stages(args.id)}
+        spec = read(args.spec)
+        if args.inquiry_action == 'open':
+            return inquiry.open(spec)
+        return inquiry.ensure(spec['id'], 'evidence', spec['content'], inquiry.paths(spec['basis']))
+    if action == 'feedback':
+        feedback = Feedback(system)
+        if args.feedback_action == 'inspect':
+            return feedback.inspect(args.id, args.revision)
+        return feedback.apply(args.feedback_action, read(args.spec))
+    if action == 'info':
+        information = Information(system)
+        if args.information_action == 'inspect': return information.inspect(args.id)
+        return getattr(information, args.information_action)(read(args.spec))
+    raise ValueError('unknown action')

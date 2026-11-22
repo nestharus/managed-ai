@@ -2,16 +2,18 @@
 
 This is the single executable engine for every instance in the package. The native application is version 0.5.0 with portable store bindings, declared payload schemas, selected source catalogues and current-use record retention. The continuation core is version 0.4.2. [Current release identities](CURRENT-RELEASE.json) identify the selected canonical guidance.
 
+The production commands live in [runtime](runtime/). Use [select_deployment.py](runtime/select_deployment.py) to enter a selected deployment, [manage_store.py](runtime/manage_store.py) for a direct native store, [exchange_packets.py](runtime/exchange_packets.py) for standalone packet exchange and [collect_returns.py](runtime/collect_returns.py) for a local carrier. The [deployment controller](runtime/deployment/), [native application](runtime/native/) and [continuation package](runtime/continuation/continuation_support/) own those operations. [Runtime tests](runtime/tests/) follow the same boundaries.
+
 [Stores, domains and deployments](INSTANCES.md) defines their actual contract. From the package root, operate the selected store through the same code:
 
 ```sh
-python3 -B engine/prototype/deploy.py --deployment deployments/research system status
-python3 -B engine/prototype/deploy.py --deployment deployments/novel system status
+python3 -B engine/runtime/select_deployment.py --deployment deployments/research system status
+python3 -B engine/runtime/select_deployment.py --deployment deployments/novel system status
 ```
 
-The [native operating contract](prototype/agent-system/README.md), [CLI field reference](CLI-FIELD-REFERENCE.md) and [capability map](CAPABILITIES.md) explain source capture, real returns, guarded adoption and current-use interpretation. [Construction](host/CONSTRUCTION.md) supplies general operating guidance. [Peer communication](host/PEER-COMMUNICATION.md) applies when a comparison needs an exposure boundary.
+The [native operating contract](runtime/native/README.md), [CLI field reference](CLI-FIELD-REFERENCE.md) and [capability map](CAPABILITIES.md) explain source capture, real returns, guarded adoption and current-use interpretation. [Construction](host/CONSTRUCTION.md) supplies general operating guidance. [Peer communication](host/continuing_work/PEER-COMMUNICATION.md) applies when a comparison needs an exposure boundary.
 
-[Material maintenance](host/MATERIAL-MAINTENANCE.md) selects current useful content and deliberately selected evidence. Native record replacement also defaults to current-use retention. Schema validation, source custody, semantic adequacy and completion remain distinct judgments.
+[Material maintenance](host/material_retention/MATERIAL-MAINTENANCE.md) selects current useful content and deliberately selected evidence. Native record replacement also defaults to current-use retention. Schema validation, source custody, semantic adequacy and completion remain distinct judgments.
 
 [SOURCES.md](SOURCES.md) names each canonical operating source. Broad theory, domain methods, human and agent guidance, research state and application material have their own owners under the enclosing package. The engine reads selected sources through verified references; it does not carry another complete source mirror.
 

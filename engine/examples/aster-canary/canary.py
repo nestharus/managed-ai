@@ -6,9 +6,9 @@ import sqlite3
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
-PRODUCT = ROOT / 'prototype' if (ROOT/'prototype'/'agent-system').is_dir() else ROOT
-COLLECTIVE = PRODUCT/'collective-work' if (PRODUCT/'collective-work').is_dir() else PRODUCT
-sys.path[:0] = [str(PRODUCT/'agent-system'), str(COLLECTIVE)]
+PRODUCT = ROOT / 'runtime' if (ROOT / 'runtime/native').is_dir() else ROOT
+COLLECTIVE = PRODUCT/'collective' if (PRODUCT/'collective').is_dir() else PRODUCT
+sys.path[:0] = [str(PRODUCT/'native'), str(COLLECTIVE)]
 from system import System
 from collective_store import Collective, Session
 from collective_store.contract import pin, require
