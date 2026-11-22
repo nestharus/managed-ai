@@ -467,9 +467,9 @@
       "sha256": "30acc6150ea7e417c615744b84f8be312419f2df16745a5e7add32f35c46e7de"
     },
     "runtime/docs/api.md": {
-      "bytes": 10911,
+      "bytes": 10933,
       "mode": 420,
-      "sha256": "2574c0364cb5973af981bf055218d7723d425032ad78e196af1c957bf1379392"
+      "sha256": "bf85a37467825f8d9a7ca13f12f286f94edd5ea6a5d617384f4b05f2e2448538"
     },
     "runtime/docs/architecture.md": {
       "bytes": 6541,

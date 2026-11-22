@@ -9,7 +9,7 @@ The [architecture guide](architecture.md) explains the component relationships a
 | Code | Implemented contribution | Supplied by the surrounding application |
 |---|---|---|
 | [collector.py](../continuation/continuation_support/collector.py) | Admitted local command, actual byte streams, collected exit or visible uncertainty | Choice and permission to run the command; bounded foreground behavior; interpretation of the outcome |
-| [exchange.py](../src/continuation_support/exchange.py) | Captured inputs, attributed returns, reusable proposed bodies, guarded single-file replacement | Source selection, actual recipient delivery, interpretation, current effect authority and any larger transaction |
+| [Packet exchange operations](../continuation/continuation_support/exchange/) | Captured inputs, attributed returns, reusable proposed bodies, guarded single-file replacement | Source selection, actual recipient delivery, interpretation, current effect authority and any larger transaction |
 | [attention.py](../continuation/continuation_support/attention.py) | Nominated questions, source/use-bound public accounts, selected feedback and historical access | Useful questions and alternatives, actual consideration, semantic adequacy and the next constructive choice |
 
 Use only the relationship a current task needs. Existing files or a capable host may already supply it. The package does not need to become the controller of all application work, and research mechanisms described elsewhere are not installed by importing these modules.
