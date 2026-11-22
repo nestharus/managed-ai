@@ -247,19 +247,19 @@
       "sha256": "cbdf500521e2ed2374d38903c97717c2967a948dcc04cadb477707ebf2797064"
     },
     "release/package.py": {
-      "bytes": 18006,
+      "bytes": 19023,
       "mode": 420,
-      "sha256": "b2885cdf98a5c8639304dadd0e6e9ee62c3d7af06c7afe4c49c3e2d5b1106e6f"
+      "sha256": "a50b25cbe0cd6a60afe24814f9170c6e667c7f60e06c26d659eaf642f464debc"
     },
     "release/refresh_guidance.py": {
-      "bytes": 7040,
+      "bytes": 7283,
       "mode": 420,
-      "sha256": "a1ba4f2bea66d280a938df2cd8466b4f5a042351683559b1133c7d77e116309d"
+      "sha256": "844c4d646ed26b0dda0de04099e00259ae054d44dc7c1d9567c7653abbd3106b"
     },
     "release/test_source_list.py": {
-      "bytes": 4564,
+      "bytes": 4813,
       "mode": 420,
-      "sha256": "567d363632afdec3542387a60788c6c5bf168565b31fbb5557cc3f76643edf59"
+      "sha256": "89674e723489763d05efcdaeeb06e30510606dfcf068905dae1a5135cdabd7d5"
     },
     "runtime/CORE.md": {
       "bytes": 4531,

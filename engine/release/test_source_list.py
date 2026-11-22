@@ -46,14 +46,19 @@ class SourceListTest(unittest.TestCase):
                 api["members"](root, None)
 
     def test_stale_second_identity_refuses_before_publication(self):
+        for catalogue_root in ("runtime/native", "prototype/agent-system"):
+            with self.subTest(catalogue_root=catalogue_root):
+                self.check_stale_identity(catalogue_root)
+
+    def check_stale_identity(self, catalogue_root):
         with TemporaryDirectory() as temporary:
             root = Path(temporary) / "bundle"
             core = root / "engine"
             (core / "release").mkdir(parents=True)
-            (core / "runtime/native").mkdir(parents=True)
+            (core / catalogue_root).mkdir(parents=True)
             rows = [{"id": name, "source": name + ".md"} for name in ("neighbor", "guide")]
             (core / "release/current_sources.json").write_text(json.dumps({"edition": "test", "bodies": rows}))
-            (core / "runtime/native/catalogue.json").write_text(json.dumps({"entries": rows}))
+            (core / catalogue_root / "catalogue.json").write_text(json.dumps({"entries": rows}))
             (core / "release/navigation.json").write_text("{}")
             (core / "neighbor.md").write_bytes(b"neighbor")
             (core / "guide.md").write_bytes(b"current")

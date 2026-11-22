@@ -34,6 +34,10 @@ def render(root):
     """Read canonical UTF-8 inputs and prepare each projection without writing."""
     selection_name = 'release/current_sources.json'
     catalogue_name = 'runtime/native/catalogue.json'
+    legacy = 'prototype/agent-system/catalogue.json'
+    if (not (root / 'runtime/native/native_runtime/selection').is_dir()
+            and not (root / catalogue_name).is_file() and (root / legacy).is_file()):
+        catalogue_name = legacy
     selected = json.loads((root / selection_name).read_text(encoding='utf-8'))
     catalogue = json.loads((root / catalogue_name).read_text(encoding='utf-8'))
     prior = {e['id']: e for e in catalogue['entries']}

@@ -19,6 +19,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 SELECTION = Path("release/current_sources.json")
 CATALOGUE = Path("runtime/native/catalogue.json")
+LEGACY_CATALOGUE = Path("prototype/agent-system/catalogue.json")
 MARKER = Path("CURRENT-RELEASE.json")
 # refresh_guidance stages each projection in an adjacent TemporaryDirectory.
 STAGED_PROJECTIONS = (SELECTION, CATALOGUE, Path("SOURCES.md"), MARKER)
@@ -85,11 +86,21 @@ def reserved_stage(path, info, prefixes):
     return False
 
 
+def catalogue_path(core):
+    # The loaded source edition determines its catalogue root. Keep the
+    # new canonical member mandatory when its selection loader is present.
+    if (core / "runtime/native/native_runtime/selection").is_dir() or (core / CATALOGUE).is_file():
+        return CATALOGUE
+    return LEGACY_CATALOGUE if (core / LEGACY_CATALOGUE.parent).is_dir() else CATALOGUE
+
+
 def source_paths(root, engine):
     ordinary(root, root.lstat(), stat.S_ISDIR)
     staging = {}
     if engine is not None:
         for target in STAGED_PROJECTIONS:
+            if target == CATALOGUE:
+                target = catalogue_path(engine)
             parent = engine
             if target.parent.parts:
                 parent = observed_path(engine, target.parent, stat.S_ISDIR)
@@ -113,8 +124,15 @@ def source_paths(root, engine):
 
 def received_compressed_text(system):
     """Select complete, source-bound compressed data from native import receipts."""
-    accepted = {(item["id"], item["revision"], item["sha256"])
-                for item in system.completed_import_records()}
+    if hasattr(system, "completed_import_records"):
+        acknowledgements = system.completed_import_records()
+    else:
+        # Earlier native instances expose the same exchange and instance
+        # binding. Read their retained receipts through the current owner.
+        native = Path(__file__).resolve().parents[1] / "runtime/native/native_runtime"
+        reader = runpy.run_path(str(native / "record_import.py"))["completed_receipt_records"]
+        acknowledgements = reader(system)
+    accepted = {(item["id"], item["revision"], item["sha256"]) for item in acknowledgements}
     evidence = set()
     for head in system.records():
         if (head["id"], head["revision"], head["sha256"]) not in accepted:
@@ -205,7 +223,7 @@ def read_catalogue(path):
 
 
 def verify_core_selection(core, native, *, prefix=""):
-    catalogue_member = CATALOGUE.as_posix()
+    catalogue_member = catalogue_path(core).as_posix()
     if catalogue_member not in native:
         raise ValueError(f"Package inventory requires the exact catalogue member {prefix}{catalogue_member}. "
                          "Correct the on-disk spelling before running release guidance refresh.")
@@ -215,7 +233,7 @@ def verify_core_selection(core, native, *, prefix=""):
     current = read_json(core / MARKER)
     if current["selection_sha256"] != identity(selection_path)["sha256"]:
         raise ValueError("Current release names a different source selection")
-    catalogue = read_catalogue(core / CATALOGUE)
+    catalogue = read_catalogue(core / catalogue_member)
     entries = {}
     for entry in catalogue["entries"]:
         ident = entry["id"]
