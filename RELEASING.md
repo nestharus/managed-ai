@@ -100,8 +100,10 @@ Publish the receiving result alongside the digest of the archive it qualifies.
 From the domain's repository, set `domain` to its declared ID, `commit` to its reviewed commit and `archive` to the output ZIP.
 
 ```sh
-git archive --format=zip --prefix="domains/$domain/" --output="$archive" "$commit"
+git -c core.autocrlf=false archive --format=zip --prefix="domains/$domain/" --output="$archive" "$commit"
 python3 -m zipfile -t "$archive"
 ```
+
+Compare exported file bytes with their pinned Git blobs. The archive uses LF source bytes on hosts configured for automatic CRLF checkout.
 
 Record the archive, domain descriptor and catalogue digests, engine API, and any required domain commits or external source identities. Mount the domain in a compatible disposable package and run native configuration and the selected-source gate. Publish the receiving result with the release record.

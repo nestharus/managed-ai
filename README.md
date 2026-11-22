@@ -4,7 +4,19 @@ One maintained AI-system implementation, three current native stores, and loadab
 
 ## Start
 
-Extract this archive into one directory. From that directory, inspect the three deployments:
+In a Git checkout, `engine/` owns the shared runtime. The three entries under
+`domains/` pin their source repositories. A checkout can have neither a store
+nor an initialized domain checkout. Open the existing research workspace to
+continue its work. On Windows, run `python -B research.py` from the research workspace. Use `python -B research.py system show ID` to reopen a native record. In a POSIX shell, from the directory containing its `deployment.json`, point
+`engine` at the qualified shared engine and run:
+
+```sh
+python3 -B "$engine/prototype/deploy.py" --deployment . status
+python3 -B "$engine/prototype/deploy.py" --deployment . system show research-current
+python3 -B "$engine/prototype/deploy.py" --deployment . system catalogue --query method --limit 5
+```
+
+For an extracted full release, start in the package root. Inspect its three deployments:
 
 ```sh
 python -B engine/prototype/deploy.py --deployment deployments/research status
