@@ -26,6 +26,7 @@ FORMAT = 'agent-system-deployment/2'
 ENGINE_API = 'managed-ai-runtime/1'
 STORE_SCHEMA = 'managed-ai-store/1'
 NATIVE_ENTRY = Path('runtime/native/system.py')
+NATIVE_CONTRACT = Path('runtime/native/native_runtime/selection/domain_selection.py')
 PORTABLE_ENTRY = Path('prototype/agent-system/system.py')
 PORTABLE_CONTRACT = Path('prototype/agent-system/native_runtime/domains.py')
 NON_SOURCE_SUFFIXES = ('.pyc', '.pyo', '.pyd', '.so', *EXTENSION_SUFFIXES)
@@ -89,7 +90,8 @@ def code_identity(engine):
     rows, declarations = [], {}
     interfaces = [(PORTABLE_ENTRY, PORTABLE_CONTRACT)]
     if (engine / NATIVE_ENTRY).is_file():
-        interfaces.append((NATIVE_ENTRY, PORTABLE_CONTRACT))
+        schema = NATIVE_CONTRACT if (engine / NATIVE_CONTRACT).is_file() else PORTABLE_CONTRACT
+        interfaces.append((NATIVE_ENTRY, schema))
     declaration_paths = {path for pair in interfaces for path in pair}
     for path in sorted(paths):
         relative = path.relative_to(engine)
@@ -250,7 +252,7 @@ class Deployment:
         # engine. A cached package would otherwise mask the selected engine.
         app = self._native_entry().parent
         names = {'continuation_support', 'native_runtime'}
-        names.update({'knowledge', 'source_producer'})
+        names.update({'knowledge', 'source_producer', 'source_library'})
         names.update(path.stem for path in app.glob('*.py'))
 
         def selected_name(name):

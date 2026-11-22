@@ -19,8 +19,6 @@ class SourceListTest(unittest.TestCase):
         api = runpy.run_path(str(RELEASE / "package.py"))
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            receipts = root / ".system/imports"
-            receipts.mkdir(parents=True)
             path = root / "sample.gz"
             path.write_bytes(gzip.compress(b'{"count": 4}\n'))
             pin = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -30,19 +28,15 @@ class SourceListTest(unittest.TestCase):
                       "target": basis["path"], "sha256": pin, "bytes": basis["bytes"]}
             ref = {"id": "trial", "revision": 1, "sha256": "a" * 64}
             head = dict(ref, relations=[source], basis=[basis])
-            system = SimpleNamespace(work=root, instance_id="test", records=lambda: [head])
-            receipt = {"format": "managed-ai-import-receipt/1", "complete": True,
-                       "instance_id": "test", "records": [ref]}
+            accepted = []
+            system = SimpleNamespace(records=lambda: [head], completed_import_records=lambda: iter(accepted))
             self.assertFalse(api["received_compressed_text"](system))
-            receipt_path = receipts / "trial.json"
-            receipt_path.write_text(json.dumps(receipt))
+            accepted.append(ref)
             self.assertIn((basis["path"], pin, basis["bytes"]), api["received_compressed_text"](system))
             api["check_compressed_text"](path)
-            for wrong in (dict(receipt, complete=False), dict(receipt, instance_id="other"),
-                          dict(receipt, records=[dict(ref, revision=2)])):
-                receipt_path.write_text(json.dumps(wrong))
-                self.assertFalse(api["received_compressed_text"](system))
-            receipt_path.write_text(json.dumps(receipt))
+            accepted[0] = dict(ref, revision=2)
+            self.assertFalse(api["received_compressed_text"](system))
+            accepted[0] = ref
             source["origin"] = "study/collection.tar.gz"
             self.assertFalse(api["received_compressed_text"](system))
             path.write_bytes(gzip.compress(b"PK\x03\x04nested"))
@@ -56,10 +50,10 @@ class SourceListTest(unittest.TestCase):
             root = Path(temporary) / "bundle"
             core = root / "engine"
             (core / "release").mkdir(parents=True)
-            (core / "prototype/agent-system").mkdir(parents=True)
+            (core / "runtime/native").mkdir(parents=True)
             rows = [{"id": name, "source": name + ".md"} for name in ("neighbor", "guide")]
             (core / "release/current_sources.json").write_text(json.dumps({"edition": "test", "bodies": rows}))
-            (core / "prototype/agent-system/catalogue.json").write_text(json.dumps({"entries": rows}))
+            (core / "runtime/native/catalogue.json").write_text(json.dumps({"entries": rows}))
             (core / "release/navigation.json").write_text("{}")
             (core / "neighbor.md").write_bytes(b"neighbor")
             (core / "guide.md").write_bytes(b"current")

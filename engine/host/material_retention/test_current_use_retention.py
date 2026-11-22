@@ -3,6 +3,8 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -51,6 +53,12 @@ class RetentionContract(unittest.TestCase):
         current = b"Current chosen contribution: capacity differs from intention.\n"
         second = self.capture("second", current)
         recovered, report = self.exported_store("current")
+        portable = recovered.root / "managed_material.py"
+        self.assertEqual(portable.read_bytes(), IMPL.read_bytes())
+        for args in (["verify"], ["restore", "--output", str(self.root / "portable-output")]):
+            subprocess.run([sys.executable, "-I", str(portable), *args, "--store", ".", "--occurrence", "second"],
+                           cwd=recovered.root, check=True, capture_output=True)
+        self.assertEqual((self.root / "portable-output/selected").read_bytes(), current)
         self.assertNotIn(obsolete, recovered.objects)
         self.assertNotIn(first["manifest"], material.selection_closure(recovered, second["selection"])[2])
         self.assertEqual(report["retained_selections"], 1)

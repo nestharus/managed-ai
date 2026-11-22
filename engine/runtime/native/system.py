@@ -22,7 +22,7 @@ if __name__ == '__main__':
 
 APP = Path(__file__).resolve().parent
 PRODUCT = APP.parent
-CORE_CATALOGUE = PRODUCT.parent / 'prototype/agent-system'
+CORE_CATALOGUE = APP
 sys.path.insert(0, str(PRODUCT / 'source_library'))
 sys.path.insert(0, str(APP))
 sys.path.insert(0, str(PRODUCT / 'continuation'))
@@ -33,17 +33,17 @@ from continuation_support.ownership import NativeLayout, packet_id
 from continuation_support.storage import encode, exclusive, shared, now, sha, write_json
 from feedback import Feedback
 from information import InformationEnvelope
-from native_runtime.capture import TurnCapture
+from native_runtime.turn_context.capture_inputs import TurnCapture
 from native_runtime.projects import ProjectSelection
-from native_runtime.catalogue import InstalledCatalogue
+from native_runtime.selection.installed_catalogue import InstalledCatalogue
 from native_runtime.command_dispatch import act, emit
 from native_runtime.command_parser import parser
 from native_runtime.goals import GoalUse
 from native_runtime.inputs import accounted_closure, read, strings, text, write_input
 from native_runtime.records import RecordStore
-from native_runtime.domains import DomainSelection, ENGINE_API, STORE_SCHEMA, pin
-from native_runtime.scope import NativeEffects
-from turn_preparation import TurnPreparation, feedback_id
+from native_runtime.selection.domain_selection import DomainSelection, ENGINE_API, STORE_SCHEMA, pin
+from native_runtime.effect_authority import NativeEffects
+from native_runtime.turn_context.preparation_journal import TurnPreparation, feedback_id
 
 
 VERSION = '0.5.0'
@@ -152,6 +152,11 @@ class System:
 
     def records(self) -> list[dict]:
         return self.record_store.all()
+
+    def completed_import_records(self):
+        """Yield the exact record identities acknowledged by this store's complete imports."""
+        from native_runtime.record_import import completed_receipt_records
+        return completed_receipt_records(self)
 
     def record_path(self, ident: str) -> Path:
         return self.record_store.path(ident)
@@ -287,12 +292,12 @@ class System:
                     del sys.modules[name]
 
     def view(self, turn: str) -> dict:
-        from native_runtime.context_explanation import captured_view
+        from native_runtime.turn_context.explain_delivery import captured_view
         _, request = self.ex.load(turn)
         return captured_view(self.ex, turn, request)
 
     def explain_context(self, turn: str) -> dict:
-        from native_runtime.context_explanation import explain_context
+        from native_runtime.turn_context.explain_delivery import explain_context
         return explain_context(self.ex, turn)
 
     def _proposal_recovery_command(self, turn: str, producer: str, proposals: list[str]) -> str:
@@ -402,11 +407,11 @@ def main():
                 result = act(System(root), args)
         elif args.action == 'configure':
             from continuation_support.ownership import external_root as external_exchange
-            from native_runtime.loading import Loading
+            from native_runtime.store_operations import StoreOperations
             root = external(args.root)
             exchange_root = external_exchange(NativeLayout(root).exchange)
             with exclusive(exchange_root / 'owner.lock'):
-                override = Loading.configuration_descriptor(root, read(args.spec))
+                override = StoreOperations.configuration_descriptor(root, read(args.spec))
                 result = act(System(root, _selection_override=override), args)
         else:
             system = System(args.root)

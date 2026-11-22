@@ -1,6 +1,6 @@
 # Continuing observation service
 
-`signal_field.py` is an optional host adapter for **receiving uses**, their supplied observing agreements and recoverable service. It is not an observer library, an all-dimension checklist, an effect authority, or a provider client. One use may consume several dimensions; one dimension may require several local, aggregate or global observations. The writing loader owns those meanings and the qualified coverage projection.
+`signal_field/queue.py` is an optional host adapter for **receiving uses**, their supplied observing agreements and recoverable service. It is not an observer library, an all-dimension checklist, an effect authority, or a provider client. One use may consume several dimensions; one dimension may require several local, aggregate or global observations. The writing loader owns those meanings and the qualified coverage projection.
 
 ## Responsible change and existing means
 
@@ -102,7 +102,7 @@ The [received scheduling study](../../stores/research/work/findings/signal-field
 For actual enrollment, use the `Field` API under its local owner or send one CLI request:
 
 ```bash
-python3 -B engine/host/signal_field.py --db /absolute/host/signal-field.sqlite --request /absolute/operation.json
+python3 -B engine/host/signal_field/queue.py --db /absolute/host/signal-field.sqlite --request /absolute/operation.json
 ```
 
 An operation is `{"op":"enroll","spec":...}`, `{"op":"change","source":...,"epoch":...,"position":...,"value":...}`, or `{"op":"run","argv":["/absolute/permitted-worker"],"budget":5,"timeout":60}`. A budget is a resource bound, not a mandated five-dimension batch. `pull`, `receive`, `retry`, `retain`, `pending`, `inspect`, `reconcile` and `status` are also available. A change of receiving lifetime requires a distinct use identity so that an existing owed lifetime is not silently repurposed. Keep the runtime database outside shipped source; the queue is one host's continuing state, not another copy of the core engine.

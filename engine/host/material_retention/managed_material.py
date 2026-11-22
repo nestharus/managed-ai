@@ -999,11 +999,17 @@ def retire(store, plan_path, expected_plan, expected_selection):
     expected = [{k: r[k] for k in ("prefix", "source_path", "entries", "bytes", "restore")} for r in plan["materializations"]]
     observed = [{k: r[k] for k in ("prefix", "source_path", "entries", "bytes", "restore")} for r in fresh["materializations"]]
     require(expected == observed, "Live materializations differ from received plan")
+    removed = _remove_planned_materializations(store, fresh["materializations"], expected,
+                                              expected_plan, expected_selection)
+    return _record_retirement(store, current, plan, removed, expected_plan, expected_selection)
+
+
+def _remove_planned_materializations(store, materializations, expected, expected_plan, expected_selection):
     store.event("retirement-started", {"plan": expected_plan, "selection": expected_selection,
                                         "materializations": expected})
     removed = []
     try:
-        for row in fresh["materializations"]:
+        for row in materializations:
             source = Path(row["source_path"])
             require(source.resolve() != store.root.resolve() and source.resolve() not in store.root.resolve().parents,
                     "Cannot remove the managed store")
@@ -1017,6 +1023,10 @@ def retire(store, plan_path, expected_plan, expected_selection):
         store.event("retirement-partial", {"plan": expected_plan, "removed": removed,
                                            "error_type": type(exc).__name__, "error": str(exc)})
         raise
+    return removed
+
+
+def _record_retirement(store, current, plan, removed, expected_plan, expected_selection):
     receipt = {"format": "managed-material-retirement/1", "at": utc(), "plan": plan,
                "plan_sha256": expected_plan, "previous_selection": expected_selection,
                "source_manifest": current["manifest"], "retired": removed,

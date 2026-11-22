@@ -14,6 +14,9 @@ from native_runtime.inputs import bounded_source_bytes, integer, read
 class InstalledCatalogue:
     def __init__(self, root: Path, selection=None):
         self.root = root.resolve()
+        native = Path(__file__).resolve().parents[2]
+        if self.root == native.parents[1] / 'prototype/agent-system':
+            self.root = native
         self.selection = selection
 
     def index(self) -> dict:
@@ -81,8 +84,8 @@ class InstalledCatalogue:
 
     def body(self, entry: dict, *, byte_limit: int | None = None) -> bytes:
         if entry.get('body_role') == 'complete-current-source-reference':
-            from native_runtime.domains import DomainSelection
-            return DomainSelection.body(None, entry, byte_limit=byte_limit)
+            from native_runtime.selection.domain_selection import read_selected_body
+            return read_selected_body(entry, byte_limit=byte_limit)
         source = self.root / relative_path(entry['body_path'])
         if source.is_symlink() or not source.resolve().is_relative_to(self.root):
             raise ValueError('technique body path escapes the installed app')

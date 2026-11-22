@@ -1,5 +1,12 @@
 # Maintain material through identities, occurrences and current selections
 
+`managed_material.py` is also the complete recovery program stored inside each export.
+`retirement_plan` checks recoverability and the physical inventory. `retire` rechecks the
+received plan before removal, records partial completion on failure, and installs the
+successor selection and lifecycle receipt. Both operations use the same recipe and
+manifest readers as exported verification and restore.
+
+
 Use `host/material_retention/managed_material.py` when a body of work has repeated captured sources, failed and revised candidates, exchanged objects, releases or exported evidence. The maintained store owns exact content identities and their relationships selected for current use. Working directories and transport archives are materializations of that retained work. Their continued existence is a separate applicability decision.
 
 This layer uses the same raw-content SHA-256 identities as the host and native exchange. It does not replace their operational formats, migrate a live runtime, infer acceptance from a hash, or make all retained history current. The store should live outside any source directory that it scans. Serialize store operations; there is no cross-process store lock or transaction with unrelated filesystem editors.

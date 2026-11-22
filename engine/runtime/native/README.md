@@ -2,6 +2,10 @@
 
 This application joins persistent goals and extensible JSON records to captured context, actual returns, guarded artifact adoption, attention feedback and a source-bound research catalogue. It is a small work environment for an existing capable agent. It does not provide a model, infer every relevant relationship or make alignment judgments automatically.
 
+Domain and catalogue loading live under [selection](native_runtime/selection/).
+[Turn context](native_runtime/turn_context/) holds the input capture, record scope, preparation journal and frozen delivery explanation.
+[The installed catalogue](catalogue.json) binds the core source IDs and their bodies.
+
 ## Start with one useful context
 
 Use Python 3.10 or later on Linux, macOS or another POSIX system. From `engine/runtime`:

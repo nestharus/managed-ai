@@ -15,7 +15,7 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-db4e51fc8172437a2216"></a>
 ## prototype/agent-system/README.md
 
-[runtime/native/README.md](runtime/native/README.md) — 49994 bytes; SHA-256 `f7108077878f55bcbc0e5357299e617800f4c7d6bbbc28981d3a4eccf7aad721`.
+[runtime/native/README.md](runtime/native/README.md) — 50298 bytes; SHA-256 `54de19a53d5a1245918095ea88590bf01293ba8c556d4293d06cc88c2b891f28`.
 
 <a id="source-3b80c2b35af864f33824"></a>
 ## prototype/docs/attention.md
@@ -25,17 +25,17 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-3755126b56e96cca2595"></a>
 ## prototype/collective-work/README.md
 
-[runtime/collective/README.md](runtime/collective/README.md) — 34310 bytes; SHA-256 `b6ef1bf438a32b5bd881abe4c4203bfbd41dfa4140129e44add99546ee284e71`.
+[runtime/collective/README.md](runtime/collective/README.md) — 34305 bytes; SHA-256 `48832dd8500678ff00b39dc2d3424c96c7d124b8e503cd3ec17503aeb06825da`.
 
 <a id="source-53cca3885001b6f38c30"></a>
 ## prototype/knowledge-system/README.md
 
-[runtime/source_library/README.md](runtime/source_library/README.md) — 8424 bytes; SHA-256 `07b88766cbcb84ceab9e0f278f157a2950ed52879680fbc0d84791456159e1d8`.
+[runtime/source_library/README.md](runtime/source_library/README.md) — 8632 bytes; SHA-256 `d69f352757ecde799b17950a7a3b5acdc54a71ede6f07c1523d9a21a4bf6e8fa`.
 
 <a id="source-fee751dc881d0860bdb7"></a>
 ## prototype/knowledge-system/CONTRACT.md
 
-[runtime/source_library/CONTRACT.md](runtime/source_library/CONTRACT.md) — 24119 bytes; SHA-256 `1dd6cfb3bc4248fffad2e69032e0ce91a46e6fb683a6246de54072f467e73343`.
+[runtime/source_library/CONTRACT.md](runtime/source_library/CONTRACT.md) — 24130 bytes; SHA-256 `a6d484a383f285e21246b3384733c8cd4cb7ac59122a039544ef44193ba2732b`.
 
 <a id="source-abb12435fcf333967237"></a>
 ## prototype/knowledge-system/MIGRATION.md
@@ -110,7 +110,7 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-32d4df76e6b1b8e42764"></a>
 ## host/README.md
 
-[host/README.md](host/README.md) — 24017 bytes; SHA-256 `b6e411c954c01baa8948b6a6708e078df11f2e5bc12ea58f791ae5fb25bb6f30`.
+[host/README.md](host/README.md) — 24041 bytes; SHA-256 `fd2a5bbe22d5e5336e756f4aae7803139a717dc79b6bd64c3903cd2394b5c22c`.
 
 <a id="source-adfc314c9a023758c35d"></a>
 ## host/CONSTRUCTION.md
@@ -120,7 +120,7 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-5aa07111ec0c6e07b48f"></a>
 ## host/MATERIAL-MAINTENANCE.md
 
-[host/material_retention/MATERIAL-MAINTENANCE.md](host/material_retention/MATERIAL-MAINTENANCE.md) — 22994 bytes; SHA-256 `be4008213b62a6b6092bd95892deed6fbc7a34d9f9976c32548fb8680e7da4cc`.
+[host/material_retention/MATERIAL-MAINTENANCE.md](host/material_retention/MATERIAL-MAINTENANCE.md) — 23397 bytes; SHA-256 `c4f5d6bbe289086953cf921c7e2cb0d332d4e185cb72cf000b549e8677da5798`.
 
 <a id="source-8b380c742c245acba5de"></a>
 ## host/RELATION-COMPOSITION.md
@@ -140,7 +140,7 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-73692ee93d0b96260539"></a>
 ## host/SIGNAL-FIELD.md
 
-[host/SIGNAL-FIELD.md](host/SIGNAL-FIELD.md) — 17428 bytes; SHA-256 `36c6b11d8533e31f0d4a675e4c02031e30c91f669f19f067dc1dd3f98da09903`.
+[host/SIGNAL-FIELD.md](host/SIGNAL-FIELD.md) — 17440 bytes; SHA-256 `574a4ec4a918222cc2c04e5b952eaf6666b65a3e18744de47f37c54c8ec70f8e`.
 
 <a id="source-5de2e61e25c2b74e8603"></a>
 ## agent/shared-systems.md

@@ -29,8 +29,8 @@
       "link_base": "runtime/native/README.md",
       "presentation": "runtime/native/README.md",
       "kind": "guide",
-      "sha256": "f7108077878f55bcbc0e5357299e617800f4c7d6bbbc28981d3a4eccf7aad721",
-      "bytes": 49994,
+      "sha256": "54de19a53d5a1245918095ea88590bf01293ba8c556d4293d06cc88c2b891f28",
+      "bytes": 50298,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -49,8 +49,8 @@
       "link_base": "runtime/collective/README.md",
       "presentation": "runtime/collective/README.md",
       "kind": "guide",
-      "sha256": "b6ef1bf438a32b5bd881abe4c4203bfbd41dfa4140129e44add99546ee284e71",
-      "bytes": 34310,
+      "sha256": "48832dd8500678ff00b39dc2d3424c96c7d124b8e503cd3ec17503aeb06825da",
+      "bytes": 34305,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -59,8 +59,8 @@
       "link_base": "runtime/source_library/README.md",
       "presentation": "runtime/source_library/README.md",
       "kind": "guide",
-      "sha256": "07b88766cbcb84ceab9e0f278f157a2950ed52879680fbc0d84791456159e1d8",
-      "bytes": 8424,
+      "sha256": "d69f352757ecde799b17950a7a3b5acdc54a71ede6f07c1523d9a21a4bf6e8fa",
+      "bytes": 8632,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -69,8 +69,8 @@
       "link_base": "runtime/source_library/CONTRACT.md",
       "presentation": "runtime/source_library/CONTRACT.md",
       "kind": "guide",
-      "sha256": "1dd6cfb3bc4248fffad2e69032e0ce91a46e6fb683a6246de54072f467e73343",
-      "bytes": 24119,
+      "sha256": "a6d484a383f285e21246b3384733c8cd4cb7ac59122a039544ef44193ba2732b",
+      "bytes": 24130,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -219,8 +219,8 @@
       "link_base": "host/README.md",
       "presentation": "host/README.md",
       "kind": "guide",
-      "sha256": "b6e411c954c01baa8948b6a6708e078df11f2e5bc12ea58f791ae5fb25bb6f30",
-      "bytes": 24017,
+      "sha256": "fd2a5bbe22d5e5336e756f4aae7803139a717dc79b6bd64c3903cd2394b5c22c",
+      "bytes": 24041,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -239,8 +239,8 @@
       "link_base": "host/material_retention/MATERIAL-MAINTENANCE.md",
       "presentation": "host/material_retention/MATERIAL-MAINTENANCE.md",
       "kind": "guide",
-      "sha256": "be4008213b62a6b6092bd95892deed6fbc7a34d9f9976c32548fb8680e7da4cc",
-      "bytes": 22994,
+      "sha256": "c4f5d6bbe289086953cf921c7e2cb0d332d4e185cb72cf000b549e8677da5798",
+      "bytes": 23397,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -279,8 +279,8 @@
       "link_base": "host/SIGNAL-FIELD.md",
       "presentation": "host/SIGNAL-FIELD.md",
       "kind": "guide",
-      "sha256": "36c6b11d8533e31f0d4a675e4c02031e30c91f669f19f067dc1dd3f98da09903",
-      "bytes": 17428,
+      "sha256": "574a4ec4a918222cc2c04e5b952eaf6666b65a3e18744de47f37c54c8ec70f8e",
+      "bytes": 17440,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     }
   ]

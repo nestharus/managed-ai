@@ -5,7 +5,7 @@ from pathlib import Path
 
 from continuation_support.ownership import packet_id
 from continuation_support.storage import atomic_bytes, encode, sha
-from native_runtime.domains import load_json
+from native_runtime.selection.domain_selection import load_json
 
 
 def export(system, ident, output):

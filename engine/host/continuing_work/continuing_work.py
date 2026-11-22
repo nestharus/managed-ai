@@ -6,12 +6,9 @@ Uses the existing native runtime for context, Attention, receive/adopt and goal 
 """
 from __future__ import annotations
 import argparse
-import datetime as dt
 import fcntl
-import hashlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -20,31 +17,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
-def now():
-    return dt.datetime.now(dt.timezone.utc).isoformat()
-
-def digest(raw):
-    return hashlib.sha256(raw).hexdigest()
-
-def read(path):
-    return json.loads(Path(path).read_text())
-
-def write(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name+'.tmp')
-    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2)+'\n')
-    tmp.replace(path)
-
-def ident(value):
-    if not isinstance(value, str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,100}', value):
-        raise ValueError('Use a simple local identity: '+str(value))
-    return value
-
-def nonempty(value, label):
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(label+' must be nonempty text')
-    return value
+# This entry also supports loading by an explicit filename from a deployment.
+sys.path.insert(0, str(HERE))
+from occurrence_files import digest, ident, nonempty, now, read, write
+from repair_custody import RepairCustody
 
 def capture_error(raw):
     """Preserve known selected-capture errors, not arbitrary owner history."""
@@ -87,7 +63,7 @@ def overlap_rows(previous_scopes, sources, reads, writes):
                             r['scope_state']=='prepared-or-unreconciled',r['prepared_at_utc'],r['scope']),reverse=True)
     return rows
 
-class Host:
+class Host(RepairCustody):
     def __init__(self, root):
         self.root = Path(root).resolve()
         self.config_path = self.root/'host.json'
@@ -146,6 +122,9 @@ class Host:
         if not obj.exists():
             obj.parent.mkdir(parents=True,exist_ok=True); obj.write_bytes(raw)
         return {'path':str(p),'sha256':sha,'bytes':len(raw),'object':str(obj.relative_to(self.root))}
+
+    def producer_dependencies(self):
+        return [self.pin(HERE / name) for name in ('occurrence_files.py', 'repair_custody.py')]
 
     def goal(self):
         return self.call('show','goal')
@@ -298,9 +277,10 @@ class Host:
             raise ValueError('Current goal changed while checking the selected release')
         write(self.config_path,self.config)
         event=self.event('producing-release-selected',{'before_engine':self.pin(old),'current_engine':self.pin(new),
-            'host_producer':self.pin(Path(__file__).resolve()),'host_method':self.pin(HERE/'OPERATION.md'),
+            'host_producer':self.pin(Path(__file__).resolve()),
+               'host_dependencies':self.producer_dependencies(),'host_method':self.pin(HERE/'OPERATION.md'),
             'account':account,'native_programs_unchanged':True,'prior_captures_unchanged':True})
-        return {'engine':str(new),'host_producer':event['host_producer'],'host_method':event['host_method'],
+        return {'engine':str(new),'host_producer':event['host_producer'],'host_method':event['host_method'],'host_dependencies':event['host_dependencies'],
                 'native_programs_unchanged':True,'parent_duties_unchanged':True}
 
     def resource(self, rid, source):
@@ -408,19 +388,7 @@ class Host:
         if any((self.work/p).exists() for p in targets): raise ValueError('Fresh generation targets must be absent')
         # Native publication deliberately requires an existing parent at capture.
         for target in targets: (self.work/target).parent.mkdir(parents=True,exist_ok=True)
-        producer=[r for r in sources if r['role']=='producer']
-        repairs=[]
-        for rid in spec.get('repairs',[]):
-            repair=read(self.root/'repairs'/f'{ident(rid)}.json')
-            old={r['id']:r for r in repair['producer_before']}
-            changed_means=[r for r in producer if r['id'] in old and r['sha256']!=old[r['id']]['sha256']]
-            if not changed_means: raise ValueError('Repair generation requires a selected changed producing means, not only a changed output')
-            original_inputs={r['sha256'] for r in repair['inputs']}
-            selected_inputs={r['sha256'] for r in sources}
-            if not original_inputs.issubset(selected_inputs):
-                raise ValueError('Original-case repair generation must select the retained original inputs; run transfers as separate scopes')
-            repairs.append({'id':rid,'changed_producers':changed_means,
-                            'original_inputs':[r['sha256'] for r in repair['inputs']]})
+        repairs = self._generation_repairs(spec.get('repairs', []), sources)
         source_note={'scope':sid,'prediction':prediction,'duty_ids':duty_ids,
             'changed_sources':changed,'overlap_nominations':overlaps,
             'overlap_coverage':{'previous_scopes':len(previous_scopes),'matching_scopes':len(all_overlaps),
@@ -467,6 +435,7 @@ class Host:
         context_file.write_text(recover['context'])
         scope={'format':'g60-continuing-work-scope/1','id':sid,'prepared_at_utc':now(),
                'host_producer':self.pin(Path(__file__).resolve()),
+               'host_dependencies':self.producer_dependencies(),
                'host_method':self.pin(HERE/'OPERATION.md'),
                'spec':spec,'parent_goal':{k:goal[k] for k in ('revision','sha256')},
                'reads':reads,'writes':writes,'sources':sources,'targets':targets,
@@ -608,71 +577,6 @@ class Host:
             scopes.append({'id':scope['id'],'host_state':label,'native':current})
         return {'native':native,'scopes':scopes,
                 'repairs':[read(x) for x in sorted((self.root/'repairs').glob('*.json'))]}
-
-    def repair_open(self,spec):
-        rid=ident(spec['id']); path=self.root/'repairs'/f'{rid}.json'
-        if path.exists(): raise ValueError('Preserve the original failure occurrence')
-        row={'id':rid,'opened_at_utc':now(),'failure_account':nonempty(spec['failure_account'],'failure account'),
-             'causal_hypothesis':nonempty(spec['causal_hypothesis'],'causal hypothesis'),
-             'inputs':[self.pin(p) for p in spec['inputs']],
-             'failures':[self.pin(p) for p in spec['failures']],
-             'producer_before':[dict(self.pin(x['path']),id=ident(x['id'])) for x in spec['producer_before']]}
-        if not row['inputs'] or not row['failures'] or not row['producer_before']:
-            raise ValueError('A repair needs retained inputs, observed failure and responsible producing means')
-        write(path,row); self.event('repair-opened',{'id':rid,'retained':self.pin(path)})
-        return row
-
-    def repair_accept(self,spec):
-        rid=ident(spec['id']); repair_path=self.root/'repairs'/f'{rid}.json'; repair=read(repair_path)
-        if 'acceptance' in repair: raise ValueError('Repair acceptance already recorded; new evidence requires a new occurrence')
-        gen=read(self.root/'scopes'/f'{ident(spec["generation"])}.json')
-        rec=read(self.root/'scopes'/f'{ident(spec["receiving"])}.json')
-        if gen['id']==rec['id'] or 'result' not in gen or 'result' not in rec:
-            raise ValueError('Require distinct actually returned generation and receiving scopes')
-        self.current(self.config['commission'],'Current commission')
-        if self.goal()['sha256']!=rec['parent_goal']['sha256']:
-            raise ValueError('Parent duty changed after receiving; requalify this repair under current work')
-        self.received_outputs(gen); receiving_outputs=self.received_outputs(rec)
-        if gen['result']['producer']==rec['result']['producer']:
-            raise ValueError('This acceptance route requires a separately attributed actual receiver')
-        if rid not in [r['id'] for r in gen['repairs']]: raise ValueError('Generation did not select this changed producer')
-        if rec['prepared_at_utc']<=gen['result']['at_utc']: raise ValueError('Receiver must encounter the actual returned product')
-        generated={p['sha256'] for p in gen['result']['outputs']}
-        seen={p['sha256'] for p in rec['sources']}
-        if not generated.issubset(seen): raise ValueError('Receiver did not select all actual generated outputs')
-        failed={p['sha256'] for p in repair['failures']}
-        if not failed.issubset(seen): raise ValueError('Receiver must encounter retained failure outputs')
-        causal_sources={p['sha256'] for p in [*repair['inputs'],*repair['producer_before']]}
-        changed=next(r for r in gen['repairs'] if r['id']==rid)['changed_producers']
-        causal_sources.update(p['sha256'] for p in changed)
-        if not causal_sources.issubset(seen):
-            raise ValueError('Receiver must encounter original inputs and actual old/new producing means')
-        assessment_target='outputs/'+rec['id']+'/'+ident(spec['assessment'])
-        if assessment_target not in rec['targets']: raise ValueError('Assessment must be an actual returned receiving target')
-        received_pin=next((p for p in receiving_outputs if p['path']==str((self.work/assessment_target).resolve())),None)
-        if received_pin is None: raise ValueError('Assessment is not one of the received output occurrences')
-        assessment=read(self.root/received_pin['object'])
-        if assessment.get('finding')!='fixed-within-stated-scope': raise ValueError('Receiver has not accepted this repair')
-        for key in ('causal_account','comparison','transfer_or_rival'):
-            nonempty(assessment.get(key),key)
-        limits=assessment.get('limits')
-        if isinstance(limits,list):
-            if not limits: raise ValueError('limits must contain at least one substantive limit')
-            for item in limits: nonempty(item,'limit')
-        else:
-            nonempty(limits,'limits')
-        named=assessment.get('generated_sha256')
-        if isinstance(named,dict):
-            expected={Path(p['path']).name:p['sha256'] for p in gen['result']['outputs']}
-            if named!=expected: raise ValueError('Assessment names different output names or bytes')
-        elif not isinstance(named,list) or len(named)!=len(generated) or any(not isinstance(x,str) for x in named) or set(named)!=generated:
-            raise ValueError('Assessment names different output bytes')
-        acceptance={'at_utc':now(),'generation':gen['id'],'receiving':rec['id'],
-                    'assessment':received_pin,'account':assessment,
-                    'scope':'Mechanical lineage plus attributed semantic receiving; not proof of universal efficacy.'}
-        repair['acceptance']=acceptance; write(repair_path,repair)
-        self.event('repair-accepted',{'id':rid,'generation':gen['id'],'receiving':rec['id']})
-        return acceptance
 
     def duty(self,spec):
         self.current(self.config['commission'],'Current commission')

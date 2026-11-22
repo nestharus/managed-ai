@@ -4,7 +4,7 @@ import json
 
 from continuation_support.ownership import packet_id
 from continuation_support.storage import encode, sha, write_json
-from native_runtime.domains import DomainSelection, ordinary, pin
+from native_runtime.selection.domain_selection import DomainSelection, ordinary, pin
 
 
 REVIEWED_CONFIGURE = 'managed-ai-reviewed-configure/1'
@@ -70,7 +70,7 @@ def configure(system, spec):
     descriptor = system.root / 'system.json'
     current = configuration_descriptor(system.root, spec)
     selected = DomainSelection(system.root, current)
-    from native_runtime.catalogue import InstalledCatalogue
+    from native_runtime.selection.installed_catalogue import InstalledCatalogue
     selected.validate_catalogue({e['id']: e for e in InstalledCatalogue(system.techniques.root, selected).index()['entries']})
     previous_kinds = system.persisted_descriptor.get('schema_bindings', system.domain_selection.schemas)
     for record in system.record_store.all():

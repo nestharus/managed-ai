@@ -18,7 +18,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 SELECTION = Path("release/current_sources.json")
-CATALOGUE = Path("prototype/agent-system/catalogue.json")
+CATALOGUE = Path("runtime/native/catalogue.json")
 MARKER = Path("CURRENT-RELEASE.json")
 # refresh_guidance stages each projection in an adjacent TemporaryDirectory.
 STAGED_PROJECTIONS = (SELECTION, CATALOGUE, Path("SOURCES.md"), MARKER)
@@ -113,12 +113,8 @@ def source_paths(root, engine):
 
 def received_compressed_text(system):
     """Select complete, source-bound compressed data from native import receipts."""
-    accepted = set()
-    for receipt_path in (system.work / ".system/imports").glob("*.json"):
-        receipt = read_json(receipt_path)
-        if (receipt.get("format") == "managed-ai-import-receipt/1" and receipt.get("complete") is True
-                and receipt["instance_id"] == system.instance_id):
-            accepted.update((item["id"], item["revision"], item["sha256"]) for item in receipt["records"])
+    accepted = {(item["id"], item["revision"], item["sha256"])
+                for item in system.completed_import_records()}
     evidence = set()
     for head in system.records():
         if (head["id"], head["revision"], head["sha256"]) not in accepted:

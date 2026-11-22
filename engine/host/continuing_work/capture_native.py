@@ -18,6 +18,7 @@ import sys
 
 REVIEWED_NATIVE_PROFILE = 'f65119d9a2751f7927ecfb502df1f26c07ee1c958c9b219aeb13f6efc1c6565e'
 REORGANIZED_NATIVE_PROFILE = '65d21e3482ae5ca9a4a9a3060e8d2c60e98bc95e224f6969dbed198d317910aa'
+REPAIRED_NATIVE_PROFILE = '7b6176300e8802b9c2714bf9cd9ebdfa8d2741b41d21c680c39f5bf5a32784e3'
 PROFILE_ERROR = ('Selected native engine does not match the reviewed capture adapter; '
                  'requalify this adapter before capture')
 RETURN_ERROR = 'Native return already exists; use its retained body or a new current occurrence'
@@ -49,7 +50,7 @@ def reviewed_engine(engine: Path):
     path, programs = native_sources(engine)
     profile = hashlib.sha256(json.dumps(programs, sort_keys=True,
                                        separators=(',', ':')).encode()).hexdigest()
-    if profile not in (REVIEWED_NATIVE_PROFILE, REORGANIZED_NATIVE_PROFILE):
+    if profile not in (REVIEWED_NATIVE_PROFILE, REORGANIZED_NATIVE_PROFILE, REPAIRED_NATIVE_PROFILE):
         raise ValueError(PROFILE_ERROR)
     spec = importlib.util.spec_from_file_location('reviewed_capture_engine', path)
     if spec is None or spec.loader is None:

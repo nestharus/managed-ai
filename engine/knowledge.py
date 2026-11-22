@@ -17,7 +17,7 @@ if '--library' in sys.argv or any(a.startswith('--library=') for a in sys.argv):
 
 sys.path.insert(0, str(ROOT / 'runtime/native'))
 sys.path.insert(0, str(ROOT / 'runtime/continuation'))
-from native_runtime.catalogue import InstalledCatalogue
+from native_runtime.selection.installed_catalogue import InstalledCatalogue
 
 
 def main():
@@ -34,7 +34,7 @@ def main():
         api = runpy.run_path(str(ROOT / 'runtime/native/system.py'))
         catalogue = api['System'](args.store).techniques
     else:
-        catalogue = InstalledCatalogue(ROOT / 'prototype/agent-system')
+        catalogue = InstalledCatalogue(ROOT / 'runtime/native')
     if args.action == 'show':
         result = catalogue.search(args.identity)
         if args.text:
