@@ -57,6 +57,17 @@ def design():
                  'requires': [['source']], 'reads': ['module'], 'writes': ['review'], 'footprint': 'declared'}]}
 
 
+def design_with_competing_focus_rows():
+    body = design()
+    body['elements'].append({'id': 'later', 'account': 'A later receiving artifact.'})
+    relations = {row['id']: row for row in body['relations']}
+    opportunities = {row['id']: row for row in body['opportunities']}
+    relations['flow']['to'].append('later')
+    opportunities['explain']['at'] = ['relation:meaning', 'relation:flow']
+    opportunities['build']['requires'] = [['source', 'external']]
+    return body
+
+
 class CompositionChecks(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -115,15 +126,10 @@ class CompositionChecks(unittest.TestCase):
             ('premises', 'premise:external'),
             ('opportunities', 'opportunity:review'),
         )
+        self.system.record['content'] = design_with_competing_focus_rows()
+        before = copy.deepcopy(self.system.record)
         for collection, focus in scenarios:
             with self.subTest(focus=focus):
-                body = design()
-                body['elements'].append({'id': 'later', 'account': 'A later receiving artifact.'})
-                body['relations'][1]['to'].append('later')
-                body['opportunities'][1]['at'] = ['relation:meaning', 'relation:flow']
-                body['opportunities'][0]['requires'] = [['source', 'external']]
-                self.system.record['content'] = body
-                before = copy.deepcopy(self.system.record)
                 result = self.view.inspect('design', focus=focus, limit=1, pair_limit=0)
                 self.assertEqual([row['ref'] for row in result[collection]], [focus])
                 coverage = result['coverage']['collections'][collection]
@@ -226,7 +232,11 @@ class CompositionChecks(unittest.TestCase):
         result = self.view.inspect('design', limit=1, pair_limit=20000)
         encoded = json.dumps(result, ensure_ascii=False, indent=2).encode('utf-8')
         self.assertLessEqual(len(encoded), MAX_VIEW_BYTES)
-        self.assertIn('phase_refs', result['interactions'][0])
+        displayed, = result['opportunities']
+        first_pair = result['interactions'][0]
+        self.assertEqual(first_pair['left'], displayed['ref'])
+        self.assertIn(first_pair['right'], result['coverage']['collections']['opportunities']['omitted_refs'])
+        self.assertIn('phase_refs', first_pair)
         self.assertNotIn('phases', result['interactions'][0])
         self.assertGreater(result['coverage']['pairs']['omitted'], 0)
         self.assertIn('view-byte-bound', result['coverage']['pairs']['saturated'])

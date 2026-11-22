@@ -39,13 +39,13 @@ class Producer:
     def _retention(self):
         catalogues = []
         for library in self._libraries.values():
-            cache = library._search_cache
+            scope = library.prepared_scope
             catalogues.append({
                 "library_sha256": library.sha256,
                 "catalogue_bytes": len(library.raw),
-                "search_prepared": cache is not None,
-                "prepared_body_ids": list(cache[0][3]) if cache is not None else [],
-                "prepared_module_count": len(library.modules) if cache is not None else 0,
+                "search_prepared": scope is not None,
+                "prepared_body_ids": list(scope.body_ids) if scope is not None else [],
+                "prepared_module_count": len(library.modules) if scope is not None else 0,
             })
         return {
             "lifetime": "This Producer instance, ending at close().",
@@ -95,38 +95,6 @@ class Producer:
             "request_fields": "Unknown fields are refused. Requests are served serially. Call close() to release all retained indexes and catalogues.",
         }
 
-    def _discover(self, library, request):
-        query = knowledge.text(request["query"], "query", 2048)
-        limit = knowledge.integer(request.get("limit", 20), "result limit", 1, 100)
-        scan_limit = knowledge.integer(request.get("scan_limit", 512), "scan limit", 1, knowledge.MAX_BODIES)
-        max_bytes = knowledge.integer(request.get("max_bytes", 8 * 1024 * 1024),
-                                      "search bytes", 1, knowledge.MAX_PACKAGE)
-        parsed = knowledge.search_query(query, "fts5")
-        searchable = bool(parsed["terms"] or parsed["phrases"]) or query in library.bodies or query in library.modules
-        selected, omitted, body_bytes = library.search_scope(scan_limit, max_bytes)
-        key = (library.sha256, knowledge.SEARCH_POLICY, "fts5", tuple(selected))
-        cache = library._search_cache
-        if not searchable or cache is None or cache[0] != key:
-            return library.discover(query, limit=limit, scan_limit=scan_limit,
-                                    max_bytes=max_bytes, backend="fts5")
-
-        # The issued Library owns this already-verified corpus and both indexes.
-        # Query it directly to retain its historical observation across calls.
-        preparation = {
-            "storage": "in-memory Library instance only",
-            "reused": True,
-            "index_sha256": None,
-            "index_read_bytes": 0,
-            "index_verified": False,
-            "source_verification": "No canonical source bodies read on this call. The same in-memory FTS5 indexes retain bodies read and hash-verified when this catalogue and selected corpus were prepared. Use show for fresh exact acquisition.",
-            "lifetime": "Retained until a different corpus replaces this catalogue's index, or close() ends the instance.",
-        }
-        return library._discovery_result(
-            query, parsed, cache[1].search(parsed), cache[2].search(parsed),
-            selected, omitted, body_bytes, limit=limit, scan_limit=scan_limit,
-            max_bytes=max_bytes, backend="fts5", preparation=preparation, indexed=True,
-        )
-
     def handle(self, request):
         try:
             knowledge.need(not self._closed, "producer is closed")
@@ -153,7 +121,8 @@ class Producer:
                 result = deepcopy(library.show(ident))
                 body_count, body_bytes = 1, library.bodies[ident]["bytes"]
             else:
-                result = self._discover(library, request)
+                bounds = {key: request[key] for key in ("limit", "scan_limit", "max_bytes") if key in request}
+                result = library.discover_retained_scope(request["query"], **bounds)
                 body_count = result["coverage"]["verified_bodies"]
                 body_bytes = result["coverage"]["examined_body_bytes"]
             current = request["use"] == "current"

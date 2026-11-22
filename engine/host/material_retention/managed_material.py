@@ -472,6 +472,130 @@ def path_state(path):
             "device": s.st_dev, "inode": s.st_ino, "type": stat.S_IFMT(s.st_mode)}
 
 
+def _snapshot_history(store, spec):
+    prior_key, prior_selection = current_selection(store) if (store.root / "CURRENT.json").exists() else (None, None)
+    # A new current-use selection does not inherit every earlier delivery.
+    # An explicitly supplied legacy history list remains an intentional
+    # selection. Append-only ancestry is available only by an explicit policy.
+    policy = spec.get("retention_policy")
+    require(policy in (None, "current-use", "append-history"),
+            "retention_policy must be current-use or append-history")
+    history = spec.get("history", [])
+    require(isinstance(history, list), "History must name exact prior manifest hashes")
+    require(not (policy == "current-use" and history),
+            "current-use conflicts with nonempty history; omit the policy to select exact history")
+    history = list(history)
+    if policy == "append-history" and prior_selection is not None:
+        if prior_selection["manifest"] not in history:
+            history.insert(0, prior_selection["manifest"])
+    effective_policy = policy or ("selected-history" if history else "current-use")
+    history_account = spec.get("history_account")
+    if effective_policy == "current-use" and not history_account:
+        history_account = ("Current-use selection retains the declared roots without implicit "
+                           "ancestry. Earlier managed objects are not deleted.")
+    retained_manifests = set()
+    for old in history:
+        retained_manifests.update(manifest_closure(store, old)[0])
+    retain_prior_selection = prior_selection is not None and prior_selection["manifest"] in retained_manifests
+    if prior_selection is not None and not retain_prior_selection:
+        require(history_account, "Omitting the prior selected-state ancestry needs an explicit history account")
+    prior_states = materialization_state(store, selection_closure(store, prior_key)[0]) if retain_prior_selection else []
+    return history, effective_policy, history_account, prior_key if retain_prior_selection else None, prior_states
+
+
+def _acquire_snapshot_roots(store, spec, rows):
+    exclusions, source_checks, labels = [], [], set()
+    for root in spec["roots"]:
+        label = root["label"]
+        safe_relative(label)
+        require(label not in labels and "/" not in label, "Unique single-component root labels required")
+        labels.add(label)
+        base = Path(root["path"]).absolute()
+        require(base.exists(), "Selected root absent: " + str(base))
+        require(store.root.resolve() != base.resolve() and base.resolve() not in store.root.resolve().parents,
+                "Store must not be inside a scanned source root")
+        paths = [base]
+        if base.is_dir() and not base.is_symlink():
+            for parent, dirs, files in os.walk(base, followlinks=False):
+                dirs.sort(); files.sort()
+                paths.extend(Path(parent) / x for x in dirs + files)
+        for path in paths:
+            rel = str(path.relative_to(base)).replace(os.sep, "/") if path != base else ""
+            logical = label + ("/" + rel if rel else "")
+            if any(fnmatch.fnmatchcase(logical, pattern) for pattern in spec.get("exclude", [])):
+                exclusions.append({"path": logical, "reason": "explicit selection exclusion"})
+                continue
+            before = path_state(path)
+            row = {"path": logical, "source_path": str(path), "mode": before["mode"],
+                   "mtime_ns": before["mtime_ns"], "role": root.get("role", "observed-material"),
+                   "materialization": root.get("materialization", "observed-working-copy")}
+            if path.is_symlink():
+                raw = os.fsencode(os.readlink(path))
+                key = store.blob(raw)
+                row.update({"type": "symlink", "object": key, "bytes": len(raw)})
+            elif path.is_file():
+                raw = path.read_bytes()
+                after = path_state(path)
+                require(before == after, "Source changed during acquisition: " + str(path))
+                key = store.ingest(raw, logical)
+                row.update({"type": "file", "object": key, "bytes": len(raw)})
+                source_checks.append({"path": str(path), "state": after, "sha256": key})
+            elif path.is_dir():
+                row.update({"type": "directory"})
+            else:
+                raise ValueError("Special filesystem object requires explicit handling: " + str(path))
+            rows.append(row)
+    return exclusions, source_checks
+
+
+def _retain_snapshot(store, spec, attempt, occurrence_path, rows):
+    producer_object = store.blob(LOADED_PRODUCER_BYTES)
+    history, effective_policy, history_account, retained_selection, prior_states = _snapshot_history(store, spec)
+    exclusions, source_checks = _acquire_snapshot_roots(store, spec, rows)
+    logicals = [r["path"] for r in rows]
+    require(len(logicals) == len(set(logicals)), "Duplicate occurrence path")
+    by_path = {r["path"]: r for r in rows}
+    currents = []
+    for current in spec.get("current", []):
+        selected = by_path.get(current["path"])
+        require(selected is not None and "object" in selected, "Current choice absent from observed occurrence: " + current["path"])
+        if current.get("expected_sha256"):
+            require(selected["object"] == current["expected_sha256"], "Current selection identity differs")
+        currents.append({**current, "object": selected["object"], "bytes": selected["bytes"]})
+    for check in source_checks:
+        path = Path(check["path"])
+        require(path_state(path) == check["state"] and sha(path.read_bytes()) == check["sha256"],
+                "Source changed before selection publication: " + str(path))
+    manifest = {"format": "managed-material-occurrence/1", "id": spec["id"],
+                "started_at": attempt["started_at"], "completed_at": utc(),
+                "spec": spec, "spec_sha256": attempt["spec_sha256"], "files": rows, "excluded": exclusions,
+                "current": currents, "lineage": spec.get("lineage", []),
+                "history": history,
+                "retention": {"policy": effective_policy, "history_account": history_account},
+                "materialization_groups": spec.get("materialization_groups", []),
+                "producer": {"sha256": producer_object, "object": producer_object, "python": platform.python_version(),
+                             "zlib_runtime": zlib.ZLIB_RUNTIME_VERSION, "zlib_compile": zlib.ZLIB_VERSION},
+                "observations": store.observations,
+                "scope": "Per-file stable custody plus final identity recheck; not an atomic source transaction, semantic acceptance, runtime relocation, or deletion authority."}
+    raw = js(manifest)
+    manifest_hash = sha(raw)
+    store.commit_index()
+    immutable(store.root / "manifests" / (manifest_hash + ".json"), raw)
+    pointer = {"format": "managed-material-occurrence-pointer/1", "id": spec["id"], "manifest": manifest_hash,
+               "path": "manifests/" + manifest_hash + ".json"}
+    immutable(occurrence_path, js(pointer))
+    selection = {"format": "managed-material-current-selection/1", "occurrence": spec["id"],
+                 "manifest": manifest_hash, "current": currents,
+                 "account": spec.get("account", "Observed selection; no implied acceptance.")}
+    if retained_selection is not None:
+        selection["previous_selection"] = retained_selection
+    selection["materializations"] = observed_materialization_state(prior_states, manifest, manifest_hash)
+    selection_raw = js(selection)
+    selection_hash = sha(selection_raw)
+    immutable(store.root / "selections" / (selection_hash + ".json"), selection_raw)
+    return manifest_hash, selection_hash, effective_policy
+
+
 def snapshot(store, spec_path):
     spec_raw = Path(spec_path).read_bytes()
     spec = json.loads(spec_raw)
@@ -482,132 +606,31 @@ def snapshot(store, spec_path):
     safe_relative(spec["id"])
     attempt = {"id": spec["id"], "spec_sha256": sha(spec_raw), "started_at": utc()}
     store.event("snapshot-started", attempt)
-    rows, exclusions, source_checks, labels = [], [], [], set()
+    rows = []
     started = time.monotonic()
     try:
-        producer_object = store.blob(LOADED_PRODUCER_BYTES)
-        prior_key, prior_selection = current_selection(store) if (store.root / "CURRENT.json").exists() else (None, None)
-        # A new current-use selection does not inherit every earlier delivery.
-        # An explicitly supplied legacy history list remains an intentional
-        # selection. Append-only ancestry is available only by an explicit policy.
-        policy = spec.get("retention_policy")
-        require(policy in (None, "current-use", "append-history"),
-                "retention_policy must be current-use or append-history")
-        history = spec.get("history", [])
-        require(isinstance(history, list), "History must name exact prior manifest hashes")
-        require(not (policy == "current-use" and history),
-                "current-use conflicts with nonempty history; omit the policy to select exact history")
-        history = list(history)
-        if policy == "append-history" and prior_selection is not None:
-            if prior_selection["manifest"] not in history:
-                history.insert(0, prior_selection["manifest"])
-        effective_policy = policy or ("selected-history" if history else "current-use")
-        history_account = spec.get("history_account")
-        if effective_policy == "current-use" and not history_account:
-            history_account = ("Current-use selection retains the declared roots without implicit "
-                               "ancestry. Earlier managed objects are not deleted.")
-        retained_manifests = set()
-        for old in history:
-            retained_manifests.update(manifest_closure(store, old)[0])
-        retain_prior_selection = prior_selection is not None and prior_selection["manifest"] in retained_manifests
-        if prior_selection is not None and not retain_prior_selection:
-            require(history_account, "Omitting the prior selected-state ancestry needs an explicit history account")
-        prior_states = materialization_state(store, selection_closure(store, prior_key)[0]) if retain_prior_selection else []
-        for root in spec["roots"]:
-            label = root["label"]
-            safe_relative(label)
-            require(label not in labels and "/" not in label, "Unique single-component root labels required")
-            labels.add(label)
-            base = Path(root["path"]).absolute()
-            require(base.exists(), "Selected root absent: " + str(base))
-            require(store.root.resolve() != base.resolve() and base.resolve() not in store.root.resolve().parents,
-                    "Store must not be inside a scanned source root")
-            paths = [base]
-            if base.is_dir() and not base.is_symlink():
-                for parent, dirs, files in os.walk(base, followlinks=False):
-                    dirs.sort(); files.sort()
-                    paths.extend(Path(parent) / x for x in dirs + files)
-            for path in paths:
-                rel = str(path.relative_to(base)).replace(os.sep, "/") if path != base else ""
-                logical = label + ("/" + rel if rel else "")
-                if any(fnmatch.fnmatchcase(logical, pattern) for pattern in spec.get("exclude", [])):
-                    exclusions.append({"path": logical, "reason": "explicit selection exclusion"})
-                    continue
-                before = path_state(path)
-                row = {"path": logical, "source_path": str(path), "mode": before["mode"],
-                       "mtime_ns": before["mtime_ns"], "role": root.get("role", "observed-material"),
-                       "materialization": root.get("materialization", "observed-working-copy")}
-                if path.is_symlink():
-                    raw = os.fsencode(os.readlink(path))
-                    key = store.blob(raw)
-                    row.update({"type": "symlink", "object": key, "bytes": len(raw)})
-                elif path.is_file():
-                    raw = path.read_bytes()
-                    after = path_state(path)
-                    require(before == after, "Source changed during acquisition: " + str(path))
-                    key = store.ingest(raw, logical)
-                    row.update({"type": "file", "object": key, "bytes": len(raw)})
-                    source_checks.append({"path": str(path), "state": after, "sha256": key})
-                elif path.is_dir():
-                    row.update({"type": "directory"})
-                else:
-                    raise ValueError("Special filesystem object requires explicit handling: " + str(path))
-                rows.append(row)
-        logicals = [r["path"] for r in rows]
-        require(len(logicals) == len(set(logicals)), "Duplicate occurrence path")
-        by_path = {r["path"]: r for r in rows}
-        currents = []
-        for current in spec.get("current", []):
-            selected = by_path.get(current["path"])
-            require(selected is not None and "object" in selected, "Current choice absent from observed occurrence: " + current["path"])
-            if current.get("expected_sha256"):
-                require(selected["object"] == current["expected_sha256"], "Current selection identity differs")
-            currents.append({**current, "object": selected["object"], "bytes": selected["bytes"]})
-        for check in source_checks:
-            path = Path(check["path"])
-            require(path_state(path) == check["state"] and sha(path.read_bytes()) == check["sha256"],
-                    "Source changed before selection publication: " + str(path))
-        manifest = {"format": "managed-material-occurrence/1", "id": spec["id"],
-                    "started_at": attempt["started_at"], "completed_at": utc(),
-                    "spec": spec, "spec_sha256": sha(spec_raw), "files": rows, "excluded": exclusions,
-                    "current": currents, "lineage": spec.get("lineage", []),
-                    "history": history,
-                    "retention": {"policy": effective_policy, "history_account": history_account},
-                    "materialization_groups": spec.get("materialization_groups", []),
-                    "producer": {"sha256": producer_object, "object": producer_object, "python": platform.python_version(),
-                                 "zlib_runtime": zlib.ZLIB_RUNTIME_VERSION, "zlib_compile": zlib.ZLIB_VERSION},
-                    "observations": store.observations,
-                    "scope": "Per-file stable custody plus final identity recheck; not an atomic source transaction, semantic acceptance, runtime relocation, or deletion authority."}
-        raw = js(manifest)
-        manifest_hash = sha(raw)
-        store.commit_index()
-        immutable(store.root / "manifests" / (manifest_hash + ".json"), raw)
-        pointer = {"format": "managed-material-occurrence-pointer/1", "id": spec["id"], "manifest": manifest_hash,
-                   "path": "manifests/" + manifest_hash + ".json"}
-        immutable(existing, js(pointer))
-        selection = {"format": "managed-material-current-selection/1", "occurrence": spec["id"],
-                     "manifest": manifest_hash, "current": currents,
-                     "account": spec.get("account", "Observed selection; no implied acceptance.")}
-        if retain_prior_selection:
-            selection["previous_selection"] = prior_key
-        selection["materializations"] = observed_materialization_state(prior_states, manifest, manifest_hash)
-        selection_raw = js(selection)
-        selection_hash = sha(selection_raw)
-        immutable(store.root / "selections" / (selection_hash + ".json"), selection_raw)
+        manifest_hash, selection_hash, policy = _retain_snapshot(store, spec, attempt, existing, rows)
         replace_json(store.root / "CURRENT.json", {"selection": selection_hash,
                                                    "path": "selections/" + selection_hash + ".json"})
+    except Exception as exc:
+        store.commit_index()
+        store.event("snapshot-failed", {**attempt, "error_type": type(exc).__name__, "error": str(exc),
+                                        "completed_entries": len(rows), "selection_published": False})
+        raise
+
+    try:
         closure = store.closure(r["object"] for r in rows if "object" in r)
         result = {"id": spec["id"], "manifest": manifest_hash, "selection": selection_hash,
-                  "retention_policy": effective_policy,
+                  "retention_policy": policy,
                   "occurrence_entries": len(rows), "file_occurrences": sum(r["type"] == "file" for r in rows),
                   "source_bytes": sum(r.get("bytes", 0) for r in rows), "seconds": round(time.monotonic() - started, 3),
                   **store.stats(closure)}
         store.event("snapshot-completed", result)
         return result
     except Exception as exc:
-        store.commit_index()
         store.event("snapshot-failed", {**attempt, "error_type": type(exc).__name__, "error": str(exc),
-                                        "completed_entries": len(rows), "selection_published": False})
+                                        "completed_entries": len(rows), "selection_published": True,
+                                        "manifest": manifest_hash, "selection": selection_hash})
         raise
 
 

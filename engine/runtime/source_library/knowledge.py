@@ -7,7 +7,7 @@ adapter acquires declared knowledge and imports data; it never executes a body.
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+from collections import Counter, namedtuple
 import json
 import math
 import os
@@ -168,6 +168,28 @@ class PreparedIndex:
         self.close()
 
 
+# One prepared corpus per library. Its identity includes the ordered examination scope.
+SearchScope = namedtuple('SearchScope', 'catalogue_sha256 policy backend body_ids')
+
+
+class RetainedSearch:
+    def __init__(self, scope, documents, modules):
+        self.scope = scope
+        self.bodies = SearchIndex(documents, scope.backend)
+        try:
+            self.modules = SearchIndex(modules, scope.backend)
+        except Exception:
+            self.bodies.close()
+            raise
+
+    def search(self, parsed):
+        return self.bodies.search(parsed), self.modules.search(parsed)
+
+    def close(self):
+        self.bodies.close()
+        self.modules.close()
+
+
 class Library:
     def __init__(self, directory):
         self.directory = ordinary(directory)
@@ -181,11 +203,15 @@ class Library:
 
     def close(self):
         if self._search_cache is not None:
-            for index in self._search_cache[1:]: index.close()
+            self._search_cache.close()
             self._search_cache = None
 
     def __del__(self):
         if hasattr(self, '_search_cache'): self.close()
+
+    @property
+    def prepared_scope(self):
+        return self._search_cache.scope if self._search_cache is not None else None
 
     def pin(self, row, kind='body'):
         return {'library_sha256': self.sha256, 'id': row['id'],
@@ -292,6 +318,17 @@ class Library:
 
     def discover(self, query, limit=20, scan_limit=512, max_bytes=8 * 1024 * 1024, backend='bm25',
                  index=None, index_sha256=None):
+        """Verify each examined body on ordinary searches, even with warm indexes."""
+        return self._discover(query, limit, scan_limit, max_bytes, backend, index, index_sha256,
+                              allow_retained_scope=False)
+
+    def discover_retained_scope(self, query, limit=20, scan_limit=512, max_bytes=8 * 1024 * 1024):
+        """Query the retained FTS5 observation, acquiring bodies on a scope miss."""
+        return self._discover(query, limit, scan_limit, max_bytes, 'fts5', None, None,
+                              allow_retained_scope=True)
+
+    def _discover(self, query, limit, scan_limit, max_bytes, backend, index, index_sha256,
+                  *, allow_retained_scope):
         text(query, 'query', 2048)
         integer(limit, 'result limit', 1, 100); integer(scan_limit, 'scan limit', 1, MAX_BODIES)
         integer(max_bytes, 'search bytes', 1, MAX_PACKAGE)
@@ -299,11 +336,23 @@ class Library:
         need(index is None or backend == 'fts5', 'prepared index requires --backend fts5')
         if index is not None: sha(index_sha256)
         parsed = search_query(query, backend)
-        rows, documents = [], []
+        documents = []
         searchable = bool(parsed['terms'] or parsed['phrases']) or query in self.bodies or query in self.modules
         examined, omitted, byte_count = self.search_scope(scan_limit, max_bytes) if searchable else ([], list(self.bodies), 0)
-        key = (self.sha256, SEARCH_POLICY, backend, tuple(examined))
-        reusable = self._search_cache is not None and self._search_cache[0] == key
+        scope = SearchScope(self.sha256, SEARCH_POLICY, backend, tuple(examined))
+        reusable = self.prepared_scope == scope
+        if allow_retained_scope and searchable and reusable:
+            matches, module_matches = self._search_cache.search(parsed)
+            preparation = {
+                'storage': 'in-memory Library instance only', 'reused': True,
+                'index_sha256': None, 'index_read_bytes': 0, 'index_verified': False,
+                'source_verification': 'No canonical source bodies read on this call. The same in-memory FTS5 indexes retain bodies read and hash-verified when this catalogue and selected corpus were prepared. Use show for fresh exact acquisition.',
+                'lifetime': "Retained until a different corpus replaces this catalogue's index, or close() ends the instance.",
+            }
+            return self._discovery_result(query, parsed, matches, module_matches, examined, omitted, byte_count,
+                limit=limit, scan_limit=scan_limit, max_bytes=max_bytes, backend=backend,
+                preparation=preparation, indexed=True)
+
         if index is None:
             for ident in examined:
                 data = self.body(ident)
@@ -331,19 +380,11 @@ class Library:
                 return found
             matches, module_matches = literal(documents), literal(module_documents)
         else:
-            # Every selected body was read and verified above, including cache hits.
-            # One cached scope avoids accumulating indexes for arbitrary selections.
             reused = reusable
             if not reused:
                 self.close()
-                bodies_index = SearchIndex(documents, backend)
-                try: modules_index = SearchIndex(module_documents, backend)
-                except Exception:
-                    bodies_index.close()
-                    raise
-                self._search_cache = (key, bodies_index, modules_index)
-            matches = self._search_cache[1].search(parsed)
-            module_matches = self._search_cache[2].search(parsed)
+                self._search_cache = RetainedSearch(scope, documents, module_documents)
+            matches, module_matches = self._search_cache.search(parsed)
         preparation = {'storage': 'pinned external contentless index' if index is not None else 'in-memory Library instance only',
             'reused': reused, 'index_sha256': index_sha256, 'index_read_bytes': index_bytes,
             'index_verified': bool(index_bytes),

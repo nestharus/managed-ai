@@ -261,6 +261,94 @@ def inspect_durable_state(state_dir):
         return _failure("state_error", str(exc))
 
 
+class _CallbackJournal:
+    def __init__(self, root, operations, actual, replayed, max_steps, checkpoint, after_record):
+        self.calls = root / "calls"
+        self.operations = operations
+        self.actual = actual
+        self.replayed = replayed
+        self.max_steps = max_steps
+        self.checkpoint = checkpoint
+        self.after_record = after_record
+        self.cursor = 0
+
+    def invoke(self, callback_kind, name, current_step, request, callback):
+        request = _snapshot(request)
+        identifier = f"{self.cursor + 1:06d}"
+        desired = {"schema": SCHEMA, "id": identifier,
+                   "callback": callback_kind, "name": name,
+                   "logical_step": current_step,
+                   "request": request, "request_sha256": _digest(request)}
+        if self.cursor < len(self.operations):
+            return self._replay_completed(desired)
+        return self._record_new_call(desired, callback)
+
+    def _replay_completed(self, desired):
+        stored = self.operations[self.cursor]
+        if _canonical(stored["intent"]) != _canonical(desired):
+            raise _ReplayMismatch("reconstructed request differs at operation " + desired["id"])
+        self.cursor += 1
+        self.replayed[desired["callback"]] += 1
+        outcome = stored["completion"]["outcome"]
+        if outcome["kind"] == "exception":
+            replay_exception = type(outcome["exception_type"], (Exception,), {})
+            raise replay_exception(outcome["message"])
+        return _snapshot(outcome["value"])
+
+    def _record_new_call(self, desired, callback):
+        identifier = desired["id"]
+        callback_kind = desired["callback"]
+        if callback_kind == "model" and _counts(self.operations)[0]["model"] >= self.max_steps:
+            raise _ReplayMismatch("original model budget exhausted before dispatch")
+        try:
+            _write_new(self.calls / (identifier + ".intent.json"), desired)
+        except Exception as exc:
+            raise _InfrastructureStop("intent persistence failed: " + str(exc)) from exc
+        operation = {"intent": desired, "completion": None}
+        self.operations.append(operation)
+        self.cursor += 1
+        self.actual[callback_kind] += 1
+        caught = None
+        try:
+            value = callback(_snapshot(desired["request"]))
+        except Exception as exc:
+            caught = exc
+            outcome = {"kind": "exception", "exception_type": type(exc).__name__,
+                       "message": str(exc)}
+        else:
+            try:
+                value = _snapshot(value)
+            except Exception as exc:
+                caught = TypeError("durable callback return must be finite JSON: " + str(exc))
+                outcome = {"kind": "exception", "exception_type": type(caught).__name__,
+                           "message": str(caught)}
+            else:
+                outcome = {"kind": "return", "value": value}
+        try:
+            post_state = _snapshot(self.checkpoint())
+            completion = {"schema": SCHEMA, "operation_id": identifier,
+                          "intent_sha256": _digest(desired), "origin": "callback",
+                          "outcome": outcome, "checkpoint": post_state,
+                          "checkpoint_sha256": _digest(post_state)}
+            completion_path = self.calls / (identifier + ".return.json")
+            _write_new(completion_path, completion)
+            operation["completion"] = completion
+        except Exception as exc:
+            raise _InfrastructureStop("completion persistence failed: " + str(exc)) from exc
+        if self.after_record is not None:
+            event = {"event": "callback_completed", "operation_id": identifier,
+                     "callback": callback_kind, "name": desired["name"],
+                     "logical_step": desired["logical_step"],
+                     "completion_path": str(completion_path), "resolved": False}
+            try:
+                self.after_record(_snapshot(event))
+            except Exception as exc:
+                raise _InfrastructureStop("completion observer stopped: " + str(exc)) from exc
+        if caught is not None:
+            raise caught
+        return _snapshot(value)
+
+
 def run_durable_agent(*, state_dir, binding, task, sources, model, tools,
                       max_steps, resume=False, checkpoint=None, restore=None,
                       after_record=None, controller_dir=None):
@@ -330,92 +418,23 @@ def run_durable_agent(*, state_dir, binding, task, sources, model, tools,
                                 operation=pending[0]["intent"])
             latest = operations[-1]["completion"]["checkpoint"] if operations else manifest["initial_checkpoint"]
             restore(_snapshot(latest))
-            cursor = 0
+            journal = _CallbackJournal(root, operations, actual, replayed, max_steps, checkpoint, after_record)
             current_step = 0
-
-            def invoke(callback_kind, name, request, callback):
-                nonlocal cursor
-                request = _snapshot(request)
-                identifier = f"{cursor + 1:06d}"
-                desired = {"schema": SCHEMA, "id": identifier,
-                           "callback": callback_kind, "name": name,
-                           "logical_step": current_step,
-                           "request": request, "request_sha256": _digest(request)}
-                if cursor < len(operations):
-                    stored = operations[cursor]
-                    if _canonical(stored["intent"]) != _canonical(desired):
-                        raise _ReplayMismatch("reconstructed request differs at operation " + identifier)
-                    cursor += 1
-                    replayed[callback_kind] += 1
-                    outcome = stored["completion"]["outcome"]
-                    if outcome["kind"] == "exception":
-                        replay_exception = type(outcome["exception_type"], (Exception,), {})
-                        raise replay_exception(outcome["message"])
-                    return _snapshot(outcome["value"])
-                if callback_kind == "model" and _counts(operations)[0]["model"] >= max_steps:
-                    raise _ReplayMismatch("original model budget exhausted before dispatch")
-                try:
-                    _write_new(root / "calls" / (identifier + ".intent.json"), desired)
-                except Exception as exc:
-                    raise _InfrastructureStop("intent persistence failed: " + str(exc)) from exc
-                operation = {"intent": desired, "completion": None}
-                operations.append(operation)
-                cursor += 1
-                actual[callback_kind] += 1
-                caught = None
-                try:
-                    value = callback(_snapshot(request))
-                except Exception as exc:
-                    caught = exc
-                    outcome = {"kind": "exception", "exception_type": type(exc).__name__,
-                               "message": str(exc)}
-                else:
-                    try:
-                        value = _snapshot(value)
-                    except Exception as exc:
-                        caught = TypeError("durable callback return must be finite JSON: " + str(exc))
-                        outcome = {"kind": "exception", "exception_type": type(caught).__name__,
-                                   "message": str(caught)}
-                    else:
-                        outcome = {"kind": "return", "value": value}
-                try:
-                    post_state = _snapshot(checkpoint())
-                    completion = {"schema": SCHEMA, "operation_id": identifier,
-                                  "intent_sha256": _digest(desired), "origin": "callback",
-                                  "outcome": outcome, "checkpoint": post_state,
-                                  "checkpoint_sha256": _digest(post_state)}
-                    completion_path = root / "calls" / (identifier + ".return.json")
-                    _write_new(completion_path, completion)
-                    operation["completion"] = completion
-                except Exception as exc:
-                    raise _InfrastructureStop("completion persistence failed: " + str(exc)) from exc
-                if after_record is not None:
-                    event = {"event": "callback_completed", "operation_id": identifier,
-                             "callback": callback_kind, "name": name,
-                             "logical_step": current_step,
-                             "completion_path": str(completion_path), "resolved": False}
-                    try:
-                        after_record(_snapshot(event))
-                    except Exception as exc:
-                        raise _InfrastructureStop("completion observer stopped: " + str(exc)) from exc
-                if caught is not None:
-                    raise caught
-                return _snapshot(value)
 
             def durable_model(request):
                 nonlocal current_step
                 current_step = request["step"]
-                return invoke("model", "model", request, model)
+                return journal.invoke("model", "model", current_step, request, model)
 
             # Preserve the original display name in controller error traces.
             durable_model.__name__ = getattr(model, "__name__", type(model).__name__)
             wrapped_tools = {name: (lambda arguments, n=name, callback=callback:
-                                    invoke("tool", n, arguments, callback))
+                                    journal.invoke("tool", n, current_step, arguments, callback))
                              for name, callback in tools.items()}
             try:
                 result = run_agent(task=task, sources=dict(sources), model=durable_model,
                                    tools=wrapped_tools, max_steps=max_steps)
-                if cursor != len(operations):
+                if journal.cursor != len(operations):
                     raise _ReplayMismatch("controller ended before recorded operations were consumed")
             except _ReplayMismatch as exc:
                 return _failure("binding_mismatch", str(exc), manifest=manifest,

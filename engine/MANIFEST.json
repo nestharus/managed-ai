@@ -117,14 +117,14 @@
       "sha256": "2b7373ebd791979e5aa795d80ad35e93d0541e09f09e69fec96ce03004b5a5d0"
     },
     "host/continuing_work/capture_native.py": {
-      "bytes": 6724,
+      "bytes": 6877,
       "mode": 420,
-      "sha256": "dff07d599eea7dca3ed8bf6b0be7f1d8d4403e1439376b1b50ad65e49d495a1c"
+      "sha256": "a1d53eef77a1795c95fd92c88eb96520752a8bb78f4f8c3d2bbbabe8f85a4aff"
     },
     "host/continuing_work/continuing_work.py": {
-      "bytes": 43940,
+      "bytes": 44291,
       "mode": 420,
-      "sha256": "332d58f914b590508cb3b1a8f76f3db668d9961774898bb6cd7031389d6001f6"
+      "sha256": "04d0bfa98d51630cc82efa548a7009ca80aaeefac3e3fd53ebd03ff5400cb344"
     },
     "host/continuing_work/occurrence_files.py": {
       "bytes": 955,
@@ -136,20 +136,25 @@
       "mode": 420,
       "sha256": "674aa0e12cd1cadd6a690a1112ec5eb33979668fa4cddb5ebbbdf59c14340119"
     },
+    "host/continuing_work/test_prepare.py": {
+      "bytes": 3122,
+      "mode": 420,
+      "sha256": "5abd2e18e9567b38800ce29c8cabcf62d6c9a0c58aa7da373dfb1cd9aa8f65c1"
+    },
     "host/material_retention/MATERIAL-MAINTENANCE.md": {
       "bytes": 23397,
       "mode": 420,
       "sha256": "c4f5d6bbe289086953cf921c7e2cb0d332d4e185cb72cf000b549e8677da5798"
     },
     "host/material_retention/managed_material.py": {
-      "bytes": 73173,
+      "bytes": 73779,
       "mode": 420,
-      "sha256": "4ee1b264973d867bcd688ef6aa9143effe525b57abf70a39b62c38052b989589"
+      "sha256": "e96fa6b9b2e93a5a6703d48c28fcd74ed2ba6d6cd1fc3d164c275e3e832c1f69"
     },
     "host/material_retention/test_current_use_retention.py": {
-      "bytes": 6564,
+      "bytes": 9257,
       "mode": 420,
-      "sha256": "1e7e0e8547939172f75e382fa0f2dfb777ff47d5d65f8aa4609ed91a6cea5168"
+      "sha256": "076c86be38ef3b9e902dd0ab2871e026eb7ad20bcbcec1429ff6bdea51d47263"
     },
     "host/signal_field.py": {
       "bytes": 299,
@@ -257,9 +262,9 @@
       "sha256": "844c4d646ed26b0dda0de04099e00259ae054d44dc7c1d9567c7653abbd3106b"
     },
     "release/test_compressed_research_evidence.py": {
-      "bytes": 2178,
+      "bytes": 2816,
       "mode": 420,
-      "sha256": "28c70828bd05b47d907608c1f0349da16a87cbda5319ecb9b7f01ece7f7a73cb"
+      "sha256": "043c80e00d3eddec2935ae4c39464147949c477edd2f72e85b40d1713188627e"
     },
     "release/test_source_list.py": {
       "bytes": 2977,
@@ -522,9 +527,9 @@
       "sha256": "83a988a46ef7e115a637b48dc6ea5e82960027c7874a429e115b1572bdbc336c"
     },
     "runtime/native/composition.py": {
-      "bytes": 24705,
+      "bytes": 24820,
       "mode": 420,
-      "sha256": "80d1de0748531dd9abe0ffa5c58a01c6ef6b5db3af749247ba5c9a06a678b1b0"
+      "sha256": "cad5bccf323f478a8513beef55172999a20ce5c30d5df154f3e2a1484bc06ca7"
     },
     "runtime/native/composition_boundary.py": {
       "bytes": 8805,
@@ -867,9 +872,9 @@
       "sha256": "1fb37f72b7bfe284c970635ccff1d1d8da7204988fdcc071b5b2f2085437f382"
     },
     "runtime/patterns/prospective-reception/discovery/README.md": {
-      "bytes": 57511,
+      "bytes": 57809,
       "mode": 420,
-      "sha256": "6433532d09832601baa30ca60ed9f8cd27e1249a0b46e0f988a91f926c088a8f"
+      "sha256": "768a62e84b7f0201d6269e18cb79e4f3e73d5929756e2faa916aefdea2e25dd5"
     },
     "runtime/patterns/prospective-reception/discovery/alignment_facts.py": {
       "bytes": 2883,
@@ -1007,9 +1012,9 @@
       "sha256": "c91a177de3596fee002c0fbb3ee198829ab21bfe86dcee576ac595ece4529ea8"
     },
     "runtime/patterns/prospective-reception/discovery/test_federation.py": {
-      "bytes": 4259,
+      "bytes": 5067,
       "mode": 420,
-      "sha256": "0cb77f8901e16f7de8ca61ef04db7cd2853e30a2e35248b2e5697ee6fac4a429"
+      "sha256": "ae091587c812a1d49f41bb39d1e01f22fe088668e74a1227326af85388960f5a"
     },
     "runtime/patterns/prospective-reception/discovery/test_recall.py": {
       "bytes": 4399,
@@ -1207,9 +1212,9 @@
       "sha256": "e1db4034e470f9e029d9e2f5ee63293b058c2b864338a8e783204454ad818de8"
     },
     "runtime/source_library/knowledge.py": {
-      "bytes": 32376,
+      "bytes": 34365,
       "mode": 420,
-      "sha256": "08c2938211e0390ed3be0ef6326b613113e25e11790b8d3c80dd20d38619379e"
+      "sha256": "d20190c0d21f42ed05f2eea391a703cb4cb7d547215c50921807f0980204f74c"
     },
     "runtime/source_library/lexical_search.py": {
       "bytes": 3740,
@@ -1237,9 +1242,9 @@
       "sha256": "a3ad5872f49caadda7acb5e959500949101d4576fa527aa9d8eb85d03d33b488"
     },
     "runtime/source_library/source_producer.py": {
-      "bytes": 9844,
+      "bytes": 7878,
       "mode": 420,
-      "sha256": "79421eb41a4780441cf27f8a56a85121ee1a3efa89852dd3614df3a4f2d7e996"
+      "sha256": "90d33260827c7c6839b032c4711c6996b241bac7ab20fbed17cb401885665388"
     },
     "runtime/system-release/README.md": {
       "bytes": 256,
@@ -1327,9 +1332,9 @@
       "sha256": "50914272bacb3c90276688e9ab9504f6153516bed282a1589b1999502544b8fd"
     },
     "runtime/tests/library/test_discovery.py": {
-      "bytes": 29397,
+      "bytes": 29545,
       "mode": 420,
-      "sha256": "29530c723fb8e98c35a992ae49be43a939e36e9125c86f7d6a642d11b7caa874"
+      "sha256": "5b42fe8c7ad5d37757fbfb4c642c43a4cf804b8ef886b671cc07119885a77ed0"
     },
     "runtime/tests/library/test_knowledge.py": {
       "bytes": 8711,
@@ -1337,9 +1342,9 @@
       "sha256": "5600579e7617127eb745829bfecd3bdb1d6dccfc4250b28fd56df6f4eda88782"
     },
     "runtime/tests/library/test_source_producer.py": {
-      "bytes": 14791,
+      "bytes": 14803,
       "mode": 420,
-      "sha256": "997a44a047b577f8ea3bf4e43504a6278f6d9375d0e354ec7f79d6f056de8338"
+      "sha256": "f2680904c2b8eb8170d233ac9c7fd3677ce08a5f87e3d46c3229f832d45c36e6"
     },
     "runtime/tests/native_store/__init__.py": {
       "bytes": 26,
@@ -1352,9 +1357,9 @@
       "sha256": "3a6d816819dd48d7526fcd28c40cd3c17fffcb505b5317797a1bc60d4ec2f4e0"
     },
     "runtime/tests/native_store/test_composition.py": {
-      "bytes": 17256,
+      "bytes": 17646,
       "mode": 420,
-      "sha256": "7395f077faa3d9360c766619133f671ff750def197fa31f5750fe62a775d94c9"
+      "sha256": "4de65a95369b8aefca3f77403f6539b95f2abe06cae2adcf34de4d0a8dcc6f91"
     },
     "runtime/tests/native_store/test_composition_context.py": {
       "bytes": 6113,

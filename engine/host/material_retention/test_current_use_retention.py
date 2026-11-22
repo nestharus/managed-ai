@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 
@@ -92,6 +93,56 @@ class RetentionContract(unittest.TestCase):
             self.capture("conflict", b"not published\n", retention_policy="current-use",
                          history=[first["manifest"]])
         self.assertEqual((self.store.root / "CURRENT.json").read_bytes(), before)
+        self.assertFalse(self.last_event()["selection_published"])
+
+    def last_event(self):
+        return json.loads((self.store.root / "events.jsonl").read_bytes().splitlines()[-1])
+
+    def test_failed_pointer_replace_retains_occurrence_but_keeps_the_previous_selection(self):
+        first = self.capture("first", b"previous bytes")
+        replace_pointer = material.replace_json
+
+        def refuse_current(path, value):
+            if path.name == "CURRENT.json":
+                raise OSError("pointer unavailable")
+            replace_pointer(path, value)
+
+        with patch.object(material, "replace_json", refuse_current), self.assertRaisesRegex(OSError, "pointer unavailable"):
+            self.capture("second", b"retained bytes")
+
+        self.assertEqual(material.current_selection(self.store)[0], first["selection"])
+        self.assertFalse(self.last_event()["selection_published"])
+        self.assertTrue((self.store.root / "occurrences/second.json").is_file())
+        with self.assertRaisesRegex(ValueError, "Occurrence identity already exists"):
+            self.capture("second", b"retained bytes")
+
+    def test_reporting_failures_leave_the_new_selection_published(self):
+        for failure in ("statistics", "completion event"):
+            with self.subTest(failure=failure):
+                occurrence = "selected-" + failure.split()[0]
+                body = occurrence.encode()
+                record_event = self.store.event
+
+                def fail_completion(kind, data):
+                    if kind == "snapshot-completed":
+                        raise OSError(failure)
+                    record_event(kind, data)
+
+                fault = (patch.object(self.store, "stats", side_effect=OSError(failure))
+                         if failure == "statistics" else patch.object(self.store, "event", fail_completion))
+                with fault, self.assertRaisesRegex(OSError, failure):
+                    self.capture(occurrence, body)
+
+                key, selected = material.current_selection(self.store)
+                self.assertEqual(selected["occurrence"], occurrence)
+                self.assertEqual(self.store.materialize(selected["current"][0]["object"]), body)
+                event = self.last_event()
+                self.assertEqual(event["kind"], "snapshot-failed")
+                self.assertTrue(event["selection_published"])
+                self.assertEqual(event["selection"], key)
+                self.assertEqual(event["manifest"], selected["manifest"])
+                with self.assertRaisesRegex(ValueError, "Occurrence identity already exists"):
+                    self.capture(occurrence, body)
 
     def test_current_use_excludes_old_transport_and_retirement(self):
         source = self.root / "obsolete"

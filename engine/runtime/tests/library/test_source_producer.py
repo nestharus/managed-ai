@@ -136,7 +136,7 @@ class SourceProducerTest(unittest.TestCase):
                 self.assert_discovery(self.request('discover', query=query), expected)
 
     @NEEDS_FTS5
-    def test_retained_scope_has_truthful_source_observation(self):
+    def test_discovery_reads_bodies_once_for_the_retained_scope(self):
         for use, query, expected_body_reads in (
                 ('current', 'source', 3), ('historical', 'source', 0),
                 ('current', 'correcting', 0)):
@@ -203,7 +203,7 @@ class SourceProducerTest(unittest.TestCase):
                 catalogue.write_bytes(original)
 
     @NEEDS_FTS5
-    def test_fresh_acquisition_refuses_changed_and_missing_canonical_source(self):
+    def test_show_refuses_changed_bytes_while_retained_discovery_can_still_nominate(self):
         expected = self.oracle.discover('source', backend='fts5')
         original_body = self.oracle.show('a')
         self.assert_discovery(self.request('discover', query='source', use='historical'), expected)

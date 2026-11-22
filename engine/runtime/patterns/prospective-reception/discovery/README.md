@@ -570,7 +570,7 @@ Coverage counts sum the examined indexed records, omitted records and matched re
 
 ### Checks
 
-Run `G60_READER=/absolute/path/to/knowledge.py python -B -m unittest discover -s . -v` in this directory. The tests exercise the real native reader, reject a source with a changed nominated digest, withhold a 110-item inventory from every issued text channel in a first-paragraph window, retain full-owner recovery, and require a local return after transfer. The federation integration test searches three real prepared libraries containing 1,800 entries. It checks a final-shard exact witness, competing results, a vocabulary miss, global truncation and refusal of a modified index. Without the environment variable the two native integration tests are skipped.
+Run `G60_READER=/absolute/path/to/knowledge.py python -B -m unittest discover -s . -v` in this directory. The tests exercise the real native reader, reject a source with a changed nominated digest, withhold a 110-item inventory from every issued text channel in a first-paragraph window, retain full-owner recovery, and require a local return after transfer. The federation integration test searches three real prepared libraries containing 1,800 entries. It checks a final-shard exact witness, competing results, a vocabulary miss, global truncation and refusal of a modified index. The federation cases pass an explicit library to the reader. From a checkout they can use the engine's top-level `knowledge.py`. The single-library turn case also calls `discover` and `show` without a library argument. It needs the complete-library reader with its default library installed beside it. Without `G60_READER`, discovery skips both sets of reader-dependent cases.
 
 ### Find a prior investigation from a fresh job
 

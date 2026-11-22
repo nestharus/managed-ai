@@ -328,22 +328,22 @@ class Composition:
             element = focus.partition(':')[2]
             focus_refs.update('relation:' + ident for ident, relation in rows['relations'].items()
                               if element in relation.get('from', []) or element in relation.get('to', []))
-        ordered = sorted(opportunities.values(), key=lambda row:
+        all_opportunities = sorted(opportunities.values(), key=lambda row:
                          (row['ref'] != focus,
                           not (row['ref'] in focus_refs or bool(set(row.get('at', [])) & focus_refs))))
-        selected = ordered[:limit]
+        displayed_opportunities = all_opportunities[:limit]
         related_refs = set(focus_refs)
-        for row in selected:
+        for row in displayed_opportunities:
             related_refs.update(row.get('at', []))
             related_refs.update('premise:' + name for group in row.get('requires', []) for name in group)
         for relation in relations.values():
             if relation['ref'] in related_refs:
                 related_refs.update('element:' + value for key in ('from', 'to') for value in relation.get(key, []))
 
-        collections = {'opportunities': selected}
+        collections = {'opportunities': displayed_opportunities}
         complete = {'elements': [dict(row, ref='element:' + ident) for ident, row in rows['elements'].items()],
                     'relations': list(relations.values()), 'premises': list(premises.values()),
-                    'opportunities': ordered}
+                    'opportunities': all_opportunities}
         coverage = {}
         for collection, items in complete.items():
             if collection != 'opportunities':
@@ -357,7 +357,7 @@ class Composition:
                                     'omitted_refs': [row['ref'] for row in items if row['ref'] not in shown]}
 
         pairs = []
-        count = len(ordered) * (len(ordered) - 1) // 2
+        count = len(all_opportunities) * (len(all_opportunities) - 1) // 2
         result = {'format': FORMAT, 'profile': PROFILE,
                   'record': {key: record[key] for key in ('id', 'revision', 'sha256')},
                   'purpose': body['purpose'], 'focus': focus,
@@ -385,10 +385,10 @@ class Composition:
         # ordered focus-first, not just the displayed detail rows. Stop before
         # accumulation would exceed either the count or returned byte bound.
         byte_saturated = False
-        for index, left in enumerate(ordered):
+        for index, left in enumerate(all_opportunities):
             if len(pairs) >= pair_limit or byte_saturated:
                 break
-            for right in ordered[index + 1:]:
+            for right in all_opportunities[index + 1:]:
                 if len(pairs) >= pair_limit:
                     break
                 reasons = []

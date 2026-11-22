@@ -105,22 +105,24 @@ class DiscoveryTest(unittest.TestCase):
         self.assertEqual(bounded['coverage']['omitted_body_ids'], ['later/body.md'])
         self.assertEqual(lib.show('later/body.md')['text'], 'Two')
 
-    def check_reused_source(self, backend):
+    def assert_ordinary_search_rechecks_source(self, backend):
         lib = self.make_library('fresh-' + backend, {'a.md': b'Original useful source.'})
         first = lib.discover('useful', backend=backend)
         self.assertFalse(first['preparation']['reused'])
-        self.assertTrue(lib.discover('useful', backend=backend)['preparation']['reused'])
+        warmed = lib.discover('useful', backend=backend)
+        self.assertTrue(warmed['preparation']['reused'])
+        self.assertEqual(warmed['coverage']['verified_bodies'], 1)
         (lib.directory/lib.bodies['a.md']['object']).write_bytes(b'Changed source bytes.')
         with self.assertRaisesRegex(ValueError, 'differs from declared source'):
             lib.discover('useful', backend=backend)
         lib.close()
 
     def test_reused_index_still_rejects_changed_source_bytes(self):
-        self.check_reused_source('bm25')
+        self.assert_ordinary_search_rechecks_source('bm25')
 
     @unittest.skipUnless(FTS5_AVAILABLE, 'optional SQLite FTS5 unavailable')
     def test_fts_reused_index_still_rejects_changed_source_bytes(self):
-        self.check_reused_source('fts5')
+        self.assert_ordinary_search_rechecks_source('fts5')
 
     def test_changed_scope_replaces_preparation(self):
         self.library.discover('Complete', scan_limit=1)

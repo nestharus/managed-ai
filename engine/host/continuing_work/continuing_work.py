@@ -36,6 +36,49 @@ def capture_error(raw):
     return ('Candidate capture could not be confirmed; raw failure details remain in owner evidence. '
             'Do not blindly repeat the receipt.')
 
+def prepare_questions(supplied_questions, selected_sources, task):
+    # Resolve the question input contract before any host/native effects.
+    # Omission deliberately leaves a question unbound; an unknown spelling
+    # or unresolved identity must never be converted into that omission.
+    if not isinstance(selected_sources,list) or any(not isinstance(r,dict) for r in selected_sources):
+        raise ValueError('sources must be a list of selected resource objects')
+    selected_ids=[ident(r['id']) for r in selected_sources]
+    if len(set(selected_ids))!=len(selected_ids): raise ValueError('Duplicate selected resource')
+    if not isinstance(supplied_questions,list): raise ValueError('questions must be a list')
+    questions=[]
+    for i,q in enumerate(supplied_questions):
+        label='questions['+str(i)+']'
+        if not isinstance(q,dict): raise ValueError(label+' must be an object')
+        unknown=set(q)-{'question','use','sources'}
+        if unknown:
+            raise ValueError(label+' has unsupported fields: '+', '.join(sorted(unknown))+
+                             '; use sources for selected resource IDs')
+        refs=q.get('sources',[])
+        if not isinstance(refs,list) or any(not isinstance(r,str) for r in refs):
+            raise ValueError(label+'.sources must be a list of selected resource IDs')
+        if len(set(refs))!=len(refs): raise ValueError(label+'.sources contains duplicates')
+        missing=set(refs)-set(selected_ids)
+        if missing:
+            raise ValueError(label+'.sources names unselected resource IDs: '+', '.join(sorted(missing)))
+        questions.append({'question':nonempty(q.get('question'),label+'.question'),
+                          'use':nonempty(q.get('use',task),label+'.use'),'sources':refs})
+    return questions
+
+
+def prepare_attention_selection(spec):
+    # Native Attention owns the meaning, current treatment and active-ID
+    # checks. Preserve the caller's explicit earlier selection instead of
+    # silently replacing it with only this occurrence's new questions.
+    attention={}
+    for key,limit in (('attention_items',2000),('attention_groups',100)):
+        value=spec.get(key,[])
+        if not isinstance(value,list) or len(value)>limit or any(not isinstance(v,str) for v in value):
+            raise ValueError(key+' must be a bounded list of strings')
+        if len(value)!=len(set(value)): raise ValueError(key+' contains duplicates')
+        attention[key]=value
+    return attention
+
+
 def overlap_rows(previous_scopes, sources, reads, writes):
     """Nominate declared footprints and observed source/output identity, without semantic ranking."""
     rows=[]; a=set(reads); b=set(writes)
@@ -283,7 +326,7 @@ class Host(RepairCustody):
         return {'engine':str(new),'host_producer':event['host_producer'],'host_method':event['host_method'],'host_dependencies':event['host_dependencies'],
                 'native_programs_unchanged':True,'parent_duties_unchanged':True}
 
-    def resource(self, rid, source):
+    def refresh_resource(self, rid, source):
         rid=ident(rid); old_path=self.root/'resources'/f'{rid}.json'
         previous=read(old_path) if old_path.exists() else None
         pin=self.pin(source)
@@ -300,6 +343,8 @@ class Host(RepairCustody):
         write(old_path,row)
         return row, previous if previous and previous['sha256']!=row['sha256'] else None
 
+    resource = refresh_resource  # Earlier host callers use this spelling.
+
     def scopes(self):
         return [read(p) for p in sorted((self.root/'scopes').glob('*.json'))]
 
@@ -307,56 +352,31 @@ class Host(RepairCustody):
         sid=ident(spec['id']); saved=self.root/'scopes'/f'{sid}.json'
         if saved.exists(): raise ValueError('A scope is one immutable occurrence; select a fresh identity')
         task=nonempty(spec['task'],'task'); prediction=nonempty(spec['prediction'],'prediction')
-        # Resolve the question input contract before any host/native effects.
-        # Omission deliberately leaves a question unbound; an unknown spelling
-        # or unresolved identity must never be converted into that omission.
-        selected_sources=spec.get('sources',[])
-        if not isinstance(selected_sources,list) or any(not isinstance(r,dict) for r in selected_sources):
-            raise ValueError('sources must be a list of selected resource objects')
-        selected_ids=[ident(r['id']) for r in selected_sources]
-        if len(set(selected_ids))!=len(selected_ids): raise ValueError('Duplicate selected resource')
-        supplied_questions=spec.get('questions',[])
-        if not isinstance(supplied_questions,list): raise ValueError('questions must be a list')
-        questions=[]
-        for i,q in enumerate(supplied_questions):
-            label='questions['+str(i)+']'
-            if not isinstance(q,dict): raise ValueError(label+' must be an object')
-            unknown=set(q)-{'question','use','sources'}
-            if unknown:
-                raise ValueError(label+' has unsupported fields: '+', '.join(sorted(unknown))+
-                                 '; use sources for selected resource IDs')
-            refs=q.get('sources',[])
-            if not isinstance(refs,list) or any(not isinstance(r,str) for r in refs):
-                raise ValueError(label+'.sources must be a list of selected resource IDs')
-            if len(set(refs))!=len(refs): raise ValueError(label+'.sources contains duplicates')
-            missing=set(refs)-set(selected_ids)
-            if missing:
-                raise ValueError(label+'.sources names unselected resource IDs: '+', '.join(sorted(missing)))
-            questions.append({'question':nonempty(q.get('question'),label+'.question'),
-                              'use':nonempty(q.get('use',task),label+'.use'),'sources':refs})
-        # Native Attention owns the meaning, current treatment and active-ID
-        # checks. Preserve the caller's explicit earlier selection instead of
-        # silently replacing it with only this occurrence's new questions.
-        attention={}
-        for key,limit in (('attention_items',2000),('attention_groups',100)):
-            value=spec.get(key,[])
-            if not isinstance(value,list) or len(value)>limit or any(not isinstance(v,str) for v in value):
-                raise ValueError(key+' must be a bounded list of strings')
-            if len(value)!=len(set(value)): raise ValueError(key+' contains duplicates')
-            attention[key]=value
+        selected_sources = spec.get('sources', [])
+        questions = prepare_questions(spec.get('questions', []), selected_sources, task)
+        for ordinal, question in enumerate(questions, 1):
+            question['id'] = ident(f'{sid}-q{ordinal}')
+        resource_paths = [(item, Path(item['path'])) for item in selected_sources]
+        attention = prepare_attention_selection(spec)
+        overlap_limit=spec.get('overlap_limit',8)
+        if type(overlap_limit) is not int or not 1<=overlap_limit<=200:
+            raise ValueError('overlap_limit must be an integer from1through200')
+        outnames=[ident(n) for n in spec['outputs']]
+        if not outnames or len(set(outnames))!=len(outnames): raise ValueError('Select distinct new output names')
+        targets=['outputs/'+sid+'/'+n for n in outnames]
+        reads=list(dict.fromkeys([*spec.get('reads',[]),*(r['id'] for r in selected_sources)]))
+        writes=list(dict.fromkeys(spec.get('writes',[])))
+
         self.current(self.config['commission'],'Current commission')
         goal=self.goal(); duty_ids=spec['duty_ids']
         known={r['id']:r for r in goal['content']['obligations']}
         if not duty_ids or set(duty_ids)-known.keys(): raise ValueError('Bind actual current parent duties')
         sources=[]; changed=[]
-        for item in selected_sources:
-            row,old=self.resource(item['id'],item['path'])
+        for item, path in resource_paths:
+            row,old=self.refresh_resource(item['id'],path)
             row=dict(row,role=item.get('role','source'))
             sources.append(row)
             if old: changed.append({'resource':row['id'],'before':old,'current':row})
-        reads=list(dict.fromkeys([*spec.get('reads',[]),*(r['id'] for r in sources)]))
-        writes=list(dict.fromkeys(spec.get('writes',[])))
-        overlaps=[]
         previous_scopes=self.scopes()
         for source in sources:
             if any(c['resource']==source['id'] for c in changed): continue
@@ -370,9 +390,6 @@ class Host(RepairCustody):
                 if any((r['id']==change['resource'] or r['path']==change['current']['path']) and r['sha256']!=change['current']['sha256']
                        for r in s['sources'])]
         all_overlaps=overlap_rows(previous_scopes,sources,reads,writes)
-        overlap_limit=spec.get('overlap_limit',8)
-        if type(overlap_limit) is not int or not 1<=overlap_limit<=200:
-            raise ValueError('overlap_limit must be an integer from1through200')
         affected={name for change in changed for name in change['affected_prior_consumers']}
         # Keep current selected output use ahead of affected-history nominees.
         # Stable sorting preserves the existing order within each category.
@@ -382,9 +399,6 @@ class Host(RepairCustody):
         write(index,{'scope':sid,'previous_scope_count':len(previous_scopes),'rows':all_overlaps,
                      'meaning':'Author-declared footprints plus exact same-source/received-output identity. Shared reading need not conflict. Disjoint identities do not establish semantic independence.'})
         overlap_pin=self.pin(index)
-        outnames=[ident(n) for n in spec['outputs']]
-        if not outnames or len(set(outnames))!=len(outnames): raise ValueError('Select distinct new output names')
-        targets=['outputs/'+sid+'/'+n for n in outnames]
         if any((self.work/p).exists() for p in targets): raise ValueError('Fresh generation targets must be absent')
         # Native publication deliberately requires an existing parent at capture.
         for target in targets: (self.work/target).parent.mkdir(parents=True,exist_ok=True)
@@ -403,8 +417,8 @@ class Host(RepairCustody):
             'receiving_question':spec.get('receiving_question','Did the actual contribution produce the predicted useful effect under current sources?')}
         note='sources/host/'+sid+'-prospect.json'; write(self.work/note,source_note)
         items=[]
-        for i,q in enumerate(questions):
-            item={'id':ident(sid+'-q'+str(i+1)), 'question':q['question'],'use':q['use'],
+        for q in questions:
+            item={'id':q['id'], 'question':q['question'],'use':q['use'],
                   'basis':[r['work_path'] for r in sources if r['id'] in q['sources']],
                   'groups':[sid]}
             items.append(item)
