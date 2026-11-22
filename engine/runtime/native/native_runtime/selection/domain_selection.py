@@ -8,7 +8,7 @@ import json
 import os
 import re
 
-from continuation_support.storage import sha
+from continuation_support.storage import encode, sha
 
 ENGINE_API = 'managed-ai-runtime/1'
 STORE_SCHEMA = 'managed-ai-store/1'
@@ -42,6 +42,28 @@ def pin(root, path):
     return {'path': os.path.relpath(path, root), 'sha256': sha(path.read_bytes())}
 
 
+PAYLOAD_TYPES = {
+    'object': lambda x: isinstance(x, dict),
+    'array': lambda x: isinstance(x, list),
+    'string': lambda x: isinstance(x, str),
+    'integer': lambda x: type(x) is int,
+    'number': lambda x: type(x) in (int, float),
+    'boolean': lambda x: type(x) is bool,
+    'null': lambda x: x is None,
+}
+
+
+def same_literal(left, right):
+    """Compare JSON containers recursively, retaining the dialect's scalar equality."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(same_literal(left[k], right[k]) for k in left)
+    if isinstance(left, list):
+        return len(left) == len(right) and all(same_literal(a, b) for a, b in zip(left, right))
+    return left == right
+
+
 def validate_schema(schema):
     """Fail closed for keywords outside the documented structural vocabulary."""
     if isinstance(schema, bool):
@@ -55,6 +77,12 @@ def validate_schema(schema):
     unknown = set(schema) - allowed
     if unknown:
         raise ValueError('unsupported structural schema keywords: ' + ', '.join(sorted(unknown)))
+    if 'type' in schema:
+        declared = schema['type']
+        names = [declared] if isinstance(declared, str) else declared
+        if (not isinstance(names, list) or not names or
+                any(not isinstance(name, str) or name not in PAYLOAD_TYPES for name in names)):
+            raise ValueError(f'unsupported payload type declaration: {declared!r}')
     for group in ('properties', '$defs', 'definitions'):
         for child in schema.get(group, {}).values():
             validate_schema(child)
@@ -79,20 +107,14 @@ def validate_payload(value, schema, *, at='content', document=None):
         for key in schema['$ref'][2:].split('/'):
             target = target[key.replace('~1', '/').replace('~0', '~')]
         validate_payload(value, target, at=at, document=document)
-    types = {'object': lambda x: isinstance(x, dict), 'array': lambda x: isinstance(x, list),
-             'string': lambda x: isinstance(x, str), 'integer': lambda x: type(x) is int,
-             'number': lambda x: type(x) in (int, float), 'boolean': lambda x: type(x) is bool,
-             'null': lambda x: x is None}
     wanted = schema.get('type')
     if wanted is not None:
         wanted = [wanted] if isinstance(wanted, str) else wanted
-        if not any(types[k](value) for k in wanted):
+        if not any(PAYLOAD_TYPES[k](value) for k in wanted):
             raise ValueError(at + ': wrong payload type')
-    def same(a, b):
-        return type(a) is type(b) and a == b
-    if 'enum' in schema and not any(same(value, item) for item in schema['enum']):
+    if 'enum' in schema and not any(same_literal(value, item) for item in schema['enum']):
         raise ValueError(at + ': value is outside schema enum')
-    if 'const' in schema and not same(value, schema['const']):
+    if 'const' in schema and not same_literal(value, schema['const']):
         raise ValueError(at + ': value differs from schema constant')
     for group in ('allOf', 'anyOf', 'oneOf'):
         if group in schema:
@@ -134,6 +156,8 @@ class DomainSelection:
         self.schemas, self.entries, self.entry_sources, self.domains = {}, [], [], []
         self.tools = []
         self.bindings = {}
+        self.schema_bindings = {}
+        declaring_domain = {}
         required_domains = set()
         if descriptor.get('store_schema', STORE_SCHEMA) != STORE_SCHEMA:
             raise ValueError('unsupported store schema; explicit migration required')
@@ -149,10 +173,19 @@ class DomainSelection:
             self.domains.append(domain['id'])
             required_domains.update(domain.get('requires_domains', []))
             for kind, schema in domain.get('schemas', {}).items():
-                validate_schema(schema)
-                if kind in self.schemas and self.schemas[kind] != schema:
-                    raise ValueError('conflicting payload schemas for kind: ' + kind)
+                owner = domain['id']
+                try:
+                    validate_schema(schema)
+                except ValueError as exc:
+                    raise ValueError(f'{owner} schema for {kind}: {exc}') from exc
+                binding = sha(encode(schema))
+                if kind in self.schema_bindings:
+                    if self.schema_bindings[kind] != binding:
+                        raise ValueError(f'conflicting payload schemas for {kind}: {declaring_domain[kind]} and {owner}')
+                    continue
+                declaring_domain[kind] = owner
                 self.schemas[kind] = schema
+                self.schema_bindings[kind] = binding
             self.entry_sources.extend(domain.get('entry_sources', []))
             self.tools.extend(dict(tool, domain=domain['id']) for tool in domain.get('tools', []))
             if domain.get('catalogue'):

@@ -73,7 +73,7 @@ class System:
         self.descriptor = self.persisted_descriptor if _selection_override is None else _selection_override
         self.instance_id = self.descriptor.get('instance_id')
         self.domain_selection = DomainSelection(self.root, self.descriptor)
-        bindings = {kind: sha(encode(schema)) for kind, schema in self.domain_selection.schemas.items()}
+        bindings = self.domain_selection.schema_bindings
         if 'schema_bindings' in self.descriptor and self.descriptor['schema_bindings'] != bindings:
             raise ValueError('selected typed-schema bindings changed')
         self.work = layout.workspace
@@ -125,7 +125,7 @@ class System:
                      'domains': [pin(root, path) for path in domains],
                      'catalogues': [pin(root, path) for path in catalogues]}
         selected = DomainSelection(root, selection)
-        selection['schema_bindings'] = {kind: sha(encode(schema)) for kind, schema in selected.schemas.items()}
+        selection['schema_bindings'] = selected.schema_bindings
         available = {e['id']: e for e in InstalledCatalogue(CORE_CATALOGUE, selected).index()['entries']}
         selected.validate_catalogue(available)
         if record_retention not in {'current-use', 'append-history'}:

@@ -98,26 +98,27 @@ def import_records(system, spec):
     # Qualify all rows without capturing basis objects or changing any head.
     for row in rows:
         system.record_store.validate_import(row)
-    recorded = old['records'] if old is not None else []
-    prefix = recorded if old is not None and not old['complete'] else []
+    prefix = old['records'] if old is not None else []
     _verify_progress(system, prefix)
+    if old is not None:
+        # A replacement may have become visible before its directory sync completed.
+        sync_dir(receipt.parent)
+        if old['complete']:
+            return old
+
+    # Only a new or interrupted batch may publish acknowledgements.
     result = {'format': RECEIPT_FORMAT, 'id': ident,
               'spec_sha256': spec_sha, 'instance_id': system.instance_id, 'records': list(prefix)}
     receipt.parent.mkdir(parents=True, exist_ok=True)
     sync_dir(receipt.parent.parent)
     if old is None:
         write_json(receipt, dict(result, complete=False))
-    else:
-        # A previous replacement may have become visible before its sync was confirmed.
-        sync_dir(receipt.parent)
     for row in rows[len(prefix):]:
         if not system.record_store.path(row['id']).exists():
             system.put(row, 0)
         current = system.record_store.show(row['id'])
         result['records'].append(record_identity(current))
-        if len(result['records']) > len(recorded):
-            write_json(receipt, dict(result, complete=False))
+        write_json(receipt, dict(result, complete=False))
     result['complete'] = True
-    if result != old:
-        write_json(receipt, result)
+    write_json(receipt, result)
     return result

@@ -130,7 +130,8 @@ def runtime_binding(root):
             config.get('store_schema') != STORE_SCHEMA or config.get('engine_api') != ENGINE_API):
         raise ValueError('store/engine schema incompatibility; explicit import or migration required')
     packet_id(config['instance_id'])
-    if (binding.get('version') != 2 or binding.get('workspace_relative') != '../work' or
+    if (type(binding.get('version')) is not int or binding['version'] != 2 or
+            binding.get('workspace_relative') != '../work' or
             binding.get('instance_id') != config['instance_id']):
         raise ValueError('portable store binding differs')
     return {'instance_id': config['instance_id'], 'store_schema': STORE_SCHEMA,

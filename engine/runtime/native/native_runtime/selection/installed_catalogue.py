@@ -24,33 +24,47 @@ class InstalledCatalogue:
         if not path.is_file():
             return {'format': 'pending-catalogue', 'entries': []}
         result = read(path)
+        if 'format' in result and result['format'] != 'agent-system-catalogue/1':
+            raise ValueError('unsupported installed catalogue format')
         # Bind each declared root once for this read of the installed catalogue.
         # Keep the bindings local so the next index observes a relocated source.
         roots = {}
-        for entry in result.setdefault('entries', []):
+        entries = result.get('entries', [])
+        if not isinstance(entries, list):
+            raise ValueError('catalogue entries must be a list')
+        for entry in entries:
             if 'source_root_relative' in entry:
                 relative = entry['source_root_relative']
                 if relative not in roots:
                     roots[relative] = str((self.root / relative).resolve())
                 entry['source_root'] = roots[relative]
         if self.selection is not None:
-            entries = result.get('entries', []) + self.selection.entries
-            ids = [e['id'] for e in entries]
-            if len(ids) != len(set(ids)):
-                raise ValueError('core/domain/store source identity collision')
-            result = dict(result, entries=entries)
-        by_id = {e['id']: e for e in result.get('entries', [])}
-        for alias in result.get('aliases', []):
-            if alias['target'] in by_id and alias['id'] not in by_id:
-                result['entries'].append(dict(by_id[alias['target']], id=alias['id'], alias_of=alias['target']))
+            entries = entries + self.selection.entries
+        result['entries'] = self._resolve_names(entries, result.get('aliases', []))
         return result
+
+    @staticmethod
+    def _resolve_names(entries, aliases):
+        """Primary IDs win. A compatibility name can expose one selected primary."""
+        primary = {entry['id']: entry for entry in entries}
+        if len(primary) != len(entries):
+            raise ValueError('core/domain/store source identity collision')
+        targets = {}
+        for alias in aliases:
+            name, target = alias['id'], alias['target']
+            if name in targets and targets[name] != target:
+                raise ValueError(f'ambiguous catalogue alias {name}: {targets[name]} and {target}')
+            targets[name] = target
+        resolved = list(entries)
+        for name, target in targets.items():
+            if name not in primary and target in primary:
+                resolved.append(dict(primary[target], id=name, alias_of=target))
+        return resolved
 
     def search(self, ident: str | None = None, query: str = '', kind: str | None = None,
                   limit: int = 25, offset: int = 0, content: bool = False) -> dict:
         catalogue = self.index()
-        entries = catalogue.get('entries', [])
-        if not isinstance(entries, list):
-            raise ValueError('catalogue entries must be a list')
+        entries = catalogue['entries']
         if ident is None:
             integer(limit, 'catalogue limit', 1); integer(offset, 'catalogue offset')
             if limit > 200:
@@ -97,8 +111,6 @@ class InstalledCatalogue:
     def capture(self, directory: Path, identities: list[str], write_input) -> dict:
         entries = self.index().get('entries', [])
         by_id = {e['id']: e for e in entries}
-        if len(by_id) != len(entries):
-            raise ValueError('duplicate catalogue identity')
         selected, paths = [], []
         for ident in identities:
             if ident not in by_id:

@@ -6,6 +6,8 @@ The same native `System` runs every instance. A deployment selects that code and
 
 A native store has `system.json`, `exchange/` and `work/`. Its descriptor declares `store_schema: managed-ai-store/1`, `engine_api: managed-ai-runtime/1`, a stable `instance_id`, selected domain/catalogue hashes and typed-schema bindings. Its workspace binding is relative. Keep the package together when relocating it; captured old contexts remain exact evidence of their original occurrence, while new contexts use the current location. Relocation does not authorize replay of a pending external effect.
 
+Direct exchange readers accept the integer workspace editions issued by the initializer. Version 1 names an absolute workspace. Version 2 binds `../work` to the native instance. Deployment requires version 2 and explicit matching store and engine editions. Direct native access also opens older store descriptors. If they omit both the store edition and retention policy, writes retain predecessor history.
+
 The deployment format is `agent-system-deployment/2`. The descriptor names a relative engine path with the exact Python code identity and a relative store path with its stable instance identity. Invocation checks both. New code requires explicit compatibility assessment and a new selected code identity. Ordinary staging writes only `candidate.json` and carries forward the selected store. Activation compares the current descriptor's raw digest and the canonical encoding digest of the staged descriptor. It verifies the declared APIs and Python identity and checks the binding of the store named in staging. Identical bytes can recur across stages. If you receive staging from another producer, verify its resolved paths and intended store.
 
 Code identity includes sorted Python paths and their content digests. Qualification checks the engine reference before resolving it. Use ordinary directories and files throughout the selected engine and its reference path. Links, reparse points, nonordinary entries and failed enumeration cause refusal. Keep importable engine modules in Python source. Ordinary interpreter cache files below `__pycache__` are omitted from the pin, and standalone bytecode or extension modules cause refusal. Both API declarations must be present in the hashed source. Descriptors must be JSON objects. Invalid declaration syntax is reported as an input error.
@@ -48,11 +50,15 @@ python3 -B engine/knowledge.py --store stores/research show SOURCE_ID --text
 python3 -B engine/runtime/select_deployment.py --deployment deployments/novel system catalogue SOURCE_ID --text
 ```
 
+The installed catalogue uses `agent-system-catalogue/1` and also reads its untagged layout. Primary IDs across the core and selected references are unique. A primary ID takes precedence over a compatibility alias. Each alias names one primary target and becomes available when that target is selected. Listing, body lookup and context capture use this same resolution.
+
 The source catalogue records availability and custody. Registration, hashing, importing metadata and building a source index do not establish a participant's acquisition or application. Existing acquisition counts remain owned by their source-account records.
 
 ## Structural payload schemas
 
 `schemas` maps record kinds to a bounded structural-schema dialect. It supports `type`, `properties`, `required`, `additionalProperties`, `items`, `enum`, `const`, string/array length limits, numeric limits, `pattern`, `allOf`, `anyOf`, `oneOf`, local `$ref` with `$defs`/`definitions`, and descriptive `$id`, `$schema`, `title`, `description`. It is **not a complete JSON Schema implementation**. Unsupported keywords are refused before initialization or selection. There is no network reference resolution or schema code execution.
+
+Every declared type must be supported, including in unused kinds. Domains that declare the same kind must agree on its exact schema binding. Research and Writing each declare `obligation`. Select compatible editions together when changing that schema. Both accept the optional `basis_change` object. The native record owner checks its account and prior revision when an owed duty replaces or drops existing evidence.
 
 The native record owner enforces declared kinds on ordinary writes and imports. A typed record cannot evade its schema through ordinary reclassification. A generic Information envelope retains its own exact interpretation contract; the domain schema checks its substantive payload. Other open native record kinds remain extensible. Structural validity does not establish semantic adequacy or a universal ontology.
 
@@ -67,6 +73,8 @@ New stores default to `record_retention: current-use`. Ordinary replacement adva
 `history ID` reports the retained chain and a truthful `retention_boundary` when earlier ordinary revisions were not retained. It does not claim complete history at that boundary. Use `init --record-retention append-history` or an explicit `configure` selection when a task needs a continuing predecessor chain. Legacy feedback duties lacking an explicit carried disposition must recover it from their verified old chain before a new current-use write; missing recovery evidence causes refusal. Historical audit tools refuse a complete-history conclusion across a retention boundary.
 
 `import --spec FILE` takes `{format: managed-ai-import/1, id, records}`. It validates the complete proposed batch before writing. Its receipt supports resumption and identical retries; a changed import under the same identity is refused. It is a current selection, not a multi-record transaction or automatic predecessor archive import.
+
+A completed import keeps its as-issued revision and digest for every row. Retrying requires the proposed inputs to still match and every acknowledged head to remain at that exact edition. Restoring its content at a later revision therefore refuses. Reading or enumerating completed acknowledgements still returns the original identities.
 
 A new valid import first records its instance, ID and exact specification digest with an empty progress list in the existing incomplete receipt. After interruption, repeat the original specification through the same store. The owner checks the binding and current records before continuing, including when the first head exists and the progress list is still empty. A different valid specification under that ID refuses before another head write. A pre-existing head with no import receipt supplies no evidence of which import created it.
 

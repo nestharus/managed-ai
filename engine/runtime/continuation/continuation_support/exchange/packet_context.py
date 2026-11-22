@@ -41,15 +41,21 @@ class PacketContext:
         if not (self.root / 'workspace.json').is_file():
             raise ValueError('initialize the external exchange first')
         binding = read_json(self.root / 'workspace.json')
-        if binding.get('version') == 2:
+        version = binding.get('version')
+        if type(version) is not int or version not in (1, 2):
+            raise ValueError('unsupported exchange workspace version')
+        if version == 1:
+            workspace = binding.get('workspace')
+            if not isinstance(workspace, str) or not Path(workspace).is_absolute():
+                raise ValueError('absolute workspace required for exchange version 1')
+            self.workspace = Path(workspace).resolve()
+        else:
             if binding.get('workspace_relative') != '../work':
                 raise ValueError('unsupported portable native workspace binding')
             descriptor = NativeLayout(self.root.parent).read_descriptor()
-            if descriptor.get('instance_id') != binding.get('instance_id'):
+            if not binding.get('instance_id') or descriptor.get('instance_id') != binding['instance_id']:
                 raise ValueError('portable workspace belongs to a different instance')
             self.workspace = (self.root / binding['workspace_relative']).resolve()
-        else:
-            self.workspace = Path(binding['workspace']).resolve()
         self.objects = ObjectStore(self.root / 'objects')
         self._authority = StandaloneAuthority() if authority is None else authority
         self.transport = PacketTransport(self.root / 'carrier', self.workspace, self._authority)
@@ -71,7 +77,7 @@ class PacketContext:
                 record = {'version': 1, 'workspace': str(workspace)}
             path = root / 'workspace.json'
             if path.exists():
-                if read_json(path) != record:
+                if encode(read_json(path)) != encode(record):
                     raise ValueError('exchange already belongs to another workspace')
             else:
                 if any(p.name != 'owner.lock' for p in root.iterdir()):

@@ -166,7 +166,7 @@ class RecordStore:
         previous = self.show(record['id'])
         self._validate_payload(record, previous)
         normalized = self._normalize_record(record, previous, retain_basis=False)
-        if normalized != {key: previous[key] for key in normalized}:
+        if encode(normalized) != encode({key: previous[key] for key in normalized}):
             raise ValueError('current import conflicts with existing record: ' + record['id'])
 
     def put(self, record: dict, expected: int) -> dict:

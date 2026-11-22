@@ -75,7 +75,7 @@ def configuration_descriptor(root, spec):
         current = _read_current_descriptor(root, spec['expected_sha256'], spec.get('account'))
         _apply_selection_changes(root, current, spec)
     selected = DomainSelection(root, current)
-    current['schema_bindings'] = {kind: sha(encode(schema)) for kind, schema in selected.schemas.items()}
+    current['schema_bindings'] = selected.schema_bindings
     current['selection_account'] = spec['account']
     return current
 

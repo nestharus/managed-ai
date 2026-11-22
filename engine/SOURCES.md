@@ -135,7 +135,7 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-0d8fd7e7ed54be901b4f"></a>
 ## INSTANCES.md
 
-[INSTANCES.md](INSTANCES.md) — 12165 bytes; SHA-256 `a71bb3ca1cdf2b4c999d58d1dacf1da8f995c6f8f57ee820f4bfd5565db229a2`.
+[INSTANCES.md](INSTANCES.md) — 13700 bytes; SHA-256 `0438d2f4ccfa7b42294ffa685b58a6a7a637a8688901d358749641d93915cedc`.
 
 <a id="source-73692ee93d0b96260539"></a>
 ## host/SIGNAL-FIELD.md
