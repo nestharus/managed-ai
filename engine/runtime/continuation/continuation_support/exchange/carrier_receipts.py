@@ -1,4 +1,4 @@
-"""Retain and recover carrier evidence, validate returns and account for terminal attempts."""
+"""Retain and recover carrier evidence and account for terminal attempts."""
 from __future__ import annotations
 
 import base64
@@ -120,28 +120,6 @@ def transport_outcome(exchange, directory: Path, request: dict[str, Any]) -> dic
 
 
 class TransportReceipts:
-    def validate_return(self, directory: Path, record: dict[str, Any]) -> None:
-        if (directory / 'transport-outcome.json').exists():
-            raise ValueError('packet contains both a return and a terminal outcome')
-        if record['return_sha256'] != sha(encode({k: v for k, v in record.items() if k != 'return_sha256'})):
-            raise ValueError('return record changed')
-        request = read_json(directory / 'request.json')
-        if record['request_sha256'] != sha(encode(request)):
-            raise ValueError('return belongs to another request')
-        if type(record['reply_bytes']) is not int or record['reply_bytes'] < 0:
-            raise ValueError('invalid reply length')
-        self.objects.read(record['reply_sha256'], expected_bytes=record['reply_bytes'])
-        for row in record['proposals']:
-            if type(row['bytes']) is not int or row['bytes'] < 0:
-                raise ValueError('invalid proposal length')
-            self.objects.read(row['sha256'], expected_bytes=row['bytes'])
-        view = transport_view(self, record['transport'])
-        if view is not None:
-            stdout = view['streams']['stdout']
-            if (stdout['sha256'] != record['reply_sha256']
-                    or stdout['byte_count'] != record['reply_bytes']):
-                raise ValueError('transport stdout does not match the reply')
-
     def recover_transport(self, packet: str) -> dict[str, Any] | None:
         """Recover the exact captured carrier view, using only retained evidence.
 

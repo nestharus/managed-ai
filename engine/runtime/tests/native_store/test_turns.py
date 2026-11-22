@@ -1,5 +1,8 @@
 """Reopen a native context after actual process exits at its two local owners."""
-from native_test_paths import APP, ENGINE, PRODUCT
+if __package__:
+    from .native_test_paths import APP, ENGINE, PRODUCT
+else:
+    from native_test_paths import APP, ENGINE, PRODUCT
 import json
 import os
 from pathlib import Path

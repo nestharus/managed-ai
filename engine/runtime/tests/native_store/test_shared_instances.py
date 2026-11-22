@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Bounded behavioral acceptance cases for one engine and independent stores."""
-from native_test_paths import APP, ENGINE, PRODUCT
+if __package__:
+    from .native_test_paths import APP, ENGINE, PRODUCT
+else:
+    from native_test_paths import APP, ENGINE, PRODUCT
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import base64

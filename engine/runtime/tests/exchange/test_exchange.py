@@ -62,6 +62,16 @@ class ExchangeTests(unittest.TestCase):
         self.assertEqual(json.loads(p.stdout)['consumer'], 'reader')
         self.assertTrue(all(x['unchanged'] for x in json.loads(p.stdout)['basis']))
 
+    def test_module_entry_reopens_external_context(self):
+        self.prepare()
+        result = subprocess.run(
+            [sys.executable, '-B', '-m', 'continuation_support.exchange',
+             '--root', str(self.root), 'inspect', 'one'],
+            cwd=ROOT / 'continuation', capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['consumer'], 'reader')
+
     def test_inspect_opens_existing_lock_read_only_after_append_denial(self):
         self.prepare()
         self.received()

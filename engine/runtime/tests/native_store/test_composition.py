@@ -2,7 +2,10 @@
 """Isolated substantive checks for the optional composition view."""
 from __future__ import annotations
 
-from native_test_paths import APP, ENGINE, PRODUCT
+if __package__:
+    from .native_test_paths import APP, ENGINE, PRODUCT
+else:
+    from native_test_paths import APP, ENGINE, PRODUCT
 import copy
 import hashlib
 import json

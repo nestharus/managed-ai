@@ -17,7 +17,7 @@ The package gate checks the exact catalogue member path, including the bundle's 
 Run the bounded native acceptance cases with:
 
 ```sh
-python3 -B engine/prototype/agent-system/check_shared_instances.py
+python3 -B engine/release/check_current.py
 ```
 
 Package the single current tree from its parent or another working directory:

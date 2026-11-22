@@ -3,7 +3,10 @@
 
 These are authored isolated fixtures, not an empirical completeness evaluation.
 """
-from native_test_paths import APP, ENGINE, PRODUCT
+if __package__:
+    from .native_test_paths import APP, ENGINE, PRODUCT
+else:
+    from native_test_paths import APP, ENGINE, PRODUCT
 from pathlib import Path
 import json
 import runpy

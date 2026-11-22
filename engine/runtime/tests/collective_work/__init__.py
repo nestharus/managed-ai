@@ -1,0 +1,1 @@
+"""Collective work tests."""

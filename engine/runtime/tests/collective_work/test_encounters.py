@@ -1,7 +1,9 @@
 """Exercise owner-nominated contact in the existing collective store."""
 from pathlib import Path
 import tempfile
+import sys
 import unittest
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'collective'))
 from collective import Collective, Refused, pin
 
 

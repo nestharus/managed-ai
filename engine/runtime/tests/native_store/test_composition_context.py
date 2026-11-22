@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Exercise composition exposure against actual custody/publication boundaries."""
-from native_test_paths import APP, ENGINE, PRODUCT
+if __package__:
+    from .native_test_paths import APP, ENGINE, PRODUCT
+else:
+    from native_test_paths import APP, ENGINE, PRODUCT
 from pathlib import Path
 import json
 import tempfile

@@ -2,8 +2,10 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import sys
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'collective'))
 from collective import Collective
 
 

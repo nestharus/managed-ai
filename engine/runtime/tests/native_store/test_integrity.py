@@ -1,5 +1,8 @@
 """End-to-end regressions from the external system-integrity review."""
-from native_test_paths import APP, ENGINE, PRODUCT
+if __package__:
+    from .native_test_paths import APP, ENGINE, PRODUCT
+else:
+    from native_test_paths import APP, ENGINE, PRODUCT
 import hashlib
 import importlib.util
 import os

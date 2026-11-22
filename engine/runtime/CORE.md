@@ -35,7 +35,7 @@ python3 -B collect_returns.py --help
 python3 -B -m unittest discover -s tests -v
 ```
 
-Tests use temporary external directories and actual local subprocesses. They do not invoke a model or establish semantic efficacy.
+The suite discovers the Collective, exchange, native store, return carrier and source library tests under `tests/`. Tests use temporary external directories and actual local subprocesses. They do not invoke a model or establish semantic efficacy.
 
 ## Install or build
 

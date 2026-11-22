@@ -16,7 +16,7 @@ class DistributionEntry(unittest.TestCase):
         self.product = self.base / 'renamed-product'
         self.component = self.product / 'collective'
         self.component.mkdir(parents=True)
-        source = Path(__file__).resolve().parent
+        source = Path(__file__).resolve().parents[2] / 'collective'
         shutil.copy2(source / 'collective.py', self.component / 'collective.py')
         shutil.copytree(source / 'collective_store', self.component / 'collective_store')
         shutil.copy2(source.parent / 'manage_collective.py', self.product / 'collective.py')

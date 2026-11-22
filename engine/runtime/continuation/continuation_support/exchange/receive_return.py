@@ -1,12 +1,12 @@
-"""Dispatch one packet and receive its attributed return and nominated files."""
+"""Dispatch a packet, receive its attributed return and validate the retained receipt."""
 from __future__ import annotations
 
 import os
 from pathlib import Path
 from typing import Any
 
-from ..storage import encode, now, read_bytes as _bytes, sha, write_json
-from .carrier_receipts import retain_transport, transport_outcome
+from ..storage import encode, now, read_bytes as _bytes, read_json, sha, write_json
+from .carrier_receipts import retain_transport, transport_outcome, transport_view
 from .proposal_files import _proposal_bytes, _proposal_directory, _run_nominations, proposal_mappings
 
 
@@ -104,3 +104,25 @@ class PacketReceiving:
         record['return_sha256'] = sha(encode(record))
         write_json(directory / 'return.json', record)
         return record
+
+    def validate_return(self, directory: Path, record: dict[str, Any]) -> None:
+        if (directory / 'transport-outcome.json').exists():
+            raise ValueError('packet contains both a return and a terminal outcome')
+        if record['return_sha256'] != sha(encode({k: v for k, v in record.items() if k != 'return_sha256'})):
+            raise ValueError('return record changed')
+        request = read_json(directory / 'request.json')
+        if record['request_sha256'] != sha(encode(request)):
+            raise ValueError('return belongs to another request')
+        if type(record['reply_bytes']) is not int or record['reply_bytes'] < 0:
+            raise ValueError('invalid reply length')
+        self.objects.read(record['reply_sha256'], expected_bytes=record['reply_bytes'])
+        for row in record['proposals']:
+            if type(row['bytes']) is not int or row['bytes'] < 0:
+                raise ValueError('invalid proposal length')
+            self.objects.read(row['sha256'], expected_bytes=row['bytes'])
+        view = transport_view(self, record['transport'])
+        if view is not None:
+            stdout = view['streams']['stdout']
+            if (stdout['sha256'] != record['reply_sha256']
+                    or stdout['byte_count'] != record['reply_bytes']):
+                raise ValueError('transport stdout does not match the reply')

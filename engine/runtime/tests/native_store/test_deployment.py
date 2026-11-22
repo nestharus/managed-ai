@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Deployment acceptance reuses the current shared-instance behavioral cases."""
-from native_test_paths import APP, ENGINE, PRODUCT
-import unittest
-from test_shared_instances import SharedInstances
-
 if __name__ == '__main__':
+    import unittest
+
+    from test_shared_instances import SharedInstances
+
     suite = unittest.TestSuite(SharedInstances(name) for name in (
         'test_01_shared_code_and_separate_actual_turns',
         'test_04_incompatible_selection_refuses_before_mutation',

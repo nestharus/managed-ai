@@ -145,7 +145,7 @@ Commands return JSON; refused operations exit 2. `publish.py audit` exits 1 when
 
 ```bash
 python3 -B knowledge.py verify
-python3 -B -m unittest discover -s tests -v
+python3 -B -m unittest discover -s ../tests/source_library -v
 ```
 
 The tests exercise package integrity, complete closure, stale pins, collisions, bounded selection, malformed imports and idempotent admission. A meaningful system check also lets a capable recipient discover, read and use an exported module for a declared contribution, then receives and interprets that return. Mechanical package checks cannot supply that latter evidence.

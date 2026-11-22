@@ -1,5 +1,8 @@
 """Test the native history boundary and historical diagnostics across restarts."""
-from native_test_paths import APP, ENGINE, PRODUCT
+if __package__:
+    from .native_test_paths import APP, ENGINE, PRODUCT
+else:
+    from native_test_paths import APP, ENGINE, PRODUCT
 import json
 from pathlib import Path
 import subprocess

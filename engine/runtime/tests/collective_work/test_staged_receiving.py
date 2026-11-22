@@ -1,8 +1,10 @@
 """Duties and the proposal they qualify have different lifetimes."""
 import tempfile
+import sys
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'collective'))
 from collective import Collective, pin
 
 

@@ -6,7 +6,10 @@ not measure semantic relevance, agent reading, useful uptake or broad coverage.
 """
 from __future__ import annotations
 
-from native_test_paths import APP, ENGINE, PRODUCT
+if __package__:
+    from .native_test_paths import APP, ENGINE, PRODUCT
+else:
+    from native_test_paths import APP, ENGINE, PRODUCT
 import hashlib
 import json
 from pathlib import Path

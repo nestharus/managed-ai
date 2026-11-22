@@ -1,6 +1,6 @@
 # Interfaces and embedding
 
-Install the supplied wheel or add `src/` to Python's import path. The standalone launchers perform that setup locally. Installed command names are `g60-collect`, `g60-work` and `g60-attend`.
+Install the supplied wheel or add `engine/runtime/continuation/` to Python's import path. The standalone launchers perform that setup locally. Installed command names are `g60-collect`, `g60-work` and `g60-attend`. With either import setup, `python3 -B -m continuation_support.exchange` runs the exchange CLI.
 
 The [architecture guide](architecture.md) explains the component relationships and the passage from a prepared context to a returned contribution, reuse and an explicit file effect.
 
