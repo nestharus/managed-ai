@@ -67,6 +67,7 @@ the original source coordinates, and every basis object's bytes against the
 selected cut. Reassemble a partitioned original in its declared order and
 verify its full digest. For a scope-specific signed evidence request, the
 research operation's `verify` command checks the original native receipt.
+A retained, hash-addressed JSON, JSON Lines or TSV gzip can be carried at its native basis path when the completed import, current head, retained object and decompressed text all verify. Other nested transports remain excluded.
 The scoped research guide describes native discovery and receipt-bound
 intake in `domains/research/operations/CURRENT-WORK.md`.
 
