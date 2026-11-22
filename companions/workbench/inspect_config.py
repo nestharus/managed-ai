@@ -215,8 +215,17 @@ class Inspection:
             for name in ("agent_runtime.py", "evidence_support.py"):
                 self.file("controller_dir/" + name, str(controller / name))
         if corpus is not None:
-            search = Path(__file__).resolve().parents[2] / "engine/prototype/knowledge-system/knowledge.py"
-            self.file("bundled_search_implementation", str(search), ordinary_link=True)
+            engine = Path(__file__).resolve().parents[2] / "engine"
+            legacy = engine / "prototype/knowledge-system/knowledge.py"
+            runtime = engine / "runtime/source_library/knowledge.py"
+            if legacy.exists() or legacy.is_symlink():
+                self.file("bundled_search_entrance", str(legacy), ordinary_link=True)
+            if runtime.exists() or runtime.is_symlink() or not legacy.exists():
+                self.file("bundled_search_implementation", str(runtime), ordinary_link=True)
+                for name in ("library_format.py", "lexical_search.py", "product_bundle.py"):
+                    dependency = runtime.with_name(name)
+                    if dependency.exists() or dependency.is_symlink():
+                        self.file("bundled_search_implementation/" + name, str(dependency), ordinary_link=True)
 
         source_state = None
         if "source_state_dir" in config or state is not None:

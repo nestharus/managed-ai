@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded discovery and complete-body product interchange for a capable host.
+"""Browse, verify and acquire published source libraries.
 
 The host interprets questions, composes modules and accepts effects. This local
 adapter acquires declared knowledge and imports data; it never executes a body.
@@ -8,61 +8,43 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-import hashlib
-import io
 import json
 import math
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
-import shutil
-import stat
 import sys
 import tempfile
-import unicodedata
 import zipfile
 
-try:
-    import sqlite3
-except ImportError:  # Default acquisition and BM25 do not require this optional build.
-    sqlite3 = None
-SQLITE_ERRORS = (sqlite3.Error,) if sqlite3 is not None else ()
-
 sys.dont_write_bytecode = True
-FORMAT = 'knowledge-library/1'
-SELECTION = 'knowledge-selection/1'
-MAX_MANIFEST = 4 * 1024 * 1024
-MAX_BODY = 2 * 1024 * 1024
-MAX_BODIES = 2048
-MAX_MODULES = 256
-MAX_PACKAGE = 32 * 1024 * 1024
-MAX_ARCHIVE = 40 * 1024 * 1024
-SHA = re.compile(r'[0-9a-f]{64}\Z')
-IDENT = re.compile(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,239}\Z')
-SEARCH_POLICY = 'knowledge-search/1'
+if not __package__:
+    # Retained scripts and bare imports must resolve siblings in this edition.
+    import hashlib
+    import importlib.util
+
+    owner = Path(__file__).resolve().parent
+    __package__ = '_g60_source_library_' + hashlib.sha256(os.fsencode(owner)).hexdigest()
+    if __package__ not in sys.modules:
+        spec = importlib.util.spec_from_file_location(__package__, owner / '__init__.py')
+        package = importlib.util.module_from_spec(spec)
+        sys.modules[__package__] = package
+        spec.loader.exec_module(package)
+
+from .library_format import (FORMAT, IDENT, MAX_ARCHIVE, MAX_BODIES, MAX_BODY,
+                             MAX_MANIFEST, MAX_MODULES, MAX_PACKAGE, SELECTION,
+                             SHA, check_manifest, decoded, digest, encoded,
+                             integer, need, ordinary, read_bytes, relative, sha,
+                             text, unique)
+from .lexical_search import FtsAnalyzer, SEARCH_POLICY, SQLITE_ERRORS, STOPWORDS, TOKEN, search_query, sqlite3
+from .product_bundle import (bundle_bytes, context, export, import_bundle as _import_bundle,
+                             inspect_bundle, product, resolve)
+
 INDEX_FORMAT = 'knowledge-search-index/1'
 MAX_INDEX = 40 * 1024 * 1024
 MAX_BATCH_QUERIES = 32
 MAX_BATCH_INPUT = 128 * 1024
 MAX_BATCH_RESULT = 8 * 1024 * 1024
-STOPWORDS = frozenset(('a an and are as at be been being but by can could did do does '
-    'for from had has have how i if in into is it its may me my of on or our should '
-    'so than that the their them then there these they this those to was we were '
-    'what when where which who why will with would you your').split())
-TOKEN = re.compile(r'\w+')
-
-
-def encoded(value):
-    return (json.dumps(value, sort_keys=True, ensure_ascii=False, indent=2) + '\n').encode()
-
-
-def digest(data):
-    return hashlib.sha256(data).hexdigest()
-
-
-def need(condition, message):
-    if not condition:
-        raise ValueError(message)
 
 
 def batch_json_size(value, maximum, extra_indent=0):
@@ -72,174 +54,6 @@ def batch_json_size(value, maximum, extra_indent=0):
         size += len(chunk.encode()) + extra_indent * chunk.count('\n')
         need(size <= maximum, 'discovery batch exceeds its JSON byte bound')
     return size
-
-
-def unique(pairs):
-    result = {}
-    for key, value in pairs:
-        need(key not in result, 'duplicate JSON key: ' + key)
-        result[key] = value
-    return result
-
-
-def decoded(data):
-    def refuse_constant(value):
-        raise ValueError('non-JSON numeric constant: ' + value)
-    return json.loads(data, object_pairs_hook=unique, parse_constant=refuse_constant)
-
-
-def ordinary(path):
-    path = Path(path).expanduser().absolute()
-    for part in (*reversed(path.parents), path):
-        need(not part.is_symlink(), 'symlink path is unsupported: ' + str(part))
-    return path
-
-
-def read_bytes(path, limit):
-    path = ordinary(path)
-    need(path.is_file() and stat.S_ISREG(path.stat().st_mode), 'ordinary file required: ' + str(path))
-    need(path.stat().st_size <= limit, 'file exceeds byte bound: ' + str(path))
-    with path.open('rb') as stream:
-        # A read(limit + 1) can allocate the entire allowed bound even for a
-        # small file. Bound each allocation while still detecting growth past
-        # the limit and consuming short reads until actual EOF.
-        chunks, remaining = [], limit + 1
-        while remaining:
-            chunk = stream.read(min(64 * 1024, remaining))
-            if not chunk: break
-            chunks.append(chunk); remaining -= len(chunk)
-        body = b''.join(chunks)
-    need(len(body) <= limit, 'file grew beyond byte bound: ' + str(path))
-    return body
-
-
-def relative(value):
-    need(isinstance(value, str) and IDENT.fullmatch(value), 'invalid relative identity')
-    need(not PurePosixPath(value).is_absolute() and all(x not in {'', '.', '..'} for x in value.split('/')), 'unsafe relative identity')
-    return value
-
-
-def text(value, label, maximum=16384):
-    need(isinstance(value, str) and value.strip() and len(value.encode()) <= maximum, 'invalid ' + label)
-    return value
-
-
-def sha(value):
-    need(isinstance(value, str) and SHA.fullmatch(value), 'invalid SHA-256')
-    return value
-
-
-def integer(value, label, low, high):
-    need(type(value) is int and low <= value <= high, 'invalid ' + label)
-    return value
-
-
-def check_manifest(value):
-    need(isinstance(value, dict) and set(value) == {'format', 'edition', 'bodies', 'modules', 'provenance'}, 'invalid library fields')
-    need(value['format'] == FORMAT, 'unsupported library format; explicit migration required')
-    text(value['edition'], 'edition', 512)
-    need(isinstance(value['provenance'], dict), 'provenance must be an object')
-    bodies, modules = value['bodies'], value['modules']
-    need(isinstance(bodies, list) and 1 <= len(bodies) <= MAX_BODIES, 'invalid body count')
-    need(isinstance(modules, list) and len(modules) <= MAX_MODULES, 'invalid module count')
-    by_id = {}
-    for row in bodies:
-        need(isinstance(row, dict) and set(row) == {'id', 'title', 'summary', 'object', 'sha256', 'bytes', 'source', 'link_base', 'references'}, 'invalid body fields')
-        ident = relative(row['id'])
-        need(ident not in by_id, 'duplicate body identity: ' + ident)
-        text(row['title'], 'title', 1024); text(row['summary'], 'summary', 4096)
-        h = sha(row['sha256'])
-        need(row['object'] == 'objects/' + h + '.txt', 'body object is not content-addressed')
-        integer(row['bytes'], 'body bytes', 0, MAX_BODY)
-        need(isinstance(row['source'], dict) and set(row['source']) == {'path', 'sha256'}, 'invalid body source')
-        relative(row['source']['path']); relative(row['link_base'])
-        need(row['source']['sha256'] == h, 'complete copied source must have the body digest')
-        need(isinstance(row['references'], list) and len(row['references']) <= 2048, 'invalid references')
-        for ref in row['references']:
-            need(isinstance(ref, dict) and set(ref) == {'target', 'anchor', 'kind'}, 'invalid reference')
-            text(ref['target'], 'reference target', 8192)
-            need(isinstance(ref['anchor'], str) and len(ref['anchor']) <= 1024, 'invalid reference anchor')
-            need(isinstance(ref['kind'], str) and ref['kind'] in {'source', 'url'}, 'invalid reference kind')
-        by_id[ident] = row
-    need(sum(row['bytes'] for row in bodies) <= MAX_PACKAGE, 'library exceeds declared total body byte bound')
-    module_ids = set()
-    for row in modules:
-        need(isinstance(row, dict) and set(row) == {'id', 'title', 'purpose', 'members', 'requires', 'parents', 'external_participation'}, 'invalid module fields')
-        ident = relative(row['id']); need(ident not in module_ids, 'duplicate module identity: ' + ident)
-        module_ids.add(ident)
-        text(row['title'], 'module title', 1024); text(row['purpose'], 'module purpose')
-        for key in ('members', 'requires'):
-            need(isinstance(row[key], list) and len(row[key]) <= MAX_BODIES, 'invalid module ' + key)
-            for member in row[key]: relative(member)
-            need(len(row[key]) == len(set(row[key])), 'duplicate module ' + key)
-        need(row['members'], 'a module needs at least one complete member body')
-        need(all(x in by_id for x in row['members']), 'module has an unavailable required body: ' + ident)
-        need(isinstance(row['parents'], list) and len(row['parents']) <= MAX_MODULES, 'invalid parents')
-        for parent in row['parents']:
-            need(isinstance(parent, dict) and set(parent) == {'id', 'role'}, 'invalid parent relation')
-            relative(parent['id']); text(parent['role'], 'parent role', 4096)
-        need(isinstance(row['external_participation'], list) and len(row['external_participation']) <= 256, 'invalid external participation')
-        for item in row['external_participation']: text(item, 'external participation')
-    for row in modules:
-        need(all(x in module_ids for x in row['requires']), 'module has an unavailable required module: ' + row['id'])
-    return value
-
-
-def search_query(query, backend):
-    """Interpret ordinary text as data; double-quoted spans are token phrases."""
-    need(backend in {'bm25', 'fts5', 'literal'}, 'unknown discovery backend')
-    if backend == 'literal':
-        return {'terms': list(dict.fromkeys(query.casefold().split())), 'phrases': [],
-                'ignored_terms': [], 'tokenization': 'casefolded whitespace substrings',
-                'language': 'no stemming or stopword policy'}
-    need(query.count('"') % 2 == 0, 'unclosed double quote in query')
-    terms, phrases, ignored = [], [], []
-    for match in re.finditer(r'"([^"]*)"|([^\s"]+)', query):
-        if match.group(1) is not None:
-            phrase = ' '.join(TOKEN.findall(match.group(1).casefold()))
-            if phrase: phrases.append(phrase)
-        else:
-            for term in TOKEN.findall(match.group(2).casefold()):
-                (ignored if term in STOPWORDS else terms).append(term)
-    terms, phrases, ignored = (list(dict.fromkeys(xs)) for xs in (terms, phrases, ignored))
-    need(len(terms) + len(phrases) <= 128, 'query exceeds 128 distinct terms and phrases')
-    return {'terms': terms, 'phrases': phrases, 'ignored_terms': ignored,
-            'tokenization': 'whole Unicode word tokens; quoted token phrases',
-            'language': 'English stopwords; English porter stemming' if backend == 'fts5'
-                        else 'English stopwords; no stemming'}
-
-
-class FtsAnalyzer:
-    """Shared lexical index schema, query and recorded identity for both storage modes."""
-    weights = (1, 5, 2, 1)
-    tokenizer = 'porter unicode61'
-    keys = {'docs': 'id', 'body_docs': 'rowid', 'module_docs': 'rowid'}
-
-    @classmethod
-    def identity(cls):
-        return {'tokenizer': cls.tokenizer, 'weights': list(cls.weights),
-                'detail': 'full', 'columnsize': 1, 'unicode_version': unicodedata.unidata_version,
-                'sqlite_version': sqlite3.sqlite_version, 'word_pattern': TOKEN.pattern,
-                'stopwords_sha256': digest(encoded(sorted(STOPWORDS)))}
-
-    @classmethod
-    def create(cls, db, table):
-        key = cls.keys[table]
-        content = ",content=''" if key == 'rowid' else ''
-        db.execute(f"CREATE VIRTUAL TABLE {table} USING fts5(id,title,summary,body{content},tokenize='{cls.tokenizer}')")
-
-    @classmethod
-    def search(cls, db, table, units):
-        key = cls.keys[table]
-        quoted = ['"' + term.replace('"', '""') + '"' for term in units]
-        condition = f' FROM {table} WHERE {table} MATCH ?'
-        weights = ','.join(str(w) for w in cls.weights)
-        rows = db.execute(f'SELECT {key},bm25({table},{weights})' + condition, (' OR '.join(quoted),))
-        hits = {ident: {'score': -score, 'matched_terms': []} for ident, score in rows}
-        for term, expression in zip(units, quoted):
-            for ident, in db.execute(f'SELECT {key}' + condition, (expression,)):
-                hits[ident]['matched_terms'].append(term)
-        return hits
 
 
 class SearchIndex:
@@ -640,172 +454,8 @@ class Library:
                 'scope': 'Ranked lexical candidates and authored module membership nominate routes within the examined scope. Scores are not relevance probabilities. Complete-body reading, semantic fit and effect authority remain separate.'}
 
 
-def resolve(libraries, selection, limit=MAX_PACKAGE):
-    integer(limit, 'selection body bytes', 1, MAX_PACKAGE)
-    need(isinstance(selection, dict) and set(selection) == {'format', 'purpose', 'bodies', 'modules'}, 'invalid selection fields')
-    need(selection['format'] == SELECTION, 'unsupported selection format')
-    text(selection['purpose'], 'receiving purpose')
-    by_hash = {lib.sha256: lib for lib in libraries}
-    chosen, chosen_modules, seen = {}, {}, set()
-    for key in ('bodies', 'modules'):
-        need(isinstance(selection[key], list) and len(selection[key]) <= MAX_BODIES, 'invalid selected ' + key)
-        for pin in selection[key]:
-            need(isinstance(pin, dict) and set(pin) == {'library_sha256', 'id', 'sha256'}, 'invalid source pin')
-            h = sha(pin['library_sha256']); sha(pin['sha256']); relative(pin['id'])
-            need(h in by_hash, 'selected library unavailable or changed')
-            lib = by_hash[h]
-            available = lib.bodies if key == 'bodies' else lib.modules
-            need(pin['id'] in available, 'selected identity unavailable')
-            expected = lib.pin(available[pin['id']], 'body' if key == 'bodies' else 'module')
-            need(pin == expected, 'selected source pin changed')
-            if key == 'bodies': chosen[(h, pin['id'])] = (lib, available[pin['id']])
-            else:
-                pending = [pin['id']]
-                while pending:
-                    ident = pending.pop()
-                    if (h, ident) in seen: continue
-                    seen.add((h, ident)); row = lib.modules[ident]
-                    chosen_modules[(h, ident)] = (lib, row)
-                    for body_id in row['members']: chosen[(h, body_id)] = (lib, lib.bodies[body_id])
-                    pending.extend(row['requires'])
-    need(chosen, 'selection needs at least one complete body')
-    total, data = 0, {}
-    for key, (lib, row) in chosen.items():
-        need(row['bytes'] <= limit - total, 'selected complete bodies exceed byte bound')
-        body = lib.body(row['id']); total += len(body); data[key] = body
-    return chosen, chosen_modules, data, total
-
-
-def context(libraries, selection, max_bytes=8 * 1024 * 1024):
-    integer(max_bytes, 'context bytes', 1, MAX_PACKAGE)
-    rows, modules, data, total = resolve(libraries, selection, max_bytes)
-    result = {'format': 'knowledge-context/1', 'purpose': selection['purpose'], 'selection': selection,
-            'body_bytes': total, 'modules': [{'pin': lib.pin(row, 'module'), 'entry': row} for lib, row in modules.values()],
-            'bodies': [{'pin': lib.pin(row), 'entry': row, 'text': data[key].decode()} for key, (lib, row) in rows.items()],
-            'scope': 'Complete selected source exposure. No inferred applicability, model invocation, publication or effect authority.'}
-    need(len(encoded(result)) <= MAX_PACKAGE + MAX_MANIFEST, 'rendered context exceeds total byte bound')
-    return result
-
-
-def product(libraries, selection, edition):
-    rows, modules, data, _ = resolve(libraries, selection)
-    body_map, module_map, objects = {}, {}, {}
-    for key, (_, row) in rows.items():
-        need(row['id'] not in body_map or body_map[row['id']] == row, 'body identity collision; select one version explicitly: ' + row['id'])
-        body_map[row['id']] = row; objects[row['object']] = data[key]
-    for _, row in modules.values():
-        need(row['id'] not in module_map or module_map[row['id']] == row, 'module identity collision; select one interpretation explicitly: ' + row['id'])
-        module_map[row['id']] = row
-    refs = [{'from': row['id'], **ref} for row in body_map.values() for ref in row['references']
-            if ref['kind'] == 'url' or ref['target'] not in body_map]
-    manifest = {'format': FORMAT, 'edition': text(edition, 'edition', 512),
-        'bodies': sorted(body_map.values(), key=lambda x: x['id']),
-        'modules': sorted(module_map.values(), key=lambda x: x['id']),
-        'provenance': {'selection': selection, 'source_libraries': sorted({lib.sha256 for lib, _ in rows.values()}),
-            'outside_reference_routes': refs,
-            'scope': 'The required bodies/modules declared by this selection are included. Other reference routes are disclosed, not asserted to be supplied prerequisites. Parent roles do not imply inherited permission or execution.'}}
-    check_manifest(manifest)
-    raw = encoded(manifest); need(len(raw) <= MAX_MANIFEST, 'product manifest exceeds byte bound')
-    return raw, objects
-
-
-def export(libraries, selection, edition, output):
-    raw, objects = product(libraries, selection, edition)
-    output = ordinary(output)
-    need(output.parent.is_dir(), 'existing output parent required')
-    need(not output.exists(), 'output exists; inspect it rather than overwrite')
-    with output.open('xb') as stream:
-        with zipfile.ZipFile(stream, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-            for name, data in sorted({'catalogue.json': raw, **objects}.items()):
-                info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0)); info.compress_type = zipfile.ZIP_DEFLATED
-                info.external_attr = 0o100644 << 16; archive.writestr(info, data)
-    return inspect_bundle(output)
-
-
-def bundle_bytes(path):
-    archive_bytes = read_bytes(path, MAX_ARCHIVE)
-    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
-        infos = archive.infolist(); names = [x.filename for x in infos]
-        need(len(names) == len(set(names)) and len(names) <= MAX_BODIES + 1, 'duplicate or excessive archive members')
-        need('catalogue.json' in names, 'bundle catalogue absent')
-        for info in infos:
-            need(not info.is_dir() and not info.flag_bits & 1, 'unsupported bundle member')
-            mode = info.external_attr >> 16
-            need(stat.S_IFMT(mode) in {0, stat.S_IFREG}, 'bundle member is not an ordinary file')
-            bound = MAX_MANIFEST if info.filename == 'catalogue.json' else MAX_BODY
-            need(info.file_size <= bound, 'bundle member exceeds byte bound')
-        need(sum(x.file_size for x in infos) <= MAX_PACKAGE + MAX_MANIFEST, 'bundle total exceeds byte bound')
-        def get(name, bound):
-            with archive.open(name) as stream: data = stream.read(bound + 1)
-            need(len(data) <= bound, 'bundle member grew beyond byte bound')
-            return data
-        raw = get('catalogue.json', MAX_MANIFEST); manifest = check_manifest(decoded(raw))
-        expected = {'catalogue.json'} | {row['object'] for row in manifest['bodies']}
-        need(set(names) == expected, 'bundle has missing or unselected members')
-        objects = {}
-        for row in manifest['bodies']:
-            if row['object'] not in objects: objects[row['object']] = get(row['object'], MAX_BODY)
-            data = objects[row['object']]
-            need(len(data) == row['bytes'] and digest(data) == row['sha256'], 'bundle body/source mismatch: ' + row['id'])
-            data.decode('utf-8')
-    return archive_bytes, raw, manifest, objects
-
-
-def inspect_bundle(path):
-    archive, raw, manifest, objects = bundle_bytes(path)
-    return {'format': 'knowledge-package-inspection/1', 'archive_sha256': digest(archive),
-        'archive_bytes': len(archive), 'library_sha256': digest(raw), 'edition': manifest['edition'],
-        'bodies': len(manifest['bodies']), 'modules': len(manifest['modules']),
-        'body_bytes': sum(len(x) for x in objects.values()), 'complete_declared_closure': True,
-        'provenance': manifest['provenance'], 'scope': 'Verified data package; no semantic acceptance or executable installation.'}
-
-
 def import_bundle(path, store):
-    archive, raw, manifest, objects = bundle_bytes(path)
-    store = ordinary(store); need(store.is_dir(), 'existing caller-owned store directory required')
-    ident = digest(archive); destination = store / ident
-    # POSIX file locking serializes short store commits; it is not a semantic supervisor.
-    need(os.name == 'posix', 'cooperative import commit requires POSIX')
-    import fcntl
-    lock = ordinary(store / 'import.lock')
-    flags = os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
-    fd = os.open(lock, flags, 0o600)
-    try:
-        need(stat.S_ISREG(os.fstat(fd).st_mode), 'import lock must be an ordinary file')
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        need(not destination.is_symlink(), 'import destination is a symlink')
-        if destination.exists():
-            existing = Library(destination); existing.verify()
-            need(existing.raw == raw, 'content-addressed import destination differs')
-            expected = {'catalogue.json'} | set(objects)
-            actual = {p.relative_to(destination).as_posix() for p in destination.rglob('*') if p.is_file() or p.is_symlink()}
-            need(actual == expected, 'existing import has unexpected members')
-            status = 'already-present-verified'
-        else:
-            temporary = Path(tempfile.mkdtemp(prefix='.' + ident + '.', dir=store))
-            try:
-                (temporary / 'objects').mkdir()
-                for name, body in {'catalogue.json': raw, **objects}.items():
-                    with (temporary / name).open('xb') as stream:
-                        stream.write(body); stream.flush(); os.fsync(stream.fileno())
-                for directory in (temporary / 'objects', temporary):
-                    directory_fd = os.open(directory, os.O_RDONLY)
-                    try: os.fsync(directory_fd)
-                    finally: os.close(directory_fd)
-                os.rename(temporary, destination)
-                directory_fd = os.open(store, os.O_RDONLY)
-                try: os.fsync(directory_fd)
-                finally: os.close(directory_fd)
-                status = 'imported-data'
-            except BaseException:
-                if temporary.exists(): shutil.rmtree(temporary)
-                raise
-    finally:
-        os.close(fd)
-    return {'format': 'knowledge-import/1', 'status': status, 'archive_sha256': ident,
-        'library_sha256': digest(raw), 'library': str(destination), 'edition': manifest['edition'],
-        'bodies': len(manifest['bodies']), 'modules': len(manifest['modules']),
-        'authority': 'Data only. No source owner, credentials, effect permission, current selection or executable capability is imported.'}
+    return _import_bundle(path, store, open_library=Library)
 
 
 def main():

@@ -15,9 +15,16 @@ files together:
 - `source_tools.py` and `model_bridges.py`;
 - `controller/agent_runtime.py` and `controller/evidence_support.py`.
 
-Python's standard library and SQLite FTS5 suffice. The system bundle supplies the trusted search implementation at
-`../../engine/prototype/knowledge-system/knowledge.py`; the selected domain supplies source data. A known source-body read
-does not require full search preparation.
+Python's standard library and SQLite FTS5 suffice. The system bundle supplies the
+trusted search implementation in `../../engine/runtime/source_library/`. The
+selected domain supplies source data. A known source-body read can run before
+full search preparation.
+
+The durable binding includes the effective search files and analyzer identity.
+An issued standalone predecessor binding can resume with its exact search bytes
+and original compatible inputs. A historical binding that identified only the
+forwarding script lacks the effective code evidence needed to resume. Inspection
+still exposes those retained observations.
 
 ## Start a construction
 

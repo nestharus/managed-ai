@@ -8,11 +8,120 @@ import unittest
 from unittest.mock import patch
 
 import peer_workbench
+import source_tools
 import resumable_workbench
-from source_tools import SourceService
+from source_tools import SearchImplementation, SourceService, identity
+
+
+def search_layout(root):
+    engine = Path(__file__).resolve().parents[2] / 'engine'
+    runtime = root / 'engine/runtime/source_library'
+    runtime.mkdir(parents=True)
+    for name in ('knowledge.py', 'library_format.py', 'lexical_search.py', 'product_bundle.py'):
+        (runtime / name).write_bytes((engine / 'runtime/source_library' / name).read_bytes())
+    relative = 'prototype/knowledge-system/knowledge.py'
+    legacy = root / 'engine' / relative
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes((engine / relative).read_bytes())
+    return runtime, legacy
+
+
+def change_query_parser(path):
+    previous = path.read_bytes()
+    changed = previous.replace(b'    need(backend in', b"    query = 'changed'\n    need(backend in", 1)
+    if changed == previous:
+        raise AssertionError('Fixture must change the selected parser')
+    path.write_bytes(changed)
+    return previous
 
 
 class SharedLayout(unittest.TestCase):
+    def test_forwarding_and_direct_layouts_bind_the_same_effective_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime, legacy = search_layout(root)
+            corpus = root / 'corpus'
+            corpus.mkdir()
+            (corpus / 'example.md').write_text('# Example lexical fixture\n')
+            tools = root / 'companions/workbench/source_tools.py'
+            tools.parent.mkdir(parents=True)
+            tools.write_bytes(Path(source_tools.__file__).read_bytes())
+
+            with patch.object(source_tools, '__file__', str(tools)):
+                with SourceService(corpus, root / 'forwarded') as forwarded:
+                    inventory = forwarded.inventory()
+                legacy.unlink()
+                with SourceService(corpus, root / 'direct') as direct:
+                    self.assertEqual(direct.inventory(), inventory)
+                    recorded = inventory['selector']['search_code']
+                    for name in ('knowledge.py', 'library_format.py', 'lexical_search.py', 'product_bundle.py'):
+                        data = (runtime / name).read_bytes()
+                        self.assertEqual(recorded[name], {'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
+                    self.assertEqual(inventory['selector']['acquired_search_sha256'], recorded['knowledge.py']['sha256'])
+                    self.assertEqual(inventory['selector_id'], identity(inventory['selector']))
+                    change_query_parser(runtime / 'lexical_search.py')
+                    self.assertEqual(direct.discover('the example')['query_interpretation']['terms'], ['example'])
+
+                with SourceService(corpus, root / 'direct') as changed:
+                    self.assertEqual(changed.discover('the example')['query_interpretation']['terms'], ['changed'])
+                    self.assertNotEqual(changed.selector_id, inventory['selector_id'])
+                    self.assertEqual(changed.selector['acquired_search_sha256'], recorded['knowledge.py']['sha256'])
+                    self.assertIn(inventory['receipt_id'], changed.receipts()['inventories'])
+
+    def test_unknown_delegation_and_oversized_dependency_are_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, legacy = search_layout(Path(directory))
+            legacy.write_bytes(legacy.read_bytes() + b'\n# Unrecognized delegation.\n')
+            with self.assertRaisesRegex(ValueError, 'supported entrance'):
+                SearchImplementation(legacy)
+            (runtime / 'lexical_search.py').write_bytes(b'#' * (256 * 1024 + 1))
+            with self.assertRaisesRegex(ValueError, 'exceeds byte bound'):
+                SearchImplementation(runtime / 'knowledge.py')
+
+    def test_resume_refuses_dependency_drift_before_dispatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime, legacy = search_layout(root)
+            corpus = root / 'corpus'
+            corpus.mkdir()
+            (corpus / 'example.md').write_text('# Example\n')
+            config = {"run_id": "source-drift", "task": "Prepare an inventory.",
+                      "corpus_root": str(corpus), "workspace": str(root / 'workspace'),
+                      "state_dir": str(root / 'state'), "max_steps": 2,
+                      "model": {"kind": "injected", "identity": "source-drift-fixture"}}
+            steps = []
+
+            def model(request):
+                steps.append(request['step'])
+                if request['step'] == 1:
+                    return {"kind": "tool", "name": "source_inventory", "arguments": {}}
+                return {"kind": "final", "answer": "Ready."}
+
+            with patch.object(resumable_workbench, 'SearchImplementation', side_effect=lambda: SearchImplementation(legacy)):
+                start = resumable_workbench.run_workbench(config, model=model)
+                self.assertEqual(start['status'], 'complete', start)
+                self.assertEqual(steps, [1, 2])
+                state = root / 'state'
+                receipts = state / 'source-service/receipts.json'
+                manifest_file = state / 'durable/manifest.json'
+                receipt_bytes, manifest_bytes = receipts.read_bytes(), manifest_file.read_bytes()
+                binding = json.loads(manifest_bytes)['contract']['binding']
+                self.assertEqual(set(binding['source_search_code']),
+                                 {str(runtime / name) for name in ('knowledge.py', 'library_format.py',
+                                 'lexical_search.py', 'product_bundle.py')})
+                self.assertIn('tokenizer', binding['source_search_analyzer'])
+                predecessor = change_query_parser(runtime / 'lexical_search.py')
+                drift = resumable_workbench.run_workbench(config, resume=True, model=model)
+                self.assertEqual(drift['status'], 'binding_mismatch', drift)
+                self.assertEqual(steps, [1, 2])
+                self.assertEqual(receipts.read_bytes(), receipt_bytes)
+                self.assertEqual(manifest_file.read_bytes(), manifest_bytes)
+
+                (runtime / 'lexical_search.py').write_bytes(predecessor)
+                resumed = resumable_workbench.run_workbench(config, resume=True, model=model)
+                self.assertEqual(resumed['status'], 'complete', resumed)
+                self.assertEqual(steps, [1, 2])
+
     def test_relocated_exposure_boundary_blocks_read_and_discovery(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

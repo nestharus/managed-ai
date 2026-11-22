@@ -2,7 +2,7 @@
 
 **Managed AI store.** From the package root, read a registered source with `python3 -B engine/knowledge.py --store STORE show SOURCE_ID --text`. Search the selected registrations with `python3 -B engine/knowledge.py --store STORE discover --query TEXT`. The [instance contract](../../INSTANCES.md) describes store and domain selection.
 
-In the v28 working source, publish the current knowledge catalogue into a new local destination with `python3 -B prototype/knowledge-system/publish.py --root . publish --edition local --output ../my-knowledge`. Then pass `--library ../my-knowledge` to the reader. That workflow requires the authoring inputs and an explicitly selected published library.
+Publish a catalogue from a complete authoring tree with [publish.py](publish.py) using `--root` to select the tree. Pass the published directory to `knowledge.py --library LIBRARY`. For code maintenance, [knowledge.py](knowledge.py) owns catalogue reading and discovery. [lexical_search.py](lexical_search.py) owns query interpretation and the FTS5 analyzer used by the workbench. [library_format.py](library_format.py) owns catalogue validation and bounded acquisition. [product_bundle.py](product_bundle.py) owns selected-body context and package interchange.
 
 An AI system joins a capable interpreter, useful information, operations and actual receiving work. A contribution can be an explanation, a design, a review, code or a new system. Predict what the contribution needs; discover or construct that understanding; project the effect forward and its necessary participation backward. Select a representation that supplies the needed distinctions, use it, and let the return change both the work and the means available for later work.
 

@@ -43,7 +43,7 @@ class WorkbenchBasisMismatch(ValueError):
 class Workbench:
     """Host-configured source service, workspace operations and receiving commands."""
 
-    def __init__(self, config, *, source_service=None, resume=False):
+    def __init__(self, config, *, source_service=None, resume=False, _source_search=None):
         self.config = json.loads(encode(config))
         self.workspace = Path(config["workspace"]).resolve()
         self.state = Path(config["state_dir"]).resolve()
@@ -69,7 +69,8 @@ class Workbench:
             if source_state.is_relative_to(self.workspace):
                 raise ValueError("source_state_dir must be outside model-editable workspace")
             source_service = SourceService(config["corpus_root"], source_state,
-                                           max_cache_bytes=config.get("max_cache_bytes", 65536))
+                                           max_cache_bytes=config.get("max_cache_bytes", 65536),
+                                           _search=_source_search)
         self.source_service = source_service
         self.source_receipt_ids = []
         self.selection_receipt_ids = []
@@ -205,7 +206,8 @@ class Workbench:
             if inventory_id not in ledger["inventories"]:
                 raise ValueError("Recovered source inventory is unavailable")
             inventory = ledger["inventories"][inventory_id]
-            if inventory.get("selector_id") != self.source_service.selector_id:
+            if (inventory.get("selector_id") != self.source_service.selector_id
+                    and not self.source_service.matches_predecessor_inventory(inventory)):
                 raise WorkbenchBasisMismatch("Recovered inventory uses another source selector")
             self.source_service.members = json.loads(encode(inventory["members"]))
         else:

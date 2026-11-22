@@ -7,16 +7,18 @@ Text is returned as evidence, never executed. No semantic acceptance is inferred
 """
 from __future__ import annotations
 
+import builtins
 from collections import OrderedDict
 from copy import deepcopy
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
 import sqlite3
 import stat
+import sys
 import time
+from types import ModuleType
 
 
 VERSION = 'g60-source-service/1'
@@ -26,6 +28,16 @@ DEFAULT_EXCLUDED = {
     'coverage/recent-historical-material.md': 'Locator catalogues are not locally retained argument bodies.',
 }
 PROTECTED_PREFIXES = ('evidence/fleet/D12/', 'instruments/incident-corpus/D12/')
+
+# The issued compatibility entrance delegates to the runtime reader. Its bytes
+# authenticate the route only; effective identity comes from the selected code.
+_FORWARDER_SHA256 = '69bdf7733049a04a2dc7a19230c1d8f095bef7f5dc016f61fe4f2a61aee55174'
+PREDECESSOR_SEARCH_SHA256 = 'fac79f192b0029667300400f659564591a2c996abf1e450b70cdb76a67874725'
+PREDECESSOR_SOURCE_TOOLS_SHA256 = 'd8036644bee5a11ce7f5a4f0fa6ff0dbced1b23099801f2f58231aef5fb52016'
+_LEGACY_ENTRY = Path('prototype/knowledge-system/knowledge.py')
+_RUNTIME_ENTRY = Path('runtime/source_library/knowledge.py')
+_MAX_SEARCH_FILES = 8
+_MAX_SEARCH_FILE_BYTES = 256 * 1024
 
 
 def encoded(value):
@@ -54,10 +66,98 @@ def relative(value):
     return value
 
 
+def _search_bytes(path):
+    path = Path(os.path.abspath(path))
+    need(not any(part.is_symlink() for part in (path, *path.parents)),
+         'Search code cannot pass through a symlink: ' + str(path))
+    need(path.is_file(), 'Required search code is not an ordinary file: ' + str(path))
+    flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    flags |= getattr(os, 'O_NONBLOCK', 0)
+    with os.fdopen(os.open(path, flags), 'rb') as stream:
+        metadata = os.fstat(stream.fileno())
+        need(stat.S_ISREG(metadata.st_mode), 'Required search code is not an ordinary file: ' + str(path))
+        need(metadata.st_size <= _MAX_SEARCH_FILE_BYTES, 'Search code exceeds byte bound: ' + str(path))
+        data = stream.read(_MAX_SEARCH_FILE_BYTES + 1)
+    need(len(data) <= _MAX_SEARCH_FILE_BYTES, 'Search code exceeds byte bound: ' + str(path))
+    return data
+
+
+class SearchImplementation:
+    """Select and execute one bounded snapshot of the trusted lexical code."""
+
+    def __init__(self, module_path=None):
+        self.legacy_entry = Path(__file__).resolve().parents[2] / 'engine' / _LEGACY_ENTRY
+        if module_path is None:
+            module_path = self.legacy_entry
+            if not module_path.exists() and not module_path.is_symlink():
+                module_path = module_path.parents[2] / _RUNTIME_ENTRY
+        entry = Path(os.path.abspath(module_path))
+        data = _search_bytes(entry)
+        if digest(data.replace(b'\r\n', b'\n')) == _FORWARDER_SHA256:
+            need(entry.parts[-len(_LEGACY_ENTRY.parts):] == _LEGACY_ENTRY.parts,
+                 'The retained search entrance requires the prototype layout.')
+            entry = entry.parents[2] / _RUNTIME_ENTRY
+            data = _search_bytes(entry)
+        self.modules = {}
+        self.pins = {}
+        self.entry = entry
+        self._sealed = False
+        self.module = self._load(entry, data)
+        self._sealed = True
+
+        analyzer = self.module.FtsAnalyzer
+        for implementation in (self.module.search_query, analyzer.identity, analyzer.create, analyzer.search):
+            code = getattr(implementation, '__code__', None)
+            need(code is not None and code.co_filename in self.pins,
+                 'Selected search callable is outside the verified source files.')
+        self.analyzer = analyzer.identity()
+
+    def _load(self, path, data=None):
+        if path in self.modules:
+            return self.modules[path]
+        need(not self._sealed, 'Search cannot load a new code dependency after binding: ' + path.name)
+        need(len(self.modules) < _MAX_SEARCH_FILES, 'Search code exceeds dependency count bound.')
+        if data is None:
+            data = _search_bytes(path)
+        module = ModuleType('_g60_verified_source_library.' + path.stem)
+        module.__file__ = str(path)
+        module.__package__ = '_g60_verified_source_library'
+        module.__dict__['__builtins__'] = {**vars(builtins), '__import__': self._import}
+        self.modules[path] = module
+        self.pins[str(path)] = {'bytes': len(data), 'sha256': digest(data)}
+        try:
+            exec(compile(data, str(path), 'exec', dont_inherit=True), module.__dict__)
+        except SyntaxError as exc:
+            raise ValueError('Invalid lexical source: ' + str(exc)) from exc
+        return module
+
+    def _import(self, name, globals=None, locals=None, fromlist=(), level=0):
+        if level:
+            need(level == 1 and name.isidentifier() and fromlist,
+                 'Search can bind only explicit sibling source imports: ' + name)
+            return self._load(self.entry.with_name(name + '.py'))
+        root = name.split('.', 1)[0]
+        need(root not in {'runpy', 'importlib'},
+             'Search code must use a supported entrance and explicit sibling imports: ' + name)
+        need(root in sys.stdlib_module_names,
+             'Search dependency must be standard library code or an explicit sibling import: ' + name)
+        return builtins.__import__(name, globals, locals, fromlist, level)
+
+    @property
+    def entry_pin(self):
+        return self.pins[str(self.entry)]
+
+    @property
+    def is_predecessor(self):
+        runtime_entry = self.legacy_entry.parents[2] / _RUNTIME_ENTRY
+        return (self.entry in (self.legacy_entry, runtime_entry) and len(self.pins) == 1
+                and self.entry_pin['sha256'] == PREDECESSOR_SEARCH_SHA256)
+
+
 class SourceService:
     """Scoped source service; body cache bounds do not bound the derived index/RSS."""
 
-    def __init__(self, corpus_root, state_dir, max_cache_bytes=65536, *, search_module_path=None):
+    def __init__(self, corpus_root, state_dir, max_cache_bytes=65536, *, search_module_path=None, _search=None):
         self.root = Path(corpus_root).absolute()
         need(self.root.is_dir() and not self.root.is_symlink(), 'Ordinary corpus directory required.')
         self.state_dir = Path(state_dir).absolute()
@@ -88,20 +188,17 @@ class SourceService:
                     need(identity(record) == ident, 'Receipt identity mismatch: ' + ident)
         else:
             self.ledger = {'schema': VERSION, 'inventories': {}, 'selections': {}, 'sources': {}, 'uses': {}}
-        module_path = (Path(search_module_path) if search_module_path else
-                       Path(__file__).resolve().parents[2] / 'engine/prototype/knowledge-system/knowledge.py')
-        need(module_path.is_file() and not module_path.is_symlink(), 'Select the bundled trusted knowledge.py search implementation.')
-        module_bytes = module_path.read_bytes()
-        spec = importlib.util.spec_from_file_location('_g60_acquired_knowledge_' + digest(module_bytes)[:16], module_path)
-        self.search = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.search)
+        implementation = _search or SearchImplementation(search_module_path)
+        self.search = implementation.module
+        self._predecessor_selector = None
         self.selector = {
             'service': VERSION,
             'implementation_sha256': digest(Path(__file__).read_bytes()),
-            'acquired_search_sha256': digest(module_bytes),
+            'acquired_search_sha256': implementation.entry_pin['sha256'],
+            'search_code': {Path(path).name: pin for path, pin in implementation.pins.items()},
             'backend': 'native FtsAnalyzer, contentless body_docs',
             'query_parser': 'native search_query(query, fts5)',
-            'analyzer': self.search.FtsAnalyzer.identity(),
+            'analyzer': implementation.analyzer,
             'eligible_extension': '.md (case insensitive)',
             'default_excluded': DEFAULT_EXCLUDED,
             'protected_prefixes': list(PROTECTED_PREFIXES),
@@ -110,6 +207,18 @@ class SourceService:
             'source_model': 'Serialized cooperative source changes; complete explicit refresh observations.',
         }
         self.selector_id = identity(self.selector)
+
+    def admit_predecessor_inventory(self, implementation):
+        """Recognize inventories owned by an already verified predecessor occurrence."""
+        need(implementation.is_predecessor, 'An exact standalone predecessor is required.')
+        selector = dict(self.selector, implementation_sha256=PREDECESSOR_SOURCE_TOOLS_SHA256)
+        del selector['search_code']
+        self._predecessor_selector = selector
+
+    def matches_predecessor_inventory(self, inventory):
+        selector = self._predecessor_selector
+        return (selector is not None and inventory.get('selector') == selector
+                and inventory.get('selector_id') == identity(selector))
 
     def _ordinary(self, relative_path):
         path = self.root / relative(relative_path)

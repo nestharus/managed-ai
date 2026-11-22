@@ -19,10 +19,22 @@ from durable_agent import (inspect_durable_state, resolve_durable_operation,
                            run_durable_agent)
 from model_bridges import (CommandModel, MailboxModel, atomic_json, encode,
                            write_mailbox_response)
+from source_tools import PREDECESSOR_SOURCE_TOOLS_SHA256, SearchImplementation
 from workbench_agent import Workbench, WorkbenchBasisMismatch, pin
 
 
 VERSION = "g60-resumable-workbench/1"
+
+# Exact adapter editions that wrote the standalone predecessor journals. The
+# durable owner still validates the retained contract and operation records.
+_PREDECESSOR_ADAPTER = {
+    "resumable_workbench.py": {"bytes": 12751,
+        "sha256": "7a4a388e861630f50b8a9806db239028730592d07dffb4f59662136393333b13"},
+    "workbench_agent.py": {"bytes": 26657,
+        "sha256": "e9ceeeda150e5dc85d29964f3ed2d971e3869c2b07e07d85e40e022bea5c0ab0"},
+    "source_tools.py": {"bytes": 19137, "sha256": PREDECESSOR_SOURCE_TOOLS_SHA256},
+}
+
 
 
 def _config(config):
@@ -69,12 +81,10 @@ def _command_code(command, cwd=None):
     return _pins(paths)
 
 
-def _binding(config, injected_model):
+def _binding(config, injected_model, search):
     base = Path(__file__).parent
     code = _pins(base / name for name in (
         "resumable_workbench.py", "workbench_agent.py", "source_tools.py", "model_bridges.py"))
-    search = base.resolve().parents[1] / "engine/prototype/knowledge-system/knowledge.py"
-    source_code = _pins([search])
     model = config["model"]
     model_inputs = _pins(model.get("inputs", []))
     model_code = {}
@@ -97,9 +107,29 @@ def _binding(config, injected_model):
         receiver_inputs[name] = _pins(receiver.get("inputs", []))
         receiver_code[name] = _command_code(receiver["argv"], config["workspace"])
     return {"schema": VERSION, "configuration": config, "adapter_code": code,
-            "source_search_code": source_code, "model_code": model_code,
+            "source_search_code": search.pins, "source_search_analyzer": search.analyzer,
+            "model_code": model_code,
             "model_inputs": model_inputs, "receiver_inputs": receiver_inputs,
             "receiver_code": receiver_code}
+
+
+def _compatible_predecessor_binding(state, binding, search):
+    if not search.is_predecessor:
+        return None
+    previous = dict(binding)
+    del previous["source_search_analyzer"]
+    # The issued journal named the predecessor's standalone entrance. That
+    # file can now be reached at the runtime path through the known forwarder.
+    previous["source_search_code"] = {str(search.legacy_entry): search.entry_pin}
+    previous["adapter_code"] = {
+        path: _PREDECESSOR_ADAPTER.get(Path(path).name, pin)
+        for path, pin in binding["adapter_code"].items()
+    }
+    retained = inspect_durable_state(state / "durable")
+    manifest = retained.get("manifest", {})
+    if manifest.get("contract", {}).get("binding") == previous:
+        return previous
+    return None
 
 
 def inspect_workbench(state_dir):
@@ -146,8 +176,18 @@ def run_workbench(config, *, resume=False, model=None, after_record=None):
             return _failure("state_error", "Resume requires an existing durable occurrence", state)
         if not resume and (state / "entry-basis.json").exists():
             return _failure("state_error", "Workbench occurrence already exists; use resume", state)
-        binding = _binding(configured, model)
-        workbench = Workbench(configured, resume=resume)
+        try:
+            search = SearchImplementation()
+        except (OSError, ValueError, TypeError, AttributeError, ImportError) as exc:
+            if resume:
+                return _failure("binding_mismatch", str(exc), state)
+            return _failure("state_error", str(exc), state)
+        binding = _binding(configured, model, search)
+        previous = _compatible_predecessor_binding(state, binding, search) if resume else None
+        workbench = Workbench(configured, resume=resume, _source_search=search)
+        if previous is not None:
+            binding = previous
+            workbench.source_service.admit_predecessor_inventory(search)
         transport = model
         transport_kind = configured["model"]["kind"]
         if transport is None:
