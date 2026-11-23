@@ -5,7 +5,29 @@ from pathlib import Path
 
 from continuation_support.ownership import packet_id
 from continuation_support.storage import atomic_bytes, encode, sha
+from native_runtime.identities import identity, record_identity, require, strict_json
 from native_runtime.selection.domain_selection import load_json
+
+
+def unpack_transfer(bundle, records):
+    """Verify a supplied native export without receiving or retaining any material."""
+    require(bundle.get('format') == 'managed-ai-transfer/1', 'unsupported source transfer')
+    require(isinstance(bundle.get('body_base64'), str), 'expected encoded transfer body')
+    raw = base64.b64decode(bundle['body_base64'], validate=True)
+    require(sha(raw) == bundle.get('object_sha256') and type(bundle.get('bytes')) is int and
+            len(raw) == bundle['bytes'], 'transferred source bytes differ')
+    source = bundle.get('source')
+    require(isinstance(source, dict) and {'instance_id', 'record_id', 'revision', 'sha256'} <= source.keys(),
+            'incomplete transfer source identity')
+    require(isinstance(source['instance_id'], str) and source['instance_id'].strip(),
+            'source transfer requires a stable declared source instance')
+    wanted = identity(dict(id=source['record_id'], revision=source['revision'], sha256=source['sha256']))
+    record = strict_json(raw)
+    require(record.get('format') == records.format and record.get('sha256') ==
+            sha(encode({k: v for k, v in record.items() if k != 'sha256'})), 'transferred record identity differs')
+    require({'id', 'revision', 'sha256'} <= record.keys() and identity(record_identity(record)) == wanted,
+            'source pin differs from transferred record')
+    return source, record, raw
 
 
 def export(system, ident, output):
@@ -31,20 +53,9 @@ def receive(system, path, ident, account, expected):
     if not isinstance(account, str) or not account.strip():
         raise ValueError('source observation requires a receiving account')
     bundle = load_json(path)
-    if bundle.get('format') != 'managed-ai-transfer/1':
-        raise ValueError('unsupported source transfer')
-    raw = base64.b64decode(bundle['body_base64'], validate=True)
-    if sha(raw) != bundle['object_sha256'] or len(raw) != bundle['bytes']:
-        raise ValueError('transferred source bytes differ')
-    record = json.loads(raw)
-    if record.get('format') != system.record_store.format or record.get('sha256') != sha(encode({k: v for k, v in record.items() if k != 'sha256'})):
-        raise ValueError('transferred record identity differs')
-    source = bundle['source']
-    if not source.get('instance_id') or source['instance_id'] == system.instance_id:
+    source, _, raw = unpack_transfer(bundle, system.record_store)
+    if source['instance_id'] == system.instance_id:
         raise ValueError('observation requires a distinct declared source instance')
-    if {k: source[k] for k in ('record_id', 'revision', 'sha256')} != {
-            'record_id': record['id'], 'revision': record['revision'], 'sha256': record['sha256']}:
-        raise ValueError('source pin differs from transferred record')
     bundle_sha = sha(encode(bundle))
     old = system.record_store.show(ident) if system.record_store.path(ident).exists() else None
     if old and old['kind'] == 'source-observation' and old['content'].get('transfer_sha256') == bundle_sha:

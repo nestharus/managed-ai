@@ -7,14 +7,14 @@
       "sha256": "16007090e48bdfcbd03c508e7031d93666d9a3af9bf191df267c43221641c40e"
     },
     "CLI-FIELD-REFERENCE.md": {
-      "bytes": 20209,
+      "bytes": 22868,
       "mode": 420,
-      "sha256": "accce14d166fd7f8addcf6a4d85ab8c8f1dfba9274cda435819e2a0b0e69e8cb"
+      "sha256": "df26241b16c102ca9a4b6edfaaead25043f6adaa2421fc1e06618a852dd185c2"
     },
     "CURRENT-RELEASE.json": {
       "bytes": 559,
       "mode": 420,
-      "sha256": "fcc652c31a2c52b83e478ffad09885e7c48f88c014c85fa0e9cec292c39ba515"
+      "sha256": "6921f8595efa6c727b33f6df19962d21fb6744f836272d26e81d22dbe24aba2d"
     },
     "INSTANCES.md": {
       "bytes": 14598,
@@ -34,7 +34,7 @@
     "SOURCES.md": {
       "bytes": 31678,
       "mode": 420,
-      "sha256": "185707ad214fa130c5d1c767cf5196bb1c213303c80b5c01ac9f63a97c27053e"
+      "sha256": "44f84ba7749ba147bc6027082dd77c42e01c05dae4eb09835616ae454d635ff8"
     },
     "companion_representation/CONTRACT.md": {
       "bytes": 5692,
@@ -117,9 +117,9 @@
       "sha256": "2b7373ebd791979e5aa795d80ad35e93d0541e09f09e69fec96ce03004b5a5d0"
     },
     "host/continuing_work/capture_native.py": {
-      "bytes": 7299,
+      "bytes": 7431,
       "mode": 420,
-      "sha256": "24451333f50a0f03c3e9852d007136ecc41aa07dfe6aa467e103df1de5f5baf1"
+      "sha256": "09d8b1b5335cfc0c9f3a5d3a326706037ef07914614695430d3f64c01f75cce8"
     },
     "host/continuing_work/continuing_work.py": {
       "bytes": 44906,
@@ -244,7 +244,7 @@
     "release/current_sources.json": {
       "bytes": 14371,
       "mode": 420,
-      "sha256": "6b8fe81133e3259cc5c86c5ea4a4ca226787abd2023b40ff420ba1fe14f0fc70"
+      "sha256": "beee0354bf6db5b30ac2dd4339c648455e5a68893d21599f00261240c8bb3b00"
     },
     "release/navigation.json": {
       "bytes": 25601,
@@ -462,9 +462,9 @@
       "sha256": "346c2dd98b076735e9700e8f8817fbb9709330d399862fdf43143089c01df761"
     },
     "runtime/deployment/controller.py": {
-      "bytes": 20782,
+      "bytes": 21499,
       "mode": 420,
-      "sha256": "95c0c3bf687d4c8a7df31a8ab9afc18bbe0c1ed4614fda08b557673dbcdba96c"
+      "sha256": "5f70c52f4e453a5b39b04fdbf8ad35398bf846b57504b05609411ba181eaf209"
     },
     "runtime/docs/api.md": {
       "bytes": 11132,
@@ -534,7 +534,7 @@
     "runtime/native/catalogue.json": {
       "bytes": 42452,
       "mode": 420,
-      "sha256": "d9dd0fb03b52ff299d8743b74173d2ee34e161217ed8392b5f7927523999f10f"
+      "sha256": "5d3bfe7e4fcad17c00177a61dc8a28a8b74d24ba48724c95198b3d80a19f01ea"
     },
     "runtime/native/composition.py": {
       "bytes": 24820,
@@ -557,9 +557,9 @@
       "sha256": "8511412735b0fb6d43214141665401db74a21cf084f931658f6c8f3139792d7d"
     },
     "runtime/native/composition_revision.py": {
-      "bytes": 15583,
+      "bytes": 27350,
       "mode": 420,
-      "sha256": "064d5fb298db53e9141f12d5e251d4ae2b463133a63a72ccdd6cdb0da6a02e32"
+      "sha256": "343fa16ecc78a87b3b21f40961e7681d785f4202bb931dbbb6bc050c3b5c1bdd"
     },
     "runtime/native/context_discovery.py": {
       "bytes": 31823,
@@ -597,9 +597,9 @@
       "sha256": "557ec2decb7cdf2831c45525c9d7d8f62dc17378b4ae8b95be9194f02e9783ab"
     },
     "runtime/native/native_runtime/command_parser.py": {
-      "bytes": 9797,
+      "bytes": 9924,
       "mode": 420,
-      "sha256": "0077c4568ded314f41c116d99d3c7eb611d7a7c10df89a2bdefd20073ebbe0ef"
+      "sha256": "facee232c6264f5c80ced131a75a2ca87fabd427c8b1757d6c67f1416bbe6493"
     },
     "runtime/native/native_runtime/context_explanation.py": {
       "bytes": 145,
@@ -632,9 +632,9 @@
       "sha256": "b09910ffe8e012b7c01e4c2ae967f6aaa35a41095248ec42850780c4110a7bd6"
     },
     "runtime/native/native_runtime/inputs.py": {
-      "bytes": 3797,
+      "bytes": 4322,
       "mode": 420,
-      "sha256": "0e46c8c8835fb4c74acf38750e8872c32e8b3936d3139f1094b05fad9bceeff7"
+      "sha256": "8558b23acb9f4e920efeb34dbd25eac9795ad10996262931ed544cefcae08e91"
     },
     "runtime/native/native_runtime/inquiry.py": {
       "bytes": 5903,
@@ -657,14 +657,14 @@
       "sha256": "062290aef8f5a0cbdd9979194da14fa48fc018bec4bfe28974110c5e8406bdfa"
     },
     "runtime/native/native_runtime/record_transfer.py": {
-      "bytes": 4386,
+      "bytes": 5102,
       "mode": 420,
-      "sha256": "1b578e8ef4e9d60a3a0b88f14136e9117fdd50a16395aa24b25467a6fc80c45d"
+      "sha256": "eaf6b5dc47d16573002ba27a205c0ce4e5b9a0f76e6769d1061de1cc738e4fd1"
     },
     "runtime/native/native_runtime/records.py": {
-      "bytes": 18133,
+      "bytes": 18803,
       "mode": 420,
-      "sha256": "6520b5b66da2ed82c3866718aeff4573b49acd8c0bdb183fd384d5277b4dd18b"
+      "sha256": "ba6fadea5d522dc614fbbcdaaef76c69216fd236ec212a4d14a8c6ce3bb34fee"
     },
     "runtime/native/native_runtime/scope.py": {
       "bytes": 229,
@@ -682,9 +682,9 @@
       "sha256": "0ffcd805b5bdb7c0c82e31630c5b885e70e2eff18ea969c82a2bfa42bc86b25e"
     },
     "runtime/native/native_runtime/selection/installed_catalogue.py": {
-      "bytes": 9607,
+      "bytes": 9624,
       "mode": 420,
-      "sha256": "ce98635b7748b8c0d64109ca75534c0c7419559be09bf505ea042426c9716e9c"
+      "sha256": "49cf712e537f7d92c0c8edf71b4fa43406fd255cb87b58a894943ba02fb30de5"
     },
     "runtime/native/native_runtime/store_configuration.py": {
       "bytes": 4985,
@@ -712,9 +712,9 @@
       "sha256": "34dc665e6b03c1fbcf27e2caee46b44b6db532b758d3454f40af607e11585da9"
     },
     "runtime/native/native_runtime/turn_context/preparation_journal.py": {
-      "bytes": 5252,
+      "bytes": 5276,
       "mode": 420,
-      "sha256": "77970188884c58bc84b33acd052a4696c94231708cbc32134da4cf8be8e22345"
+      "sha256": "4a28593f0f6c329fe7f4da9eec5e0d2b998d62badd96fb491d974e39da45f1dc"
     },
     "runtime/native/native_runtime/turn_context/record_scope.py": {
       "bytes": 5518,
@@ -1432,9 +1432,9 @@
       "sha256": "717624b235e3db7ec408f7994bd534a0cbb3c3ca63ead88eb66158bbda2d1e4c"
     },
     "runtime/tests/native_store/test_system.py": {
-      "bytes": 28396,
+      "bytes": 42331,
       "mode": 420,
-      "sha256": "5ec02567c23b5132d12c62dca1be8903964794e918690e6957038c6720dc27e7"
+      "sha256": "66bf288559c92088014f97a9b95a5644f8f727cf8f474d6ce79709a448b33166"
     },
     "runtime/tests/native_store/test_turns.py": {
       "bytes": 8037,

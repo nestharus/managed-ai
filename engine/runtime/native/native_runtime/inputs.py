@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import json
-import stat
+import os
 from pathlib import Path
+from stat import S_ISREG
 from typing import Any
 
 from continuation_support.storage import atomic_bytes
@@ -50,18 +51,26 @@ def _ordinary_file_size(path: Path, role: str) -> int:
     except (FileNotFoundError, NotADirectoryError):
         pass
     else:
-        if stat.S_ISREG(info.st_mode):
+        if S_ISREG(info.st_mode):
             return info.st_size
     raise ValueError(f'ordinary {role} file required: {path}')
 
 
-def bounded_source_bytes(path: Path, limit: int) -> bytes:
-    """Read an ordinary source with bounded chunks and one growth sentinel."""
+def _check_limit(limit: int) -> None:
     if type(limit) is not int or limit < 0:
         raise ValueError('source byte limit must be a nonnegative integer')
-    if _ordinary_file_size(path, 'source') > limit:
+
+
+def _open_source(name, flags):
+    return os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY)
+
+
+def _bounded_bytes(path: Path, limit: int, size: int) -> bytes:
+    if size > limit:
         raise ValueError(f'source exceeds byte bound: {path}')
-    with path.open('rb') as stream:
+    with open(path, 'rb', opener=_open_source) as stream:
+        if not S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError(f'ordinary source file required: {path}')
         chunks, remaining = [], limit + 1
         while remaining:
             chunk = stream.read(min(64 * 1024, remaining))
@@ -75,9 +84,19 @@ def bounded_source_bytes(path: Path, limit: int) -> bytes:
     return data
 
 
+def bounded_source_bytes(path: Path, limit: int) -> bytes:
+    """Read an ordinary source with bounded chunks and one growth sentinel."""
+    _check_limit(limit)
+    return _bounded_bytes(path, limit, _ordinary_file_size(path, 'source'))
+
+
 def read_input(path: Path, *, byte_limit: int | None = None) -> tuple[dict, bytes]:
-    _ordinary_file_size(path, 'JSON')
-    data = path.read_bytes() if byte_limit is None else bounded_source_bytes(path, byte_limit)
+    size = _ordinary_file_size(path, 'JSON')
+    if byte_limit is None:
+        data = path.read_bytes()
+    else:
+        _check_limit(byte_limit)
+        data = _bounded_bytes(path, byte_limit, size)
     obj = json.loads(data.decode('utf-8'), object_pairs_hook=unique_json,
                      parse_constant=lambda value: (_ for _ in ()).throw(ValueError('nonfinite JSON: ' + value)))
     if not isinstance(obj, dict):

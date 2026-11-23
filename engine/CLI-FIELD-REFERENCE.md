@@ -107,6 +107,16 @@ A receipt names each delivered item actually being credited:
 
 ## Composition and factorized overlap
 
+When reviewing a child edit, a `recompose` request can include `"consumer_scope": ["named-lot", "count"]`. Supply the local record IDs authorized for this decision. The review reads those heads under the target's owner guard and reports their identities against the request's remaining scan and byte budgets. A missing record or exhausted budget requires a fresh selection. An exact source digest in a records-only body search can help locate candidates when the names are unknown.
+
+In `consumer_scope.candidates`, each binding locates a consumer row and its captured source pin. The projection compares the value at that coordinate with the proposed child content. For a composition collection it follows the authored row ID across a reorder. A missing value, a different captured edition or a pointer to the future record envelope needs interpretation. Array indices inside arbitrary row data retain their positional meaning. The `affected` list follows the consumer's declared row dependencies from changed, relocated and unresolved coordinates. An unchanged value still carries its original edition.
+
+A delayed consumer can resolve an earlier edition from its own native `basis` capture of the source record path. To use another local holder's capture, select that holder's exact native head and `/basis/N` pointer in the ordinary `sources` list. The review verifies the captured object's length and digest and the enclosed record's ID, revision and digest before following the typed row. The binding reports the holder and object used. Each distinct consulted object costs one scan and its declared bytes, including a failed verification. An unresolved binding reports the reason. The review uses existing captures and leaves record retention with the source owner.
+
+An exact native evidence pointer can also select a complete `managed-ai-transfer/1` export already incorporated by a local holder. Its declared source instance and record ID must match the reviewed owner. The transfer reader verifies its encoded bytes, object digest and enclosed record identity. The holder head is charged to the source budget. A matched binding identifies this coordinate as `transfer_source`. Research file pins continue to use their domain reader.
+
+The accepted child and each parent have separate decisions. To revise a parent, use its returned `target`, the newly installed child head and the verified coordinate in an ordinary parent proposal. A maximum count can survive a change that invalidates a named release. A matching binding locates the decision and the source needed to check it. A parent whose use was never recorded still needs direct investigation.
+
 Put an ordinary record with `content.format: "g60-composition/1"` and a free-text `purpose`. Supported collections are `elements`, `relations`, `premises`, `opportunities`; `unknowns`, `coverage` and arbitrary `content` are optional. All row IDs are participant-authored.
 
 - Element: `id`, required `account`, optional `content`.

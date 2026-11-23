@@ -6,8 +6,6 @@ import argparse
 import os
 from pathlib import Path
 
-from native_runtime.store_configuration import REVIEWED_CONFIGURE
-
 
 def _file_argument(value):
     """Decode the exact TARGET=FILE argv bytes in an emitted recovery command."""
@@ -26,6 +24,8 @@ def parser() -> argparse.ArgumentParser:
 
 
 def _store_commands(sub):
+    from native_runtime.store_configuration import REVIEWED_CONFIGURE
+
     init = sub.add_parser('init')
     goal = init.add_mutually_exclusive_group(required=True)
     goal.add_argument('--goal', type=Path)
@@ -159,7 +159,8 @@ def _source_and_composition_commands(sub):
     composition.add_argument('--limit', type=int, default=20)
     composition.add_argument('--pair-limit', type=int, default=200)
     revision = sub.add_parser('recompose', help='Review one composition revision against current, selected evidence')
-    revision.add_argument('--request', type=Path, required=True)
+    revision.add_argument('--request', type=Path, required=True,
+                          help='Proposal JSON. Optional consumer_scope lists local record IDs to inspect for bound uses.')
     revision.add_argument('--proof-store', type=Path, help='Current external owner bound by this composition')
     decision = revision.add_mutually_exclusive_group()
     decision.add_argument('--accept', metavar='REVIEW_SHA256')

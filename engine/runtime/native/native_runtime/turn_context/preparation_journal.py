@@ -1,7 +1,6 @@
 """Local owner of the transition from an Attention selection to a published context."""
 import os
 import shutil
-import tempfile
 from pathlib import Path
 
 from continuation_support.attention import Attention
@@ -55,6 +54,8 @@ class TurnPreparation:
         return False
 
     def begin(self):
+        from tempfile import TemporaryDirectory
+
         if self.ex.directory(self.turn).exists():
             raise ValueError('turn identity already used; recover it or choose another')
         if self.directory.exists() and not self.discard_inputs():
@@ -62,7 +63,7 @@ class TurnPreparation:
         parent = self.directory.parent
         parent.mkdir(parents=True, exist_ok=True)
         # An unsealed, unused staging directory does not reserve the public identity.
-        with tempfile.TemporaryDirectory(prefix='.new-', dir=parent) as tmp:
+        with TemporaryDirectory(prefix='.new-', dir=parent) as tmp:
             staging = Path(tmp)
             write_json(staging / 'preparation.json', {'phase': 'draft'})
             os.rename(staging, self.directory)
