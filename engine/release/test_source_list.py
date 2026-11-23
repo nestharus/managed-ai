@@ -12,6 +12,34 @@ RELEASE = Path(__file__).resolve().parent
 
 
 class SourceListTest(unittest.TestCase):
+    def test_checkout_metadata_refuses_before_manifest_or_transport_write(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "bundle"
+            release = root / "engine/release"
+            release.mkdir(parents=True)
+            (release / "current_sources.json").write_text("{}")
+            domain = root / "domains/research"
+            domain.mkdir(parents=True)
+            transport = root.parent / "current.zip"
+            prior = [root / "MANIFEST.json", root / "engine/MANIFEST.json", transport]
+            for path in prior:
+                path.write_bytes(b"existing")
+            for path, directory in [(root / ".git", True), (domain / ".git", False)]:
+                with self.subTest(path=path):
+                    if directory:
+                        path.mkdir()
+                    else:
+                        path.write_text("gitdir: example")
+                    result = subprocess.run([sys.executable, "-B", RELEASE / "package.py", "--root", root,
+                                             "--output", transport, "--replace"], capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("Git checkout metadata", result.stderr)
+                    self.assertTrue(all(p.read_bytes() == b"existing" for p in prior))
+                    if directory:
+                        path.rmdir()
+                    else:
+                        path.unlink()
+
     def test_stale_second_identity_refuses_before_publication(self):
         for catalogue_root in ("runtime/native", "prototype/agent-system"):
             with self.subTest(catalogue_root=catalogue_root):

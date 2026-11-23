@@ -111,6 +111,9 @@ def source_paths(root, engine):
     while pending:
         parent = pending.pop()
         for path in parent.iterdir():
+            if engine is not None and path.name.casefold() == ".git":
+                raise ValueError(f"Git checkout metadata at {path}. Export the selected tracked files "
+                                 "into a clean package directory as described in RELEASING.md.")
             if "__pycache__" in path.parts:
                 continue
             info = path.lstat()

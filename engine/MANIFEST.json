@@ -117,9 +117,9 @@
       "sha256": "2b7373ebd791979e5aa795d80ad35e93d0541e09f09e69fec96ce03004b5a5d0"
     },
     "host/continuing_work/capture_native.py": {
-      "bytes": 7431,
+      "bytes": 7615,
       "mode": 420,
-      "sha256": "09d8b1b5335cfc0c9f3a5d3a326706037ef07914614695430d3f64c01f75cce8"
+      "sha256": "2511a94ebe74eee4c90ea3370f4c7726e391806fc81971d73e2733376fc9f990"
     },
     "host/continuing_work/continuing_work.py": {
       "bytes": 44906,
@@ -232,9 +232,9 @@
       "sha256": "885be21769d0e76162ecdc54c29def65779252c6b891913ba658e56207cb3e8f"
     },
     "release/README.md": {
-      "bytes": 3477,
+      "bytes": 3628,
       "mode": 420,
-      "sha256": "bb5ffbfc01b6230a37e656ba5ccdd85e851a7b6f45d1f43c8ff5436dec321a82"
+      "sha256": "6bfa210cc532c775a711b483b7fab25eafce48f32c7c6eb6832f4be95ea1d6f5"
     },
     "release/check_current.py": {
       "bytes": 1429,
@@ -252,9 +252,9 @@
       "sha256": "cbdf500521e2ed2374d38903c97717c2967a948dcc04cadb477707ebf2797064"
     },
     "release/package.py": {
-      "bytes": 19351,
+      "bytes": 19622,
       "mode": 420,
-      "sha256": "fc9c7f1e747219a5fa8a6ca9facc747a4a183f9e3d5555db31115a692f10404b"
+      "sha256": "4b3027fc82705c48f32b71e2cc314ffbde1037aff8eae32661cf3fd4067de745"
     },
     "release/refresh_guidance.py": {
       "bytes": 7283,
@@ -277,9 +277,9 @@
       "sha256": "a10bd748c5e70697e0f5f9b3d975f9632a351d7c1c48005795fb25bd3c07037b"
     },
     "release/test_source_list.py": {
-      "bytes": 2977,
+      "bytes": 4472,
       "mode": 420,
-      "sha256": "246d6fad08952aff06b613d2decd739bbf59efbfc66a5c744e3ae83458434ce7"
+      "sha256": "4f76daccc2e9bce9ecf0ce1bce90fc7db003585b6c9ef41f0c3540b836c5edf6"
     },
     "runtime/CORE.md": {
       "bytes": 4431,
@@ -296,10 +296,20 @@
       "mode": 420,
       "sha256": "f9ecf526d8a9bc5f20663a711e77c1ea6f68851554d3df2f2513e0eaf6bb9a49"
     },
+    "runtime/attend.py": {
+      "bytes": 246,
+      "mode": 420,
+      "sha256": "8f886407b0c557c07c1206b189acf837e21847363c8b94df164ed0da4e485f55"
+    },
     "runtime/collect_returns.py": {
       "bytes": 674,
       "mode": 420,
       "sha256": "6d08b37505a7b6cd7cdb7036891fd869babd138e3f1eac6e45cf444fd43b87ce"
+    },
+    "runtime/collective.py": {
+      "bytes": 248,
+      "mode": 420,
+      "sha256": "455e95be4713246c17a168a44e198ef748ce172b8d19754d1f17b2a0794a328f"
     },
     "runtime/collective/README.md": {
       "bytes": 34305,
@@ -460,6 +470,11 @@
       "bytes": 4906,
       "mode": 420,
       "sha256": "346c2dd98b076735e9700e8f8817fbb9709330d399862fdf43143089c01df761"
+    },
+    "runtime/deploy.py": {
+      "bytes": 248,
+      "mode": 420,
+      "sha256": "7f2becafa81691c853b5e54b6a3a009b2d9b9366a57b9c1f7e8b6e94470e25e8"
     },
     "runtime/deployment/controller.py": {
       "bytes": 21499,
@@ -1186,6 +1201,11 @@
       "mode": 420,
       "sha256": "e124f655ff4495fce791eea4ecdd37ac442aa0297fe83fdf8bcdb0c1a7428b6c"
     },
+    "runtime/run.py": {
+      "bytes": 246,
+      "mode": 420,
+      "sha256": "846b5508c1b3d3c3fea54f23785764bba2ac3c7c87de4cbb9dcccffe9bc449ec"
+    },
     "runtime/select_deployment.py": {
       "bytes": 572,
       "mode": 420,
@@ -1256,10 +1276,20 @@
       "mode": 420,
       "sha256": "90d33260827c7c6839b032c4711c6996b241bac7ab20fbed17cb401885665388"
     },
+    "runtime/store/system.py": {
+      "bytes": 361,
+      "mode": 420,
+      "sha256": "1175f184c856008add2e3925bfe80765e70ac45bdb91fc37aeefcb8d1396cbdb"
+    },
     "runtime/system-release/README.md": {
       "bytes": 256,
       "mode": 420,
       "sha256": "af651f83813ab1a04d8f0818d5ad360591ecdbf4236730e2763b559a8a67b0ba"
+    },
+    "runtime/system.py": {
+      "bytes": 311,
+      "mode": 420,
+      "sha256": "4f593781859d4bf585809667deacd8c40961a0ff5a599ce0d3fbb4e2a5e3b2f7"
     },
     "runtime/tests/collective_work/__init__.py": {
       "bytes": 29,
@@ -1460,6 +1490,11 @@
       "bytes": 363,
       "mode": 420,
       "sha256": "3bb7056ee0e76857205ebf5a816cc424fa92db6df1d7936d3141ecdd735bfe8b"
+    },
+    "runtime/work.py": {
+      "bytes": 247,
+      "mode": 420,
+      "sha256": "ea6c9a856d9d640561f6a835dc7bdb8a5d332b41a33f9ac7515533ea1335c1d2"
     }
   }
 }

@@ -21,6 +21,8 @@ python3 -B -m unittest discover -s engine/release
 python3 -B engine/release/check_current.py
 ```
 
+Export the selected tracked sources and domain pins into a clean packaging directory. The packager refuses Git metadata in a recognized product tree.
+
 Package the single current tree from its parent or another working directory:
 
 ```sh
