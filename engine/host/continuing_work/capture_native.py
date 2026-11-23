@@ -21,7 +21,8 @@ REORGANIZED_NATIVE_PROFILE = '65d21e3482ae5ca9a4a9a3060e8d2c60e98bc95e224f6969db
 REPAIRED_NATIVE_PROFILE = '7b6176300e8802b9c2714bf9cd9ebdfa8d2741b41d21c680c39f5bf5a32784e3'
 COMMAND_ROUTES_NATIVE_PROFILE = 'fb535b60e0d22b6fc482f84dcd4482ecce2dda52fa6e06ee5915268a4cc3f621'
 BODY_REPAIRS_NATIVE_PROFILE = 'e92245c09bc33a22e7aa086be2ae141093dd19bf2302f69d53c771e5e8e23cc9'
-CURRENT_NATIVE_PROFILE = '5f0830029a210dd73fd3299a3a6f5c170a2802dadf85b3076b5640831774d836'
+SCHEMA_REPAIRS_NATIVE_PROFILE = '5f0830029a210dd73fd3299a3a6f5c170a2802dadf85b3076b5640831774d836'
+CURRENT_NATIVE_PROFILE = 'e031f4e246801e7ea5d41306c7356891872af6444f7fd9b998bacd48ea67945a'
 PROFILE_ERROR = ('Selected native engine does not match the reviewed capture adapter; '
                  'requalify this adapter before capture')
 RETURN_ERROR = 'Native return already exists; use its retained body or a new current occurrence'
@@ -54,7 +55,8 @@ def reviewed_engine(engine: Path):
     profile = hashlib.sha256(json.dumps(programs, sort_keys=True,
                                        separators=(',', ':')).encode()).hexdigest()
     if profile not in (REVIEWED_NATIVE_PROFILE, REORGANIZED_NATIVE_PROFILE, REPAIRED_NATIVE_PROFILE,
-                       COMMAND_ROUTES_NATIVE_PROFILE, BODY_REPAIRS_NATIVE_PROFILE, CURRENT_NATIVE_PROFILE):
+                       COMMAND_ROUTES_NATIVE_PROFILE, BODY_REPAIRS_NATIVE_PROFILE,
+                       SCHEMA_REPAIRS_NATIVE_PROFILE, CURRENT_NATIVE_PROFILE):
         raise ValueError(PROFILE_ERROR)
     spec = importlib.util.spec_from_file_location('reviewed_capture_engine', path)
     if spec is None or spec.loader is None:

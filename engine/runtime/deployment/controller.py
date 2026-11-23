@@ -33,13 +33,21 @@ PORTABLE_CONTRACT = Path('prototype/agent-system/native_runtime/domains.py')
 NON_SOURCE_SUFFIXES = ('.pyc', '.pyo', '.pyd', '.so', *EXTENSION_SUFFIXES)
 
 
-def read(path):
+def _descriptor_bytes(path):
     if path.is_symlink() or not path.is_file():
         raise ValueError('ordinary descriptor required: ' + str(path))
-    value = json.loads(path.read_bytes())
+    return path.read_bytes()
+
+
+def _descriptor_object(path, raw):
+    value = json.loads(raw)
     if not isinstance(value, dict):
         raise ValueError('expected a JSON object in descriptor: ' + str(path))
     return value
+
+
+def read(path):
+    return _descriptor_object(path, _descriptor_bytes(path))
 
 
 def _ordinary_mode(path, info):
@@ -151,57 +159,24 @@ class DeploymentAdoptBasisChanged(ValueError):
         self.basis = basis
 
 
-class Deployment:
+class DeploymentSelection:
+    """Read or replace deployment metadata, including when the incumbent code has drifted."""
+
     def __init__(self, root):
         self.root = Path(root).resolve()
-        self.config = read(self.root / 'deployment.json')
+        descriptor = self.root / 'deployment.json'
+        raw = _descriptor_bytes(descriptor)
+        self.config = _descriptor_object(descriptor, raw)
         if self.config.get('format') != FORMAT:
             raise ValueError('copied-engine deployment is not supported; create a shared reference deployment')
-        self.engine = _engine_directory(self.root / self.config['engine']['path'])
-        self.runtime = (self.root / self.config['store']['path']).resolve()
-        if any(p.is_symlink() for p in (self.root, self.engine, self.runtime)):
-            raise ValueError('ordinary deployment, engine and store directories required')
-        self.verify()
+        self.descriptor_sha256 = sha(raw)
 
-    @classmethod
-    def initialize(cls, root, runtime, engine=None):
-        root, runtime = Path(root).resolve(), Path(runtime).resolve()
-        engine = _engine_directory(engine or HERE.parents[1])
-        if root == runtime or root.is_relative_to(runtime) or root == engine or root.is_relative_to(engine):
-            raise ValueError('deployment metadata must be separate from store and engine')
-        if (root / 'deployment.json').exists():
-            raise ValueError('deployment already exists; stage and activate an explicit new selection')
-        binding = runtime_binding(runtime)
-        value = {'format': FORMAT, 'controller_version': VERSION,
-                 'engine': {'path': os.path.relpath(engine, root), 'code_sha256': code_identity(engine),
-                            'engine_api': ENGINE_API},
-                 'store': {'path': os.path.relpath(runtime, root), **binding},
-                 'account': 'Initial explicit shared engine/store selection.'}
-        root.mkdir(parents=True, exist_ok=True)
-        atomic_bytes(root / 'deployment.json', encode(value))
-        return cls(root).status()
-
-    def _verify_engine(self):
-        if self.config['engine'].get('engine_api') != ENGINE_API:
-            raise ValueError('incompatible engine API')
-        if code_identity(self.engine) != self.config['engine']['code_sha256']:
-            raise ValueError('shared engine code changed; qualify and activate its current identity')
-
-    def verify(self):
-        self._verify_engine()
-        binding = runtime_binding(self.runtime)
-        if any(self.config['store'].get(k) != v for k, v in binding.items()):
-            raise ValueError('deployment selected a different store identity/schema')
-        return binding
-
-    def status(self):
-        return {'format': FORMAT, 'deployment': str(self.root), 'engine': str(self.engine),
-                'engine_code_sha256': self.config['engine']['code_sha256'],
-                'store': str(self.runtime), **self.verify(),
-                'descriptor_sha256': sha((self.root / 'deployment.json').read_bytes()),
-                'scope': 'One shared code tree; explicit store and data-domain selection. No copied runtime.'}
+    def _require_current(self):
+        if sha(_descriptor_bytes(self.root / 'deployment.json')) != self.descriptor_sha256:
+            raise ValueError('deployment selection revision conflict; reopen the deployment')
 
     def stage(self, edition, engine):
+        self._require_current()
         packet_id(edition)
         engine = _engine_directory(engine)
         value = dict(self.config, edition=edition,
@@ -233,14 +208,82 @@ class Deployment:
         try:
             (self.root / 'candidate.json').unlink()
             step = 'status_readback'
-            return type(self)(self.root).status()
+            return Deployment.current_status(self.root)
         except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
             raise ActivationIncomplete(step, sha(descriptor_bytes), exc) from exc
 
+
+class Deployment(DeploymentSelection):
+    """Open the selected engine and store after verifying their declared identities."""
+
+    def __init__(self, root):
+        super().__init__(root)
+        self.engine = _engine_directory(self.root / self.config['engine']['path'])
+        self.runtime = (self.root / self.config['store']['path']).resolve()
+        if any(p.is_symlink() for p in (self.root, self.engine, self.runtime)):
+            raise ValueError('ordinary deployment, engine and store directories required')
+        self._verify_binding()
+
+    @classmethod
+    def initialize(cls, root, runtime, engine=None):
+        root, runtime = Path(root).resolve(), Path(runtime).resolve()
+        engine = _engine_directory(engine or HERE.parents[1])
+        if root == runtime or root.is_relative_to(runtime) or root == engine or root.is_relative_to(engine):
+            raise ValueError('deployment metadata must be separate from store and engine')
+        if (root / 'deployment.json').exists():
+            raise ValueError('deployment already exists; stage and activate an explicit new selection')
+        binding = runtime_binding(runtime)
+        value = {'format': FORMAT, 'controller_version': VERSION,
+                 'engine': {'path': os.path.relpath(engine, root), 'code_sha256': code_identity(engine),
+                            'engine_api': ENGINE_API},
+                 'store': {'path': os.path.relpath(runtime, root), **binding},
+                 'account': 'Initial explicit shared engine/store selection.'}
+        root.mkdir(parents=True, exist_ok=True)
+        atomic_bytes(root / 'deployment.json', encode(value))
+        return cls.current_status(root)
+
+    def _verify_engine(self):
+        if self.config['engine'].get('engine_api') != ENGINE_API:
+            raise ValueError('incompatible engine API')
+        if code_identity(self.engine) != self.config['engine']['code_sha256']:
+            raise ValueError('shared engine code changed; qualify and activate its current identity')
+
+    def _verify_binding(self):
+        binding = runtime_binding(self.runtime)
+        if any(self.config['store'].get(k) != v for k, v in binding.items()):
+            raise ValueError('deployment selected a different store identity/schema')
+        self._verify_engine()
+        return binding
+
+    def verify(self):
+        self._require_current()
+        return self._verify_binding()
+
+    @classmethod
+    def current_status(cls, root):
+        selected = cls(root)
+        store = selected.config['store']
+        return {'format': FORMAT, 'deployment': str(selected.root), 'engine': str(selected.engine),
+                'engine_code_sha256': selected.config['engine']['code_sha256'],
+                'store': str(selected.runtime), 'instance_id': store['instance_id'],
+                'store_schema': store['store_schema'], 'engine_api': store['engine_api'],
+                'descriptor_sha256': selected.descriptor_sha256,
+                'scope': 'One shared code tree; explicit store and data-domain selection. No copied runtime.'}
+
+    def status(self):
+        return type(self).current_status(self.root)
+
+    @classmethod
+    def dispatch_current(cls, root, arguments):
+        return cls(root)._dispatch(arguments)
+
     def system(self, arguments):
+        self.verify()
+        return self._dispatch(arguments)
+
+    def _dispatch(self, arguments):
         if not arguments or any(v == '--root' or v.startswith('--root=') for v in arguments):
             raise ValueError('supply a native command; deployment owns its selected store')
-        self._verify_engine()
         if self.engine != HERE.parents[1] or arguments[0] in {'adopt', 'reconcile-publication', 'recompose'}:
             return self._selected_system(arguments)
         return self._system_action(arguments)
@@ -368,24 +411,16 @@ def main():
         with guard(root / 'deployment.lock'):
             if args.action == 'init':
                 result = Deployment.initialize(root, args.runtime, args.engine)
+            elif args.action == 'stage':
+                result = DeploymentSelection(root).stage(args.edition, args.engine)
+            elif args.action == 'activate':
+                result = DeploymentSelection(root).activate(args.edition, args.expected, args.manifest_sha256, args.reason)
+            elif args.action in {'status', 'verify'}:
+                result = Deployment.current_status(root)
             else:
-                # A changed shared engine may be explicitly reselected without first
-                # passing the old code pin. All ordinary execution still verifies it.
-                if args.action in {'stage', 'activate'}:
-                    deployment = object.__new__(Deployment)
-                    deployment.root = root
-                    deployment.config = read(root / 'deployment.json')
-                    if deployment.config.get('format') != FORMAT:
-                        raise ValueError('unsupported deployment format')
-                else:
-                    deployment = Deployment(root)
-                if args.action == 'stage': result = deployment.stage(args.edition, args.engine)
-                elif args.action == 'activate': result = deployment.activate(args.edition, args.expected, args.manifest_sha256, args.reason)
-                elif args.action in {'status', 'verify'}: result = deployment.status()
-                else:
-                    result, app_args, api = deployment.system(args.arguments)
-                    api['emit'](result, app_args)
-                    return
+                result, app_args, api = Deployment.dispatch_current(root, args.arguments)
+                api['emit'](result, app_args)
+                return
         print(json.dumps(result, indent=2))
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         failure = {'status': 'unresolved', 'operation': args.action, 'error': str(exc)}

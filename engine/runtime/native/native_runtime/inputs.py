@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -43,13 +44,22 @@ def unique_json(pairs):
     return result
 
 
+def _ordinary_file_size(path: Path, role: str) -> int:
+    try:
+        info = path.lstat()
+    except (FileNotFoundError, NotADirectoryError):
+        pass
+    else:
+        if stat.S_ISREG(info.st_mode):
+            return info.st_size
+    raise ValueError(f'ordinary {role} file required: {path}')
+
+
 def bounded_source_bytes(path: Path, limit: int) -> bytes:
     """Read an ordinary source with bounded chunks and one growth sentinel."""
     if type(limit) is not int or limit < 0:
         raise ValueError('source byte limit must be a nonnegative integer')
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f'ordinary source file required: {path}')
-    if path.stat().st_size > limit:
+    if _ordinary_file_size(path, 'source') > limit:
         raise ValueError(f'source exceeds byte bound: {path}')
     with path.open('rb') as stream:
         chunks, remaining = [], limit + 1
@@ -66,8 +76,7 @@ def bounded_source_bytes(path: Path, limit: int) -> bytes:
 
 
 def read_input(path: Path, *, byte_limit: int | None = None) -> tuple[dict, bytes]:
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f'ordinary JSON file required: {path}')
+    _ordinary_file_size(path, 'JSON')
     data = path.read_bytes() if byte_limit is None else bounded_source_bytes(path, byte_limit)
     obj = json.loads(data.decode('utf-8'), object_pairs_hook=unique_json,
                      parse_constant=lambda value: (_ for _ in ()).throw(ValueError('nonfinite JSON: ' + value)))

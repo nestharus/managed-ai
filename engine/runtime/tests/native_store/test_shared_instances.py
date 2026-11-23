@@ -84,6 +84,30 @@ class SharedInstances(unittest.TestCase):
         self.assertFalse((da / 'editions').exists())
         self.assertEqual(list(da.glob('*.py')), [])
 
+    def test_retained_deployment_reopens_status_and_refuses_stale_dispatch_or_staging(self):
+        active = self.bundle / 'deployments/active'
+        producer = self.bundle / 'deployments/producer'
+        first = Deployment.initialize(active, self.a, ENGINE)
+        retained = Deployment(active)
+
+        # A sibling deployment prepares an explicitly reviewed selection of store B.
+        Deployment.initialize(producer, self.b, ENGINE)
+        staged = Deployment(producer).stage('second', ENGINE)
+        shutil.copyfile(producer / 'candidate.json', active / 'candidate.json')
+        published = retained.activate('second', first['descriptor_sha256'], staged['candidate_sha256'],
+                                      'Select the second fixture instance.')
+
+        self.assertEqual(published['instance_id'], 'instance-b')
+        self.assertEqual(published['descriptor_sha256'], sha((active / 'deployment.json').read_bytes()))
+        self.assertEqual(retained.status(), published)
+        with self.assertRaisesRegex(ValueError, 'selection revision conflict'):
+            retained.system(['show', 'goal'])
+        with self.assertRaisesRegex(ValueError, 'selection revision conflict'):
+            retained.stage('stale', ENGINE)
+        self.assertFalse((active / 'candidate.json').exists())
+        goal, _, _ = Deployment(active).system(['show', 'goal'])
+        self.assertEqual(goal, self.sb.show('goal'))
+
     def test_deployed_put_uses_policy_current_at_owner_admission(self):
         deployment = self.bundle / 'deployments/a'
         Deployment.initialize(deployment, self.a, ENGINE)
