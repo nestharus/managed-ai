@@ -1,4 +1,4 @@
-# Continuation support 0.4.1
+# Continuation support
 
 A standalone, standard-library Python package that keeps selected inputs, actual returns and public work accounts usable across local invocations. The caller supplies the task, interpretation and authority. The package supplies command-return collection, a source-bound continuation exchange, and caller-invoked attention feedback.
 
@@ -39,12 +39,11 @@ The suite discovers the Collective, exchange, native store, return carrier and s
 
 ## Install or build
 
-The supplied wheel in `dist/` installs the commands `g60-attend`, `g60-work` and `g60-collect`. Run the source launchers directly when installation is unnecessary.
-
-An optional rebuild requires setuptools and wheel in the build environment:
+To install the three commands, use a disposable source copy of this directory and a Python environment with pip, setuptools and wheel. From the copy, build into an empty external wheel directory and install the resulting artifact:
 
 ```bash
 python3 -m pip wheel --no-deps --no-build-isolation --wheel-dir /external/wheels .
+python3 -m pip install --no-deps /external/wheels/g60_continuation_support-*.whl
 ```
 
-Use a disposable source copy for building; generated build directories are not part of the clean distribution. Version 0.4.1 adds explicit original-context recovery and makes packet receipt inspect its known carrier job directly. It preserves existing stored formats and effect boundaries.
+The wheel takes its version from `continuation_support.__version__` and installs `g60-attend`, `g60-work` and `g60-collect`.

@@ -72,6 +72,40 @@ class SelectionContracts(unittest.TestCase):
         self.assertEqual(descriptor.read_bytes(), before)
         self.assertEqual(system.record_path('goal').read_bytes(), head)
 
+    def test_dangling_reference_refuses_an_unoccupied_kind(self):
+        bad = self.manifest('measures', {'$defs': {'unused': {'$ref': '#/$defs/missing'}}})
+        error = r'measures schema for reading: unresolved local payload-schema reference .*missing'
+        with self.assertRaisesRegex(ValueError, error):
+            System.initialize(self.store, self.goal, domains=[bad])
+        self.assertFalse(self.store.exists())
+
+        System.initialize(self.store, self.goal)
+        system = System(self.store)
+        descriptor, goal = self.store / 'system.json', system.record_path('goal')
+        before = descriptor.read_bytes(), goal.read_bytes()
+        with self.assertRaisesRegex(ValueError, error):
+            Loading(system).configure({'expected_sha256': sha(before[0]), 'domains': [bad],
+                                       'account': 'Select measurements.'})
+        self.assertEqual((descriptor.read_bytes(), goal.read_bytes()), before)
+        self.assertEqual(System(self.store).domain_selection.domains, [])
+
+    def test_recursive_reference_checks_each_finite_child(self):
+        ref = {'$ref': '#/definitions/a~1b~0'}
+        node = {'type': 'object', 'properties': {'quantity': {'type': 'integer'}, 'child': ref}}
+        schema = dict(ref, definitions={'a/b~': node})
+        selected = self.manifest('trees', schema)
+        System.initialize(self.store, self.goal, domains=[selected])
+        system = System(self.store)
+        row = {'id': 'sample', 'kind': 'reading', 'content': {'child': {'quantity': 3}}}
+        system.put(row, 0)
+        prior = system.record_path('sample').read_bytes()
+        with self.assertRaisesRegex(ValueError, r'content\.child\.quantity: wrong payload type'):
+            system.put(dict(row, content={'child': {'quantity': 'three'}}), 1)
+        self.assertEqual(system.record_path('sample').read_bytes(), prior)
+
+        with self.assertRaisesRegex(ValueError, 'cyclic schema reference'):
+            validate_payload({}, {'$ref': '#/$defs/loop', '$defs': {'loop': {'$ref': '#/$defs/loop'}}})
+
     def test_workspace_readers_accept_their_issued_editions(self):
         workspace = self.base / 'standalone-work'
         workspace.mkdir()
@@ -138,22 +172,22 @@ class SelectionContracts(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, error):
                         read()
 
-    def checked_out_domains(self):
-        paths = [ENGINE.parent / 'domains' / name / 'domain.json'
-                 for name in ('research', 'writing', 'ai-system-building')]
-        if not all(path.is_file() for path in paths):
-            self.skipTest('integration requires the three pinned domain checkouts')
+    def checked_out_domains(self, *names):
+        paths = [ENGINE.parent / 'domains' / name / 'domain.json' for name in names]
+        missing = [path.parent.name for path in paths if not path.is_file()]
+        if missing:
+            self.skipTest('missing pinned domain checkout: ' + ', '.join(missing))
         return paths
 
     def test_owed_basis_change_under_either_or_both_domain_owners(self):
-        research, writing, building = self.checked_out_domains()
-        for domains in ([research], [writing], [research, writing], [research, writing, building]):
-            names = [p.parent.name for p in domains]
+        for names in [('research',), ('writing',), ('research', 'writing'),
+                      ('research', 'writing', 'ai-system-building')]:
             with self.subTest(selected=names):
+                domains = self.checked_out_domains(*names)
                 root = self.base / '-'.join(names)
                 System.initialize(root, self.goal, domains=domains)
                 system = System(root)
-                self.assertEqual(system.domain_selection.domains, names)
+                self.assertEqual(system.domain_selection.domains, list(names))
                 content = {'text': 'Read the evidence.', 'disposition': 'open', 'source_scope': 'fixture'}
                 (system.work / 'sources/old').write_bytes(b'first')
                 (system.work / 'sources/new').write_bytes(b'second')
@@ -176,7 +210,7 @@ class SelectionContracts(unittest.TestCase):
                 self.assertIn('duty', system.status()['owed_record_obligations'])
 
     def test_shipped_alias_follows_selection_and_primary_precedence(self):
-        research, _, _ = self.checked_out_domains()
+        research, = self.checked_out_domains('research')
         System.initialize(self.store, self.goal)
         system = System(self.store)
         with self.assertRaisesRegex(ValueError, 'unknown technique'):

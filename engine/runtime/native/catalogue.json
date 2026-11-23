@@ -3,7 +3,7 @@
   "source_root": "managed-ai-shared-engine-1",
   "snapshot": {
     "edition": "managed-ai-shared-engine-1",
-    "selection_sha256": "3d695a37414108c2b92eaf7d6285e18c5dbd24fa8c9cd3b18f01ac7e97d53d2e",
+    "selection_sha256": "6b8fe81133e3259cc5c86c5ea4a4ca226787abd2023b40ff420ba1fe14f0fc70",
     "relationship": "References to one canonical source body; domain sources are selected per store."
   },
   "entries": [
@@ -540,10 +540,10 @@
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "source_root": "managed-ai-shared-engine-1",
-      "source_sha256": "266b99b16f352503acc11d0d087c2cb035c9eee91fdb043625c55949323a5bde",
-      "sha256": "266b99b16f352503acc11d0d087c2cb035c9eee91fdb043625c55949323a5bde",
-      "bytes": 14091,
-      "body_id": "sha256:266b99b16f352503acc11d0d087c2cb035c9eee91fdb043625c55949323a5bde"
+      "source_sha256": "01a6c0dcd008b0171d8162ad5cad72a7f2585cba85f6a2b13ec1a89a34602a6a",
+      "sha256": "01a6c0dcd008b0171d8162ad5cad72a7f2585cba85f6a2b13ec1a89a34602a6a",
+      "bytes": 14598,
+      "body_id": "sha256:01a6c0dcd008b0171d8162ad5cad72a7f2585cba85f6a2b13ec1a89a34602a6a"
     },
     {
       "id": "host/SIGNAL-FIELD.md",

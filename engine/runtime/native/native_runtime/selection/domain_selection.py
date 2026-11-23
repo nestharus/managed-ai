@@ -64,8 +64,32 @@ def same_literal(left, right):
     return left == right
 
 
+def _local_schema_target(document, reference):
+    if not isinstance(reference, str) or not reference.startswith('#/'):
+        raise ValueError(f'only local payload-schema references are supported: {reference!r}')
+    target = document
+    for token in reference[2:].split('/'):
+        key = token.replace('~1', '/').replace('~0', '~')
+        if not isinstance(target, dict) or key not in target:
+            raise ValueError(f'unresolved local payload-schema reference {reference!r}')
+        target = target[key]
+    if not isinstance(target, (dict, bool)):
+        raise ValueError(f'local payload-schema reference {reference!r} does not name a schema')
+    return target
+
+
 def validate_schema(schema):
-    """Fail closed for keywords outside the documented structural vocabulary."""
+    """Check every declaration once, including referenced schemas, without a payload."""
+    pending = [schema]
+    visited = set()
+    while pending:
+        node = pending.pop()
+        if id(node) not in visited:
+            visited.add(id(node))
+            pending.extend(_schema_children(node, schema))
+
+
+def _schema_children(schema, document):
     if isinstance(schema, bool):
         return
     if not isinstance(schema, dict):
@@ -84,29 +108,27 @@ def validate_schema(schema):
                 any(not isinstance(name, str) or name not in PAYLOAD_TYPES for name in names)):
             raise ValueError(f'unsupported payload type declaration: {declared!r}')
     for group in ('properties', '$defs', 'definitions'):
-        for child in schema.get(group, {}).values():
-            validate_schema(child)
+        yield from schema.get(group, {}).values()
     for group in ('anyOf', 'allOf', 'oneOf'):
-        for child in schema.get(group, []):
-            validate_schema(child)
+        yield from schema.get(group, [])
     for key in ('items', 'additionalProperties'):
         if key in schema:
-            validate_schema(schema[key])
-    if '$ref' in schema and not schema['$ref'].startswith('#/'):
-        raise ValueError('only local payload-schema references are supported')
+            yield schema[key]
+    if '$ref' in schema:
+        yield _local_schema_target(document, schema['$ref'])
 
 
-def validate_payload(value, schema, *, at='content', document=None):
+def validate_payload(value, schema, *, at='content', document=None, _references=frozenset()):
     document = schema if document is None else document
     if schema is True:
         return
     if schema is False:
         raise ValueError(at + ': prohibited by schema')
     if '$ref' in schema:
-        target = document
-        for key in schema['$ref'][2:].split('/'):
-            target = target[key.replace('~1', '/').replace('~0', '~')]
-        validate_payload(value, target, at=at, document=document)
+        target = _local_schema_target(document, schema['$ref'])
+        if id(target) in _references:
+            raise ValueError(at + ': cyclic schema reference at the same payload location')
+        validate_payload(value, target, at=at, document=document, _references=_references | {id(target)})
     wanted = schema.get('type')
     if wanted is not None:
         wanted = [wanted] if isinstance(wanted, str) else wanted
@@ -121,7 +143,7 @@ def validate_payload(value, schema, *, at='content', document=None):
             valid = 0
             for child in schema[group]:
                 try:
-                    validate_payload(value, child, at=at, document=document)
+                    validate_payload(value, child, at=at, document=document, _references=_references)
                     valid += 1
                 except ValueError:
                     pass

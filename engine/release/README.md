@@ -14,7 +14,7 @@ The release owner serializes refresh and packaging. After an interrupted refresh
 
 The package gate checks the exact catalogue member path, including the bundle's `engine/` prefix, and reads existing catalogue JSON with the native reader's rules. If the inventory reports a spelling mismatch, correct the named file and directory spelling on disk before running guidance refresh. On a case-insensitive filesystem, a case-only correction may require a temporary name. If the catalogue contains duplicate `body_path` fields, guidance refresh can regenerate the selected references. Repair other invalid JSON or restore a valid catalogue before refreshing if the offending value survives refresh. Rerun packaging after guidance refresh succeeds.
 
-The release checks exercise the displayed source list and admission of compressed Research originals. The shared-instance suite exercises native deployment and store behavior. From the repository root, run:
+The release checks exercise the displayed source list and admission of compressed Research originals. The shared-instance suite exercises native deployment and store behavior. The release check selects both the suite and its runtime from the requested engine. Use the suite directly with `G60_TEST_PRODUCT` set to another runtime directory for cross-product conformance. From the repository root, run:
 
 ```sh
 python3 -B -m unittest discover -s engine/release

@@ -3,6 +3,7 @@
 from pathlib import Path
 import argparse
 import json
+import os
 import subprocess
 import sys
 
@@ -11,9 +12,11 @@ parser.add_argument('--product', type=Path, default=Path(__file__).resolve().par
 parser.add_argument('--records', type=Path)
 parser.add_argument('--work', type=Path, help='Compatibility argument; tests own isolated temporary stores')
 args = parser.parse_args()
-program = args.product.resolve() / 'runtime/tests/native_store/test_shared_instances.py'
-run = subprocess.run([sys.executable, '-B', str(program)], capture_output=True, text=True)
-report = {'status': 'passed' if run.returncode == 0 else 'failed', 'program': str(program),
+runtime = args.product.resolve() / 'runtime'
+program = runtime / 'tests/native_store/test_shared_instances.py'
+run = subprocess.run([sys.executable, '-B', str(program)], capture_output=True, text=True,
+                     env=dict(os.environ, G60_TEST_PRODUCT=str(runtime)))
+report = {'status': 'passed' if run.returncode == 0 else 'failed', 'program': str(program), 'runtime': str(runtime),
           'returncode': run.returncode, 'stdout': run.stdout, 'stderr': run.stderr,
           'scope': 'Bounded shared-code, store/schema/domain, portability, receiving and retention cases; no broad scientific-efficacy claim.'}
 if args.records:
