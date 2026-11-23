@@ -266,13 +266,15 @@ class SourceService:
             os.replace(temporary, self.ledger_path)
         except OSError as failure:
             # Replacement can have taken effect before its response was lost.
-            self._published = None
             try:
                 observed = self.ledger_path.read_bytes()
             except FileNotFoundError:
                 raise failure from None
             if observed != data:
                 raise
+        finally:
+            # On interruption the next operation must reopen the actual image.
+            self._published = None
         self._published = candidate
         self._stats['receipt_write_bytes'] += len(data)
         return ident

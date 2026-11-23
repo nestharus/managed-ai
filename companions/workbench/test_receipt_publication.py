@@ -87,6 +87,19 @@ class ReceiptPublication(unittest.TestCase):
             self.assertEqual(writes.call_count, 1)
         self.assert_reopens(set(self.owner.source_receipt_ids))
 
+    def test_interrupt_after_replace_keeps_the_row_on_the_next_write(self):
+        replace = os.replace
+        def interrupt(staging, destination):
+            replace(staging, destination)
+            raise KeyboardInterrupt
+
+        with patch('source_tools.os.replace', side_effect=interrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.read('one.md')
+        first, = json.loads(self.service.ledger_path.read_bytes())['sources']
+        second = self.read('two.md')
+        self.assert_reopens({first, second})
+
     def test_different_postimage_does_not_acknowledge_or_overwrite_it(self):
         self.read('one.md')
         replace = os.replace
