@@ -219,8 +219,8 @@
       "link_base": "host/README.md",
       "presentation": "host/README.md",
       "kind": "guide",
-      "sha256": "fd2a5bbe22d5e5336e756f4aae7803139a717dc79b6bd64c3903cd2394b5c22c",
-      "bytes": 24041,
+      "sha256": "3d524312e2509458ca260e7a43a13fe5ee2bcb55179f5650f613f7a0ca467896",
+      "bytes": 24007,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {

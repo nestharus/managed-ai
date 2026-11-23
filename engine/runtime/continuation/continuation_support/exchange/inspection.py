@@ -68,6 +68,22 @@ def inspect_publications(exchange, directory, request, result, observe):
 
 
 class PacketInspection:
+    def packet_summary(self, directory, consumer, publications, *, returned, outcome):
+        """Summarize validated observations of one packet under the caller's guard."""
+        attempted = self.transport.has_attempt(directory)
+        if outcome is not None:
+            transport = 'terminal-without-return'
+        elif returned:
+            transport = 'returned'
+        else:
+            transport = 'dispatch-attempted' if attempted else 'prepared'
+        row = {'packet': directory.name, 'consumer': consumer, 'transport': transport,
+               'publications': [{'path': p['path'], 'phase': p['phase']} for p in publications],
+               'semantic_fulfillment': 'not-decided-by-exchange'}
+        if outcome is not None:
+            row['transport_outcome'] = {k: outcome[k] for k in ('reason', 'account', 'outcome_sha256')}
+        return row
+
     def list(self, consumer: str | None = None) -> list[dict[str, Any]]:
         """Expose retained occasions without inventing a semantic completion flag."""
         rows = []
@@ -83,19 +99,8 @@ class PacketInspection:
                     self.validate_return(directory, read_json(directory / 'return.json'))
                 outcome = transport_outcome(self, directory, request)
                 publications = [read_json(p) for p in directory.glob('publish-*.json')]
-                transport = 'prepared'
-                if self.transport.has_attempt(directory):
-                    transport = 'dispatch-attempted'
-                if has_return:
-                    transport = 'returned'
-                if outcome is not None:
-                    transport = 'terminal-without-return'
-                row = {'packet': directory.name, 'consumer': request['consumer'], 'transport': transport,
-                       'publications': [{'path': p['path'], 'phase': p['phase']} for p in publications],
-                       'semantic_fulfillment': 'not-decided-by-exchange'}
-                if outcome is not None:
-                    row['transport_outcome'] = {k: outcome[k] for k in ('reason', 'account', 'outcome_sha256')}
-                rows.append(row)
+                rows.append(self.packet_summary(directory, request['consumer'], publications,
+                                                returned=has_return, outcome=outcome))
             except (ValueError, KeyError, OSError, TypeError) as exc:
                 rows.append({'packet': directory.name, 'transport': 'record-unresolved', 'error': str(exc)})
         return rows

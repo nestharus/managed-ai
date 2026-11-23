@@ -178,16 +178,7 @@ class SourceService:
             'refresh_seconds': 0.0, 'discovery_seconds': 0.0,
         }
         self.ledger_path = self.state_dir / 'receipts.json'
-        if self.ledger_path.exists():
-            need(not self.ledger_path.is_symlink(), 'Receipt symlinks are unsupported.')
-            self.ledger = json.loads(self.ledger_path.read_text(encoding='utf-8'))
-            need(self.ledger.get('schema') == VERSION and set(self.ledger) == {'schema', 'inventories', 'selections', 'sources', 'uses'}, 'Unknown receipt ledger.')
-            for category in ('inventories', 'selections', 'sources', 'uses'):
-                need(isinstance(self.ledger[category], dict), 'Invalid receipt category.')
-                for ident, record in self.ledger[category].items():
-                    need(identity(record) == ident, 'Receipt identity mismatch: ' + ident)
-        else:
-            self.ledger = {'schema': VERSION, 'inventories': {}, 'selections': {}, 'sources': {}, 'uses': {}}
+        self.reopen_receipts()
         implementation = _search or SearchImplementation(search_module_path)
         self.search = implementation.module
         self._predecessor_selector = None
@@ -234,22 +225,56 @@ class SourceService:
         self._stats[purpose + '_read_bytes'] += len(data)
         return data, data.decode('utf-8')
 
-    def _persist(self):
-        data = encoded(self.ledger) + b'\n'
+    def reopen_receipts(self):
+        """Read the serialized owner's published image at acquisition or after uncertainty."""
+        self._published = None
+        need(not self.ledger_path.is_symlink(), 'Receipt symlinks are unsupported.')
+        try:
+            data = self.ledger_path.read_bytes()
+        except FileNotFoundError:
+            ledger = {'schema': VERSION, 'inventories': {}, 'selections': {}, 'sources': {}, 'uses': {}}
+        else:
+            ledger = json.loads(data.decode('utf-8'))
+            need(ledger.get('schema') == VERSION and set(ledger) == {'schema', 'inventories', 'selections', 'sources', 'uses'}, 'Unknown receipt ledger.')
+            for category in ('inventories', 'selections', 'sources', 'uses'):
+                need(isinstance(ledger[category], dict), 'Invalid receipt category.')
+                for ident, record in ledger[category].items():
+                    need(identity(record) == ident, 'Receipt identity mismatch: ' + ident)
+        self._published = ledger
+
+    @property
+    def ledger(self):
+        if self._published is None:
+            self.reopen_receipts()
+        return self._published
+
+    def _record(self, category, value):
+        value = json.loads(encoded(value))
+        ident = identity(value)
+        published = self.ledger
+        if ident in published[category]:
+            return ident
+
+        candidate = {**published, category: {**published[category], ident: value}}
+        data = encoded(candidate) + b'\n'
         temporary = self.ledger_path.with_suffix('.json.tmp')
         with temporary.open('wb') as stream:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, self.ledger_path)
+        try:
+            os.replace(temporary, self.ledger_path)
+        except OSError as failure:
+            # Replacement can have taken effect before its response was lost.
+            self._published = None
+            try:
+                observed = self.ledger_path.read_bytes()
+            except FileNotFoundError:
+                raise failure from None
+            if observed != data:
+                raise
+        self._published = candidate
         self._stats['receipt_write_bytes'] += len(data)
-
-    def _record(self, category, value):
-        value = json.loads(encoded(value))
-        ident = identity(value)
-        if ident not in self.ledger[category]:
-            self.ledger[category][ident] = value
-            self._persist()
         return ident
 
     def refresh(self):

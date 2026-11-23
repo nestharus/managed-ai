@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Host-owned selected capture for an explicitly reviewed native implementation.
 
-System.assess and Exchange.inspect retain their native behavior. Exact transport
-reporting also uses the reviewed PacketTransport.has_attempt predicate. That
-dependency is not a new public native API. Requalify this adapter after any
-native Python program change; never fall back to a broad or repeated assessment.
+Exchange owns the current packet summary. Earlier pinned engines require their
+original single-packet projection. Requalify after any native program change.
 """
 from __future__ import annotations
 
@@ -25,7 +23,8 @@ SCHEMA_REPAIRS_NATIVE_PROFILE = '5f0830029a210dd73fd3299a3a6f5c170a2802dadf85b30
 LIFECYCLE_NATIVE_PROFILE = 'e031f4e246801e7ea5d41306c7356891872af6444f7fd9b998bacd48ea67945a'
 OUTLIER_REPAIRS_NATIVE_PROFILE = '9b879473fc1a7a46b530027d5f7045101b05183b9742027861af15d3f145e6ea'
 SCOPED_COMPOSITION_NATIVE_PROFILE = '6bb020ad0a1feacaab040b7b8bfe448e9f472525902bad1203344d2ec2f436f4'
-CURRENT_NATIVE_PROFILE = '27c5c10a3c1a0016fb5fb9e86454025103aa1a22e9889044ad65bd9f8932316d'
+JOINED_NATIVE_PROFILE = '27c5c10a3c1a0016fb5fb9e86454025103aa1a22e9889044ad65bd9f8932316d'
+CURRENT_NATIVE_PROFILE = 'db6b9c8a443483e99932b8970b5abbc506622d1a2f337a1fe9b452a98cec706a'
 PROFILE_ERROR = ('Selected native engine does not match the reviewed capture adapter; '
                  'requalify this adapter before capture')
 RETURN_ERROR = 'Native return already exists; use its retained body or a new current occurrence'
@@ -61,7 +60,7 @@ def reviewed_engine(engine: Path):
                        COMMAND_ROUTES_NATIVE_PROFILE, BODY_REPAIRS_NATIVE_PROFILE,
                        SCHEMA_REPAIRS_NATIVE_PROFILE,
                        LIFECYCLE_NATIVE_PROFILE, OUTLIER_REPAIRS_NATIVE_PROFILE,
-                       SCOPED_COMPOSITION_NATIVE_PROFILE, CURRENT_NATIVE_PROFILE):
+                       SCOPED_COMPOSITION_NATIVE_PROFILE, JOINED_NATIVE_PROFILE, CURRENT_NATIVE_PROFILE):
         raise ValueError(PROFILE_ERROR)
     spec = importlib.util.spec_from_file_location('reviewed_capture_engine', path)
     if spec is None or spec.loader is None:
@@ -71,13 +70,22 @@ def reviewed_engine(engine: Path):
     return module, profile
 
 
-def turn_summary(system, turn: str, observed=None) -> dict:
-    """Match the reviewed Exchange.list row using only the requested packet.
+def legacy_packet_summary(exchange, directory, consumer, publications, returned, outcome):
+    """The admitted predecessor engines predate Exchange.packet_summary."""
+    attempted = exchange.transport.has_attempt(directory)
+    transport = 'dispatch-attempted' if attempted else 'prepared'
+    if returned:
+        transport = 'returned'
+    row = {'packet': directory.name, 'consumer': consumer, 'transport': transport,
+           'publications': publications, 'semantic_fulfillment': 'not-decided-by-exchange'}
+    if outcome is not None:
+        row['transport'] = 'terminal-without-return'
+        row['transport_outcome'] = {k: outcome[k] for k in ('reason', 'account', 'outcome_sha256')}
+    return row
 
-    inspect() also checks current bases/targets; its observation errors do not
-    become new status predicates. The same publication fields and transport
-    precedence as the reviewed list() implementation determine this summary.
-    """
+
+def turn_summary(system, turn: str, observed=None) -> dict:
+    """Project only the inspected packet. Current basis observations do not decide transport."""
     try:
         observed = system.ex.inspect(turn) if observed is None else observed
         publications = []
@@ -86,23 +94,13 @@ def turn_summary(system, turn: str, observed=None) -> dict:
                 raise ValueError(observation['observation_error'])
             record = observation['record']
             publications.append({'path': record['path'], 'phase': record['phase']})
-        transport = 'prepared'
-        # Reviewed implementation dependency, qualified by the complete native
-        # Python profile above; this is not a promised Exchange embedding API.
-        if system.ex.transport.has_attempt(system.ex.directory(turn)):
-            transport = 'dispatch-attempted'
-        if observed['return'] is not None:
-            transport = 'returned'
+        directory = system.ex.directory(turn)
+        returned = observed['return'] is not None
         outcome = observed.get('transport_outcome')
-        if outcome is not None:
-            transport = 'terminal-without-return'
-        result = {'packet': turn, 'consumer': observed['consumer'],
-                  'transport': transport, 'publications': publications,
-                  'semantic_fulfillment': 'not-decided-by-exchange'}
-        if outcome is not None:
-            result['transport_outcome'] = {
-                k: outcome[k] for k in ('reason', 'account', 'outcome_sha256')}
-        return result
+        if hasattr(system.ex, 'packet_summary'):
+            return system.ex.packet_summary(directory, observed['consumer'], publications,
+                                            returned=returned, outcome=outcome)
+        return legacy_packet_summary(system.ex, directory, observed['consumer'], publications, returned, outcome)
     except (ValueError, KeyError, OSError, TypeError) as exc:
         return {'packet': turn, 'transport': 'record-unresolved', 'error': str(exc)}
 

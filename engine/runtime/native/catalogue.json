@@ -3,7 +3,7 @@
   "source_root": "managed-ai-shared-engine-1",
   "snapshot": {
     "edition": "managed-ai-shared-engine-1",
-    "selection_sha256": "beee0354bf6db5b30ac2dd4339c648455e5a68893d21599f00261240c8bb3b00",
+    "selection_sha256": "e5eeee4e917c57315b8693d1b5dc85d00cbbdb7712d6813a4060ca4b0c576880",
     "relationship": "References to one canonical source body; domain sources are selected per store."
   },
   "entries": [
@@ -434,11 +434,11 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "host/README.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:fd2a5bbe22d5e5336e756f4aae7803139a717dc79b6bd64c3903cd2394b5c22c",
+      "body_id": "sha256:3d524312e2509458ca260e7a43a13fe5ee2bcb55179f5650f613f7a0ca467896",
       "body_path": "host/README.md",
-      "sha256": "fd2a5bbe22d5e5336e756f4aae7803139a717dc79b6bd64c3903cd2394b5c22c",
-      "source_sha256": "fd2a5bbe22d5e5336e756f4aae7803139a717dc79b6bd64c3903cd2394b5c22c",
-      "bytes": 24041,
+      "sha256": "3d524312e2509458ca260e7a43a13fe5ee2bcb55179f5650f613f7a0ca467896",
+      "source_sha256": "3d524312e2509458ca260e7a43a13fe5ee2bcb55179f5650f613f7a0ca467896",
+      "bytes": 24007,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "This optional adapter repairs an enrollment and continuation gap in extended research and construction. It makes the original commission, explicit owed duties, current selected sources, forecasts, changed-source notices and nominated overlaps actual inputs to the native producing context. It uses the existing runtime for source capture, Attention, retained returns, guarded publication and goal interpretation. It does not add a model client, universal planner or domain ontology.",

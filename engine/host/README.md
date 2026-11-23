@@ -230,10 +230,9 @@ every native Python program before importing the selected engine or recording a
 receipt. Any program edit, addition or removal refuses capture until this adapter
 is separately requalified. Existing host `upgrade` still requires byte-identical
 native programs; this adapter does not weaken that guard. `System.assess` and
-selected `Exchange.inspect` keep their supported behavior. Exact dispatch-state
-reporting additionally uses the reviewed implementation's
-`ex.transport.has_attempt(ex.directory(turn))` predicate. This is an explicit
-implementation dependency, not a new public native API.
+selected `Exchange.inspect` keep their supported behavior. Exchange builds the
+current transport summary from the selected observations. For earlier qualified
+engines the adapter retains the original projection and dispatch-marker check.
 
 The profile check reads a fixed installed program set on each capture. Selected
 inspection still validates the selected context and its referenced objects, and

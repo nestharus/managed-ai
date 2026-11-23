@@ -10,10 +10,12 @@ import fcntl
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import runpy
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 HERE = Path(__file__).resolve().parent
 
@@ -482,13 +484,22 @@ class Host(RepairCustody):
         if 'result' in scope or 'superseded' in scope:
             raise ValueError('Candidate capture uses an open producing scope, not a completed or superseded one')
         receipt=Path(spec['receipt']).resolve()
-        rid=ident(read(receipt)['id'])
+        with receipt.open('rb') as submitted:
+            if not stat.S_ISREG(os.fstat(submitted.fileno()).st_mode):
+                raise ValueError('An ordinary assessment receipt file is required')
+            body=submitted.read()
+        rid=ident(json.loads(body.decode())['id'])
         target=self.root/'captures'/sid/f'{rid}.json'
         if target.exists():
             raise ValueError('Retain the existing candidate capture; use a fresh receipt for a new occurrence')
         # The adapter checks the selected native return under the same native
         # owner lock as assessment, without constructing global status.
-        result=self.capture_native(sid,receipt,nonempty(spec['producer'],'producer'))
+        # The host lock does not protect the caller's path. Give native strict
+        # JSON validation and Attention exactly the bytes used to name this capture.
+        with NamedTemporaryFile(dir=self.root/'requests', suffix='.json') as selected:
+            selected.write(body)
+            selected.flush()
+            result=self.capture_native(sid,Path(selected.name),nonempty(spec['producer'],'producer'))
         attention=result['attention']; status=result['status']
         matching=[r for r in status.get('turns',[]) if r.get('packet')==sid]
         turn=({'id':sid,'transport':matching[0]['transport'],

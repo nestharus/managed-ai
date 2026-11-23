@@ -110,7 +110,7 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-32d4df76e6b1b8e42764"></a>
 ## host/README.md
 
-[host/README.md](host/README.md) — 24041 bytes; SHA-256 `fd2a5bbe22d5e5336e756f4aae7803139a717dc79b6bd64c3903cd2394b5c22c`.
+[host/README.md](host/README.md) — 24007 bytes; SHA-256 `3d524312e2509458ca260e7a43a13fe5ee2bcb55179f5650f613f7a0ca467896`.
 
 <a id="source-adfc314c9a023758c35d"></a>
 ## host/CONSTRUCTION.md

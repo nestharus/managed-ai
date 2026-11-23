@@ -76,6 +76,32 @@ class SourceReplay(unittest.TestCase):
         self.assertEqual(dispatches, [1, 2])
         self.assertEqual(second["durable"]["actual_dispatches_this_invocation"], {"model": 0, "tool": 0})
 
+    def test_resume_sees_receipt_published_before_it_obtains_the_journal_lock(self):
+        calls = []
+        def model(request):
+            calls.append(request['step'])
+            if request['step'] == 1:
+                return {"kind": "tool", "name": "source_read", "arguments": {"path": "basis.md"}}
+            return {"kind": "final", "answer": "Read."}
+
+        def interrupt(event):
+            raise OSError("paused after recorded model request")
+
+        paused = resumable_workbench.run_workbench(self.config, model=model, after_record=interrupt)
+        self.assertEqual(paused['status'], 'state_error')
+        lock = durable_agent._lock
+        def finish_before_lock(root):
+            with patch.object(durable_agent, '_lock', lock):
+                first = resumable_workbench.run_workbench(self.config, resume=True, model=model)
+                self.assertEqual(first['status'], 'complete', first)
+            return lock(root)
+
+        with patch.object(durable_agent, '_lock', finish_before_lock):
+            second = resumable_workbench.run_workbench(self.config, resume=True, model=model)
+        self.assertEqual(second['status'], 'complete', second)
+        self.assertEqual(second['durable']['actual_dispatches_this_invocation'], {'model': 0, 'tool': 0})
+        self.assertEqual(calls, [1, 2])
+
 
     def test_unwritten_completion_leaves_an_intent_that_resume_will_not_dispatch(self):
         calls = []

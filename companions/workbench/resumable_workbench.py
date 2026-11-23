@@ -240,6 +240,10 @@ def run_workbench(config, *, resume=False, model=None, after_record=None):
             ordinal = value.get("model_transport_ordinal")
             if type(ordinal) is not int or ordinal < 0:
                 raise ValueError("Invalid model transport ordinal")
+            # Another invocation may have completed between construction and
+            # the durable owner's lock. Restore its checkpoint against that cut.
+            if resume:
+                workbench.source_service.reopen_receipts()
             workbench.restore(value["workbench"])
             transport_ordinal = ordinal
             if transport_kind in ("mailbox", "command"):
