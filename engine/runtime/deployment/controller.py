@@ -11,11 +11,13 @@ import ast
 import errno
 import hashlib
 import json
+import math
 import os
 import runpy
 import shlex
 import stat
 import sys
+import time
 from importlib.machinery import EXTENSION_SUFFIXES
 
 HERE = Path(__file__).resolve().parent
@@ -180,11 +182,11 @@ class DeploymentAdoptBasisChanged(ValueError):
 class DeploymentSelection:
     """Read or replace deployment metadata, including when the incumbent code has drifted."""
 
-    def __init__(self, root):
+    def __init__(self, root, *, descriptor=None):
         self.root = Path(root).resolve()
-        descriptor = self.root / 'deployment.json'
-        raw = _descriptor_bytes(descriptor)
-        self.config = _descriptor_object(descriptor, raw)
+        path = self.root / 'deployment.json'
+        raw = _descriptor_bytes(path) if descriptor is None else descriptor
+        self.config = _descriptor_object(path, raw)
         if self.config.get('format') != FORMAT:
             raise ValueError('copied-engine deployment is not supported; create a shared reference deployment')
         self.descriptor_sha256 = sha(raw)
@@ -234,8 +236,8 @@ class DeploymentSelection:
 class Deployment(DeploymentSelection):
     """Open the selected engine and store after verifying their declared identities."""
 
-    def __init__(self, root):
-        super().__init__(root)
+    def __init__(self, root, *, descriptor=None):
+        super().__init__(root, descriptor=descriptor)
         self.engine = _engine_directory(self.root / self.config['engine']['path'])
         self.runtime = (self.root / self.config['store']['path']).resolve()
         if any(p.is_symlink() for p in (self.root, self.engine, self.runtime)):
@@ -279,14 +281,15 @@ class Deployment(DeploymentSelection):
 
     @classmethod
     @contextmanager
-    def admitted(cls, root, *, engine, instance, deployment_sha, read_only, store_sha=None):
+    def admitted(cls, root, *, engine, instance, deployment_sha, read_only, store_sha=None, deadline=None):
         """Enter a pinned domain operation under the deployment, then its selected store."""
         root = Path(root).resolve()
         guard = shared if read_only else exclusive
 
         def acquire(guards):
             guards.enter_context(guard(root / 'deployment.lock'))
-            selection = DeploymentSelection(root)
+            descriptor = _descriptor_bytes(root / 'deployment.json')
+            selection = DeploymentSelection(root, descriptor=descriptor)
             if selection.descriptor_sha256 != deployment_sha:
                 raise ValueError('deployment descriptor differs')
             if (root / selection.config['engine']['path']).resolve() != engine:
@@ -295,17 +298,15 @@ class Deployment(DeploymentSelection):
                 raise ValueError('recipient instance differs')
             runtime = (root / selection.config['store']['path']).resolve()
             guards.enter_context(guard(runtime / 'exchange/owner.lock'))
-            return runtime
+            return descriptor, runtime
 
-        # Domain imports can hold the owner for minutes. Interactive callers
-        # can select a shorter wait, including an immediate disposition.
-        wait = float(os.environ.get('MANAGED_AI_DOMAIN_ADMISSION_SECONDS', '600'))
-        if not 0 <= wait <= 600:
-            raise ValueError('MANAGED_AI_DOMAIN_ADMISSION_SECONDS must be between 0 and 600')
-        with owner_admission(acquire, timeout=wait) as runtime:
+        with owner_admission(acquire, deadline=admission_deadline(deadline)) as (descriptor, runtime):
             if store_sha is not None and sha(_descriptor_bytes(runtime / 'system.json')) != store_sha:
                 raise ValueError('store descriptor differs')
-            yield cls(root)
+            selected = cls(root, descriptor=descriptor)
+            if selected.runtime != runtime:
+                raise ValueError('selected store path differs')
+            yield selected
 
     @classmethod
     def current_status(cls, root):
@@ -329,18 +330,18 @@ class Deployment(DeploymentSelection):
         self.verify()
         return self._dispatch(arguments)
 
-    def _dispatch(self, arguments):
+    def _dispatch(self, arguments, *, deadline=None):
         if not arguments or any(v == '--root' or v.startswith('--root=') for v in arguments):
             raise ValueError('supply a native command; deployment owns its selected store')
         if self.engine != HERE.parents[1] or arguments[0] in {'adopt', 'reconcile-publication', 'recompose'}:
-            return self._selected_system(arguments)
-        return self._system_action(arguments)
+            return self._selected_system(arguments, deadline)
+        return self._system_action(arguments, deadline)
 
     def _native_entry(self):
         entry = self.engine / NATIVE_ENTRY
         return entry if entry.is_file() else self.engine / PORTABLE_ENTRY
 
-    def _selected_system(self, arguments):
+    def _selected_system(self, arguments, deadline=None):
         # The controller imported its own core before it verified the selected
         # engine. A cached package would otherwise mask the selected engine.
         app = self._native_entry().parent
@@ -355,7 +356,7 @@ class Deployment(DeploymentSelection):
         search = sys.path[:]
         try:
             sys.path[:] = [p for p in search if Path(p).resolve() not in (HERE, HERE.parent / 'continuation')]
-            return self._system_action(arguments)
+            return self._system_action(arguments, deadline)
         finally:
             for name in tuple(sys.modules):
                 if selected_name(name):
@@ -363,15 +364,17 @@ class Deployment(DeploymentSelection):
             sys.modules.update(previous)
             sys.path[:] = search
 
-    def _system_action(self, arguments):
+    def _system_action(self, arguments, deadline=None):
         api = runpy.run_path(str(self._native_entry()))
         if api.get('DEPLOYMENT_API') != FORMAT or api.get('ENGINE_API') != ENGINE_API:
             raise ValueError('selected engine does not implement the declared deployment API')
         args = api['parser']().parse_args(['--root', str(self.runtime), *arguments])
+        if args.action in ('show', 'catalogue') and arguments[0] != args.action:
+            raise ValueError('supply the native store observation as the command')
         if args.action == 'init':
             raise ValueError('initialize a store through the central system entrance before deployment')
         try:
-            with self._guarded_system(api, args) as system:
+            with self._guarded_system(api, args, deadline) as system:
                 return api['act'](system, args), args, api
         except ValueError as exc:
             if args.action == 'adopt':
@@ -394,12 +397,14 @@ class Deployment(DeploymentSelection):
         return None
 
     @contextmanager
-    def _guarded_system(self, api, args):
-        if args.action in {'show', 'catalogue', 'configure'}:
-            lock = self.runtime / 'exchange' / 'owner.lock'
-            guard = shared if args.action == 'catalogue' else exclusive
-            admission = guard(lock) if args.action == 'configure' else observation_guard(guard, lock)
-            with admission:
+    def _guarded_system(self, api, args, deadline=None):
+        if args.action in {'show', 'catalogue'}:
+            with type(self).admitted(self.root, engine=self.engine, instance=self.config['store']['instance_id'],
+                                     deployment_sha=self.descriptor_sha256, read_only=args.action == 'catalogue',
+                                     deadline=deadline) as selected:
+                yield selected._open_selected_store(api, args)
+        elif args.action == 'configure':
+            with exclusive(self.runtime / 'exchange' / 'owner.lock'):
                 yield self._open_selected_store(api, args)
         elif args.action in {'put', 'recompose'}:
             # Resolve the owner before admission. Read its current policy inside the guard.
@@ -432,8 +437,23 @@ class Deployment(DeploymentSelection):
         return system
 
 
-def observation_guard(guard, path):
-    return owner_admission(lambda guards: guards.enter_context(guard(path)))
+def admission_deadline(forwarded=None):
+    """Share an explicit caller's monotonic cutoff across the POSIX exec boundary."""
+    if forwarded is not None and not math.isfinite(forwarded):
+        raise ValueError('invalid admission deadline')
+    value = os.environ.get('MANAGED_AI_DOMAIN_ADMISSION_SECONDS')
+    if value is None:
+        return forwarded
+    seconds = float(value)
+    if not 0 <= seconds <= 600:
+        raise ValueError('MANAGED_AI_DOMAIN_ADMISSION_SECONDS must be between 0 and 600')
+    end = time.monotonic() + seconds
+    return end if forwarded is None else min(forwarded, end)
+
+
+def observation_guard(guard, path, *, deadline=None):
+    return owner_admission(lambda guards: guards.enter_context(guard(path)),
+                           deadline=admission_deadline(deadline))
 
 
 @contextmanager
@@ -450,6 +470,7 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--deployment', type=Path, required=True)
     p.add_argument('--expected-descriptor', help='Deployment edition verified by the forwarding entrance')
+    p.add_argument('--admission-deadline', type=float, help=argparse.SUPPRESS)
     sub = p.add_subparsers(dest='action', required=True)
     init = sub.add_parser('init'); init.add_argument('--runtime', '--store', dest='runtime', required=True, type=Path)
     init.add_argument('--engine', type=Path)
@@ -465,6 +486,15 @@ def main():
     args = parser().parse_args()
     root = args.deployment.resolve()
     try:
+        if args.action == 'system' and args.arguments[:1] in (['show'], ['catalogue']):
+            descriptor = _descriptor_bytes(root / 'deployment.json')
+            if args.expected_descriptor is not None and sha(descriptor) != args.expected_descriptor:
+                raise ValueError('deployment descriptor differs')
+            with report_admission(args.action):
+                result, app_args, api = Deployment(root, descriptor=descriptor)._dispatch(
+                    args.arguments, deadline=args.admission_deadline)
+            api['emit'](result, app_args)
+            return
         if args.action == 'system' and args.arguments[:1] == ['explain-context']:
             # Read frozen evidence without creating deployment or store lock files.
             selected = Deployment(root)
@@ -475,11 +505,11 @@ def main():
             return
         if args.action == 'init':
             root.mkdir(parents=True, exist_ok=True)
-        guard = shared if args.action == 'system' and args.arguments[:1] == ['catalogue'] else exclusive
         lock = root / 'deployment.lock'
-        observe = (args.action in {'status', 'verify'} or
-                   args.action == 'system' and args.arguments[:1] in (['show'], ['catalogue']))
-        admission = observation_guard(guard, lock) if observe else guard(lock)
+        if args.action in {'status', 'verify'}:
+            admission = observation_guard(exclusive, lock, deadline=args.admission_deadline)
+        else:
+            admission = exclusive(lock)
         with report_admission(args.action), admission:
             if args.expected_descriptor is not None and DeploymentSelection(root).descriptor_sha256 != args.expected_descriptor:
                 raise ValueError('deployment descriptor differs')

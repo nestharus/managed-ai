@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import random
 import time
 from typing import Any, Iterator
 import uuid
@@ -75,23 +76,32 @@ class AdmissionContended(OwnerBusy):
 
 
 @contextmanager
-def owner_admission(acquire, *, timeout=5.0):
-    """Retry only guard acquisition. Release every earlier guard before sleeping."""
-    deadline = time.monotonic() + timeout
+def owner_admission(acquire, *, timeout=None, deadline=None):
+    """Try immediately, then back off on pre-entry contention until cancelled or timed out."""
+    if timeout is not None:
+        end = time.monotonic() + timeout
+        deadline = end if deadline is None else min(end, deadline)
     interval = 0.05
     while True:
         with ExitStack() as guards:
             try:
                 selection = acquire(guards)
             except OwnerBusy as exc:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise AdmissionContended(exc.path) from exc
+                busy_path = exc.path
             else:
                 yield selection
                 return
-        time.sleep(min(interval, remaining))
-        interval = min(interval * 2, 1.0)
+        # Equal jitter separates simultaneous waiters while retaining a positive floor.
+        delay = random.uniform(interval / 2, interval)
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AdmissionContended(busy_path)
+            delay = min(delay, remaining)
+        time.sleep(delay)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise AdmissionContended(busy_path)
+        interval = min(interval * 2, 2.0)
 
 
 @contextmanager
