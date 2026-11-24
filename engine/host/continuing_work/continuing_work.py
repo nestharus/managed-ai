@@ -518,6 +518,9 @@ class Host(RepairCustody):
         sid=ident(sid); path=self.root/'scopes'/f'{sid}.json'; scope=read(path)
         if 'superseded' in scope: raise ValueError('This preparation was superseded; use its actual successor')
         if 'result' in scope: raise ValueError('Retain the completed occurrence; use native recovery for uncertain transport')
+        if 'supersession_request' in scope:
+            successor = scope['supersession_request']['successor']
+            raise ValueError(f'{sid}: inspect the outstanding handoff to {successor} before receiving another return')
         goal=self.goal()
         if goal['sha256']!=scope['parent_goal']['sha256']:
             raise ValueError('Parent commission/duties changed; retain the proposal and prepare a fresh receiving occasion')
@@ -554,12 +557,28 @@ class Host(RepairCustody):
             self.received_outputs(scope)
             return {'id':sid,'already_received':True,'outputs':scope['result']['outputs']}
         goal=self.goal()
+        observed = self.inspect_native(sid)
+        returned = observed.get('return')
+        handoff = scope.get('supersession_request')
+        if handoff is not None and returned is None:
+            raise ValueError(f"{sid}: no return confirms the handoff to {handoff['successor']}; "
+                             "inspect the original packet before retrying supersede")
+        if returned is None:
+            raise ValueError('No native return exists; ordinary receive is still the appropriate operation')
+        if handoff is not None:
+            # A bound carrier excludes caller-import at Exchange. Its actual
+            # candidate can still use ordinary guarded publication on this turn.
+            if returned['transport']['kind'] != 'local-command' or not returned['proposals']:
+                return self._finish_supersession(path, scope, returned)
+            if returned['packet'] != sid or returned['request_sha256'] != handoff['request_sha256']:
+                raise ValueError(f'{sid}: carrier return differs from the prepared handoff occurrence')
+        if not returned['proposals']:
+            raise ValueError(f'{sid}: no-output return has no recorded successor binding; '
+                             'retain the original return and reconcile the handoff at its host')
         if goal['sha256']!=scope['parent_goal']['sha256']:
             raise ValueError('Parent duty changed; preserve old return and prepare a new current receiving scope')
         self.current(self.config['commission'],'Current commission')
         for source in scope['sources']: self.current(source,'Selected current source '+source['id'])
-        observed=self.inspect_native(sid); returned=observed.get('return')
-        if returned is None: raise ValueError('No native return exists; ordinary receive is still the appropriate operation')
         proposals={r['path']:r for r in returned['proposals']}
         if set(proposals)!=set(scope['targets']): raise ValueError('Observed native return differs from selected host targets')
         known={p['record']['path']:p for p in observed['publications'] if isinstance(p.get('record'),dict)}
@@ -568,7 +587,8 @@ class Host(RepairCustody):
             if target in known:
                 row=known[target]
                 if row.get('observation_error') or row['record'].get('phase')!='complete' or not row.get('current_target',{}).get('matches_proposal'):
-                    raise ValueError('Publication was attempted with unresolved outcome; use native inspection/reconciliation, never replay')
+                    raise ValueError(f'{sid}: publication of {target} has an unresolved outcome; '
+                                     'inspect and reconcile the original native publication before continuing')
                 publications.append(row['record'])
             else:
                 # Only an unattempted target may be published, through current native guards.
@@ -581,6 +601,26 @@ class Host(RepairCustody):
         self.event('resumed-return',{'id':sid,'scope':self.pin(path),'new_receive_performed':False,
                                     'previous_publications_replayed':False})
         return {'id':sid,'outputs':scope['result']['outputs'],'recovered':True,'parent_duties_closed':False}
+
+    def _finish_supersession(self, path, scope, returned):
+        sid = scope['id']
+        request = scope['supersession_request']
+        successor = request['successor']
+        transport = returned['transport']
+        if (returned['packet'] != sid or returned['request_sha256'] != request['request_sha256']
+                or returned['producer'] != request['producer'] or returned['proposals']
+                or returned['reply_sha256'] != request['reply_sha256'] or transport['kind'] != 'caller-import'
+                or transport.get('source_path') != request['reply_path']):
+            raise ValueError(f'{sid}: native return does not confirm the recorded handoff to {successor}; '
+                             'retain both for host reconciliation')
+        scope['superseded'] = {'at_utc': now(), 'successor': successor, 'account': request['account'],
+                               'return': returned}
+        del scope['supersession_request']
+        write(path, scope)
+        self.event('preparation-superseded', {'id': sid, 'successor': successor, 'scope': self.pin(path),
+                                              'parent_duties_closed': False})
+        return {'id': sid, 'state': 'superseded-without-output', 'successor': successor,
+                'return_sha256': returned['return_sha256'], 'parent_duties_closed': False}
 
     def supersede(self,sid,spec):
         """Return an obsolete preparation without a candidate; carry work to a real successor."""
@@ -598,13 +638,23 @@ class Host(RepairCustody):
         account=nonempty(spec['account'],'supersession account')
         producer=nonempty(spec['producer'],'actual responding participant')
         reply=self.root/'requests'/f'{sid}-supersession.md'
-        reply.write_text(account+'\n\nNo candidate output is returned by this occurrence. Actual continuing scope: '+successor['id']+'. Parent duties remain owed.\n')
+        body = (account + '\n\nNo candidate output is returned by this occurrence. Actual continuing scope: '
+                + successor['id'] + '. Parent duties remain owed.\n').encode('utf-8')
+        # Bind the host decision before Exchange can accept its no-output reply.
+        # The ordinary candidate path still depends on a complete native proposal roster.
+        request_sha = scope['native_context'].get('request_sha256')
+        if request_sha is None:
+            request_sha = self.call('recover', sid)['request_sha256']
+        request = {'successor': successor['id'], 'account': account, 'producer': producer,
+                   'request_sha256': request_sha, 'reply_path': str(reply), 'reply_sha256': digest(body)}
+        if 'supersession_request' in scope and scope['supersession_request'] != request:
+            raise ValueError(f"{sid}: the outstanding handoff to {scope['supersession_request']['successor']} differs; "
+                             "inspect the original request")
+        reply.write_bytes(body)
+        scope['supersession_request'] = request
+        write(path, scope)
         returned=self.call('receive',sid,'--reply',reply,'--producer',producer)['return']
-        scope['superseded']={'at_utc':now(),'successor':successor['id'],'account':account,'return':returned}
-        write(path,scope)
-        self.event('preparation-superseded',{'id':sid,'successor':successor['id'],'scope':self.pin(path),'parent_duties_closed':False})
-        return {'id':sid,'state':'superseded-without-output','successor':successor['id'],
-                'return_sha256':returned['return_sha256'],'parent_duties_closed':False}
+        return self._finish_supersession(path, scope, returned)
 
     def status(self):
         native=self.call('status'); transport={r['packet']:r for r in native['turns']}
@@ -612,7 +662,11 @@ class Host(RepairCustody):
         for scope in self.scopes():
             current=transport.get(scope['id'],{})
             label='received' if 'result' in scope else 'superseded-without-output' if 'superseded'in scope else 'native-return-needs-host-reconciliation' if current.get('transport')=='returned' else 'prepared'
-            scopes.append({'id':scope['id'],'host_state':label,'native':current})
+            row={'id':scope['id'],'host_state':label,'native':current}
+            if 'supersession_request' in scope and 'result' not in scope:
+                row.update(host_state='supersession-needs-reconciliation',
+                           successor=scope['supersession_request']['successor'])
+            scopes.append(row)
         return {'native':native,'scopes':scopes,
                 'repairs':[read(x) for x in sorted((self.root/'repairs').glob('*.json'))]}
 
