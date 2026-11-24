@@ -20,7 +20,7 @@ from importlib.machinery import EXTENSION_SUFFIXES
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / 'continuation'))
-from continuation_support.storage import encode, exclusive, shared, atomic_bytes, sha
+from continuation_support.storage import AdmissionContended, encode, exclusive, owner_admission, shared, atomic_bytes, sha
 from continuation_support.ownership import packet_id
 
 VERSION = '0.3.0'
@@ -278,6 +278,36 @@ class Deployment(DeploymentSelection):
         return self._verify_binding()
 
     @classmethod
+    @contextmanager
+    def admitted(cls, root, *, engine, instance, deployment_sha, read_only, store_sha=None):
+        """Enter a pinned domain operation under the deployment, then its selected store."""
+        root = Path(root).resolve()
+        guard = shared if read_only else exclusive
+
+        def acquire(guards):
+            guards.enter_context(guard(root / 'deployment.lock'))
+            selection = DeploymentSelection(root)
+            if selection.descriptor_sha256 != deployment_sha:
+                raise ValueError('deployment descriptor differs')
+            if (root / selection.config['engine']['path']).resolve() != engine:
+                raise ValueError('selected native engine differs')
+            if selection.config['store']['instance_id'] != instance:
+                raise ValueError('recipient instance differs')
+            runtime = (root / selection.config['store']['path']).resolve()
+            guards.enter_context(guard(runtime / 'exchange/owner.lock'))
+            return runtime
+
+        # Domain imports can hold the owner for minutes. Interactive callers
+        # can select a shorter wait, including an immediate disposition.
+        wait = float(os.environ.get('MANAGED_AI_DOMAIN_ADMISSION_SECONDS', '600'))
+        if not 0 <= wait <= 600:
+            raise ValueError('MANAGED_AI_DOMAIN_ADMISSION_SECONDS must be between 0 and 600')
+        with owner_admission(acquire, timeout=wait) as runtime:
+            if store_sha is not None and sha(_descriptor_bytes(runtime / 'system.json')) != store_sha:
+                raise ValueError('store descriptor differs')
+            yield cls(root)
+
+    @classmethod
     def current_status(cls, root):
         selected = cls(root)
         store = selected.config['store']
@@ -365,9 +395,11 @@ class Deployment(DeploymentSelection):
 
     @contextmanager
     def _guarded_system(self, api, args):
-        if args.action in {'catalogue', 'configure'}:
+        if args.action in {'show', 'catalogue', 'configure'}:
+            lock = self.runtime / 'exchange' / 'owner.lock'
             guard = shared if args.action == 'catalogue' else exclusive
-            with guard(self.runtime / 'exchange' / 'owner.lock'):
+            admission = guard(lock) if args.action == 'configure' else observation_guard(guard, lock)
+            with admission:
                 yield self._open_selected_store(api, args)
         elif args.action in {'put', 'recompose'}:
             # Resolve the owner before admission. Read its current policy inside the guard.
@@ -400,9 +432,24 @@ class Deployment(DeploymentSelection):
         return system
 
 
+def observation_guard(guard, path):
+    return owner_admission(lambda guards: guards.enter_context(guard(path)))
+
+
+@contextmanager
+def report_admission(operation):
+    """Emit the CLI disposition only for an exhausted pre-operation admission."""
+    try:
+        yield
+    except AdmissionContended as exc:
+        print(json.dumps(exc.result(operation)), file=sys.stderr)
+        raise SystemExit(75)
+
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--deployment', type=Path, required=True)
+    p.add_argument('--expected-descriptor', help='Deployment edition verified by the forwarding entrance')
     sub = p.add_subparsers(dest='action', required=True)
     init = sub.add_parser('init'); init.add_argument('--runtime', '--store', dest='runtime', required=True, type=Path)
     init.add_argument('--engine', type=Path)
@@ -420,13 +467,22 @@ def main():
     try:
         if args.action == 'system' and args.arguments[:1] == ['explain-context']:
             # Read frozen evidence without creating deployment or store lock files.
-            result, app_args, api = Deployment(root).system(args.arguments)
+            selected = Deployment(root)
+            if args.expected_descriptor is not None and selected.descriptor_sha256 != args.expected_descriptor:
+                raise ValueError('deployment descriptor differs')
+            result, app_args, api = selected.system(args.arguments)
             api['emit'](result, app_args)
             return
         if args.action == 'init':
             root.mkdir(parents=True, exist_ok=True)
         guard = shared if args.action == 'system' and args.arguments[:1] == ['catalogue'] else exclusive
-        with guard(root / 'deployment.lock'):
+        lock = root / 'deployment.lock'
+        observe = (args.action in {'status', 'verify'} or
+                   args.action == 'system' and args.arguments[:1] in (['show'], ['catalogue']))
+        admission = observation_guard(guard, lock) if observe else guard(lock)
+        with report_admission(args.action), admission:
+            if args.expected_descriptor is not None and DeploymentSelection(root).descriptor_sha256 != args.expected_descriptor:
+                raise ValueError('deployment descriptor differs')
             if args.action == 'init':
                 result = Deployment.initialize(root, args.runtime, args.engine)
             elif args.action == 'stage':

@@ -1,7 +1,7 @@
 """Filesystem durability and content-addressed bytes shared by the local engines."""
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 import errno
 import fcntl
@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import time
 from typing import Any, Iterator
 import uuid
 
@@ -60,6 +61,39 @@ def read_json(path: Path) -> dict[str, Any]:
     return value
 
 
+class OwnerBusy(RuntimeError):
+    def __init__(self, path: Path):
+        super().__init__(f"another owner holds {path}")
+        self.path = path
+
+
+class AdmissionContended(OwnerBusy):
+    """The caller timed out acquiring its guards before entering the operation."""
+
+    def result(self, operation):
+        return dict(status='contended', operation=operation, lock=str(self.path), error=str(self))
+
+
+@contextmanager
+def owner_admission(acquire, *, timeout=5.0):
+    """Retry only guard acquisition. Release every earlier guard before sleeping."""
+    deadline = time.monotonic() + timeout
+    interval = 0.05
+    while True:
+        with ExitStack() as guards:
+            try:
+                selection = acquire(guards)
+            except OwnerBusy as exc:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise AdmissionContended(exc.path) from exc
+            else:
+                yield selection
+                return
+        time.sleep(min(interval, remaining))
+        interval = min(interval * 2, 1.0)
+
+
 @contextmanager
 def exclusive(path: Path, *, allow_readonly_open: bool = False) -> Iterator[None]:
     try:
@@ -75,7 +109,7 @@ def exclusive(path: Path, *, allow_readonly_open: bool = False) -> Iterator[None
         try:
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise RuntimeError(f"another owner holds {path}") from exc
+            raise OwnerBusy(path) from exc
         try:
             yield
         finally:
@@ -89,7 +123,7 @@ def shared(path: Path) -> Iterator[None]:
         try:
             fcntl.flock(stream.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise RuntimeError(f"another owner holds {path}") from exc
+            raise OwnerBusy(path) from exc
         try:
             yield
         finally:
