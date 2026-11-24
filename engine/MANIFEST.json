@@ -117,14 +117,14 @@
       "sha256": "2b7373ebd791979e5aa795d80ad35e93d0541e09f09e69fec96ce03004b5a5d0"
     },
     "host/continuing_work/capture_native.py": {
-      "bytes": 7640,
+      "bytes": 7797,
       "mode": 420,
-      "sha256": "de700f189a4edb4eb4395c51606318ebecbfdf1ced2d85e477fe1db2339ed73f"
+      "sha256": "328bca5cd4a51489f6c36bfb158cb35747c51000409535366874515aedaa6c72"
     },
     "host/continuing_work/continuing_work.py": {
-      "bytes": 45534,
+      "bytes": 49094,
       "mode": 420,
-      "sha256": "780f94e9a0ce0d71de99649c3b1136586307023670ec51ef0f114e92c46b7cc9"
+      "sha256": "f457fe63e2d00c0ea152b1a03762e61512bbec82f2f362b2b132ae4eae4a6afb"
     },
     "host/continuing_work/occurrence_files.py": {
       "bytes": 955,
@@ -140,6 +140,11 @@
       "bytes": 4601,
       "mode": 420,
       "sha256": "b5850505258b3860c375942f10d5a9e65447080500ecf33314b3920da4a58b85"
+    },
+    "host/continuing_work/test_handoff_recovery.py": {
+      "bytes": 15949,
+      "mode": 420,
+      "sha256": "80423ab0bfd1403bb3496504123bf33e58d53667a5ae6833252a5363475fc7ee"
     },
     "host/continuing_work/test_packet_summary.py": {
       "bytes": 4132,
@@ -477,9 +482,9 @@
       "sha256": "f60c0867a202ebc06ed8f675fae049b6227619542471e97f3d8c66cd7772af61"
     },
     "runtime/continuation/continuation_support/storage.py": {
-      "bytes": 4906,
+      "bytes": 5954,
       "mode": 420,
-      "sha256": "346c2dd98b076735e9700e8f8817fbb9709330d399862fdf43143089c01df761"
+      "sha256": "655e68c24899d8b5c673a9aa5e18cd1801adbd4017e03608583d566d59d7f74a"
     },
     "runtime/deploy.py": {
       "bytes": 248,
@@ -487,9 +492,9 @@
       "sha256": "7f2becafa81691c853b5e54b6a3a009b2d9b9366a57b9c1f7e8b6e94470e25e8"
     },
     "runtime/deployment/controller.py": {
-      "bytes": 21499,
+      "bytes": 24522,
       "mode": 420,
-      "sha256": "5f70c52f4e453a5b39b04fdbf8ad35398bf846b57504b05609411ba181eaf209"
+      "sha256": "ba031f8760e2ef585b8e3b7c6da7efca7d16b5d58b859f8e770e3550dd54af6c"
     },
     "runtime/docs/api.md": {
       "bytes": 11132,
@@ -1360,6 +1365,11 @@
       "bytes": 14254,
       "mode": 420,
       "sha256": "f6e375a5330466a5b0120122cce36c6cc25353aaa6da10d61e87b5585a760695"
+    },
+    "runtime/tests/exchange/test_owner_admission.py": {
+      "bytes": 2199,
+      "mode": 420,
+      "sha256": "b21de595df7ba51eec65542d454291d24cfa61e92f638bb4fb489620fe42cf4d"
     },
     "runtime/tests/exchange/test_receiving_views.py": {
       "bytes": 10756,
