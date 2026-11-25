@@ -91,7 +91,7 @@ Publish the receiving result alongside the digest of the archive it qualifies.
   research and AI-system-building selections. From the extracted package root
   run `python3 -B start_operation.py`, inspect `system view start` through its
   deployment, and exercise the reading guides, source verifier and companion.
-  Check the companion with `--engine engine/prototype`.
+  Check the companion with `--engine engine/runtime`.
 - For a domain release, qualify the actual export in the disposable compatible
   receiver described below. Exercise its entry sources and tools at the declared
   domain mount with its exact dependency commits.

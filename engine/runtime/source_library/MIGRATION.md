@@ -21,9 +21,9 @@ The source map collects complete current, evidence and pattern Markdown bodies, 
 `publish.py` is an explicit authoring operation. It reads a nominated current project tree, constructs full objects and a catalogue in a fresh directory, and activates nothing. From the complete project's root:
 
 ```bash
-python3 -B prototype/knowledge-system/publish.py --root . publish --edition next-accepted --output /tmp/next-knowledge
-python3 -B prototype/knowledge-system/knowledge.py --library /tmp/next-knowledge verify
-python3 -B prototype/knowledge-system/publish.py --root . audit --library /tmp/next-knowledge
+python3 -B engine/runtime/source_library/publish.py --root . publish --edition next-accepted --output /tmp/next-knowledge
+python3 -B engine/runtime/source_library/knowledge.py --library /tmp/next-knowledge verify
+python3 -B engine/runtime/source_library/publish.py --root . audit --library /tmp/next-knowledge
 ```
 
 Use a fresh output directory. A retry with the identical complete catalogue and object membership verifies the existing result and returns `already-present-verified`; a different or incomplete publication is refused without overwrite. `--overlay PATH` can nominate a reviewable proposal tree over the base during construction; the audit must use the same basis or the adopted complete project afterward. The publisher does not claim an atomic concurrent source snapshot. Quiesce accepted publication or retain the selected source edition when that boundary matters.

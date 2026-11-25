@@ -44,7 +44,7 @@ python3 -B system.py --root ../my-ai-work compose --record explanation-system \
   --focus relation:claim-to-explanation --limit 6 --pair-limit 100
 ```
 
-For a selected deployment, use its stable `deploy.py --deployment ... system` prefix. A view can also enter a normal context request:
+For a selected deployment, use its stable `engine/runtime/select_deployment.py --deployment ... system` prefix. A view can also enter a normal context request:
 
 ```json
 {
