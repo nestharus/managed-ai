@@ -222,6 +222,9 @@ class TurnRetirementTests(unittest.TestCase):
             self._complete_turn('esc-ref', targets=['outputs/esc-ref.md'])
             self._complete_turn('interp-ref', targets=['outputs/interp-ref.md'])
             self._complete_turn('uncommit-ref', targets=['outputs/uncommit-ref.md'])
+            self._complete_turn('origin-ref', targets=['outputs/origin-ref.md'])
+            self._complete_turn('sealed-ref', targets=['outputs/sealed-ref.md'])
+            self._complete_turn('att-prod-ref', targets=['outputs/att-prod-ref.md'])
 
             # 1. Live record basis references .system/turns/rec-ref/brief.md -> MUST REFUSE.
             self.system.put({
@@ -256,23 +259,12 @@ class TurnRetirementTests(unittest.TestCase):
                 'content': {'log': 'Historical audit inspected work/.system/turns/log-mention/brief.md previously.'},
             }, 0)
 
-            # 5. JSON unicode-escape basis path (\u002esystem/turns/...) -> MUST REFUSE!
-            esc_record = self.system.work / 'records' / 'r-escaped.json'
-            esc_record.write_bytes(
-                b'{"id":"r-escaped","kind":"note","content":{"text":"escaped"},'
-                b'"basis":[{"path":"\\u002esystem/turns/esc-ref/brief.md","sha256":"'
-                + (b'a' * 64) + b'"}]}\n'
-            )
+            # 5. Real system.interpret() snapshot-dict evidence referencing a working copy -> MUST REFUSE! (C9-1)
+            acct = self.base / 'interp-account.md'
+            acct.write_text('Whole-goal interpretation relying directly on turn brief.\n')
+            self.system.interpret(1, 'continue', acct, ['.system/turns/interp-ref/brief.md'])
 
-            # 6. Interpretation evidence referencing a candidate working copy -> MUST REFUSE!
-            interp_dir = self.system.work / 'interpretations'
-            interp_dir.mkdir(parents=True, exist_ok=True)
-            write_json(interp_dir / 'i-1.json', {
-                'id': 'i-1',
-                'evidence': ['.system/turns/interp-ref/brief.md'],
-            })
-
-            # 7. Active uncommitted turn staging request referencing a candidate working copy -> MUST REFUSE!
+            # 6. Active uncommitted turn staging request referencing a candidate working copy -> MUST REFUSE!
             staging_dir = self.system.work / '.system/turns/staging-consumer'
             staging_dir.mkdir(parents=True, exist_ok=True)
             write_json(staging_dir / 'request.json', {
@@ -280,16 +272,75 @@ class TurnRetirementTests(unittest.TestCase):
                 'sources': ['.system/turns/uncommit-ref/brief.md'],
             })
 
+            # 7. Live record relations[].origin and content.origin referencing working copy -> MUST REFUSE! (C9-3a)
+            self.system.put({
+                'id': 'r-origin',
+                'kind': 'note',
+                'content': {'text': 'Origin note.', 'origin': '.system/turns/origin-ref/brief.md'},
+                'relations': [{'relation': 'derives-from', 'target': 'goal',
+                               'origin': '.system/turns/origin-ref/brief.md'}],
+            }, 0)
+
+            # 8. Staged exchange/packets/.sealed-<other>/request.json referencing working copy -> MUST REFUSE! (C9-3b)
+            self.system.ex.prepare(
+                'staged-consumer',
+                'tester',
+                '.system/turns/sealed-ref/brief.md',
+                [],
+                [],
+                [],
+                [],
+                staged=True,
+            )
+
+            # 9. Active Attention item latest assessment products referencing working copy -> MUST REFUSE! (C9-3c)
+            att_prod_spec = self.base / 'att-prod.json'
+            att_prod_spec.write_text(json.dumps({
+                'items': [{
+                    'id': 'watch-prod',
+                    'question': 'Track product dependency.',
+                    'use': 'Guard latest assessment product path.',
+                    'basis': [],
+                }],
+            }))
+            self.system.track(att_prod_spec)
+            self._complete_turn('prod-assess-turn', targets=['outputs/prod-assess.md'])
+            assess_path = self.base / 'assess-prod.json'
+            assess_path.write_text(json.dumps({
+                'id': 'rec-prod-1',
+                'assessments': [{
+                    'item': 'watch-prod',
+                    'disposition': 'considered',
+                    'account': 'Observed product from working copy.',
+                    'products': ['.system/turns/att-prod-ref/brief.md'],
+                }],
+            }))
+            self.system.assess('prod-assess-turn', assess_path, 'tester')
+
+            # 10. JSON unicode-escape basis path (\u002esystem/turns/...) -> MUST REFUSE!
+            esc_record = self.system.work / 'records' / 'r-escaped.json'
+            esc_record.write_bytes(
+                b'{"id":"r-escaped","kind":"note","content":{"text":"escaped"},'
+                b'"basis":[{"path":"\\u002esystem/turns/esc-ref/brief.md","sha256":"'
+                + (b'a' * 64) + b'"}]}\n'
+            )
+
             plan = plan_turn_retirement(
                 self.system,
-                turns=['rec-ref', 'pkt-ref', 'att-ref', 'log-mention', 'esc-ref', 'interp-ref', 'uncommit-ref'],
+                turns=[
+                    'rec-ref', 'pkt-ref', 'att-ref', 'log-mention', 'esc-ref',
+                    'interp-ref', 'uncommit-ref', 'origin-ref', 'sealed-ref', 'att-prod-ref',
+                ],
             )
             self.assertEqual([r['turn'] for r in plan['eligible']], ['log-mention'])
             inelig = {r['turn']: r['reasons'] for r in plan['ineligible']}
             self.assertIn('referenced_by_records', inelig['rec-ref'])
             self.assertIn('referenced_by_records', inelig['esc-ref'])
+            self.assertIn('referenced_by_records', inelig['origin-ref'])
             self.assertIn('referenced_by_other_packets', inelig['pkt-ref'])
+            self.assertIn('referenced_by_other_packets', inelig['sealed-ref'])
             self.assertIn('referenced_by_attention', inelig['att-ref'])
+            self.assertIn('referenced_by_attention', inelig['att-prod-ref'])
             self.assertIn('referenced_by_interpretations', inelig['interp-ref'])
             self.assertIn('referenced_by_uncommitted_turns', inelig['uncommit-ref'])
 
@@ -307,6 +358,63 @@ class TurnRetirementTests(unittest.TestCase):
             self.assertEqual(plan['eligible'], [])
             self.assertEqual(plan['ineligible'][0]['turn'], 'corrupt-obj')
             self.assertIn('captured_recovery_failed', plan['ineligible'][0]['reasons'])
+
+    def test_refuses_uncaptured_extra_files_and_post_capture_modifications(self):
+        with exclusive(self.system.ex.root / 'owner.lock'):
+            # 1. Extra uncaptured file placed inside work/.system/turns/<turn>/ -> MUST REFUSE! (C9-2)
+            self._complete_turn('extra-file-turn', targets=['outputs/extra.md'])
+            extra_notes = self.system.work / '.system/turns/extra-file-turn/caller-private-notes.md'
+            extra_notes.write_text('Unretained caller notes.\n')
+
+            # 2. Captured working file modified on disk after capture -> MUST REFUSE! (C9-2)
+            self._complete_turn('edited-brief-turn', targets=['outputs/edited.md'])
+            brief_file = self.system.work / '.system/turns/edited-brief-turn/brief.md'
+            brief_file.write_text('# Mutated after capture\n')
+
+            # 3. Bookkeeping request.json tampered after capture -> MUST REFUSE! (C9-2)
+            self._complete_turn('edited-req-turn', targets=['outputs/req.md'])
+            req_file = self.system.work / '.system/turns/edited-req-turn/request.json'
+            req_doc = json.loads(req_file.read_bytes())
+            req_doc['task'] = 'Tampered task text.'
+            write_json(req_file, req_doc)
+
+            # 4. Turn with legitimate attention spec (attention-spec.json) -> MUST ALLOW!
+            self._complete_turn(
+                'with-att-spec',
+                targets=['outputs/att-spec.md'],
+                extra_request={
+                    'attention': {
+                        'items': [{
+                            'id': 'inline-item',
+                            'question': 'Check inline attention spec.',
+                            'use': 'Verify attention-spec.json is accepted when captured.',
+                            'basis': [],
+                        }],
+                    },
+                },
+            )
+
+            plan = plan_turn_retirement(
+                self.system,
+                turns=['extra-file-turn', 'edited-brief-turn', 'edited-req-turn', 'with-att-spec'],
+            )
+            self.assertEqual([r['turn'] for r in plan['eligible']], ['with-att-spec'])
+            inelig = {r['turn']: r['reasons'] for r in plan['ineligible']}
+            self.assertIn('uncaptured_working_files', inelig['extra-file-turn'])
+            self.assertIn('working_dir_modified_after_capture', inelig['edited-brief-turn'])
+            self.assertIn('working_dir_modified_after_capture', inelig['edited-req-turn'])
+            self.assertTrue(extra_notes.is_file())
+
+            # Retire only the verified 'with-att-spec' turn cleanly.
+            receipt = execute_turn_retirement(
+                self.system,
+                plan=plan,
+                expected_plan=plan['plan_sha256'],
+                reason='Retire verified turn with captured attention-spec.json.',
+            )
+            self.assertTrue(receipt['complete'])
+            self.assertEqual(receipt['retired_turns'], ['with-att-spec'])
+            self.assertTrue(extra_notes.is_file())
 
     def test_rejects_unknown_escaping_and_symlink_turn_names(self):
         with exclusive(self.system.ex.root / 'owner.lock'):
@@ -359,13 +467,21 @@ class TurnRetirementTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'nonempty text'):
                 execute_turn_retirement(self.system, plan=plan, expected_plan=plan['plan_sha256'], reason='   ')
 
-            # 4. TOCTOU drift: a new file appears in work/.system/turns/drift-turn after planning.
+            # 4a. TOCTOU drift: a new uncaptured file appears after planning -> refused before removal.
             extra = self.system.work / '.system/turns/drift-turn/late-note.txt'
             extra.write_text('Added after plan.')
-            with self.assertRaisesRegex(ValueError, 'changed since planning'):
+            with self.assertRaisesRegex(ValueError, 'uncaptured_working_files'):
                 execute_turn_retirement(self.system, plan=plan, expected_plan=plan['plan_sha256'], reason='Stale plan.')
             self.assertTrue(extra.is_file())
             extra.unlink()
+
+            # 4b. TOCTOU drift: working-dir inventory changes (a captured file is removed after planning) -> refused.
+            method_copy = self.system.work / '.system/turns/drift-turn/method.md'
+            method_bytes = method_copy.read_bytes()
+            method_copy.unlink()
+            with self.assertRaisesRegex(ValueError, 'changed since planning'):
+                execute_turn_retirement(self.system, plan=plan, expected_plan=plan['plan_sha256'], reason='Changed dir.')
+            method_copy.write_bytes(method_bytes)
 
             # 5. TOCTOU guard failure: a live record adds a basis reference after planning.
             self.system.put({
