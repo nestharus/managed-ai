@@ -49,10 +49,18 @@ def _ordinary_entry(path, kind, label):
     return info
 
 
+def _ordinary_path(path, kind, label):
+    """Validate every ancestor and the entry itself before resolving."""
+    normalized = Path(os.path.abspath(path))
+    for ancestor in reversed(normalized.parents):
+        _ordinary_entry(ancestor, S_ISDIR, label)
+    _ordinary_entry(normalized, kind, label)
+    return normalized.resolve(strict=True)
+
+
 def _ordinary_within(path, boundary, kind, label):
     """Verify every segment from boundary down to path is ordinary (no symlinks or NTFS reparse points)."""
-    boundary = boundary.resolve(strict=True)
-    _ordinary_entry(boundary, S_ISDIR, label)
+    boundary = _ordinary_path(boundary, S_ISDIR, label)
     normalized = Path(os.path.abspath(path))
     try:
         rel = normalized.relative_to(boundary)
@@ -100,12 +108,9 @@ def _read_strict_object(path, boundary=None):
 
 def render(root):
     """Read canonical UTF-8 inputs and prepare each projection without writing."""
-    root = Path(root).resolve(strict=True)
-    _ordinary_entry(root, S_ISDIR, 'ordinary engine directory required')
+    root = _ordinary_path(root, S_ISDIR, 'ordinary engine directory required')
     bundle_mode = root.name == 'engine'
-    bundle_root = root.parent.resolve(strict=True) if bundle_mode else root
-    if bundle_mode:
-        _ordinary_entry(bundle_root, S_ISDIR, 'ordinary bundle root required')
+    bundle_root = _ordinary_path(root.parent, S_ISDIR, 'ordinary bundle root required') if bundle_mode else root
     source_root_rel = '../..' if bundle_mode else '..'
 
     selection_name = 'release/current_sources.json'
@@ -232,18 +237,25 @@ def refresh(root):
     The release owner serializes refreshes. A replacement failure can leave a
     prefix published. This sequence has no power-loss durability guarantee.
     """
-    root = Path(root).resolve(strict=True)
+    root = _ordinary_path(root, S_ISDIR, 'ordinary engine directory required')
     projections, summary = render(root)
     with ExitStack() as cleanup:
         staged_paths = []
         for name, raw in projections.items():
-            target = (root / name).resolve()
+            rel_target = Path(name)
+            cur = root
+            for part in rel_target.parts[:-1]:
+                cur = cur / part
+                _ordinary_entry(cur, S_ISDIR, 'ordinary projection directory required')
+            target = cur / rel_target.parts[-1]
             try:
                 info = target.lstat()
             except FileNotFoundError:
                 mode = None
             else:
                 if _is_reparse_or_symlink(info) or not S_ISREG(info.st_mode):
+                    raise ValueError('ordinary projection target required: ' + str(target))
+                if not target.resolve(strict=True).is_relative_to(root):
                     raise ValueError('ordinary projection target required: ' + str(target))
                 mode = S_IMODE(info.st_mode)
             scratch = cleanup.enter_context(TemporaryDirectory(dir=target.parent, prefix=f'.{target.name}.'))
@@ -264,6 +276,6 @@ if __name__ == '__main__':
     parser.add_argument('--root', type=Path, default=ROOT)
     args = parser.parse_args()
     try:
-        print(json.dumps(refresh(args.root.resolve(strict=True))))
+        print(json.dumps(refresh(args.root)))
     except (OSError, ValueError) as error:
         raise SystemExit(str(error)) from None

@@ -544,15 +544,29 @@ def main():
     parser.add_argument("--replace", action="store_true", help="Atomically replace the named current transport")
     parser.add_argument("--refresh-only", action="store_true")
     args = parser.parse_args()
-    root = args.root.resolve(strict=True)
-    ordinary(root, root.lstat(), stat.S_ISDIR)
+    root = _check_ordinary_path(args.root, stat.S_ISDIR)
     if not args.refresh_only and args.output is None:
         parser.error("--output is required unless --refresh-only is selected")
-    output = args.output.resolve() if args.output else None
-    if output and (output == root or root in output.parents):
-        raise ValueError("Put transport output outside the source tree")
-    if output and optional_entry(output) is not None and not args.replace:
-        raise ValueError("Output already exists; use --replace to update that current transport")
+    output = None
+    if args.output is not None:
+        output = Path(os.path.abspath(args.output))
+        for ancestor in reversed(output.parents):
+            ancestor_info = optional_entry(ancestor)
+            if ancestor_info is not None:
+                ordinary(ancestor, ancestor_info, stat.S_ISDIR)
+        existing = optional_entry(output)
+        if existing is not None:
+            ordinary(output, existing, stat.S_ISREG)
+            if not args.replace:
+                raise ValueError("Output already exists; use --replace to update that current transport")
+        if output == root or root in output.parents:
+            raise ValueError("Put transport output outside the source tree")
+        for ancestor in (output.parent, *output.parent.parents):
+            if optional_entry(ancestor) is not None:
+                resolved_ancestor = ancestor.resolve(strict=True)
+                if resolved_ancestor == root or root in resolved_ancestor.parents:
+                    raise ValueError("Put transport output outside the source tree")
+                break
     core = inventory_engine(root)
     refresh_manifests(root, core)
     source = members(root, core)
@@ -583,9 +597,12 @@ def main():
                     raise ValueError("Archive content differs: " + relative)
         if members(root, core) != source:
             raise ValueError("Source membership or content changed during packaging")
+        existing = optional_entry(output)
+        if existing is not None:
+            ordinary(output, existing, stat.S_ISREG)
         os.replace(temporary, output)
         print(json.dumps({"status": "packaged", "output": str(output), "files": len(source),
-                          "bytes": output.stat().st_size, "sha256": identity(output)["sha256"]}))
+                          "bytes": output.lstat().st_size, "sha256": identity(output)["sha256"]}))
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)

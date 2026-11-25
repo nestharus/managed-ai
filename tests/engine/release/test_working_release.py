@@ -594,6 +594,132 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "escapes allowed package root"):
                 REFRESH["render"](core)
 
+    def test_c26_1_and_c26_2_refuse_symlink_and_junction_clobber_targets(self):
+        with TemporaryDirectory() as temporary:
+            tmp = Path(temporary)
+            bundle = tmp / "bundle"
+            core = _build_minimal_bundle(bundle)
+            ext = tmp / "external_secret.txt"
+            ext.write_bytes(b"KEEP-ME-UNTOUCHED\n")
+
+            if os.name == "nt":
+                # Windows real NTFS junction tests for --root on both refresh_guidance.py and package.py
+                junc_core = tmp / "junc_core"
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(junc_core), str(core)], check=True, capture_output=True)
+                ref_junc = subprocess.run(
+                    [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(junc_core)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(ref_junc.returncode, 0)
+                self.assertIn("ordinary engine directory required", ref_junc.stderr)
+
+                junc_bundle = tmp / "junc_bundle"
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(junc_bundle), str(bundle)], check=True, capture_output=True)
+                pkg_junc = subprocess.run(
+                    [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(junc_bundle), "--refresh-only"],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(pkg_junc.returncode, 0)
+                self.assertIn("ordinary files and directories", pkg_junc.stderr)
+
+                # Junction parent for --output must be rejected before writing
+                real_out_dir = tmp / "real_out_dir"
+                real_out_dir.mkdir()
+                junc_out_dir = tmp / "junc_out_dir"
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(junc_out_dir), str(real_out_dir)], check=True, capture_output=True)
+                pkg_out_junc = subprocess.run(
+                    [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle),
+                     "--output", str(junc_out_dir / "out.zip")],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(pkg_out_junc.returncode, 0)
+                self.assertIn("ordinary files and directories", pkg_out_junc.stderr)
+                self.assertFalse((real_out_dir / "out.zip").exists())
+
+                # Mocked reparse point on SOURCES.md must be refused by refresh() before staging/replace
+                fake_reparse = SimpleNamespace(
+                    st_mode=stat.S_IFREG | 0o644,
+                    st_reparse_tag=0xA0000003,
+                    st_file_attributes=getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400),
+                )
+                sources_md = core / "SOURCES.md"
+                orig_lstat = Path.lstat
+
+                def patched_lstat(path_self):
+                    if os.path.normcase(os.path.abspath(path_self)) == os.path.normcase(os.path.abspath(sources_md)):
+                        return fake_reparse
+                    return orig_lstat(path_self)
+
+                with mock.patch.object(Path, "lstat", patched_lstat):
+                    with self.assertRaisesRegex(ValueError, "ordinary projection target required"):
+                        REFRESH["refresh"](core)
+            else:
+                # POSIX real symlink clobber tests for C26-1 (SOURCES.md, CURRENT-RELEASE.json, --root)
+                for target_name in ("SOURCES.md", "CURRENT-RELEASE.json"):
+                    target = core / target_name
+                    backup = target.read_bytes()
+                    target.unlink()
+                    target.symlink_to(ext)
+                    res = subprocess.run(
+                        [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(core)],
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertNotEqual(res.returncode, 0, target_name)
+                    self.assertIn("ordinary projection target required", res.stderr)
+                    self.assertEqual(ext.read_bytes(), b"KEEP-ME-UNTOUCHED\n")
+                    target.unlink()
+                    target.write_bytes(backup)
+
+                link_core = tmp / "link_core"
+                link_core.symlink_to(core)
+                res_root = subprocess.run(
+                    [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(link_core)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(res_root.returncode, 0)
+                self.assertIn("ordinary engine directory required", res_root.stderr)
+
+                # C26-2: package.py refuses symlink --output (--replace and dangling) and symlink --root
+                out_link = tmp / "out.zip"
+                out_link.symlink_to(ext)
+                res_rep = subprocess.run(
+                    [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle),
+                     "--output", str(out_link), "--replace"],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(res_rep.returncode, 0)
+                self.assertIn("ordinary files and directories", res_rep.stderr)
+                self.assertEqual(ext.read_bytes(), b"KEEP-ME-UNTOUCHED\n")
+
+                missing_ext = tmp / "never_create.zip"
+                dangling = tmp / "dangling.zip"
+                dangling.symlink_to(missing_ext)
+                res_dang = subprocess.run(
+                    [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle),
+                     "--output", str(dangling)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(res_dang.returncode, 0)
+                self.assertIn("ordinary files and directories", res_dang.stderr)
+                self.assertFalse(missing_ext.exists())
+
+                link_bundle = tmp / "link_bundle"
+                link_bundle.symlink_to(bundle)
+                res_pkg_root = subprocess.run(
+                    [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(link_bundle), "--refresh-only"],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(res_pkg_root.returncode, 0)
+                self.assertIn("ordinary files and directories", res_pkg_root.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
