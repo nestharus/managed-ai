@@ -1,8 +1,10 @@
 """A selected observation uses one packet and preserves Exchange transport precedence."""
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -23,7 +25,17 @@ ENGINE = (
 class PacketSummary(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
-        self.addCleanup(temp.cleanup)
+        def _cleanup():
+            deadline = time.monotonic() + 3.0
+            while True:
+                try:
+                    temp.cleanup()
+                    return
+                except PermissionError:
+                    if os.name != 'nt' or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.02)
+        self.addCleanup(_cleanup)
         self.root = Path(temp.name)
         native, _ = reviewed_engine(ENGINE)
         store = self.root / 'store'
@@ -69,8 +81,7 @@ class PacketSummary(unittest.TestCase):
         self.compare('dispatch-attempted')
         observed = self.system.receive('start', None, 'reader', [], wait=8)
         self.assertFalse(observed['received'])
-        with self.system._selected_exchange() as owner:
-            outcome = owner.close_transport('start', 'The executable was absent.')
+        outcome = self.system.close_transport('start', 'The executable was absent.')
         row = self.compare('terminal-without-return')
         self.assertEqual(row['transport_outcome'], {k: outcome[k] for k in ('reason', 'account', 'outcome_sha256')})
         (self.packet / 'transport-outcome.json').write_bytes(b'{')

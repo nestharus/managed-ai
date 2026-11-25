@@ -118,7 +118,7 @@ class Integrity(unittest.TestCase):
         archive=self.base/'base.zip'
         with ZipFile(archive,'w') as z:z.writestr('snapshot.json',snap)
         selection=self.base/'capture.json'
-        selection.write_bytes(system.encode(dict(format='g60-continuation-capture/1',work_root='runtime/work',object_root='runtime/exchange/objects',owner_lock='runtime/exchange/owner.lock',interpretation=str(pin.relative_to(self.owner)),expected_interpretation=binding(pin),expected_records=[],base=dict(archive=str(archive),**binding(archive),snapshot_sha256=system.sha(snap)))))
+        selection.write_bytes(system.encode(dict(format='g60-continuation-capture/1',work_root='runtime/work',object_root='runtime/exchange/objects',owner_lock='runtime/exchange/owner.lock',interpretation=pin.relative_to(self.owner).as_posix(),expected_interpretation=binding(pin),expected_records=[],base=dict(archive=str(archive),**binding(archive),snapshot_sha256=system.sha(snap)))))
         zpath=self.base/'projection.zip';module.capture(self.owner,selection,zpath)
         sha=binding(zpath)['sha256'];module.verify(zpath,sha)
         dest=self.base/'projection';module.recover(zpath,sha,dest)

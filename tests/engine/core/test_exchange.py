@@ -29,7 +29,16 @@ class ExchangeTests(unittest.TestCase):
         self.proposal = self.base/'proposed.txt'; self.proposal.write_text('new result')
 
     def tearDown(self):
-        self.temp.cleanup()
+        import time
+        deadline = time.monotonic() + 3.0
+        while True:
+            try:
+                self.temp.cleanup()
+                return
+            except PermissionError:
+                if os.name != 'nt' or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.02)
 
     def prepare(self, packet='one', targets=None, methods=None, materials=None, returns=None):
         return self.ex.prepare(packet, 'reader', 'brief.md', methods or ['method.md'],

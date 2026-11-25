@@ -32,7 +32,8 @@ WAVE2_NATIVE_PROFILE = 'a61df8f59eadde2f1631f7002e062770ae68c577de973717e9f49977
 PRE_WAVE3_NATIVE_PROFILE = 'dbfaee1c623984cbd60833413de6c4aab1033214d4ddf6300c415b04bfbeefce'
 WAVE3_NATIVE_PROFILE = '23c5c06540959fe6cbdd0e9e58e3bb69c328616f879caa6fd4604b22d790cf82'
 WAVE3_5_NATIVE_PROFILE = '82f1d0421b9cb9c134e5d0fb97c14e530407c409ac3716730a7f758e16ddd609'
-CURRENT_NATIVE_PROFILE = WAVE3_5_NATIVE_PROFILE
+WAVE4_NATIVE_PROFILE = '22f7b59566fd3b2cf5d02be7c774d0748f316f8bc5963278d9291d946771e5e2'
+CURRENT_NATIVE_PROFILE = WAVE4_NATIVE_PROFILE
 
 ADMITTED_NATIVE_PROFILES = frozenset({
     REVIEWED_NATIVE_PROFILE,
@@ -53,6 +54,7 @@ ADMITTED_NATIVE_PROFILES = frozenset({
     PRE_WAVE3_NATIVE_PROFILE,
     WAVE3_NATIVE_PROFILE,
     WAVE3_5_NATIVE_PROFILE,
+    WAVE4_NATIVE_PROFILE,
     CURRENT_NATIVE_PROFILE,
 })
 
@@ -113,7 +115,15 @@ def reviewed_engine(engine: Path):
     if spec is None or spec.loader is None:
         raise ValueError(PROFILE_ERROR)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    previous = sys.modules.get(spec.name)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if previous is None:
+            sys.modules.pop(spec.name, None)
+        else:
+            sys.modules[spec.name] = previous
     return module, profile
 
 

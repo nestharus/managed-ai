@@ -153,18 +153,49 @@ def limits(spec):
 
 @contextmanager
 def owner_lock(root, name):
-    if fcntl is None:
-        raise OSError('POSIX fcntl locking is required for continuing-state capture')
     path = ordinary_path(root / relative(name))
-    with path.open('rb') as stream:
-        try:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise ValueError('another cooperative owner holds the declared lock') from exc
-        try:
-            yield
-        finally:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    if fcntl is not None:
+        with path.open('rb') as stream:
+            try:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise ValueError('another cooperative owner holds the declared lock') from exc
+            try:
+                yield
+            finally:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        return
+    if os.name == 'nt':
+        import ctypes
+        from ctypes import wintypes
+        import msvcrt
+
+        class _Overlapped(ctypes.Structure):
+            _fields_ = [
+                ('Internal', ctypes.c_void_p),
+                ('InternalHigh', ctypes.c_void_p),
+                ('Offset', wintypes.DWORD),
+                ('OffsetHigh', wintypes.DWORD),
+                ('hEvent', wintypes.HANDLE),
+            ]
+
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        with path.open('r+b') as stream:
+            handle = wintypes.HANDLE(msvcrt.get_osfhandle(stream.fileno()))
+            ov = _Overlapped()
+            ok = kernel32.LockFileEx(handle, 0x00000001 | 0x00000002, 0, 0xFFFFFFFF, 0xFFFFFFFF, ctypes.byref(ov))
+            if not ok:
+                err = ctypes.get_last_error()
+                if err in (32, 33):
+                    raise ValueError('another cooperative owner holds the declared lock')
+                raise OSError(f'LockFileEx failed with Windows error {err}')
+            try:
+                yield
+            finally:
+                ov_u = _Overlapped()
+                kernel32.UnlockFileEx(handle, 0, 0xFFFFFFFF, 0xFFFFFFFF, ctypes.byref(ov_u))
+        return
+    raise OSError('cooperative file locking is unavailable on this platform')
 
 
 def base_binding(spec, root, budget):
@@ -363,11 +394,12 @@ def capture(root, spec_path, output):
                 stream.flush(); os.fsync(stream.fileno())
             require(temporary.stat().st_size <= ARCHIVE_LIMIT, 'support archive exceeds bound')
             os.link(temporary, output)
-            directory_fd = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            if hasattr(os, 'O_DIRECTORY'):
+                directory_fd = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
         finally:
             temporary.unlink(missing_ok=True)
     archive_data, archive_meta = read_bytes(output, ARCHIVE_LIMIT)

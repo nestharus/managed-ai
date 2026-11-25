@@ -5,17 +5,17 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-7876ad26fe587946f43e"></a>
 ## prototype/agent-system/GUIDE.md
 
-[store/GUIDE.md](store/GUIDE.md) — 8361 bytes; SHA-256 `13b4a443f67a91d5ec94bb93f7be9a4a5e17dbcc90dbe9c4c8a398706a048acd`.
+[store/GUIDE.md](store/GUIDE.md) — 8363 bytes; SHA-256 `49943bb1765547063dab32fca277664952823bba450240de3cd03d309c34c4e6`.
 
 <a id="source-a5cc137786c3ed585692"></a>
 ## prototype/agent-system/COMPOSITION.md
 
-[store/COMPOSITION.md](store/COMPOSITION.md) — 19087 bytes; SHA-256 `74688e3237dd8839253e53034f5c5e28ff818984fbca5f5fb166c6eea8265304`.
+[store/COMPOSITION.md](store/COMPOSITION.md) — 19087 bytes; SHA-256 `0b57cf8762473d864d84d9b0cb4448824e4f53a463d78d78da29d0d0b953368d`.
 
 <a id="source-db4e51fc8172437a2216"></a>
 ## prototype/agent-system/README.md
 
-[store/README.md](store/README.md) — 50298 bytes; SHA-256 `54de19a53d5a1245918095ea88590bf01293ba8c556d4293d06cc88c2b891f28`.
+[store/README.md](store/README.md) — 50229 bytes; SHA-256 `a932d00676a3b823d360a4b746c4799fbd319bd2806681d0f506b906fbffa388`.
 
 <a id="source-3b80c2b35af864f33824"></a>
 ## prototype/docs/attention.md
@@ -30,22 +30,22 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-53cca3885001b6f38c30"></a>
 ## prototype/knowledge-system/README.md
 
-[library/README.md](library/README.md) — 8672 bytes; SHA-256 `cd77044504add86c951fe70a8250a1d9823529e44a4381056b68a4f6515b0cfa`.
+[library/README.md](library/README.md) — 8736 bytes; SHA-256 `8a813fcec8741f74317cdfd48d71906097a566b317fff4149a6b9bb623e6eba8`.
 
 <a id="source-fee751dc881d0860bdb7"></a>
 ## prototype/knowledge-system/CONTRACT.md
 
-[library/docs/CONTRACT.md](library/docs/CONTRACT.md) — 24130 bytes; SHA-256 `a6d484a383f285e21246b3384733c8cd4cb7ac59122a039544ef44193ba2732b`.
+[library/docs/CONTRACT.md](library/docs/CONTRACT.md) — 24134 bytes; SHA-256 `a034482011bcdc226f755135a829f042ff2b759ba1c3220bbdbecc4aa56efda8`.
 
 <a id="source-abb12435fcf333967237"></a>
 ## prototype/knowledge-system/MIGRATION.md
 
-[library/docs/MIGRATION.md](library/docs/MIGRATION.md) — 6377 bytes; SHA-256 `fba65b08fff19a823290688d6ce6641f76752c6fc7978aaf0bee53c61e8c9129`.
+[library/docs/MIGRATION.md](library/docs/MIGRATION.md) — 6360 bytes; SHA-256 `4cdc7cc04d11e2f5716559a2f5a3cfdb0ccb55893ce39c6edef9b48a0d523e35`.
 
 <a id="source-973adf08e936e3795b8f"></a>
 ## prototype/knowledge-system/RESEARCH.md
 
-[library/docs/RESEARCH.md](library/docs/RESEARCH.md) — 15314 bytes; SHA-256 `a011241beee1560494697ffcd1f4fa4b621bbce0914b1e68cf0fec96e1363886`.
+[library/docs/RESEARCH.md](library/docs/RESEARCH.md) — 15316 bytes; SHA-256 `882c5b770510291d30d2891010ef2af720c63f3f19c6701a2de3bff7117f8b24`.
 
 <a id="source-ebb2cb11e60bb0995683"></a>
 ## MODEL-BOUND-COMPOSITION.md

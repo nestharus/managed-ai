@@ -9,8 +9,8 @@
       "link_base": "store/GUIDE.md",
       "presentation": "store/GUIDE.md",
       "kind": "guide",
-      "sha256": "13b4a443f67a91d5ec94bb93f7be9a4a5e17dbcc90dbe9c4c8a398706a048acd",
-      "bytes": 8361,
+      "sha256": "49943bb1765547063dab32fca277664952823bba450240de3cd03d309c34c4e6",
+      "bytes": 8363,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -19,7 +19,7 @@
       "link_base": "store/COMPOSITION.md",
       "presentation": "store/COMPOSITION.md",
       "kind": "guide",
-      "sha256": "74688e3237dd8839253e53034f5c5e28ff818984fbca5f5fb166c6eea8265304",
+      "sha256": "0b57cf8762473d864d84d9b0cb4448824e4f53a463d78d78da29d0d0b953368d",
       "bytes": 19087,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
@@ -29,8 +29,8 @@
       "link_base": "store/README.md",
       "presentation": "store/README.md",
       "kind": "guide",
-      "sha256": "54de19a53d5a1245918095ea88590bf01293ba8c556d4293d06cc88c2b891f28",
-      "bytes": 50298,
+      "sha256": "a932d00676a3b823d360a4b746c4799fbd319bd2806681d0f506b906fbffa388",
+      "bytes": 50229,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -59,8 +59,8 @@
       "link_base": "library/README.md",
       "presentation": "library/README.md",
       "kind": "guide",
-      "sha256": "cd77044504add86c951fe70a8250a1d9823529e44a4381056b68a4f6515b0cfa",
-      "bytes": 8672,
+      "sha256": "8a813fcec8741f74317cdfd48d71906097a566b317fff4149a6b9bb623e6eba8",
+      "bytes": 8736,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -69,8 +69,8 @@
       "link_base": "library/docs/CONTRACT.md",
       "presentation": "library/docs/CONTRACT.md",
       "kind": "guide",
-      "sha256": "a6d484a383f285e21246b3384733c8cd4cb7ac59122a039544ef44193ba2732b",
-      "bytes": 24130,
+      "sha256": "a034482011bcdc226f755135a829f042ff2b759ba1c3220bbdbecc4aa56efda8",
+      "bytes": 24134,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -79,8 +79,8 @@
       "link_base": "library/docs/MIGRATION.md",
       "presentation": "library/docs/MIGRATION.md",
       "kind": "guide",
-      "sha256": "fba65b08fff19a823290688d6ce6641f76752c6fc7978aaf0bee53c61e8c9129",
-      "bytes": 6377,
+      "sha256": "4cdc7cc04d11e2f5716559a2f5a3cfdb0ccb55893ce39c6edef9b48a0d523e35",
+      "bytes": 6360,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -89,8 +89,8 @@
       "link_base": "library/docs/RESEARCH.md",
       "presentation": "library/docs/RESEARCH.md",
       "kind": "guide",
-      "sha256": "a011241beee1560494697ffcd1f4fa4b621bbce0914b1e68cf0fec96e1363886",
-      "bytes": 15314,
+      "sha256": "882c5b770510291d30d2891010ef2af720c63f3f19c6701a2de3bff7117f8b24",
+      "bytes": 15316,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {

@@ -3,7 +3,7 @@
   "source_root": "managed-ai-shared-engine-1",
   "snapshot": {
     "edition": "managed-ai-shared-engine-1",
-    "selection_sha256": "f12b2325dadb5725f11b1871c5c980fee46df68887d21b24fe490fc6db966819",
+    "selection_sha256": "2cf15ee8330973aedf2d39ddad9fd3a1c6bda0a04db197c840d99a588bde6352",
     "relationship": "References to one canonical source body; domain sources are selected per store."
   },
   "entries": [
@@ -214,11 +214,11 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "CLI-FIELD-REFERENCE.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:df26241b16c102ca9a4b6edfaaead25043f6adaa2421fc1e06618a852dd185c2",
+      "body_id": "sha256:8cd9c2fd401b65f6192b3f498b614ee3a277deaafad1b71c39386d8d52691089",
       "body_path": "engine/CLI-FIELD-REFERENCE.md",
-      "sha256": "df26241b16c102ca9a4b6edfaaead25043f6adaa2421fc1e06618a852dd185c2",
-      "source_sha256": "df26241b16c102ca9a4b6edfaaead25043f6adaa2421fc1e06618a852dd185c2",
-      "bytes": 22868,
+      "sha256": "8cd9c2fd401b65f6192b3f498b614ee3a277deaafad1b71c39386d8d52691089",
+      "source_sha256": "8cd9c2fd401b65f6192b3f498b614ee3a277deaafad1b71c39386d8d52691089",
+      "bytes": 22910,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "Read a configured store directly through its native catalogue. The separate library commands require an authoring source or a published library.",
@@ -540,10 +540,10 @@
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "source_root": "managed-ai-shared-engine-1",
-      "source_sha256": "e8df34c3b48044db75c4844b1e0b89d089309c4f7d2ea5fdf4940a58cad70470",
-      "sha256": "e8df34c3b48044db75c4844b1e0b89d089309c4f7d2ea5fdf4940a58cad70470",
-      "bytes": 14624,
-      "body_id": "sha256:e8df34c3b48044db75c4844b1e0b89d089309c4f7d2ea5fdf4940a58cad70470"
+      "source_sha256": "956bf407ef3cf0d40b27452899e3034d3d39eadbf73ac03b85cbe4c80e92fe2b",
+      "sha256": "956bf407ef3cf0d40b27452899e3034d3d39eadbf73ac03b85cbe4c80e92fe2b",
+      "bytes": 14639,
+      "body_id": "sha256:956bf407ef3cf0d40b27452899e3034d3d39eadbf73ac03b85cbe4c80e92fe2b"
     },
     {
       "id": "host/SIGNAL-FIELD.md",
