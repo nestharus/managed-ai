@@ -26,7 +26,8 @@ SCOPED_COMPOSITION_NATIVE_PROFILE = '6bb020ad0a1feacaab040b7b8bfe448e9f472525902
 JOINED_NATIVE_PROFILE = '27c5c10a3c1a0016fb5fb9e86454025103aa1a22e9889044ad65bd9f8932316d'
 PACKET_LIFECYCLE_NATIVE_PROFILE = 'db6b9c8a443483e99932b8970b5abbc506622d1a2f337a1fe9b452a98cec706a'
 BOUNDED_ADMISSION_NATIVE_PROFILE = 'cc7fb2cdb1c88b5ecff826bac7088e93d11f13a0317fd673f5291778736f1c44'
-CURRENT_NATIVE_PROFILE = 'e772c4c3a51d8db2937a5cbcb991dc0a5c2433f70082a7b02d32cda5aabdd5e4'
+EXPONENTIAL_ADMISSION_NATIVE_PROFILE = 'e772c4c3a51d8db2937a5cbcb991dc0a5c2433f70082a7b02d32cda5aabdd5e4'
+CURRENT_NATIVE_PROFILE = '2eb453170ca260aa32575b628480ec529d71f78d80dcbe052ebe5f807569945f'
 PROFILE_ERROR = ('Selected native engine does not match the reviewed capture adapter; '
                  'requalify this adapter before capture')
 RETURN_ERROR = 'Native return already exists; use its retained body or a new current occurrence'
@@ -64,7 +65,7 @@ def reviewed_engine(engine: Path):
                        LIFECYCLE_NATIVE_PROFILE, OUTLIER_REPAIRS_NATIVE_PROFILE,
                        SCOPED_COMPOSITION_NATIVE_PROFILE, JOINED_NATIVE_PROFILE,
                        PACKET_LIFECYCLE_NATIVE_PROFILE, BOUNDED_ADMISSION_NATIVE_PROFILE,
-                       CURRENT_NATIVE_PROFILE):
+                       EXPONENTIAL_ADMISSION_NATIVE_PROFILE, CURRENT_NATIVE_PROFILE):
         raise ValueError(PROFILE_ERROR)
     spec = importlib.util.spec_from_file_location('reviewed_capture_engine', path)
     if spec is None or spec.loader is None:
