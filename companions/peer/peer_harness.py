@@ -506,8 +506,11 @@ class Harness:
         file_root.mkdir()
         atomic_write_bytes(checkpoint / "response.json", raw, exclusive=True)
         manifest = []
+        file_root_resolved = file_root.resolve()
         for path, value in sorted(captured.items()):
             destination = file_root.joinpath(*target_path(path))
+            if not destination.resolve().is_relative_to(file_root_resolved):
+                raise Rejection("protocol_error", "Target path escapes checkpoint directory: " + path)
             atomic_write_bytes(destination, value, exclusive=True)
             manifest.append({
                 "path": path, "bytes": len(value), "sha256": digest(value),
@@ -577,8 +580,11 @@ class Harness:
         self.event("epoch_closed", revisions={owner: state["revision"] for owner, state in self.owners.items()})
         staging = self.root / "submission-staging"
         staging.mkdir()
+        staging_resolved = staging.resolve()
         for path, value in sorted(files.items()):
             destination = staging.joinpath(*target_path(path))
+            if not destination.resolve().is_relative_to(staging_resolved):
+                raise Rejection("protocol_error", "Target path escapes submission staging directory: " + path)
             atomic_write_bytes(destination, value, exclusive=True)
         destination = self.root / "submitted"
         staging.rename(destination)

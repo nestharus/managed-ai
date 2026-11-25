@@ -12,7 +12,7 @@ from collections import OrderedDict
 from copy import deepcopy
 import math
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import sqlite3
 import stat
 import sys
@@ -60,9 +60,26 @@ def need(condition, message):
 
 
 def relative(value):
-    need(isinstance(value, str) and value and '\\' not in value, 'A POSIX relative source path is required.')
+    need(
+        isinstance(value, str) and value and '\\' not in value and '\x00' not in value,
+        'A POSIX relative source path is required.',
+    )
+    need(
+        not PureWindowsPath(value).drive and not (len(value) >= 2 and value[1] == ':'),
+        'Unsafe source path.',
+    )
     p = PurePosixPath(value)
-    need(not p.is_absolute() and all(part not in {'', '.', '..'} for part in value.split('/')), 'Unsafe source path.')
+    parts = value.split('/')
+    need(
+        not p.is_absolute()
+        and all(
+            part not in {'', '.', '..'}
+            and not PureWindowsPath(part).drive
+            and not (len(part) >= 2 and part[1] == ':')
+            for part in parts
+        ),
+        'Unsafe source path.',
+    )
     need(p.suffix.lower() == '.md', 'Only complete Markdown sources are exposed.')
     need(not any(value.startswith(prefix) for prefix in PROTECTED_PREFIXES), 'Source is protected by this study exposure boundary.')
     return value

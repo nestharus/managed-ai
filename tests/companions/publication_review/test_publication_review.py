@@ -145,6 +145,63 @@ class PublicationReviewWave4Tests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             publication_review._retain(ok_dir, previous, report)
 
+    # --- C28-2: CLI --root must not pre-resolve symlinks/junctions; _load_assessor checks ancestors ---
+    def test_cli_root_and_explicit_assessor_refuse_symlink_and_junction_ancestors(self):
+        real_root = self.root / 'real-root'
+        real_root.mkdir()
+        (real_root / 'doc.md').write_text('hello\n', encoding='utf-8')
+        real_assessor_dir = self.root / 'real-assessor'
+        real_assessor_dir.mkdir()
+        real_assessor = real_assessor_dir / 'custom_assessor.py'
+        real_assessor.write_bytes((PUB_DIR / 'continuation_assessor.py').read_bytes())
+
+        alias_root = self.root / 'alias-root'
+        alias_assessor_dir = self.root / 'alias-assessor'
+        cleanup_junctions = []
+        if os.name == 'nt':
+            for link, target in ((alias_root, real_root), (alias_assessor_dir, real_assessor_dir)):
+                proc = subprocess.run(
+                    ['cmd', '/c', 'mklink', '/J', str(link), str(target)],
+                    capture_output=True, text=True,
+                )
+                if proc.returncode != 0:
+                    return
+                cleanup_junctions.append(link)
+        else:
+            alias_root.symlink_to(real_root)
+            alias_assessor_dir.symlink_to(real_assessor_dir)
+
+        try:
+            decl_path = self.root / 'decl.json'
+            decl_path.write_text(json.dumps({
+                'schema': publication_observer.DECLARATION_SCHEMA,
+                'roots': {'src': str(real_root)},
+                'sources': {'s1': {'root': 'src', 'path': 'doc.md'}},
+            }), encoding='utf-8')
+            prev_path = self.root / 'prev.json'
+            prev_path.write_text(json.dumps({'artifacts': [], 'obligations': []}), encoding='utf-8')
+
+            # Both CLIs must refuse symlink/junction --root overrides!
+            rc_obs = publication_observer._main([
+                '--declaration', str(decl_path),
+                '--root', 'src=' + str(alias_root),
+            ])
+            self.assertEqual(rc_obs, 2)
+
+            rc_rev = publication_review.main([
+                '--previous', str(prev_path),
+                '--declaration', str(decl_path),
+                '--root', 'src=' + str(alias_root),
+            ])
+            self.assertEqual(rc_rev, 2)
+
+            # _load_assessor must refuse an assessor inside a symlinked/junctioned ancestor directory!
+            with self.assertRaisesRegex(ValueError, 'symlink|reparse'):
+                publication_review._load_assessor(alias_assessor_dir / 'custom_assessor.py')
+        finally:
+            for link in cleanup_junctions:
+                subprocess.run(['cmd', '/c', 'rmdir', str(link)], capture_output=True)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

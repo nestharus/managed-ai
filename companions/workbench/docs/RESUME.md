@@ -11,21 +11,18 @@ The durable adapter reuses the unchanged callable controller in `controller/`.
 This optional route is separate from the native system. Keep these
 files together:
 
-- `resumable_workbench.py`, `durable_agent.py` and `workbench_agent.py`;
-- `source_tools.py` and `model_bridges.py`;
-- `PREDECESSOR-RESUME.json`, which identifies the exact adapter repair qualified for legacy journals;
+- `core/resumable_workbench.py`, `core/durable_agent.py` and `core/workbench_agent.py`;
+- `core/source_tools.py`, `core/model_bridges.py`, `core/config.py` and `core/io_utils.py`;
 - `controller/agent_runtime.py` and `controller/evidence_support.py`.
 
 Python's standard library and SQLite FTS5 suffice. The system bundle supplies the
-trusted search implementation in `../../engine/runtime/source_library/`. The
-selected domain supplies source data. A known source-body read can run before
-full search preparation.
+trusted search implementation in `../../../engine/library/` (`engine/library/reader/knowledge.py`
+and its `reader/`, `search/`, and `bundles/` dependencies). The selected domain supplies
+source data. A known source-body read can run before full search preparation.
 
 The durable binding includes the effective search files and analyzer identity.
-An issued standalone predecessor binding can resume with its exact search bytes
-and original compatible inputs. A historical binding that identified only the
-forwarding script lacks the effective code evidence needed to resume. Inspection
-still exposes those retained observations.
+Older runs whose recorded bindings refer to superseded layouts remain inspectable
+as historical evidence without rewriting their original bindings.
 
 ## Start a construction
 

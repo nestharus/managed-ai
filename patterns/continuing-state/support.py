@@ -8,7 +8,10 @@ from __future__ import annotations
 import argparse
 from collections import deque
 from contextlib import contextmanager
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 import hashlib
 import io
 import json
@@ -150,6 +153,8 @@ def limits(spec):
 
 @contextmanager
 def owner_lock(root, name):
+    if fcntl is None:
+        raise OSError('POSIX fcntl locking is required for continuing-state capture')
     path = ordinary_path(root / relative(name))
     with path.open('rb') as stream:
         try:

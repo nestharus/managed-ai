@@ -2,11 +2,11 @@
 
 This optional worker connects the existing finite peer harness to the accepted model/tool workbench. A capable model can construct an owned contribution, read a peer's captured contribution, negotiate through messages and revise its own output. The supplied model performs the interpretation. The harness still schedules the workers and admits their exact structural returns.
 
-Keep this complete directory together: `peer_workbench.py`, the initial public interface, clarification and amendment, `COMPONENTS.json` and the exact `` components. The accepted harness is supplied separately by the operating release at `companions/harness/peer_harness.py`. The source corpus is the separately unpacked current research archive.
+Keep this complete directory together: `peer_workbench.py`, `peer_protocol.py`, `peer_harness.py`, `COMPONENTS.json`, the docs in `docs/`, and the exact pinned workbench components under `../workbench/{core,controller}/`. The source corpus is the separately unpacked current research archive.
 
 ## Start a declared peer construction
 
-Copy `example-peer-config.json` and `example-harness-config.json` into your new work area. Replace the declared placeholders with absolute paths:
+Copy `configs/example-peer-config.json` and `configs/example-harness-config.json` into your new work area. Replace the declared placeholders with absolute paths:
 
 | Placeholder | Meaning |
 | --- | --- |
@@ -20,7 +20,7 @@ Replace the example brief, each owner's input, complete source bodies and task w
 Run the unchanged harness:
 
 ```sh
-python3 /absolute/managed-ai/companions/harness/peer_harness.py \
+python3 /absolute/managed-ai/companions/peer/peer_harness.py \
   --config /absolute/work/harness-config.json \
   --run-dir /absolute/work/new-peer-run
 ```

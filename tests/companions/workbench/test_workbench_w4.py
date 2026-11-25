@@ -234,6 +234,18 @@ class WorkbenchWave4Tests(unittest.TestCase):
         self.assertTrue(report['ok'], report)
         self.assertEqual(report['issues'], [])
 
+    # --- C28-1: Windows drive-relative paths rejected across config, workbench_agent, source_tools ---
+    def test_drive_relative_paths_rejected_in_workbench_and_source_tools(self):
+        for bad in ('C:escape.txt', 'D:dir/file.txt', 'sub/C:escape.txt'):
+            with self.subTest(bad=bad):
+                self.assertFalse(wb_config.is_clean_relative_posix(bad))
+                with self.assertRaises(ValueError):
+                    workbench_agent.inside(self.workspace, bad)
+        for bad_md in ('C:escape.md', 'sub/D:note.md'):
+            with self.subTest(bad_md=bad_md):
+                with self.assertRaises(ValueError):
+                    source_tools.relative(bad_md)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

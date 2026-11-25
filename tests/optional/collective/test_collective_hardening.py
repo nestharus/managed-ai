@@ -104,6 +104,42 @@ class CollectiveHardeningTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(changes['complete'])
 
+    # --- C28-3: Ancestor symlink/NTFS-junction refusal on --db and --request ---
+    def test_refuses_symlink_or_junction_ancestor_directories_for_db_and_request(self):
+        real_dir = self.root / 'real-dir'
+        real_dir.mkdir()
+        req_file = real_dir / 'req.json'
+        req_file.write_text('{"op":"noop"}\n', encoding='utf-8')
+        alias_dir = self.root / 'alias-dir'
+        is_nt_junc = False
+        if os.name == 'nt':
+            proc = subprocess.run(
+                ['cmd', '/c', 'mklink', '/J', str(alias_dir), str(real_dir)],
+                capture_output=True, text=True,
+            )
+            if proc.returncode != 0:
+                return
+            is_nt_junc = True
+        else:
+            alias_dir.symlink_to(real_dir)
+
+        try:
+            # --db inside a symlink/junction directory must be refused without creating a file!
+            code, out, _ = self.run_cli('init', db=alias_dir / 'escaped.sqlite')
+            self.assertEqual(code, 3)
+            self.assertIn('symlink', out['error'].lower())
+            self.assertFalse((real_dir / 'escaped.sqlite').exists())
+
+            # --request inside a symlink/junction directory must also be refused!
+            code_init, _, _ = self.run_cli('init')
+            self.assertEqual(code_init, 0)
+            code_req, out_req, _ = self.run_cli('call', '--request', str(alias_dir / 'req.json'))
+            self.assertEqual(code_req, 3)
+            self.assertIn('symlink', out_req['error'].lower())
+        finally:
+            if is_nt_junc:
+                subprocess.run(['cmd', '/c', 'rmdir', str(alias_dir)], capture_output=True)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

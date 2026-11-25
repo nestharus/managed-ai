@@ -12,8 +12,8 @@
     "workbench/core/config.py": {
       "source": "workbench/core/config.py",
       "identity": {
-        "bytes": 9452,
-        "sha256": "c39fb19dbbb453015d1092671df3b2575293180a9cfde0ce85bdbd61ac74ce76"
+        "bytes": 9697,
+        "sha256": "3fc8935bd7fa0feca95ac91c76e3684efcaab8c33350c3622f5fec167b692bb8"
       }
     },
     "workbench/core/model_bridges.py": {
@@ -26,15 +26,15 @@
     "workbench/core/source_tools.py": {
       "source": "workbench/core/source_tools.py",
       "identity": {
-        "bytes": 28160,
-        "sha256": "aaa77dc51222275955c45a56ed934db6bc08e7a933873f37c28dcaf74acf0556"
+        "bytes": 28546,
+        "sha256": "162aab50badbcb34f8978b146b21a1c54b8389dcc95a2db7c22db6861a7f7a8c"
       }
     },
     "workbench/core/workbench_agent.py": {
       "source": "workbench/core/workbench_agent.py",
       "identity": {
-        "bytes": 26162,
-        "sha256": "4a74aec4c25c288a4c75c4f11753dcf5998e7f8271b8f3fcd0951bc644bd3cd9"
+        "bytes": 26046,
+        "sha256": "693c68cdc50829f13b29d5631366fe9d674e2bea32c80b12e5d944059bf0abff"
       }
     },
     "workbench/controller/agent_runtime.py": {

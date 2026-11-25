@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import sys
 import uuid
 
@@ -46,15 +47,49 @@ def _sync_dir(path):
         os.close(fd)
 
 
+def _is_reparse_or_symlink(path: Path) -> bool:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    return bool(
+        stat.S_ISLNK(info.st_mode)
+        or (getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+    )
+
+
+def _check_unfollowed_ordinary_file(raw_path) -> Path:
+    raw = Path(raw_path)
+    if not raw.is_absolute():
+        pwd = os.environ.get("PWD")
+        if pwd and os.path.isabs(pwd):
+            try:
+                if os.path.samefile(pwd, os.getcwd()):
+                    logical = Path(pwd)
+                    for ancestor in (*reversed(logical.parents), logical):
+                        if _is_reparse_or_symlink(ancestor):
+                            raise ValueError("Explicit assessor path traverses a symlink or reparse point: " + str(ancestor))
+            except OSError:
+                pass
+    abs_path = Path(os.path.abspath(raw))
+    for part in (*reversed(abs_path.parents), abs_path):
+        if _is_reparse_or_symlink(part):
+            raise ValueError("Explicit assessor must not be or traverse a symlink or reparse point: " + str(part))
+    try:
+        info = abs_path.lstat()
+    except FileNotFoundError as exc:
+        raise ValueError("Explicit assessor must be an existing ordinary file: " + str(abs_path)) from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("Explicit assessor must be an existing ordinary file: " + str(abs_path))
+    return abs_path.resolve()
+
+
 def _load_assessor(path=None):
     """Return the colocated assessor module or load an explicit non-symlink override."""
     if path is None:
         assessor_file = Path(_default_assessor.__file__).resolve()
         return _default_assessor, _file_identity(assessor_file)
-    explicit = Path(path)
-    if explicit.is_symlink() or not explicit.is_file():
-        raise ValueError("Explicit assessor must be an existing ordinary file: " + str(explicit))
-    resolved = explicit.resolve()
+    resolved = _check_unfollowed_ordinary_file(path)
     spec = importlib.util.spec_from_file_location("_g60_publication_assessor", resolved)
     if spec is None or spec.loader is None:
         raise ValueError("Cannot load explicit assessor module: " + str(resolved))
@@ -218,7 +253,7 @@ def main(argv=None):
                 name, separator, location = item.partition("=")
                 if not separator or not name or not location or name in overrides:
                     raise ValueError("Each --root requires a unique nonempty NAME=PATH")
-                overrides[name] = str(Path(location).resolve())
+                overrides[name] = os.path.abspath(location)
             observation = _default_observer.observe_file(args.declaration, roots=overrides)
         elif args.observation:
             observation = _read_json(args.observation)

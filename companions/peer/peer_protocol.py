@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
 import uuid
@@ -162,9 +162,17 @@ def target_path(value):
         isinstance(value, str) and bool(value) and "\\" not in value and "\x00" not in value,
         "Invalid target path",
     )
+    need(
+        not PureWindowsPath(value).drive and not (len(value) >= 2 and value[1] == ":"),
+        "Target paths must not include a drive specifier",
+    )
     parts = value.split("/")
     need(
-        not any(part in ("", ".", "..") for part in parts) and not PurePosixPath(value).is_absolute(),
+        not any(
+            part in ("", ".", "..") or PureWindowsPath(part).drive or (len(part) >= 2 and part[1] == ":")
+            for part in parts
+        )
+        and not PurePosixPath(value).is_absolute(),
         "Target paths must be normalized relative POSIX file paths",
     )
     return parts

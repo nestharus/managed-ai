@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
 import sys
 from types import ModuleType
@@ -64,13 +64,22 @@ def default_search_paths(repo_root=None):
 
 
 def is_clean_relative_posix(value):
-    return (
-        isinstance(value, str)
-        and bool(value)
-        and "\x00" not in value
-        and "\\" not in value
-        and not PurePosixPath(value).is_absolute()
-        and all(part not in ("", ".", "..") for part in value.split("/"))
+    if (
+        not isinstance(value, str)
+        or not value
+        or "\x00" in value
+        or "\\" in value
+        or PureWindowsPath(value).drive
+        or (len(value) >= 2 and value[1] == ":")
+        or PurePosixPath(value).is_absolute()
+    ):
+        return False
+    parts = value.split("/")
+    return all(
+        part not in ("", ".", "..")
+        and not PureWindowsPath(part).drive
+        and not (len(part) >= 2 and part[1] == ":")
+        for part in parts
     )
 
 

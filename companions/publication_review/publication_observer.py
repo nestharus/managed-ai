@@ -121,6 +121,16 @@ class _Reader:
             parts = _validated_root_relative_parts(raw_path)
             raw_root = Path(self.roots[name])
             if not raw_root.is_absolute():
+                pwd = os.environ.get("PWD")
+                if pwd and os.path.isabs(pwd):
+                    try:
+                        if os.path.samefile(pwd, os.getcwd()):
+                            logical = Path(pwd)
+                            for ancestor in (*reversed(logical.parents), logical):
+                                if _is_reparse_or_symlink(ancestor):
+                                    raise ValueError("configured root traverses a symlink or reparse point: " + name)
+                    except OSError:
+                        pass
                 raw_root = self.base_dir / raw_root
             abs_root = Path(os.path.abspath(raw_root))
             for ancestor in (*reversed(abs_root.parents), abs_root):
@@ -395,7 +405,7 @@ def _main(argv=None):
             name, separator, path = item.partition("=")
             if not separator or not name or not path or name in overrides:
                 raise ValueError("each --root requires a unique nonempty NAME=PATH")
-            overrides[name] = str(Path(path).resolve())
+            overrides[name] = os.path.abspath(path)
         report = observe_file(args.declaration, roots=overrides)
         rendered = json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
         if args.output:

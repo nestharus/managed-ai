@@ -1,13 +1,12 @@
 # Complete research source access
 
-`source_tools.py` supplies complete Markdown acquisition, lexical nomination and
+`core/source_tools.py` supplies complete Markdown acquisition, lexical nomination and
 durable source/use records for a capable caller. It uses the trusted reader in
-`../../engine/runtime/source_library/knowledge.py`, reached directly or through
-the retained prototype entrance. A legacy bundle can supply its standalone
-`knowledge.py` instead. The workbench loads a bounded snapshot and includes the
+`../../../engine/library/reader/knowledge.py` and its bounded `engine/library/{reader,search,bundles}`
+dependencies. The workbench loads a bounded snapshot and includes the
 actual reader and its local Python dependencies in the inventory selector.
 Alternate trusted readers supplied through `search_module_path` can declare
-local dependencies with explicit sibling imports.
+local dependencies with explicit bounded relative imports.
 
 The service uses Python's standard library and requires SQLite FTS5. It does not
 silently switch search semantics when that facility is unavailable.

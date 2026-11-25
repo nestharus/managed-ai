@@ -9,7 +9,7 @@ import subprocess
 import time
 
 try:
-    from .config import DEFAULT_CONTROLLER_DIR, build_model_transport, load_controller
+    from .config import DEFAULT_CONTROLLER_DIR, build_model_transport, is_clean_relative_posix, load_controller
     from .io_utils import (
         BasisMismatchError,
         atomic_bytes,
@@ -23,7 +23,7 @@ try:
     )
     from .model_bridges import write_mailbox_response
 except ImportError:
-    from config import DEFAULT_CONTROLLER_DIR, build_model_transport, load_controller
+    from config import DEFAULT_CONTROLLER_DIR, build_model_transport, is_clean_relative_posix, load_controller
     from io_utils import (
         BasisMismatchError,
         atomic_bytes,
@@ -39,12 +39,10 @@ except ImportError:
 
 
 def inside(root, relative):
-    """Reject escaping paths and symlinks; this is cooperative scoping, not an OS sandbox."""
-    if not isinstance(relative, str) or not relative:
-        raise ValueError("A nonempty relative path is required")
+    """Reject escaping paths, drive specifiers, and symlinks/reparse points."""
+    if not is_clean_relative_posix(relative):
+        raise ValueError("Path must be a clean relative POSIX path without drive specifiers")
     logical = PurePosixPath(relative)
-    if logical.is_absolute() or any(part in {"..", "."} for part in logical.parts) or "\\" in relative:
-        raise ValueError("Path must be a clean relative POSIX path")
     root = Path(root).resolve()
     path = root
     for part in logical.parts:

@@ -207,6 +207,37 @@ class PeerHarnessAndWorkbenchWave4Tests(unittest.TestCase):
         self.assertEqual(observed_peer['body'], 'peer artifact content\n')
         self.assertEqual(len(closed), 1)
 
+    # --- C28-1: Windows drive-relative path escape refused in protocol & harness ---
+    def test_drive_relative_target_paths_are_rejected_by_protocol_and_harness(self):
+        for bad in ('C:escape.txt', 'D:foo/bar.txt', 'sub/C:escape.txt', 'a\\b.txt'):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    peer_protocol.target_path(bad)
+
+        evil_worker = self.root / 'evil_worker.py'
+        evil_worker.write_text(
+            'import base64, json, sys\n'
+            'req = json.loads(sys.stdin.buffer.read().decode("utf-8"))\n'
+            'resp = {"schema": "peer-return/1", "owner": req["owner"], "revision": req["revision"],\n'
+            '        "state": {}, "status": "complete", "obligations": [], "ack": [], "send": [],\n'
+            '        "files": {"C:escape.txt": base64.b64encode(b"pwn").decode("ascii")}}\n'
+            'sys.stdout.buffer.write((json.dumps(resp) + "\\n").encode("utf-8"))\n',
+            encoding='utf-8', newline='\n',
+        )
+        cfg = {
+            'schema': 'peer-harness-config/1', 'run_id': 'drive-escape', 'brief': 'Refuse drive-relative path',
+            'workers': [{'owner': 'evil', 'command': [sys.executable, '-B', str(evil_worker)], 'input': {}}],
+            'limits': {
+                'parallelism': 1, 'max_turns': 2, 'max_output_bytes': 4096, 'max_artifact_bytes': 4096,
+                'wall_seconds': 15, 'turn_seconds': 5, 'terminate_grace_seconds': 1,
+            },
+        }
+        run_dir = self.root / 'run-drive-escape'
+        run_dir.mkdir()
+        res = peer_harness.Harness(cfg, peer_protocol.canonical(cfg), run_dir).run()
+        self.assertFalse(res['submitted'])
+        self.assertEqual(res['done_reason'], 'protocol_error')
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

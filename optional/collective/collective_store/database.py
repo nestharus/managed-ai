@@ -1,5 +1,6 @@
 """Open or upgrade an existing store; govern every command receipt and transaction."""
 from contextlib import closing, contextmanager
+import os
 from pathlib import Path
 import sqlite3
 import stat
@@ -64,17 +65,36 @@ def _is_reparse_or_symlink(path: Path) -> bool:
                 or (getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)))
 
 
+def _check_unfollowed_ancestors(path: Path, role: str) -> Path:
+    raw = Path(path).expanduser()
+    if not raw.is_absolute():
+        pwd = os.environ.get('PWD')
+        if pwd and os.path.isabs(pwd):
+            try:
+                if os.path.samefile(pwd, os.getcwd()):
+                    logical = Path(pwd)
+                    for anc in (*reversed(logical.parents), logical):
+                        if _is_reparse_or_symlink(anc):
+                            raise ValueError(f'{role} must not traverse a symlink or reparse point: {anc}')
+            except OSError:
+                pass
+    abs_path = Path(os.path.abspath(raw))
+    for anc in (*reversed(abs_path.parents), abs_path):
+        if _is_reparse_or_symlink(anc):
+            raise ValueError(f'{role} must not be or traverse a symlink or reparse point: {anc}')
+    return abs_path
+
+
 def _require_ordinary_path(path: Path, role: str, *, must_exist: bool = False) -> None:
-    if _is_reparse_or_symlink(path):
-        raise ValueError(f'{role} must not be a symlink or reparse point: {path}')
+    abs_path = _check_unfollowed_ancestors(path, role)
     try:
-        info = path.lstat()
+        info = abs_path.lstat()
     except FileNotFoundError:
         if must_exist:
-            raise ValueError(f'Ordinary {role} required: {path}') from None
+            raise ValueError(f'Ordinary {role} required: {abs_path}') from None
         return
     if not stat.S_ISREG(info.st_mode):
-        raise ValueError(f'Ordinary {role} required: {path}')
+        raise ValueError(f'Ordinary {role} required: {abs_path}')
 
 
 def inside_product(path, product):
