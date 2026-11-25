@@ -12,13 +12,15 @@ Use the runtime that already owns an existing native turn. The [capability map](
 
 The native runtime retains goals, source-bound context, returned material, proposals and explicit adoption. A capable participant supplies semantic fit, source selection and whole-goal judgment. Select the exact current project sources or historical bodies the duty needs. An available catalogue entry records availability. Acquire its complete body when its argument or implementation matters.
 
+Domain sources listed below by logical ID are optional and selected per store (`system catalogue LOGICAL_ID --text`); they may live in an external domain checkout or be absent in storeless or non-research bundles.
+
 | Present need | Source or operation |
 |---|---|
-| Understand an unfamiliar artifact or ask a consequential question | [Develop a probe](../../../domains/research/sources/knowledge/research/patterns/developing-probes.md). |
-| Construct across interacting responsibilities | [Composition guide](COMPOSITION.md) and [construction pattern](../../../domains/research/sources/knowledge/research/patterns/constructing-across-dimensions.md). |
-| Reuse a method, observation or installed capability under changed terms | [Qualify reusable work](../../../domains/research/sources/knowledge/research/patterns/qualifying-reuse.md). |
+| Understand an unfamiliar artifact or ask a consequential question | Acquire `research/patterns/developing-probes.md` when the research domain is selected. |
+| Construct across interacting responsibilities | [Composition guide](COMPOSITION.md) and logical source `research/patterns/constructing-across-dimensions.md`. |
+| Reuse a method, observation or installed capability under changed terms | Acquire `research/patterns/qualifying-reuse.md` when the research domain is selected. |
 | Bind original JSON inputs or all candidates through a cutoff | [Source-admission contract](../patterns/source-admission/README.md). |
-| Receive independent contributions or retain an unplaced finding | [Collective knowledge](../../../domains/research/sources/knowledge/research/patterns/collective-knowledge.md) and [collective contract](../collective/README.md). |
+| Receive independent contributions or retain an unplaced finding | Logical source `research/patterns/collective-knowledge.md` and [collective contract](../collective/README.md). |
 | Return an actual discrepancy to another turn | `feedback open`, `feedback observe` and a fresh `context` under the [runtime contract](README.md). |
 | Inspect an authored dependency after a repository change | `compose --record ID --changed-since BASE --repo CHECKOUT`, followed by the affected receiving use. |
 
@@ -50,4 +52,4 @@ Treat a proposed AI system as a produced artifact. Retain its receiving contract
 
 Compare the complete cost of the selected route with an adequate direct route. Include relevant preparation, exact acquisition, failed inquiry, installation, adaptation and receiving work. Preserve when separately arriving questions became available. Use the installed search, index or finite solver that serves that actual workload.
 
-After a consequential return, compare the immediate continuation with a broader, sibling or recomposed contribution. Carry the selected improvement into the next producer and obtain the subsequent use its prediction requires. The [application guide](../../../domains/research/sources/knowledge/research/current/application.md#when-feedback-concerns-an-attempt-to-apply-g60), [research method](../../../domains/research/sources/knowledge/research/current/method.md) and [runtime reference](README.md) supply complete deeper contracts.
+After a consequential return, compare the immediate continuation with a broader, sibling or recomposed contribution. Carry the selected improvement into the next producer and obtain the subsequent use its prediction requires. Logical domain sources `research/current/application.md` and `research/current/method.md` (when the research domain is selected) together with the [runtime reference](README.md) supply complete deeper contracts.

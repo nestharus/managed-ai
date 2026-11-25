@@ -14,5 +14,5 @@ Keep the current state, complete useful arguments, reusable capability, meaningf
 
 Do not open the sealed D12 case/key payloads as ordinary sources. Their retention is not a new experiment or a claim of semantic acquisition.
 
-The five continuing duties remain under their recorded owners. Imported current accounts do not reconstruct missing original histories. Use `stores/research/` for the current research state and `stores/novel/` for the current writing work; historical next-step paragraphs are not current assignments.
+The five continuing duties remain under their recorded owners. Imported current accounts do not reconstruct missing original histories. Use the selected research store (bundle-local `stores/research/` or an external workspace deployment such as `workspaces/research/stores/research/`) for the current research state and `stores/novel/` for the current writing work; historical next-step paragraphs are not current assignments.
 
