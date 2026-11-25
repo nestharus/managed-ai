@@ -397,5 +397,97 @@ class Wave3RuntimeTests(unittest.TestCase):
         self.assertEqual(violations, [], f'Inverted native_runtime imports found: {violations}')
 
 
+    def test_c19_o2_catalogue_rejects_unknown_top_level_fields(self):
+        """C19-O2: Unknown top-level key in catalogue.json rejected by DomainSelection.add_catalogue()."""
+        dom_dir = self.root / 'dom-cat-o2'
+        dom_dir.mkdir()
+        bad_cat = dom_dir / 'bad-catalogue.json'
+        bad_cat.write_bytes(encode({
+            'format': 'managed-ai-source-catalogue/1',
+            'sources': [],
+            'rogue_catalogue_key': True,
+        }))
+        bad_cat_dom = dom_dir / 'bad-cat-domain.json'
+        bad_cat_dom.write_bytes(encode({
+            'format': 'managed-ai-domain/1',
+            'id': 'cat-o2-dom',
+            'version': '1',
+            'engine_api': 'managed-ai-runtime/1',
+            'source_root': '.',
+            'catalogue': {'path': 'bad-catalogue.json', 'sha256': sha(bad_cat.read_bytes())},
+            'schemas': {},
+            'entry_sources': [],
+            'tools': [],
+        }))
+        with self.assertRaisesRegex(ValueError, 'unknown reference source catalogue fields'):
+            DomainSelection(self.store, {'domains': [{'path': str(bad_cat_dom), 'sha256': sha(bad_cat_dom.read_bytes())}]})
+
+    def test_c19_1_tampered_external_command_parser_never_executes(self):
+        """C19-1: External engine code must NEVER execute before code_identity(engine) verification."""
+        ext_engine = self.root / 'ext-engine'
+        shutil.copytree(ENGINE / 'runtime', ext_engine / 'runtime', ignore=shutil.ignore_patterns('tests', '__pycache__'))
+        ext_dep = self.root / 'ext-dep'
+        Deployment.initialize(ext_dep, self.store, ext_engine)
+        marker = self.root / 'EXECUTED_UNVERIFIED.txt'
+        parser_path = ext_engine / 'runtime/native/native_runtime/command_parser.py'
+        parser_path.write_text(
+            parser_path.read_text(encoding='utf-8')
+            + f'\nfrom pathlib import Path as _P\n_P({str(marker)!r}).write_text("pwned", encoding="utf-8")\n',
+            encoding='utf-8',
+        )
+        proc = self.run_cli([
+            sys.executable, '-B', str(ENGINE / 'runtime/select_deployment.py'),
+            '--deployment', str(ext_dep), 'system', 'status',
+        ], expected_rc=2)
+        self.assertIn('shared engine code changed', proc.stderr)
+        self.assertFalse(marker.exists(), 'unverified external command_parser.py executed before code_identity!')
+
+    def test_c19_2_require_domain_enforces_pin_and_rejects_symlink_or_junction(self):
+        """C19-2: --require-domain verifies exact binding sha256 and rejects symlink/junction ancestors."""
+        dom_dir = self.root / 'dom-other'
+        dom_dir.mkdir()
+        cat_bytes = encode({'format': 'managed-ai-source-catalogue/1', 'sources': []})
+        (dom_dir / 'catalogue.json').write_bytes(cat_bytes)
+        dom_path = dom_dir / 'domain.json'
+        orig_manifest = {
+            'format': 'managed-ai-domain/1', 'id': 'other', 'version': '1',
+            'engine_api': 'managed-ai-runtime/1', 'source_root': '.',
+            'catalogue': {'path': 'catalogue.json', 'sha256': sha(cat_bytes)},
+            'schemas': {}, 'entry_sources': [], 'tools': [],
+        }
+        dom_path.write_bytes(encode(orig_manifest))
+        store = self.root / 'c19-2-store'
+        dep = self.root / 'c19-2-dep'
+        System.initialize(store, {'contribution': 'Verify C19-2.'}, instance_id='c19-2-inst', domains=[dom_path])
+        Deployment.initialize(dep, store, ENGINE)
+        cli = [sys.executable, '-B', str(ENGINE / 'runtime/select_deployment.py'),
+               '--deployment', str(dep), '--require-domain', 'research', 'status']
+
+        # Baseline: 'other' domain refused when 'research' required
+        proc0 = self.run_cli(cli, expected_rc=2)
+        self.assertIn('requires a research-domain deployment', proc0.stderr)
+
+        # Attack (a): tamper domain.json id to 'research' without updating system.json sha256 pin
+        forged_manifest = dict(orig_manifest, id='research')
+        dom_path.write_bytes(encode(forged_manifest))
+        proc_a = self.run_cli(cli, expected_rc=2)
+        self.assertIn('selected domain manifest changed', proc_a.stderr)
+
+        # Attack (b): replace dom-other/ with a symlink (POSIX) or NTFS junction (Windows) to forged dir
+        forged_dir = self.root / 'dom-forged'
+        forged_dir.mkdir()
+        (forged_dir / 'catalogue.json').write_bytes(cat_bytes)
+        (forged_dir / 'domain.json').write_bytes(encode(forged_manifest))
+        shutil.rmtree(dom_dir)
+        if os.name == 'nt':
+            mk = subprocess.run(['cmd', '/c', 'mklink', '/J', str(dom_dir), str(forged_dir)],
+                                capture_output=True, text=True)
+            self.assertEqual(mk.returncode, 0, mk.stderr)
+        else:
+            dom_dir.symlink_to(forged_dir, target_is_directory=True)
+        proc_b = self.run_cli(cli, expected_rc=2)
+        self.assertIn('ordinary selected domain required', proc_b.stderr)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

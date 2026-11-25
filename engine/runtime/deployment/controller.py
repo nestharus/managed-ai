@@ -26,6 +26,7 @@ sys.path.insert(0, str(HERE.parent / 'continuation'))
 from continuation_support.storage import (
     AdmissionContended,
     atomic_bytes,
+    check_ordinary_ancestors,
     encode,
     exclusive,
     is_ordinary_file_stat,
@@ -278,19 +279,30 @@ class DeploymentSelection:
 
 
 def _check_required_domain(runtime: Path, required_domain: str):
-    """Verify the store descriptor selects the named domain without hardcoding an instance UUID."""
+    """Verify the store descriptor pins the required domain by ordinary path and exact SHA-256."""
     sys_doc = read_descriptor(runtime / 'system.json')
-    for binding in sys_doc.get('domains', ()):
-        if not isinstance(binding, dict) or not isinstance(binding.get('path'), str):
-            continue
-        dom_path = (runtime / binding['path']).resolve()
-        try:
-            dom_doc = read_descriptor(dom_path)
-        except (OSError, ValueError):
-            continue
+    domains = sys_doc.get('domains', ())
+    if not isinstance(domains, list):
+        raise ValueError('invalid domains declaration in store descriptor')
+    matched = False
+    for binding in domains:
+        if (not isinstance(binding, dict)
+                or not isinstance(binding.get('path'), str)
+                or not isinstance(binding.get('sha256'), str)):
+            raise ValueError('invalid domain binding in store descriptor')
+        ordinary_path = check_ordinary_ancestors(
+            runtime / binding['path'],
+            expect_dir=False,
+            error_prefix='ordinary selected domain required',
+        )
+        raw = ordinary_path.read_bytes()
+        if sha(raw) != binding['sha256']:
+            raise ValueError('selected domain manifest changed: ' + str(ordinary_path))
+        dom_doc = read_descriptor(ordinary_path, raw)
         if dom_doc.get('id') == required_domain:
-            return
-    raise ValueError(f'this entrance requires a {required_domain}-domain deployment')
+            matched = True
+    if not matched:
+        raise ValueError(f'this entrance requires a {required_domain}-domain deployment')
 
 
 class Deployment(DeploymentSelection):
@@ -563,40 +575,25 @@ def parser():
 
 
 def _precheck_local_system_args(engine, runtime, arguments):
-    """Parse arguments with the selected engine's parser before locks (zero store reads, zero code_identity)."""
+    """Parse arguments with THIS trusted controller's parser before locks (zero unverified external execution)."""
     if not arguments or any(v == '--root' or v.startswith('--root=') for v in arguments):
         raise ValueError('supply a native command; deployment owns its selected store')
-    parser_file = engine / 'runtime/native/native_runtime/command_parser.py'
-    if engine != HERE.parents[1]:
-        if parser_file.is_file():
-            try:
-                ext_native = str(engine / 'runtime/native')
-                added_ext = ext_native not in sys.path
-                if added_ext:
-                    sys.path.insert(0, ext_native)
-                try:
-                    mod = runpy.run_path(str(parser_file))
-                    parsed = mod['parser']().parse_args(['--root', str(runtime), *arguments])
-                    if parsed.action in ('show', 'catalogue') and arguments[0] != parsed.action:
-                        raise ValueError('supply the native store observation as the command')
-                    if parsed.action == 'init':
-                        raise ValueError('initialize a store through the central system entrance before deployment')
-                    readonly_fn = mod.get('is_readonly_action')
-                    return bool(readonly_fn(parsed)) if readonly_fn is not None else parsed.action in {'show', 'catalogue'}
-                finally:
-                    if added_ext and ext_native in sys.path:
-                        sys.path.remove(ext_native)
-            except SystemExit:
-                raise
-            except (OSError, KeyError, ImportError):
-                pass
-        return arguments[:1] in (['show'], ['catalogue'])
     native_root = str(HERE.parent / 'native')
     added = native_root not in sys.path
     if added:
         sys.path.insert(0, native_root)
     try:
         from native_runtime.command_parser import is_readonly_action, parser as native_parser
+        if engine != HERE.parents[1]:
+            # Never execute external engine code prior to code_identity(engine) verification.
+            # Classify read-only actions conservatively using this controller's trusted parser.
+            try:
+                parsed = native_parser().parse_args(['--root', str(runtime), *arguments])
+            except SystemExit:
+                return False
+            if parsed.action == 'init':
+                raise ValueError('initialize a store through the central system entrance before deployment')
+            return is_readonly_action(parsed)
         parsed = native_parser().parse_args(['--root', str(runtime), *arguments])
         if parsed.action in ('show', 'catalogue') and arguments[0] != parsed.action:
             raise ValueError('supply the native store observation as the command')

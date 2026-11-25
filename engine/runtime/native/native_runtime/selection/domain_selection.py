@@ -310,6 +310,16 @@ _DOMAIN_ALLOWED_KEYS = frozenset({
     'protected_record_ids',
     'content_addressed_basis_prefixes',
 })
+_CATALOGUE_ALLOWED_KEYS = frozenset({
+    'format',
+    'id',
+    'version',
+    'title',
+    'summary',
+    'description',
+    'source_root',
+    'sources',
+})
 
 
 def _validate_domain_version(value, path):
@@ -471,6 +481,11 @@ class DomainSelection:
         catalogue = load_json(path, expected)
         if catalogue.get('format') != CATALOGUE_FORMAT:
             raise ValueError('unsupported reference source catalogue')
+        extra = set(catalogue) - _CATALOGUE_ALLOWED_KEYS
+        if extra:
+            raise ValueError(f'unknown reference source catalogue fields ({path}): ' + ', '.join(sorted(extra)))
+        if not isinstance(catalogue.get('sources'), list):
+            raise ValueError('reference source catalogue requires a sources list: ' + str(path))
         root = (path.parent / catalogue['source_root']).resolve() if 'source_root' in catalogue else (source_root or path.parent.resolve())
         if str(root) not in self._validated_roots:
             _verify_ordinary_dir(root)

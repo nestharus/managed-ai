@@ -212,7 +212,7 @@ def _collect_record_references(system, candidate_set: set[str]) -> tuple[dict[st
                     raw = stream.read()
             else:
                 info = full.lstat()
-                require(stat.S_ISREG(info.st_mode), f'ordinary record file required: {full}')
+                require(is_ordinary_file_stat(info), f'ordinary record file required: {full}')
                 raw = full.read_bytes()
             if marker not in raw and unicode_ascii_escape not in raw:
                 continue

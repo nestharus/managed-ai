@@ -197,7 +197,13 @@ class RecordStore:
                     with stream:
                         raw = stream.read()
                 else:
-                    raw = self.path(ident).read_bytes()
+                    try:
+                        info = full_path.lstat()
+                    except OSError:
+                        raise ValueError(f'ordinary JSON file required: {full_path}') from None
+                    if not is_ordinary_file_stat(info):
+                        raise ValueError(f'ordinary JSON file required: {full_path}')
+                    raw = full_path.read_bytes()
                 if hmac.compare_digest(sha(raw), entry['raw_sha256']):
                     return {k: entry[k] for k in ('format', 'id', 'kind', 'sha256', 'revision', 'basis', 'active')}
                 record = parse_input_bytes(raw, full_path)

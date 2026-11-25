@@ -1,6 +1,6 @@
 """Cross-platform OS primitives for cooperative locking, durability, ordinary files, and strict JSON.
 
-Supports POSIX (Linux/macOS) and native Windows with zero external dependencies or WSL.
+Supports POSIX (Linux/macOS) and native Windows with zero external dependencies or compatibility bridges.
 """
 from __future__ import annotations
 
