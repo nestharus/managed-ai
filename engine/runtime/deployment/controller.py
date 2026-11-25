@@ -96,23 +96,46 @@ def _engine_directory(path):
 
 def code_identity(engine):
     engine = _engine_directory(engine)
+
+    def scan_subtree(start_dir, start_cache):
+        found = []
+        pending = [(start_dir, start_cache)]
+        while pending:
+            directory, cache = pending.pop()
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    path = directory / entry.name
+                    mode = _ordinary_mode(path, entry.stat(follow_symlinks=False))
+                    if stat.S_ISDIR(mode):
+                        pending.append((path, cache or path.name.casefold() == '__pycache__'))
+                    elif cache:
+                        if path.suffix.lower() != '.pyc':
+                            raise ValueError(f'ordinary bytecode cache files required below __pycache__: {path}')
+                    elif path.name.lower().endswith(NON_SOURCE_SUFFIXES):
+                        raise ValueError(f'shared engine requires Python source for executable modules: {path}')
+                    elif path.match('*.py'):
+                        found.append(path)
+        return found
+
     paths = []
-    directories = [(engine, False)]
-    while directories:
-        directory, cache = directories.pop()
-        with os.scandir(directory) as entries:
-            for entry in entries:
-                path = directory / entry.name
-                mode = _ordinary_mode(path, entry.stat(follow_symlinks=False))
-                if stat.S_ISDIR(mode):
-                    directories.append((path, cache or path.name.casefold() == '__pycache__'))
-                elif cache:
-                    if path.suffix.lower() != '.pyc':
-                        raise ValueError(f'ordinary bytecode cache files required below __pycache__: {path}')
-                elif path.name.lower().endswith(NON_SOURCE_SUFFIXES):
-                    raise ValueError(f'shared engine requires Python source for executable modules: {path}')
-                elif path.match('*.py'):
-                    paths.append(path)
+    top_subdirs = []
+    with os.scandir(engine) as entries:
+        for entry in entries:
+            path = engine / entry.name
+            mode = _ordinary_mode(path, entry.stat(follow_symlinks=False))
+            if stat.S_ISDIR(mode):
+                top_subdirs.append((path, path.name.casefold() == '__pycache__'))
+            elif path.name.lower().endswith(NON_SOURCE_SUFFIXES):
+                raise ValueError(f'shared engine requires Python source for executable modules: {path}')
+            elif path.match('*.py'):
+                paths.append(path)
+    if len(top_subdirs) >= 2:
+        with ThreadPoolExecutor(max_workers=min(8, len(top_subdirs))) as pool:
+            for sub_paths in pool.map(lambda item: scan_subtree(*item), top_subdirs):
+                paths.extend(sub_paths)
+    else:
+        for sub_dir, sub_cache in top_subdirs:
+            paths.extend(scan_subtree(sub_dir, sub_cache))
     sorted_paths = sorted(paths)
     interfaces = [(PORTABLE_ENTRY, PORTABLE_CONTRACT)]
     if (engine / NATIVE_ENTRY).is_file():

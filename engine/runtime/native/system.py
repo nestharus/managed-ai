@@ -214,16 +214,20 @@ class System:
             if should_check:
                 checked_ids.add(r['id'])
                 for item in r['basis']:
-                    basis_paths.append(item['path'])
+                    if not item['path'].startswith('object:'):
+                        basis_paths.append(item['path'])
             elif r['basis']:
                 deferred_inactive += 1
         resolved_hashes = self.ex.hash_workspace_paths(basis_paths) if basis_paths else {}
+        verified_objects: set[tuple[str, int]] = set()
         rows = []
         for r in records:
             if r['id'] in checked_ids:
-                changed = self.record_store.basis_changes(r, resolved_hashes=resolved_hashes)
+                changed = self.record_store.basis_changes(
+                    r, resolved_hashes=resolved_hashes, verified_objects=verified_objects)
             elif r['basis'] and all(item['path'] in resolved_hashes for item in r['basis']):
-                changed = self.record_store.basis_changes(r, resolved_hashes=resolved_hashes)
+                changed = self.record_store.basis_changes(
+                    r, resolved_hashes=resolved_hashes, verified_objects=verified_objects)
                 deferred_inactive -= 1
             else:
                 changed = []

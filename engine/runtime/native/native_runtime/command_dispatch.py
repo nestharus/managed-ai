@@ -89,6 +89,45 @@ def act(system, args):
                                                      cursor=read(args.cursor) if args.cursor else None))
     if action == 'index-head': return system.record_store.index_scope(args.id)
     if action == 'reindex': return system.reindex()
+    if action == 'deduplicate-originals':
+        from native_runtime import object_audit
+        if args.dedup_action == 'plan':
+            return object_audit.plan_deduplicate_originals(system, prefix=args.prefix)
+        return object_audit.execute_deduplicate_originals(
+            system, plan=read(args.plan), expected_plan=args.expected_plan, reason=args.reason)
+    if action == 'compact-objects':
+        from native_runtime import object_audit
+        if args.compact_action == 'plan':
+            return object_audit.plan_compact_objects(system, min_savings_bytes=args.min_savings_bytes)
+        return object_audit.execute_compact_objects(
+            system, plan=read(args.plan), expected_plan=args.expected_plan, reason=args.reason)
+    if action == 'archive-records':
+        from native_runtime import cold_archive
+        if args.archive_action == 'plan':
+            return cold_archive.plan_archive_records(system, ids=args.ids, kinds=args.kinds)
+        return cold_archive.execute_archive_records(
+            system, plan=read(args.plan), expected_plan=args.expected_plan, reason=args.reason)
+    if action == 'audit-objects':
+        from native_runtime import object_audit
+        return object_audit.audit_objects(system)
+    if action == 'gc-objects':
+        from native_runtime import object_audit
+        return object_audit.gc_objects(
+            system, plan=read(args.plan), expected_plan=args.expected_plan, reason=args.reason)
+    if action == 'graph':
+        from native_runtime import graph_query
+        if args.graph_action == 'neighbors':
+            return graph_query.neighbors(
+                system, args.id, direction=args.direction, hops=args.hops,
+                relations=args.relations, active_only=args.active_only, records_only=args.records_only)
+        if args.graph_action == 'links':
+            return graph_query.links(
+                system, target=args.target, relations=args.relations, active_only=args.active_only)
+        if args.graph_action == 'path':
+            return graph_query.shortest_path(
+                system, args.src, args.dst, max_hops=args.max_hops,
+                active_only=args.active_only, relations=args.relations)
+        return graph_query.lint(system)
     if action == 'status':
         return system.status(verify_all_basis=getattr(args, 'verify_all_basis', False))
     if action == 'abandon-context': return system.abandon_context(args.turn, args.account)

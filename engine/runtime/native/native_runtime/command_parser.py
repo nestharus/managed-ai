@@ -10,6 +10,7 @@ from pathlib import Path
 READONLY_ACTIONS = frozenset({
     'show', 'catalogue', 'status', 'discover', 'compose',
     'history', 'view', 'recover', 'recover-transport',
+    'audit-objects', 'graph',
 })
 
 
@@ -26,6 +27,12 @@ def is_readonly_action(args) -> bool:
         return getattr(args, 'information_action', None) == 'inspect'
     if action == 'inquiry':
         return getattr(args, 'inquiry_action', None) == 'stages'
+    if action == 'deduplicate-originals':
+        return getattr(args, 'dedup_action', None) == 'plan'
+    if action == 'compact-objects':
+        return getattr(args, 'compact_action', None) == 'plan'
+    if action == 'archive-records':
+        return getattr(args, 'archive_action', None) == 'plan'
     return False
 
 
@@ -97,6 +104,66 @@ def _store_commands(sub):
     status = sub.add_parser('status', allow_abbrev=False)
     status.add_argument('--verify-all-basis', action='store_true',
                         help='Cryptographically verify basis files for inactive non-duty records too')
+    dedup = sub.add_parser('deduplicate-originals', allow_abbrev=False,
+                           help='plan or execute deduplication of object-backed content-addressed originals').add_subparsers(
+                               dest='dedup_action', required=True)
+    dedup_plan = dedup.add_parser('plan', allow_abbrev=False)
+    dedup_plan.add_argument('--prefix', default='evidence/research-originals')
+    dedup_exec = dedup.add_parser('execute', allow_abbrev=False)
+    dedup_exec.add_argument('--plan', required=True, type=Path)
+    dedup_exec.add_argument('--expected-plan', required=True)
+    dedup_exec.add_argument('--reason', required=True)
+
+    compact = sub.add_parser('compact-objects', allow_abbrev=False,
+                             help='plan or execute transparent DEFLATE compaction of exchange/objects').add_subparsers(
+                                 dest='compact_action', required=True)
+    compact_plan = compact.add_parser('plan', allow_abbrev=False)
+    compact_plan.add_argument('--min-savings-bytes', type=int, default=64)
+    compact_exec = compact.add_parser('execute', allow_abbrev=False)
+    compact_exec.add_argument('--plan', required=True, type=Path)
+    compact_exec.add_argument('--expected-plan', required=True)
+    compact_exec.add_argument('--reason', required=True)
+
+    archive = sub.add_parser('archive-records', allow_abbrev=False,
+                             help='plan or execute compressed cold-tier archival of inactive records').add_subparsers(
+                                 dest='archive_action', required=True)
+    archive_plan = archive.add_parser('plan', allow_abbrev=False)
+    archive_plan.add_argument('--id', action='append', default=[], dest='ids')
+    archive_plan.add_argument('--kind', action='append', default=[], dest='kinds')
+    archive_exec = archive.add_parser('execute', allow_abbrev=False)
+    archive_exec.add_argument('--plan', required=True, type=Path)
+    archive_exec.add_argument('--expected-plan', required=True)
+    archive_exec.add_argument('--reason', required=True)
+
+    sub.add_parser('audit-objects', allow_abbrev=False,
+                   help='read-only 9-layer transitive reachability audit over exchange/objects')
+    gc = sub.add_parser('gc-objects', allow_abbrev=False,
+                        help='explicitly prune verified unreachable objects from a reviewed audit plan')
+    gc.add_argument('--plan', required=True, type=Path)
+    gc.add_argument('--expected-plan', required=True)
+    gc.add_argument('--reason', required=True)
+
+    graph = sub.add_parser('graph', allow_abbrev=False,
+                           help='read-only indexed graph queries and structural integrity lint').add_subparsers(
+                               dest='graph_action', required=True)
+    g_nb = graph.add_parser('neighbors', allow_abbrev=False)
+    g_nb.add_argument('id')
+    g_nb.add_argument('--direction', choices=('in', 'out', 'both'), default='both')
+    g_nb.add_argument('--hops', type=int, default=1)
+    g_nb.add_argument('--relation', action='append', default=[], dest='relations')
+    g_nb.add_argument('--active-only', action='store_true')
+    g_nb.add_argument('--records-only', action='store_true')
+    g_links = graph.add_parser('links', allow_abbrev=False)
+    g_links.add_argument('--target', required=True)
+    g_links.add_argument('--relation', action='append', default=[], dest='relations')
+    g_links.add_argument('--active-only', action='store_true')
+    g_path = graph.add_parser('path', allow_abbrev=False)
+    g_path.add_argument('src')
+    g_path.add_argument('dst')
+    g_path.add_argument('--max-hops', type=int, default=6)
+    g_path.add_argument('--relation', action='append', default=[], dest='relations')
+    g_path.add_argument('--active-only', action='store_true')
+    graph.add_parser('lint', allow_abbrev=False)
 
 
 def _turn_commands(sub):

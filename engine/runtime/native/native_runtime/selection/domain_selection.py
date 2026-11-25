@@ -4,11 +4,14 @@ This is selection and structural validation for the existing native System.
 It neither runs domain code nor judges the meaning or acquisition of a source.
 """
 from pathlib import Path
+import errno
 import json
+import math
 import os
 import re
+import stat
 
-from continuation_support.storage import encode, sha
+from continuation_support.storage import _OPEN_RO_NOFOLLOW, encode, open_directory, sha
 
 ENGINE_API = 'managed-ai-runtime/1'
 STORE_SCHEMA = 'managed-ai-store/1'
@@ -16,11 +19,84 @@ DOMAIN_FORMAT = 'managed-ai-domain/1'
 CATALOGUE_FORMAT = 'managed-ai-source-catalogue/1'
 
 
+def _verify_ordinary_dir(path: Path) -> Path:
+    path = Path(os.path.abspath(path))
+    if any(p.is_symlink() for p in (path, *path.parents)) or not path.is_dir():
+        raise ValueError('ordinary selected source required: ' + str(path))
+    return path
+
+
 def ordinary(path):
     path = Path(os.path.abspath(path))
     if any(p.is_symlink() for p in (path, *path.parents)) or not path.is_file():
         raise ValueError('ordinary selected source required: ' + str(path))
     return path
+
+
+def _read_ordinary_under(root: Path, name: str, *, byte_limit: int | None = None,
+                         validated_root: bool = False, root_fd: int | None = None) -> bytes:
+    """Read an ordinary non-symlink file relative to root using O_NOFOLLOW dir-FD traversal."""
+    rel = Path(name)
+    if not name or rel.is_absolute() or '..' in rel.parts or '\\' in name:
+        raise ValueError('invalid selected member path: ' + str(name))
+    parts = [part for part in rel.parts if part not in ('', '.')]
+    if not parts:
+        raise ValueError('invalid selected member path: ' + str(name))
+    display = root / rel
+    if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
+        opened_fds: list[int] = []
+        try:
+            if root_fd is not None:
+                cur = root_fd
+            else:
+                if not validated_root:
+                    _verify_ordinary_dir(root)
+                try:
+                    cur = open_directory(root)
+                except OSError as exc:
+                    if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR):
+                        raise ValueError('ordinary selected source required: ' + str(display)) from None
+                    raise
+                opened_fds.append(cur)
+            for segment in parts[:-1]:
+                try:
+                    nxt = open_directory(segment, dir_fd=cur)
+                except OSError as exc:
+                    if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR):
+                        raise ValueError('ordinary selected source required: ' + str(display)) from None
+                    raise
+                opened_fds.append(nxt)
+                cur = nxt
+            try:
+                leaf_fd = os.open(parts[-1], _OPEN_RO_NOFOLLOW, dir_fd=cur)
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
+                    raise ValueError('ordinary selected source required: ' + str(display)) from None
+                raise
+            try:
+                info = os.fstat(leaf_fd)
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError('ordinary selected source required: ' + str(display))
+                if byte_limit is not None and info.st_size > byte_limit:
+                    raise ValueError('source body exceeds the requested acquisition bound')
+                stream = os.fdopen(leaf_fd, 'rb')
+            except BaseException:
+                os.close(leaf_fd)
+                raise
+            with stream:
+                if byte_limit is not None:
+                    raw = stream.read(byte_limit + 1)
+                    if len(raw) > byte_limit:
+                        raise ValueError('source body exceeds the requested acquisition bound')
+                    return raw
+                return stream.read()
+        finally:
+            for fd in reversed(opened_fds):
+                os.close(fd)
+    path = source_path(root, name)
+    if byte_limit is not None and path.stat().st_size > byte_limit:
+        raise ValueError('source body exceeds the requested acquisition bound')
+    return path.read_bytes()
 
 
 def source_path(root, name):
@@ -107,10 +183,41 @@ def _schema_children(schema, document):
         if (not isinstance(names, list) or not names or
                 any(not isinstance(name, str) or name not in PAYLOAD_TYPES for name in names)):
             raise ValueError(f'unsupported payload type declaration: {declared!r}')
+    for key in ('minLength', 'maxLength', 'minItems', 'maxItems'):
+        if key in schema and (type(schema[key]) is not int or schema[key] < 0):
+            raise ValueError(f'schema keyword {key} must be a nonnegative integer')
+    if 'minLength' in schema and 'maxLength' in schema and schema['minLength'] > schema['maxLength']:
+        raise ValueError('schema minLength exceeds maxLength')
+    if 'minItems' in schema and 'maxItems' in schema and schema['minItems'] > schema['maxItems']:
+        raise ValueError('schema minItems exceeds maxItems')
+    for key in ('minimum', 'maximum'):
+        if key in schema and (type(schema[key]) not in (int, float) or not math.isfinite(schema[key])):
+            raise ValueError(f'schema keyword {key} must be a finite number')
+    if 'minimum' in schema and 'maximum' in schema and schema['minimum'] > schema['maximum']:
+        raise ValueError('schema minimum exceeds maximum')
+    if 'pattern' in schema:
+        if not isinstance(schema['pattern'], str):
+            raise ValueError('schema pattern must be a string')
+        try:
+            re.compile(schema['pattern'])
+        except re.error as exc:
+            raise ValueError(f'invalid schema pattern regex: {exc}') from None
+    if 'required' in schema:
+        req = schema['required']
+        if not isinstance(req, list) or any(not isinstance(item, str) for item in req):
+            raise ValueError('schema required must be a list of strings')
+    if 'enum' in schema and (not isinstance(schema['enum'], list) or not schema['enum']):
+        raise ValueError('schema enum must be a nonempty list')
     for group in ('properties', '$defs', 'definitions'):
-        yield from schema.get(group, {}).values()
+        if group in schema:
+            if not isinstance(schema[group], dict):
+                raise ValueError(f'schema {group} must be an object')
+            yield from schema[group].values()
     for group in ('anyOf', 'allOf', 'oneOf'):
-        yield from schema.get(group, [])
+        if group in schema:
+            if not isinstance(schema[group], list) or not schema[group]:
+                raise ValueError(f'schema {group} must be a nonempty list')
+            yield from schema[group]
     for key in ('items', 'additionalProperties'):
         if key in schema:
             yield schema[key]
@@ -161,15 +268,38 @@ def validate_payload(value, schema, *, at='content', document=None, _references=
     if isinstance(value, list):
         for index, item in enumerate(value):
             validate_payload(item, schema.get('items', True), at=at + '[' + str(index) + ']', document=document)
-    for key, compare in (('minLength', lambda a, b: a >= b), ('maxLength', lambda a, b: a <= b),
-                         ('minItems', lambda a, b: a >= b), ('maxItems', lambda a, b: a <= b)):
-        if key in schema and isinstance(value, (str, list)) and not compare(len(value), schema[key]):
-            raise ValueError(at + ': ' + key + ' violated')
-    if isinstance(value, str) and 'pattern' in schema and re.search(schema['pattern'], value) is None:
-        raise ValueError(at + ': pattern differs')
+    if isinstance(value, str):
+        if 'minLength' in schema and len(value) < schema['minLength']:
+            raise ValueError(at + ': minLength violated')
+        if 'maxLength' in schema and len(value) > schema['maxLength']:
+            raise ValueError(at + ': maxLength violated')
+        if 'pattern' in schema and re.search(schema['pattern'], value) is None:
+            raise ValueError(at + ': pattern differs')
+    if isinstance(value, list):
+        if 'minItems' in schema and len(value) < schema['minItems']:
+            raise ValueError(at + ': minItems violated')
+        if 'maxItems' in schema and len(value) > schema['maxItems']:
+            raise ValueError(at + ': maxItems violated')
     if type(value) in (int, float):
         if 'minimum' in schema and value < schema['minimum'] or 'maximum' in schema and value > schema['maximum']:
             raise ValueError(at + ': numeric bound violated')
+
+
+def _validate_relation_vocabulary(raw, owner):
+    if not isinstance(raw, dict):
+        raise ValueError(f'{owner} relation_vocabulary must be an object')
+    extra = set(raw) - {'predicates', 'provenance_self_loop_relations'}
+    if extra:
+        raise ValueError(f'{owner} relation_vocabulary unknown fields: ' + ', '.join(sorted(extra)))
+    parsed = {}
+    for key in ('predicates', 'provenance_self_loop_relations'):
+        values = raw.get(key, [])
+        if not isinstance(values, list) or any(not isinstance(v, str) or not v.strip() for v in values):
+            raise ValueError(f'{owner} relation_vocabulary.{key} must be a list of nonempty strings')
+        if len(values) != len(set(values)):
+            raise ValueError(f'{owner} relation_vocabulary.{key} contains duplicates')
+        parsed[key] = list(values)
+    return parsed
 
 
 class DomainSelection:
@@ -179,6 +309,9 @@ class DomainSelection:
         self.tools = []
         self.bindings = {}
         self.schema_bindings = {}
+        self._validated_roots: set[str] = set()
+        relation_predicates: set[str] = set()
+        provenance_self_loops: set[str] = set()
         declaring_domain = {}
         required_domains = set()
         if descriptor.get('store_schema', STORE_SCHEMA) != STORE_SCHEMA:
@@ -194,6 +327,10 @@ class DomainSelection:
                 raise ValueError('duplicate selected domain identity')
             self.domains.append(domain['id'])
             required_domains.update(domain.get('requires_domains', []))
+            if 'relation_vocabulary' in domain:
+                vocab = _validate_relation_vocabulary(domain['relation_vocabulary'], domain['id'])
+                relation_predicates.update(vocab['predicates'])
+                provenance_self_loops.update(vocab['provenance_self_loop_relations'])
             for kind, schema in domain.get('schemas', {}).items():
                 owner = domain['id']
                 try:
@@ -223,6 +360,12 @@ class DomainSelection:
             raise ValueError('required domains are not selected: ' + ', '.join(sorted(required_domains - set(self.domains))))
         if len({tool['id'] for tool in self.tools}) != len(self.tools):
             raise ValueError('selected domain tool identity collision')
+        self.relation_predicates = sorted(relation_predicates)
+        self.provenance_self_loop_relations = sorted(provenance_self_loops)
+        self.relation_vocabulary = {
+            'predicates': self.relation_predicates,
+            'provenance_self_loop_relations': self.provenance_self_loop_relations,
+        }
 
     def validate_catalogue(self, available):
         requested = [*self.entry_sources, *(tool[key] for tool in self.tools
@@ -235,6 +378,9 @@ class DomainSelection:
         if catalogue.get('format') != CATALOGUE_FORMAT:
             raise ValueError('unsupported reference source catalogue')
         root = (path.parent / catalogue['source_root']).resolve() if 'source_root' in catalogue else (source_root or path.parent.resolve())
+        if str(root) not in self._validated_roots:
+            _verify_ordinary_dir(root)
+            self._validated_roots.add(str(root))
         for row in catalogue['sources']:
             name = row['path']
             if not name or Path(name).is_absolute() or '..' in Path(name).parts or '\\' in name:
@@ -262,7 +408,8 @@ class DomainSelection:
             validate_payload(payload, self.schemas[kind])
 
     def body(self, entry, *, byte_limit=None):
-        return read_selected_body(entry, byte_limit=byte_limit)
+        validated = entry.get('source_root') in self._validated_roots
+        return read_selected_body(entry, byte_limit=byte_limit, validated_root=validated)
 
     def view(self):
         return {'domains': self.domains, 'typed_kinds': sorted(self.schemas),
@@ -270,15 +417,15 @@ class DomainSelection:
                 'tools': self.tools, 'tool_scope': 'Selected source and contract references; loading does not execute code.'}
 
 
-def read_selected_body(entry, *, byte_limit=None):
+def read_selected_body(entry, *, byte_limit=None, validated_root=False, root_fd=None):
     if entry.get('availability') == 'sealed':
         raise ValueError(f"sealed source {entry['id']!r}: body reading and context capture are prohibited; "
                          'inspect availability with a catalogue metadata listing (no identity argument), '
                          'then select an available source')
-    path = source_path(Path(entry['source_root']), entry['body_path'])
-    if byte_limit is not None and path.stat().st_size > byte_limit:
-        raise ValueError('source body exceeds the requested acquisition bound')
-    raw = path.read_bytes()
+    raw = _read_ordinary_under(
+        Path(entry['source_root']), entry['body_path'],
+        byte_limit=byte_limit, validated_root=validated_root, root_fd=root_fd,
+    )
     if len(raw) != entry['bytes'] or sha(raw) != entry['sha256']:
         raise ValueError('source reference changed: ' + entry['id'])
     return raw

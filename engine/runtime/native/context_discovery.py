@@ -22,7 +22,8 @@ PREFIX_SCOPE = {'record': 'records', 'project': 'project', 'technique': 'techniq
 SELECTOR = {'records': 'records', 'project': 'project_sources', 'techniques': 'techniques'}
 FIELDS = {'query', 'content', 'scopes', 'anchors', 'relation_labels', 'direction',
           'hops', 'limit', 'scan_limit', 'max_bytes', 'include_inactive',
-          'scan_order', 'seed'}
+          'scan_order', 'seed', 'records_only', 'exclude_relation_labels',
+          'include_content_links'}
 SCAN_ORDERS = ('inventory', 'scope-round-robin', 'seeded')
 SCOPE = ('Lexical matches and authored relation routes nominate inspection. '
          'Machine examination, a returned candidate, body delivery, semantic '
@@ -61,7 +62,7 @@ def request(value, deployed):
     query = value.get('query', '')
     if not isinstance(query, str):
         raise ValueError('discovery query must be text')
-    for flag in ('content', 'include_inactive'):
+    for flag in ('content', 'include_inactive', 'records_only', 'include_content_links'):
         if flag in value and type(value[flag]) is not bool:
             raise ValueError(flag + ' must be Boolean')
     scopes = strings(value.get('scopes', list(SCOPES if deployed else ('records', 'techniques'))), 'scopes')
@@ -95,6 +96,13 @@ def request(value, deployed):
     }
     if scan_order == 'seeded':
         normalized['seed'] = seed
+    if value.get('records_only'):
+        normalized['records_only'] = True
+    exclude_labels = strings(value.get('exclude_relation_labels', []), 'exclude_relation_labels')
+    if exclude_labels:
+        normalized['exclude_relation_labels'] = exclude_labels
+    if value.get('include_content_links'):
+        normalized['include_content_links'] = True
     return normalized
 
 
@@ -408,6 +416,10 @@ class Discovery:
             return None
         object_key = None
         if scope == 'techniques':
+            if row.get('availability') == 'sealed' and ref not in self.req['anchors']:
+                self.body_failures[ref] = 'sealed-source'
+                self._skip(ref, 'sealed-source')
+                return None
             # The first acquisition validates the physical body path and bytes.
             # A different path or binding must be acquired independently, even
             # when another entry advertises the same content hash.
@@ -520,7 +532,10 @@ class Discovery:
         if ref in self.edge_cache:
             return self.edge_cache[ref]
         result = []
-        for index, relation in enumerate(item.get('record', {}).get('relations', [])):
+        excluded = set(self.req.get('exclude_relation_labels', ()))
+        records_only = bool(self.req.get('records_only', False))
+        record = item.get('record', {})
+        for index, relation in enumerate(record.get('relations', [])):
             key = (ref, index)
             if key not in self.relation_rows:
                 if len(self.relation_rows) >= self.req['scan_limit']:
@@ -531,12 +546,24 @@ class Discovery:
             if not isinstance(relation, dict) or not isinstance(relation.get('relation'), str):
                 self._unresolve(str(relation), 'malformed-declared-relation', ref)
                 continue
-            if self.req['relation_labels'] and relation['relation'] not in self.req['relation_labels']:
+            label = relation['relation']
+            if label in excluded:
                 continue
-            target = self._resolve(relation.get('target'), ref)
-            if target is None:
+            if self.req['relation_labels'] and label not in self.req['relation_labels']:
                 continue
-            edge = {'from': ref, 'to': target, 'relation': relation['relation'],
+            raw_target = relation.get('target')
+            if records_only:
+                if not isinstance(raw_target, str) or not raw_target:
+                    continue
+                candidate_ref = raw_target if raw_target.startswith('record:') else ('record:' + raw_target if ':' not in raw_target else None)
+                if candidate_ref is None or candidate_ref not in self.entries:
+                    continue
+                target = candidate_ref
+            else:
+                target = self._resolve(raw_target, ref)
+                if target is None:
+                    continue
+            edge = {'from': ref, 'to': target, 'relation': label,
                     'declared_in': {'ref': ref, 'revision': item['source']['revision'],
                                     'record_sha256': item['source']['record_sha256']},
                     'properties': {k: v for k, v in relation.items() if k not in ('relation', 'target')}}
@@ -544,6 +571,38 @@ class Discovery:
             if key not in self.edge_keys:
                 self.edge_keys.add(key)
                 self.edges.append(edge)
+        if self.req.get('include_content_links') and isinstance(record.get('content'), dict):
+            content = record['content']
+            syn_index = len(record.get('relations', []))
+            for field_name, field_val in sorted(content.items()):
+                if not (field_name.endswith(('_id', '_ids')) or field_name in ('directions', 'selected_question')):
+                    continue
+                if field_name == 'id':
+                    continue
+                vals = [field_val] if isinstance(field_val, str) else (
+                    [v for v in field_val if isinstance(v, str)] if isinstance(field_val, list) else [])
+                label = 'content:' + field_name
+                if label in excluded or (self.req['relation_labels'] and label not in self.req['relation_labels']):
+                    continue
+                for val in vals:
+                    target = 'record:' + val
+                    if target not in self.entries:
+                        continue
+                    key = (ref, syn_index)
+                    syn_index += 1
+                    if key not in self.relation_rows:
+                        if len(self.relation_rows) >= self.req['scan_limit']:
+                            self.saturated.add('relation-scan-budget')
+                            break
+                        self.relation_rows.add(key)
+                    edge = {'from': ref, 'to': target, 'relation': label,
+                            'declared_in': {'ref': ref, 'revision': item['source']['revision'],
+                                            'record_sha256': item['source']['record_sha256']},
+                            'properties': {'channel': 'content-link', 'field': field_name}}
+                    result.append(edge)
+                    if key not in self.edge_keys:
+                        self.edge_keys.add(key)
+                        self.edges.append(edge)
         self.edge_cache[ref] = result
         return result
 

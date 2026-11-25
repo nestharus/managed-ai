@@ -1,7 +1,9 @@
 """Inspect packet, transport and publication state through read-only observations."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import os
+import threading
 from typing import Any
 
 from ..storage import open_directory, read_json
@@ -87,43 +89,56 @@ class PacketInspection:
 
     def list(self, consumer: str | None = None) -> list[dict[str, Any]]:
         """Expose retained occasions without inventing a semantic completion flag."""
-        rows = []
         verified_objects: set[str] = set()
         validated_returns: dict[str, dict[str, Any]] = {}
+        memo_lock = threading.Lock()
         objects_fd = None
         if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
             try:
                 objects_fd = open_directory(self.root / 'objects')
             except OSError:
                 objects_fd = None
-        try:
-            for directory in sorted((self.root / 'packets').iterdir()):
-                if directory.name.startswith('.') or not directory.is_dir():
-                    continue
-                try:
-                    _, request = self._load_directory(
-                        directory,
-                        _verified_objects=verified_objects,
-                        _validated_returns=validated_returns,
-                        _objects_fd=objects_fd,
-                    )
-                    if consumer is not None and request['consumer'] != consumer:
-                        continue
-                    has_return = (directory / 'return.json').exists()
-                    if has_return and directory.name not in validated_returns:
+
+        def inspect_one(directory):
+            try:
+                _, request = self._load_directory(
+                    directory,
+                    _verified_objects=verified_objects,
+                    _validated_returns=validated_returns,
+                    _objects_fd=objects_fd,
+                )
+                if consumer is not None and request['consumer'] != consumer:
+                    return None
+                has_return = (directory / 'return.json').exists()
+                if has_return:
+                    with memo_lock:
+                        cached = directory.name in validated_returns
+                    if not cached:
                         record = read_json(directory / 'return.json')
                         self.validate_return(directory, record)
-                        validated_returns[directory.name] = record
-                    outcome = transport_outcome(self, directory, request)
-                    publications = [read_json(p) for p in directory.glob('publish-*.json')]
-                    rows.append(self.packet_summary(directory, request['consumer'], publications,
-                                                    returned=has_return, outcome=outcome))
-                except (ValueError, KeyError, OSError, TypeError) as exc:
-                    rows.append({'packet': directory.name, 'transport': 'record-unresolved', 'error': str(exc)})
+                        with memo_lock:
+                            validated_returns[directory.name] = record
+                outcome = transport_outcome(self, directory, request)
+                publications = [read_json(p) for p in directory.glob('publish-*.json')]
+                return self.packet_summary(directory, request['consumer'], publications,
+                                           returned=has_return, outcome=outcome)
+            except (ValueError, KeyError, OSError, TypeError) as exc:
+                return {'packet': directory.name, 'transport': 'record-unresolved', 'error': str(exc)}
+
+        try:
+            packet_dirs = [
+                directory for directory in sorted((self.root / 'packets').iterdir())
+                if not directory.name.startswith('.') and directory.is_dir()
+            ]
+            if len(packet_dirs) >= 4:
+                with ThreadPoolExecutor(max_workers=min(8, len(packet_dirs))) as pool:
+                    observed = list(pool.map(inspect_one, packet_dirs))
+            else:
+                observed = [inspect_one(directory) for directory in packet_dirs]
         finally:
             if objects_fd is not None:
                 os.close(objects_fd)
-        return rows
+        return [row for row in observed if row is not None]
 
     def inspect(self, packet: str) -> dict[str, Any]:
         directory, request = self.load(packet)

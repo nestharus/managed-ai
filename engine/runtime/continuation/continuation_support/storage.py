@@ -14,6 +14,7 @@ import stat
 import time
 from typing import Any, Iterator
 import uuid
+import zlib
 
 MAX_BYTES = 2 * 1024 * 1024
 _OPEN_RO_NOFOLLOW = (
@@ -34,7 +35,7 @@ def now() -> str:
 
 
 def encode(value: Any) -> bytes:
-    return (json.dumps(value, sort_keys=True, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    return (json.dumps(value, sort_keys=True, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
 
 
 def sha(data: bytes) -> str:
@@ -68,7 +69,46 @@ def write_json(path: Path, value: Any) -> None:
 
 
 def read_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_bytes())
+    if hasattr(os, 'O_NOFOLLOW'):
+        try:
+            fd = os.open(path, _OPEN_RO_NOFOLLOW)
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
+                raise ValueError(f"ordinary JSON file required: {path}") from None
+            raise
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ValueError(f"ordinary JSON file required: {path}")
+            stream = os.fdopen(fd, 'rb')
+        except BaseException:
+            os.close(fd)
+            raise
+        with stream:
+            raw = stream.read()
+    else:
+        info = os.lstat(path)
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"ordinary JSON file required: {path}")
+        raw = path.read_bytes()
+
+    def unique_keys(pairs):
+        result = {}
+        for key, val in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key {key!r}: {path}")
+            result[key] = val
+        return result
+
+    def reject_constant(token):
+        raise ValueError(f"nonfinite JSON constant {token!r}: {path}")
+
+    value = json.loads(
+        raw.decode("utf-8"),
+        object_pairs_hook=unique_keys,
+        parse_constant=reject_constant,
+    )
     if not isinstance(value, dict):
         raise ValueError(f"JSON object required: {path}")
     return value
@@ -204,36 +244,122 @@ class ObjectStore:
     def __init__(self, directory: Path):
         self.directory = directory
 
-    def put(self, data: bytes) -> str:
+    @staticmethod
+    def _validate_key(key: str) -> None:
+        if not isinstance(key, str) or len(key) != 64 or any(c not in '0123456789abcdef' for c in key):
+            raise ValueError('invalid object identity')
+
+    def has(self, key: str) -> bool:
+        if not isinstance(key, str) or len(key) != 64 or any(c not in '0123456789abcdef' for c in key):
+            return False
+        raw_path = self.directory / key
+        if not raw_path.is_symlink() and raw_path.is_file():
+            return True
+        deflate_path = self.directory / (key + '.deflate')
+        return not deflate_path.is_symlink() and deflate_path.is_file()
+
+    def entries(self) -> list[tuple[str, Path, bool, int]]:
+        """Return sorted ordinary stored object entries as (key, path, is_compressed, disk_bytes)."""
+        if not self.directory.is_dir():
+            return []
+        found: list[tuple[str, Path, bool, int]] = []
+        with os.scandir(self.directory) as items:
+            for item in items:
+                name = item.name
+                if name.startswith('.'):
+                    continue
+                path = self.directory / name
+                info = item.stat(follow_symlinks=False)
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError(f'ordinary object file required: {path}')
+                if name.endswith('.deflate'):
+                    key = name[:-8]
+                    self._validate_key(key)
+                    found.append((key, path, True, info.st_size))
+                else:
+                    self._validate_key(name)
+                    found.append((name, path, False, info.st_size))
+        found.sort(key=lambda row: (row[0], row[2]))
+        return found
+
+    def put(self, data: bytes, *, compress: bool = False) -> str:
+        if compress:
+            return self.put_retained(data, max_bytes=MAX_BYTES, compress=True)
         return self.put_retained(data, max_bytes=MAX_BYTES)
 
-    def put_retained(self, data: bytes, *, max_bytes: int) -> str:
+    def put_retained(self, data: bytes, *, max_bytes: int, compress: bool = False) -> str:
         """Allow a caller that already validated a historical head to retain its exact bytes."""
         if len(data) > max_bytes:
             raise ValueError('object exceeds the per-object limit')
         key = sha(data)
-        path = self.directory / key
-        if path.exists():
-            if read_bytes(path, max_bytes) != data:
+        raw_path = self.directory / key
+        deflate_path = self.directory / (key + '.deflate')
+        if raw_path.exists() or deflate_path.exists():
+            if self.read(key, retained=True, expected_bytes=len(data)) != data:
                 raise ValueError('content object changed')
-        else:
-            atomic_bytes(path, data)
+            return key
+        if compress:
+            compressed = zlib.compress(data, level=6)
+            if len(compressed) < len(data):
+                atomic_bytes(deflate_path, compressed)
+                return key
+        atomic_bytes(raw_path, data)
         return key
 
-    def read(self, key: str, *, retained: bool = False,
-             expected_bytes: int | None = None, dir_fd: int | None = None) -> bytes:
-        if len(key) != 64 or any(c not in '0123456789abcdef' for c in key):
-            raise ValueError('invalid object identity')
-        if expected_bytes is not None and (type(expected_bytes) is not int or expected_bytes < 0):
-            raise ValueError('invalid expected object length')
-        path = self.directory / key
-        if hasattr(os, 'O_NOFOLLOW') and read_bytes is _READ_BYTES:
-            target = key if dir_fd is not None else path
+    @staticmethod
+    def _decompress_bounded(stream, limit: int | None, display: Path) -> bytes:
+        """Stream-decompress a zlib payload while strictly enforcing a raw-byte ceiling."""
+        decompressor = zlib.decompressobj()
+        chunks: list[bytes] = []
+        total = 0
+        try:
+            while True:
+                compressed_chunk = stream.read(65536)
+                if not compressed_chunk:
+                    break
+                if limit is None:
+                    out = decompressor.decompress(compressed_chunk)
+                else:
+                    remaining = (limit + 1) - total
+                    out = decompressor.decompress(compressed_chunk, remaining)
+                if out:
+                    chunks.append(out)
+                    total += len(out)
+                    if limit is not None and total > limit:
+                        raise ValueError(f'file exceeds {limit} bytes: {display}')
+                if decompressor.unconsumed_tail and limit is not None:
+                    raise ValueError(f'file exceeds {limit} bytes: {display}')
+                if decompressor.eof:
+                    if decompressor.unused_data or stream.read(1):
+                        raise ValueError(f'trailing data after compressed object: {display}')
+                    break
+            tail = decompressor.flush() if limit is None else decompressor.flush((limit + 1) - total)
+            if tail:
+                chunks.append(tail)
+                total += len(tail)
+                if limit is not None and total > limit:
+                    raise ValueError(f'file exceeds {limit} bytes: {display}')
+            if not decompressor.eof:
+                raise ValueError(f'truncated compressed object: {display}')
+        except zlib.error as exc:
+            raise ValueError(f'corrupt compressed object {display}: {exc}') from None
+        return b''.join(chunks)
+
+    def _read_deflate(self, key: str, *, retained: bool, expected_bytes: int | None,
+                      dir_fd: int | None) -> bytes:
+        filename = key + '.deflate'
+        path = self.directory / filename
+        if expected_bytes is not None:
+            limit: int | None = expected_bytes if retained else min(expected_bytes, MAX_BYTES)
+        else:
+            limit = None if retained else MAX_BYTES
+        if hasattr(os, 'O_NOFOLLOW'):
+            target = filename if dir_fd is not None else path
             try:
                 fd = os.open(target, _OPEN_RO_NOFOLLOW, dir_fd=dir_fd)
             except OSError as exc:
                 if exc.errno == errno.ENOENT and not retained and expected_bytes is None:
-                    raise ValueError(f'ordinary file required: {path}') from None
+                    raise ValueError(f'ordinary file required: {self.directory / key}') from None
                 if exc.errno in (errno.ELOOP, errno.EISDIR, errno.ENOTDIR, errno.ENXIO):
                     raise ValueError(f'ordinary file required: {path}') from None
                 raise
@@ -241,28 +367,67 @@ class ObjectStore:
                 info = os.fstat(fd)
                 if not stat.S_ISREG(info.st_mode):
                     raise ValueError(f'ordinary file required: {path}')
-                size = info.st_size
-                if expected_bytes is not None:
-                    if size != expected_bytes:
-                        raise ValueError('content object changed (length changed)')
-                    limit = expected_bytes if retained else min(expected_bytes, MAX_BYTES)
-                else:
-                    limit = size if retained else MAX_BYTES
                 stream = os.fdopen(fd, 'rb')
             except BaseException:
                 os.close(fd)
                 raise
             with stream:
-                data = stream.read(limit + 1)
-            if len(data) > limit:
-                raise ValueError(f'file exceeds {limit} bytes: {path}')
+                return self._decompress_bounded(stream, limit, path)
+        if path.is_symlink() or not path.is_file():
+            if not path.exists() and (retained or expected_bytes is not None):
+                raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(self.directory / key))
+            raise ValueError(f'ordinary file required: {path}')
+        with path.open('rb') as stream:
+            return self._decompress_bounded(stream, limit, path)
+
+    def read(self, key: str, *, retained: bool = False,
+             expected_bytes: int | None = None, dir_fd: int | None = None) -> bytes:
+        self._validate_key(key)
+        if expected_bytes is not None and (type(expected_bytes) is not int or expected_bytes < 0):
+            raise ValueError('invalid expected object length')
+        path = self.directory / key
+        data: bytes | None = None
+        if hasattr(os, 'O_NOFOLLOW') and read_bytes is _READ_BYTES:
+            target = key if dir_fd is not None else path
+            try:
+                fd = os.open(target, _OPEN_RO_NOFOLLOW, dir_fd=dir_fd)
+            except OSError as exc:
+                if exc.errno == errno.ENOENT:
+                    data = self._read_deflate(key, retained=retained, expected_bytes=expected_bytes, dir_fd=dir_fd)
+                elif exc.errno in (errno.ELOOP, errno.EISDIR, errno.ENOTDIR, errno.ENXIO):
+                    raise ValueError(f'ordinary file required: {path}') from None
+                else:
+                    raise
+            else:
+                try:
+                    info = os.fstat(fd)
+                    if not stat.S_ISREG(info.st_mode):
+                        raise ValueError(f'ordinary file required: {path}')
+                    size = info.st_size
+                    if expected_bytes is not None:
+                        if size != expected_bytes:
+                            raise ValueError('content object changed (length changed)')
+                        limit = expected_bytes if retained else min(expected_bytes, MAX_BYTES)
+                    else:
+                        limit = size if retained else MAX_BYTES
+                    stream = os.fdopen(fd, 'rb')
+                except BaseException:
+                    os.close(fd)
+                    raise
+                with stream:
+                    data = stream.read(limit + 1)
+                if len(data) > limit:
+                    raise ValueError(f'file exceeds {limit} bytes: {path}')
         else:
-            limit = path.stat().st_size if retained else MAX_BYTES
-            if expected_bytes is not None:
-                if path.stat().st_size != expected_bytes:
-                    raise ValueError('content object changed (length changed)')
-                limit = expected_bytes if retained else min(expected_bytes, MAX_BYTES)
-            data = read_bytes(path, limit)
+            if not path.exists() and (self.directory / (key + '.deflate')).exists():
+                data = self._read_deflate(key, retained=retained, expected_bytes=expected_bytes, dir_fd=None)
+            else:
+                limit = path.stat().st_size if retained else MAX_BYTES
+                if expected_bytes is not None:
+                    if path.stat().st_size != expected_bytes:
+                        raise ValueError('content object changed (length changed)')
+                    limit = expected_bytes if retained else min(expected_bytes, MAX_BYTES)
+                data = read_bytes(path, limit)
         if expected_bytes is not None and len(data) != expected_bytes:
             raise ValueError('content object changed (length changed)')
         if sha(data) != key:

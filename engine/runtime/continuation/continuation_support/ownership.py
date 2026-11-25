@@ -3,13 +3,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Protocol
 
 from .storage import now, read_json, write_json
 
 
+_PACKET_ID_RE = re.compile(r'^[A-Za-z0-9_-]{1,120}\Z')
+
+
 def packet_id(value: str) -> str:
-    if not value or len(value) > 120 or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for c in value):
+    if not isinstance(value, str) or not _PACKET_ID_RE.match(value):
         raise ValueError('identity must contain 1..120 letters, digits, hyphens or underscores')
     return value
 

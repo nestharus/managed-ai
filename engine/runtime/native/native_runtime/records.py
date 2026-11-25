@@ -8,15 +8,48 @@ import hmac
 import json
 import os
 from pathlib import Path
+import re
 import stat
 
 from continuation_support.ownership import packet_id, relative_path
 from continuation_support.storage import MAX_BYTES, _OPEN_RO_NOFOLLOW, atomic_bytes, encode, now, read_bytes, sha
 from feedback import KIND as FEEDBACK_KIND
+from native_runtime.cold_archive import ColdArchive
 from native_runtime.head_index import HeadIndex, build_entry
 from native_runtime.head_receipts import HeadReceipts, MIN_BYTES
 from native_runtime.identities import digest, exact_fields, identity, record_identity, require, strict_json
 from native_runtime.inputs import accounted_closure, fields, integer, parse_input_bytes, read_input, strings, text
+
+
+_CONTENT_ADDRESSED_BASIS_RE = re.compile(
+    r'^evidence/research-originals/([0-9a-f]{2})/([0-9a-f]{64})\.[A-Za-z0-9._-]+$'
+)
+_OBJECT_BASIS_RE = re.compile(r'^object:([0-9a-f]{64})$')
+
+
+def content_addressed_sha(path: str) -> str | None:
+    """Return the embedded 64-hex digest if path is an immutable content-addressed basis reference."""
+    if not isinstance(path, str):
+        return None
+    obj_match = _OBJECT_BASIS_RE.fullmatch(path)
+    if obj_match:
+        return obj_match.group(1)
+    orig_match = _CONTENT_ADDRESSED_BASIS_RE.fullmatch(path)
+    if orig_match and orig_match.group(1) == orig_match.group(2)[:2]:
+        return orig_match.group(2)
+    return None
+
+
+def is_content_addressed_basis(item: dict) -> bool:
+    """Return True when a captured basis pin matches its own content-addressed path digest."""
+    if not isinstance(item, dict):
+        return False
+    expected = item.get('sha256')
+    size = item.get('bytes')
+    if not isinstance(expected, str) or type(size) is not int or size < 0:
+        return False
+    embedded = content_addressed_sha(item.get('path', ''))
+    return embedded is not None and embedded == expected
 
 
 class RecordStore:
@@ -26,6 +59,7 @@ class RecordStore:
         self.objects = exchange.objects
         self.receipts = HeadReceipts(exchange.root)
         self.index = HeadIndex(exchange.root, self.receipts)
+        self.cold_archive = ColdArchive(exchange.root, record_format)
         self.format = record_format
         self.envelope = envelope
         self.payload_validator = None
@@ -71,6 +105,13 @@ class RecordStore:
     def size(self, ident: str) -> int:
         return self.path(ident).stat().st_size
 
+    def has_record(self, ident: str) -> bool:
+        try:
+            packet_id(ident)
+        except ValueError:
+            return False
+        return self.path(ident).is_file() or self.cold_archive.has(ident)
+
     def show(self, ident: str) -> dict:
         return self.read(ident)[0]
 
@@ -81,7 +122,13 @@ class RecordStore:
             record, raw = read_input(self.work / 'records' / filename, byte_limit=byte_limit,
                                      dir_fd=dir_fd, filename=filename)
         else:
-            record, raw = read_input(self.path(ident), byte_limit=byte_limit)
+            hot = self.path(ident)
+            if not hot.exists() and not hot.is_symlink() and self.cold_archive.has(ident):
+                record, raw = self.cold_archive.read(ident)
+                if byte_limit is not None and len(raw) > byte_limit:
+                    raise ValueError(f'input exceeds {byte_limit} bytes: {ident}')
+                return record, raw
+            record, raw = read_input(hot, byte_limit=byte_limit)
         self._verify_record(ident, record, raw)
         return record, raw
 
@@ -228,8 +275,17 @@ class RecordStore:
                 return ident, build_entry(record, raw, info)
 
             if len(idents) >= 16:
-                with ThreadPoolExecutor(max_workers=min(max_workers, len(idents))) as pool:
-                    pairs = list(pool.map(check_one, idents))
+                workers = min(max_workers, len(idents))
+                step = (len(idents) + workers - 1) // workers
+                chunks = [idents[i:i + step] for i in range(0, len(idents), step)]
+
+                def check_chunk(chunk):
+                    return [check_one(ident) for ident in chunk]
+
+                pairs = []
+                with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+                    for batch in pool.map(check_chunk, chunks):
+                        pairs.extend(batch)
             else:
                 pairs = [check_one(ident) for ident in idents]
         return dict(pairs)
@@ -242,8 +298,18 @@ class RecordStore:
         if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
             with self.ex.open_workspace_dir('records') as records_fd:
                 if len(target_ids) >= 16:
-                    with ThreadPoolExecutor(max_workers=min(max_workers, len(target_ids))) as pool:
-                        return list(pool.map(lambda ident: self.read(ident, dir_fd=records_fd)[0], target_ids))
+                    workers = min(max_workers, len(target_ids))
+                    step = (len(target_ids) + workers - 1) // workers
+                    chunks = [target_ids[i:i + step] for i in range(0, len(target_ids), step)]
+
+                    def read_chunk(chunk):
+                        return [self.read(ident, dir_fd=records_fd)[0] for ident in chunk]
+
+                    out: list[dict] = []
+                    with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+                        for batch in pool.map(read_chunk, chunks):
+                            out.extend(batch)
+                    return out
                 return [self.read(ident, dir_fd=records_fd)[0] for ident in target_ids]
         return [self.show(ident) for ident in target_ids]
 
@@ -362,15 +428,14 @@ class RecordStore:
             content = dict(content)
             self._obligations(content, previous)
         if preserve_basis is not None:
-            require(all(row['sha256'] is None or (self.objects.directory / row['sha256']).is_file()
+            require(all(row['sha256'] is None or self.objects.has(row['sha256'])
                         for row in preserve_basis), 'preserved basis object is unavailable')
             basis = preserve_basis
         elif prior_owed and owed and 'basis' not in record:
             basis = previous['basis']
         else:
-            paths = map(relative_path, strings(record.get('basis', []), 'record basis'))
-            basis = [self.ex.snapshot(path, optional=True) if retain_basis else self._preview_basis(path)
-                     for path in paths]
+            basis = [self._capture_basis_item(item, retain_basis=retain_basis)
+                     for item in strings(record.get('basis', []), 'record basis')]
         if prior_owed and owed:
             current = {r['path']: r['sha256'] for r in basis}
             if any(r['path'] not in current or current[r['path']] != r['sha256'] for r in previous['basis']):
@@ -382,20 +447,36 @@ class RecordStore:
         return {'id': ident, 'kind': kind, 'content': content, 'relations': relations,
                 'basis': basis, 'active': active}
 
+    def _capture_basis_item(self, source: str, *, retain_basis: bool) -> dict:
+        if source.startswith('object:'):
+            key = digest(source[7:], 'object basis sha256')
+            raw = self.objects.read(key, retained=True)
+            return {'path': source, 'sha256': key, 'bytes': len(raw)}
+        rel = relative_path(source)
+        path = self.ex.path(rel)
+        if not path.exists():
+            embedded = content_addressed_sha(rel)
+            if embedded is not None and self.objects.has(embedded):
+                raw = self.objects.read(embedded, retained=True)
+                return {'path': rel, 'sha256': embedded, 'bytes': len(raw)}
+        return self.ex.snapshot(rel, optional=True) if retain_basis else self._preview_basis(rel)
+
     def _preview_basis(self, source: str) -> dict:
         path = self.ex.path(source)
         if not path.exists():
             return {'path': source, 'sha256': None, 'bytes': 0}
         raw = read_bytes(path)
-        digest = sha(raw)
-        if (self.objects.directory / digest).exists() and self.objects.read(digest) != raw:
+        key = sha(raw)
+        if self.objects.has(key) and self.objects.read(key, retained=True, expected_bytes=len(raw)) != raw:
             raise ValueError('content object changed')
-        return {'path': source, 'sha256': digest, 'bytes': len(raw)}
+        return {'path': source, 'sha256': key, 'bytes': len(raw)}
 
     def validate_import(self, record: dict) -> None:
         """Qualify a new write or a matching current head without retaining evidence."""
         path = self.path(record['id'])
         if not path.exists():
+            require(not self.cold_archive.has(record['id']),
+                    'record exists in cold archive; restore explicitly before importing: ' + record['id'])
             self._prepare_write(record, None, None, retain_basis=False)
             return
         previous = self.show(record['id'])
@@ -422,6 +503,8 @@ class RecordStore:
                  preserve_basis: list | None = None, verify=None, _defer_index_update: bool = False) -> dict:
         integer(expected, 'expected revision')
         path = self.path(record.get('id', ''))
+        if not path.exists() and self.cold_archive.has(record.get('id', '')):
+            raise ValueError(f"record {record['id']} is in cold archive; restore explicitly before modifying")
         previous, previous_raw = self.read(record['id']) if path.exists() else (None, None)
         revision = previous['revision'] if previous else 0
         if revision != expected:
@@ -433,7 +516,7 @@ class RecordStore:
             require(body['basis'] == reviewed_basis, 'captured workspace basis changed at publication')
             # Reuse the incumbent's already captured objects. A rejected write
             # must not retain newly encountered workspace material.
-            require(all(row['sha256'] is None or (self.objects.directory / row['sha256']).is_file()
+            require(all(row['sha256'] is None or self.objects.has(row['sha256'])
                         for row in reviewed_basis), 'reviewed basis object is unavailable')
             require(encode(body['content']) == encode(record['content']), 'normalized composition differs from reviewed body')
         if verify is not None:
@@ -487,16 +570,35 @@ class RecordStore:
             raise ValueError(f'complete encoded record exceeds {MAX_BYTES} bytes; reduce the record or nominate external evidence')
         return body, raw
 
-    def basis_changes(self, record: dict, *, resolved_hashes: dict[str, str | None] | None = None) -> list[dict]:
+    def basis_changes(self, record: dict, *, resolved_hashes: dict[str, str | None] | None = None,
+                      verified_objects: set[tuple[str, int]] | None = None) -> list[dict]:
         basis = record['basis']
         if not basis:
             return []
-        hashes = resolved_hashes if resolved_hashes is not None else self.ex.hash_workspace_paths([item['path'] for item in basis])
+        if resolved_hashes is not None:
+            hashes = resolved_hashes
+        else:
+            workspace_paths = [item['path'] for item in basis if not item['path'].startswith('object:')]
+            hashes = self.ex.hash_workspace_paths(workspace_paths) if workspace_paths else {}
         changes = []
         for item in basis:
-            current = hashes[item['path']]
+            path = item['path']
+            current = None if path.startswith('object:') else hashes.get(path)
+            if current is None and is_content_addressed_basis(item) and self.objects.has(item['sha256']):
+                obj_key = (item['sha256'], item['bytes'])
+                if verified_objects is not None and obj_key in verified_objects:
+                    current = item['sha256']
+                else:
+                    try:
+                        self.objects.read(item['sha256'], retained=True, expected_bytes=item['bytes'])
+                    except FileNotFoundError:
+                        current = None
+                    else:
+                        current = item['sha256']
+                        if verified_objects is not None:
+                            verified_objects.add(obj_key)
             if current != item['sha256']:
-                changes.append({'path': item['path'], 'captured': item['sha256'], 'current': current})
+                changes.append({'path': path, 'captured': item['sha256'], 'current': current})
         return changes
 
     def head(self, wanted: dict) -> dict:

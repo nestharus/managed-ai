@@ -152,6 +152,8 @@ class Composition:
         return body, rows, input_bytes, references
 
     def _basis(self, record):
+        from native_runtime.records import is_content_addressed_basis
+
         captured, used = {}, 0
         declared = record.get('basis', [])
         if not isinstance(declared, list) or len(declared) > MAX_ROWS:
@@ -165,9 +167,24 @@ class Composition:
             observed = {'path': name, 'captured_sha256': row.get('sha256'),
                         'current_sha256': None, 'status': 'unavailable'}
             try:
-                path = self.system.ex.path(name)
-                if not path.is_file():
-                    observed['status'] = 'missing'
+                path = None if name.startswith('object:') else self.system.ex.path(name)
+                if path is None or not path.is_file():
+                    if is_content_addressed_basis(row) and self.system.ex.objects.has(row['sha256']):
+                        size = row['bytes']
+                        if size > MAX_PROFILE_BYTES:
+                            observed['status'] = 'per-source-byte-bound'
+                        elif used + size > MAX_BASIS_BYTES:
+                            observed['status'] = 'total-source-byte-bound'
+                        else:
+                            raw = self.system.ex.objects.read(row['sha256'], retained=True, expected_bytes=size)
+                            used += len(raw)
+                            observed['current_sha256'] = hashlib.sha256(raw).hexdigest()
+                            observed['current_bytes'] = len(raw)
+                            observed['status'] = ('current' if row.get('sha256') == observed['current_sha256']
+                                                  else 'changed')
+                            observed['custody'] = 'exchange-object'
+                    else:
+                        observed['status'] = 'missing'
                 elif path.stat().st_size > MAX_PROFILE_BYTES:
                     observed['status'] = 'per-source-byte-bound'
                 elif used + path.stat().st_size > MAX_BASIS_BYTES:

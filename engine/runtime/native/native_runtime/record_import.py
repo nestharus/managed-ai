@@ -96,9 +96,15 @@ def import_records(system, spec):
     old = _bound_receipt(receipt, system.instance_id, ident, ids, spec_sha)
     rows = spec['records']
     # Qualify all rows without capturing basis objects or changing any head.
+    prefix = old['records'] if old is not None else []
     for row in rows:
         system.record_store.validate_import(row)
-    prefix = old['records'] if old is not None else []
+    # Refuse pre-existing revision >= 2 heads on unacknowledged rows (prevents co-opting evolved heads).
+    for row in rows[len(prefix):]:
+        if system.record_store.path(row['id']).exists():
+            existing = system.record_store.show(row['id'])
+            require(existing['revision'] == 1,
+                    f"fresh import refuses pre-existing head at revision {existing['revision']}: {row['id']}")
     _verify_progress(system, prefix)
     if old is not None:
         # A replacement may have become visible before its directory sync completed.
