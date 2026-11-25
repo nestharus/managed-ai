@@ -4,7 +4,6 @@ from __future__ import annotations
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 import errno
-import fcntl
 import hashlib
 import json
 import os
@@ -16,18 +15,23 @@ from typing import Any, Iterator
 import uuid
 import zlib
 
+from ._platform import (
+    OPEN_DIR_NOFOLLOW as _OPEN_DIR_NOFOLLOW,
+    OPEN_RO_NOFOLLOW as _OPEN_RO_NOFOLLOW,
+    check_ordinary_ancestors,
+    has_ordinary_dir,
+    has_ordinary_file,
+    is_ordinary_dir_stat,
+    is_ordinary_file_stat,
+    is_reparse_or_symlink,
+    lock_file_nonblocking,
+    safe_relpath,
+    strict_json_loads,
+    sync_dir,
+    unlock_file,
+)
+
 MAX_BYTES = 2 * 1024 * 1024
-_OPEN_RO_NOFOLLOW = (
-    os.O_RDONLY
-    | getattr(os, 'O_NOFOLLOW', 0)
-    | getattr(os, 'O_NONBLOCK', 0)
-    | getattr(os, 'O_NOCTTY', 0)
-)
-_OPEN_DIR_NOFOLLOW = (
-    os.O_RDONLY
-    | getattr(os, 'O_DIRECTORY', 0)
-    | getattr(os, 'O_NOFOLLOW', 0)
-)
 
 
 def now() -> str:
@@ -40,14 +44,6 @@ def encode(value: Any) -> bytes:
 
 def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-def sync_dir(path: Path) -> None:
-    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
 
 
 def atomic_bytes(path: Path, data: bytes) -> None:
@@ -89,29 +85,11 @@ def read_json(path: Path) -> dict[str, Any]:
             raw = stream.read()
     else:
         info = os.lstat(path)
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        if not is_ordinary_file_stat(info):
             raise ValueError(f"ordinary JSON file required: {path}")
         raw = path.read_bytes()
 
-    def unique_keys(pairs):
-        result = {}
-        for key, val in pairs:
-            if key in result:
-                raise ValueError(f"duplicate JSON key {key!r}: {path}")
-            result[key] = val
-        return result
-
-    def reject_constant(token):
-        raise ValueError(f"nonfinite JSON constant {token!r}: {path}")
-
-    value = json.loads(
-        raw.decode("utf-8"),
-        object_pairs_hook=unique_keys,
-        parse_constant=reject_constant,
-    )
-    if not isinstance(value, dict):
-        raise ValueError(f"JSON object required: {path}")
-    return value
+    return strict_json_loads(raw, path, require_object=True)
 
 
 class OwnerBusy(RuntimeError):
@@ -169,13 +147,13 @@ def exclusive(path: Path, *, allow_readonly_open: bool = False) -> Iterator[None
             raise open_error from read_error
     with stream:
         try:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_file_nonblocking(stream, exclusive=True)
         except BlockingIOError as exc:
             raise OwnerBusy(path) from exc
         try:
             yield
         finally:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            unlock_file(stream)
 
 
 @contextmanager
@@ -192,13 +170,13 @@ def shared(path: Path, *, allow_readonly_open: bool = True) -> Iterator[None]:
             raise open_error from read_error
     with stream:
         try:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+            lock_file_nonblocking(stream, exclusive=False)
         except BlockingIOError as exc:
             raise OwnerBusy(path) from exc
         try:
             yield
         finally:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            unlock_file(stream)
 
 
 def open_directory(path: Path | str, *, dir_fd: int | None = None) -> int:
@@ -226,7 +204,11 @@ def read_bytes(path: Path | str, limit: int = MAX_BYTES, *,
             data = stream.read(limit + 1)
     else:
         target = Path(path)
-        if target.is_symlink() or not target.is_file():
+        try:
+            info = target.lstat()
+        except OSError:
+            raise ValueError(f'ordinary file required: {display}') from None
+        if not is_ordinary_file_stat(info):
             raise ValueError(f'ordinary file required: {display}')
         with target.open('rb') as stream:
             data = stream.read(limit + 1)
@@ -252,11 +234,9 @@ class ObjectStore:
     def has(self, key: str) -> bool:
         if not isinstance(key, str) or len(key) != 64 or any(c not in '0123456789abcdef' for c in key):
             return False
-        raw_path = self.directory / key
-        if not raw_path.is_symlink() and raw_path.is_file():
+        if has_ordinary_file(self.directory / key):
             return True
-        deflate_path = self.directory / (key + '.deflate')
-        return not deflate_path.is_symlink() and deflate_path.is_file()
+        return has_ordinary_file(self.directory / (key + '.deflate'))
 
     def entries(self) -> list[tuple[str, Path, bool, int]]:
         """Return sorted ordinary stored object entries as (key, path, is_compressed, disk_bytes)."""
@@ -270,7 +250,7 @@ class ObjectStore:
                     continue
                 path = self.directory / name
                 info = item.stat(follow_symlinks=False)
-                if not stat.S_ISREG(info.st_mode):
+                if not is_ordinary_file_stat(info):
                     raise ValueError(f'ordinary object file required: {path}')
                 if name.endswith('.deflate'):
                     key = name[:-8]
@@ -373,9 +353,13 @@ class ObjectStore:
                 raise
             with stream:
                 return self._decompress_bounded(stream, limit, path)
-        if path.is_symlink() or not path.is_file():
-            if not path.exists() and (retained or expected_bytes is not None):
-                raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(self.directory / key))
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            if retained or expected_bytes is not None:
+                raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(self.directory / key)) from None
+            raise ValueError(f'ordinary file required: {self.directory / key}') from None
+        if not is_ordinary_file_stat(info):
             raise ValueError(f'ordinary file required: {path}')
         with path.open('rb') as stream:
             return self._decompress_bounded(stream, limit, path)
@@ -419,14 +403,20 @@ class ObjectStore:
                 if len(data) > limit:
                     raise ValueError(f'file exceeds {limit} bytes: {path}')
         else:
-            if not path.exists() and (self.directory / (key + '.deflate')).exists():
+            try:
+                raw_info = path.lstat()
+            except FileNotFoundError:
                 data = self._read_deflate(key, retained=retained, expected_bytes=expected_bytes, dir_fd=None)
             else:
-                limit = path.stat().st_size if retained else MAX_BYTES
+                if not is_ordinary_file_stat(raw_info):
+                    raise ValueError(f'ordinary file required: {path}')
+                size = raw_info.st_size
                 if expected_bytes is not None:
-                    if path.stat().st_size != expected_bytes:
+                    if size != expected_bytes:
                         raise ValueError('content object changed (length changed)')
                     limit = expected_bytes if retained else min(expected_bytes, MAX_BYTES)
+                else:
+                    limit = size if retained else MAX_BYTES
                 data = read_bytes(path, limit)
         if expected_bytes is not None and len(data) != expected_bytes:
             raise ValueError('content object changed (length changed)')

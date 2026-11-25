@@ -6,7 +6,7 @@ import selectors
 import subprocess
 import time
 
-from composition import Composition, MAX_VIEW_BYTES, _integer
+from native_runtime.composition import Composition, MAX_VIEW_BYTES, _integer
 
 GIT_BYTES = 4 * 1024 * 1024
 GIT_SECONDS = 15

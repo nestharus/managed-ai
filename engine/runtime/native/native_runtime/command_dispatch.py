@@ -6,8 +6,8 @@ import math
 from pathlib import Path
 import sys
 
-from feedback import Feedback
-from information import Information
+from native_runtime.feedback import Feedback
+from native_runtime.information import Information
 from native_runtime.inputs import read, strings, text
 
 def emit(result, args):
@@ -49,17 +49,17 @@ def _compose(system, args):
     if args.interaction_map:
         if any(x is not None for x in (args.boundary, args.changed_since, args.repo, args.focus)) or args.pair_limit != 200:
             raise ValueError('interaction map takes --record and optional --limit')
-        from composition import Composition
+        from native_runtime.composition import Composition
         return Composition(system).interaction_map(args.record, args.limit)
     if args.boundary is not None:
         if args.changed_since is not None or args.repo is not None or args.focus is not None or args.pair_limit != 200:
             raise ValueError('boundary inspection takes --record, --boundary and optional --limit')
-        from composition_boundary import inspect_boundary
+        from native_runtime.composition_boundary import inspect_boundary
         return inspect_boundary(system, args.record, args.boundary, args.limit)
     if args.changed_since is not None or args.repo is not None:
         if not args.changed_since or args.repo is None or args.focus or args.pair_limit != 200:
             raise ValueError('change notice requires --changed-since BASE and --repo CHECKOUT; use --limit for detail')
-        from composition_change_notice import notice
+        from native_runtime.composition_change_notice import notice
         return notice(system, args.record, args.repo, args.changed_since, args.limit)
     return system.compose(args.record, args.focus, args.limit, args.pair_limit)
 
@@ -168,7 +168,9 @@ def act(system, args):
         if args.proposal and args.wait == 0:
             raise ValueError('run --proposal requires a positive --wait')
         producer = text(args.producer, 'positive run --wait producer') if args.wait > 0 else None
-        argv = json.loads(args.argv_json.read_text(encoding='utf-8'))
+        from continuation_support.storage import strict_json_loads
+        from native_runtime.inputs import _open_ordinary_bytes
+        argv = strict_json_loads(_open_ordinary_bytes(args.argv_json, 'JSON'), args.argv_json, require_object=False)
         if args.wait > 0:
             result = system.run(args.turn, argv, proposals=args.proposal, producer=producer, wait=args.wait)
         else:
@@ -179,7 +181,7 @@ def act(system, args):
     if action == 'materialize': return system.materialize(args.operation)
     if action == 'discover': return system.discover(read(args.request))
     if action == 'recompose':
-        from composition_revision import revise
+        from native_runtime.composition_revision import revise
         from native_runtime.inputs import read_input
         proposal, _ = read_input(args.request, byte_limit=4 * 1024 * 1024)
         return revise(system, proposal, accept=args.accept, retain=args.retain, reason=args.reason,

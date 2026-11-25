@@ -21,8 +21,8 @@ from unittest.mock import patch
 
 from system import System
 from controller import Deployment, code_identity, encode, exclusive, sha
-from feedback import Feedback
-from information import Information, record_identity
+from native_runtime.feedback import Feedback
+from native_runtime.information import Information, record_identity
 from native_runtime.loading import Loading
 
 
@@ -55,7 +55,7 @@ class SharedInstances(unittest.TestCase):
     def domain(self, name, source_id, text, *, sealed=False, schema=None):
         root = self.bundle / 'domains' / name
         root.mkdir(parents=True)
-        source = root / 'source.md'; source.write_text(text)
+        source = root / 'source.md'; source.write_text(text, encoding='utf-8', newline='\n')
         catalogue = write(root / 'catalogue.json', {'format': 'managed-ai-source-catalogue/1', 'sources': [
             {'id': source_id, 'path': 'source.md', 'sha256': sha(source.read_bytes()), 'bytes': source.stat().st_size,
              'title': source_id, 'kind': 'guide', 'exposure': 'sealed' if sealed else 'available'}]})
@@ -203,9 +203,9 @@ class SharedInstances(unittest.TestCase):
         self.assertEqual((dep / 'deployment.json').read_bytes(), original)
         stub = self.bundle / 'incompatible-engine'
         write(stub / 'placeholder.json', {})
-        p = stub / 'prototype/agent-system/native_runtime/domains.py'; p.parent.mkdir(parents=True)
+        p = stub / 'runtime/native/native_runtime/selection/domain_selection.py'; p.parent.mkdir(parents=True)
         p.write_text("ENGINE_API = 'future-api'\nSTORE_SCHEMA = 'managed-ai-store/1'\n")
-        (p.parent.parent / 'system.py').write_text("DEPLOYMENT_API = 'agent-system-deployment/2'\n")
+        (stub / 'runtime/native/system.py').write_text("DEPLOYMENT_API = 'agent-system-deployment/2'\n")
         with self.assertRaisesRegex(ValueError, 'incompatible'):
             deployment.stage('bad-engine', stub)
         self.assertEqual((dep / 'deployment.json').read_bytes(), original)
@@ -235,7 +235,7 @@ class SharedInstances(unittest.TestCase):
             self.sa.catalogue('alpha-source')
 
     def test_installed_catalogue_rebinds_roots_on_each_read(self):
-        from native_runtime.catalogue import InstalledCatalogue
+        from native_runtime.selection.installed_catalogue import InstalledCatalogue
 
         app = self.bundle / 'sample-app'
         app.mkdir()

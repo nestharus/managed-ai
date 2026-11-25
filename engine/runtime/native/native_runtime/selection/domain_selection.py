@@ -11,26 +11,31 @@ import os
 import re
 import stat
 
-from continuation_support.storage import _OPEN_RO_NOFOLLOW, encode, open_directory, sha
+from continuation_support.ownership import packet_id
+from continuation_support.storage import (
+    _OPEN_RO_NOFOLLOW,
+    check_ordinary_ancestors,
+    encode,
+    open_directory,
+    safe_relpath,
+    sha,
+    strict_json_loads,
+)
+from native_runtime import formats as _formats
+from native_runtime.formats import CATALOGUE_FORMAT, DOMAIN_FORMAT
 
+# Literal assignments preserved for static AST engine-API verification in controller.code_identity().
 ENGINE_API = 'managed-ai-runtime/1'
 STORE_SCHEMA = 'managed-ai-store/1'
-DOMAIN_FORMAT = 'managed-ai-domain/1'
-CATALOGUE_FORMAT = 'managed-ai-source-catalogue/1'
+assert ENGINE_API == _formats.ENGINE_API and STORE_SCHEMA == _formats.STORE_SCHEMA
 
 
 def _verify_ordinary_dir(path: Path) -> Path:
-    path = Path(os.path.abspath(path))
-    if any(p.is_symlink() for p in (path, *path.parents)) or not path.is_dir():
-        raise ValueError('ordinary selected source required: ' + str(path))
-    return path
+    return check_ordinary_ancestors(path, expect_dir=True, error_prefix='ordinary selected source required')
 
 
 def ordinary(path):
-    path = Path(os.path.abspath(path))
-    if any(p.is_symlink() for p in (path, *path.parents)) or not path.is_file():
-        raise ValueError('ordinary selected source required: ' + str(path))
-    return path
+    return check_ordinary_ancestors(Path(path), expect_dir=False, error_prefix='ordinary selected source required')
 
 
 def _read_ordinary_under(root: Path, name: str, *, byte_limit: int | None = None,
@@ -110,12 +115,12 @@ def load_json(path, expected=None):
     raw = ordinary(path).read_bytes()
     if expected is not None and sha(raw) != expected:
         raise ValueError('selected manifest changed: ' + str(path))
-    return json.loads(raw)
+    return strict_json_loads(raw, path, require_object=True)
 
 
 def pin(root, path):
     path = ordinary(Path(path).resolve())
-    return {'path': os.path.relpath(path, root), 'sha256': sha(path.read_bytes())}
+    return {'path': safe_relpath(path, root), 'sha256': sha(path.read_bytes())}
 
 
 PAYLOAD_TYPES = {
@@ -123,7 +128,7 @@ PAYLOAD_TYPES = {
     'array': lambda x: isinstance(x, list),
     'string': lambda x: isinstance(x, str),
     'integer': lambda x: type(x) is int,
-    'number': lambda x: type(x) in (int, float),
+    'number': lambda x: type(x) in (int, float) and math.isfinite(x),
     'boolean': lambda x: type(x) is bool,
     'null': lambda x: x is None,
 }
@@ -281,8 +286,86 @@ def validate_payload(value, schema, *, at='content', document=None, _references=
         if 'maxItems' in schema and len(value) > schema['maxItems']:
             raise ValueError(at + ': maxItems violated')
     if type(value) in (int, float):
+        if not math.isfinite(value):
+            raise ValueError(at + ': nonfinite numeric value prohibited')
         if 'minimum' in schema and value < schema['minimum'] or 'maximum' in schema and value > schema['maximum']:
             raise ValueError(at + ': numeric bound violated')
+
+
+_DOMAIN_ALLOWED_KEYS = frozenset({
+    'format',
+    'id',
+    'version',
+    'engine_api',
+    'title',
+    'summary',
+    'description',
+    'source_root',
+    'catalogue',
+    'requires_domains',
+    'schemas',
+    'entry_sources',
+    'tools',
+    'relation_vocabulary',
+    'protected_record_ids',
+    'content_addressed_basis_prefixes',
+})
+
+
+def _validate_domain_version(value, path):
+    if isinstance(value, str) and re.fullmatch(r'[0-9]+(?:\.[0-9]+){0,2}(?:-[0-9A-Za-z._-]+)?', value):
+        return value
+    raise ValueError(f'unsupported domain manifest version {value!r}: {path}')
+
+
+def _validate_domain_manifest(domain, path):
+    if not isinstance(domain, dict):
+        raise ValueError('domain manifest must be a JSON object: ' + str(path))
+    extra = set(domain) - _DOMAIN_ALLOWED_KEYS
+    if extra:
+        raise ValueError(f'unknown domain manifest fields ({path}): ' + ', '.join(sorted(extra)))
+    if domain.get('format') != DOMAIN_FORMAT or domain.get('engine_api') != ENGINE_API:
+        raise ValueError('incompatible domain manifest: ' + str(path))
+    if not isinstance(domain.get('id'), str) or not domain['id'].strip():
+        raise ValueError('domain manifest requires nonempty id: ' + str(path))
+    if 'version' in domain:
+        _validate_domain_version(domain['version'], path)
+    if 'requires_domains' in domain:
+        reqs = domain['requires_domains']
+        if not isinstance(reqs, list) or any(not isinstance(r, str) or not r.strip() for r in reqs):
+            raise ValueError(f"{domain['id']} requires_domains must be a list of nonempty strings")
+    if 'schemas' in domain and not isinstance(domain['schemas'], dict):
+        raise ValueError(f"{domain['id']} schemas must be an object")
+    if 'entry_sources' in domain:
+        es = domain['entry_sources']
+        if not isinstance(es, list) or any(not isinstance(s, str) or not s.strip() for s in es):
+            raise ValueError(f"{domain['id']} entry_sources must be a list of nonempty strings")
+    if 'tools' in domain:
+        if not isinstance(domain['tools'], list):
+            raise ValueError(f"{domain['id']} tools must be a list")
+        for tool in domain['tools']:
+            if not isinstance(tool, dict) or not isinstance(tool.get('id'), str) or not tool['id'].strip():
+                raise ValueError(f"{domain['id']} tool must be an object with nonempty id")
+            if 'dependency_source_ids' in tool:
+                deps = tool['dependency_source_ids']
+                if (not isinstance(deps, list)
+                        or any(not isinstance(d, str) or not d.strip() for d in deps)
+                        or len(deps) != len(set(deps))):
+                    raise ValueError(f"{domain['id']} tool {tool['id']} dependency_source_ids must be unique nonempty strings")
+    if 'protected_record_ids' in domain:
+        pids = domain['protected_record_ids']
+        if not isinstance(pids, list) or len(pids) != len(set(pids)):
+            raise ValueError(f"{domain['id']} protected_record_ids must be a list of unique record IDs")
+        for pid in pids:
+            packet_id(pid)
+    if 'content_addressed_basis_prefixes' in domain:
+        prefixes = domain['content_addressed_basis_prefixes']
+        if not isinstance(prefixes, list) or len(prefixes) != len(set(prefixes)):
+            raise ValueError(f"{domain['id']} content_addressed_basis_prefixes must be unique relative prefixes")
+        for pref in prefixes:
+            if (not isinstance(pref, str) or not pref or pref.startswith('/') or '\\' in pref
+                    or ':' in pref or '..' in pref.split('/') or not pref.endswith('/')):
+                raise ValueError(f"{domain['id']} invalid content_addressed_basis_prefix: {pref!r}")
 
 
 def _validate_relation_vocabulary(raw, owner):
@@ -312,6 +395,8 @@ class DomainSelection:
         self._validated_roots: set[str] = set()
         relation_predicates: set[str] = set()
         provenance_self_loops: set[str] = set()
+        protected_record_ids: set[str] = set()
+        basis_prefixes: list[str] = []
         declaring_domain = {}
         required_domains = set()
         if descriptor.get('store_schema', STORE_SCHEMA) != STORE_SCHEMA:
@@ -321,12 +406,15 @@ class DomainSelection:
         for binding in descriptor.get('domains', []):
             path = self.root / binding['path']
             domain = load_json(path, binding['sha256'])
-            if domain.get('format') != DOMAIN_FORMAT or domain.get('engine_api') != ENGINE_API:
-                raise ValueError('incompatible domain manifest: ' + str(path))
+            _validate_domain_manifest(domain, path)
             if domain['id'] in self.domains:
                 raise ValueError('duplicate selected domain identity')
             self.domains.append(domain['id'])
             required_domains.update(domain.get('requires_domains', []))
+            protected_record_ids.update(domain.get('protected_record_ids', ()))
+            for pref in domain.get('content_addressed_basis_prefixes', ()):
+                if pref not in basis_prefixes:
+                    basis_prefixes.append(pref)
             if 'relation_vocabulary' in domain:
                 vocab = _validate_relation_vocabulary(domain['relation_vocabulary'], domain['id'])
                 relation_predicates.update(vocab['predicates'])
@@ -366,10 +454,16 @@ class DomainSelection:
             'predicates': self.relation_predicates,
             'provenance_self_loop_relations': self.provenance_self_loop_relations,
         }
+        self.protected_record_ids = frozenset(protected_record_ids)
+        self.content_addressed_basis_prefixes = tuple(basis_prefixes)
 
     def validate_catalogue(self, available):
-        requested = [*self.entry_sources, *(tool[key] for tool in self.tools
-                       for key in ('source_id', 'entry_source_id', 'contract_source_id') if key in tool)]
+        requested = [*self.entry_sources]
+        for tool in self.tools:
+            for key in ('source_id', 'entry_source_id', 'contract_source_id'):
+                if key in tool:
+                    requested.append(tool[key])
+            requested.extend(tool.get('dependency_source_ids', ()))
         if any(ident not in available or available[ident].get('availability') == 'sealed' for ident in requested):
             raise ValueError('entry guidance and tool contracts must name available selected sources')
 

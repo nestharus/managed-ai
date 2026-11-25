@@ -297,13 +297,14 @@ class Library:
             db.execute('VACUUM')
             db.close(); db = None
             data = read_bytes(staged, MAX_INDEX)
-            with staged.open('rb') as stream: os.fsync(stream.fileno())
+            with staged.open('r+b') as stream: os.fsync(stream.fileno())
             # Link publishes a complete fresh file and cannot replace an existing
             # output, including one another cooperating builder just published.
             os.link(staged, output)
-            directory_fd = os.open(output.parent, os.O_RDONLY)
-            try: os.fsync(directory_fd)
-            finally: os.close(directory_fd)
+            if hasattr(os, 'O_DIRECTORY'):
+                directory_fd = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try: os.fsync(directory_fd)
+                finally: os.close(directory_fd)
             _, omitted, _ = self.search_scope(scan_limit, max_bytes)
             return {'format': 'knowledge-search-preparation/1', 'library_sha256': self.sha256,
                     'index': {'path': str(output), 'sha256': digest(data), 'bytes': len(data), 'format': INDEX_FORMAT},

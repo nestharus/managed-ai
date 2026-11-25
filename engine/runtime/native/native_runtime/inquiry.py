@@ -1,7 +1,7 @@
 """Issue or recover contact openings under the native owner lock."""
 from continuation_support.ownership import packet_id, relative_path
 from continuation_support.storage import read_bytes
-from feedback import Feedback, KIND
+from native_runtime.feedback import Feedback, KIND
 from native_runtime.identities import exact_fields, identity, nonempty, record_identity, require
 from native_runtime.inputs import strings
 

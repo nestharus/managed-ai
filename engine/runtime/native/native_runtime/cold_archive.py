@@ -4,39 +4,43 @@ from __future__ import annotations
 import errno
 import os
 from pathlib import Path
-import posixpath
 import stat
 import zlib
 
-from continuation_support.exchange.carrier_receipts import transport_outcome
-from continuation_support.exchange.publication_receipts import (
-    _publication_name,
-    publication_inventory,
-    publication_matches,
-)
 from continuation_support.ownership import packet_id
 from continuation_support.storage import (
     _OPEN_RO_NOFOLLOW,
     atomic_bytes,
     encode,
+    is_ordinary_file_stat,
     now,
     read_json,
     sha,
     sync_dir,
     write_json,
 )
-from feedback import KIND as FEEDBACK_KIND
+from native_runtime.feedback import KIND as FEEDBACK_KIND
+from native_runtime.formats import (
+    ARCHIVE_PLAN_FORMAT as PLAN_FORMAT,
+    ARCHIVE_RECEIPT_FORMAT as RECEIPT_FORMAT,
+    COLD_ARCHIVE_MANIFEST_FORMAT as MANIFEST_FORMAT,
+    COMPOSITION_FORMAT,
+    RESTORE_RECEIPT_FORMAT,
+)
 from native_runtime.head_index import build_entry, extract_content_record_links
+from native_runtime.hot_refs import (
+    extract_hot_record_id,
+    scan_attention_refs,
+    scan_interpretation_refs,
+    scan_packet_refs,
+    scan_uncommitted_turn_refs,
+)
 from native_runtime.identities import digest, exact_fields, require, strict_json
 from native_runtime.inputs import strings, text
 
 
-MANIFEST_FORMAT = 'managed-ai-cold-archive/1'
-PLAN_FORMAT = 'managed-ai-archive-records-plan/1'
-RECEIPT_FORMAT = 'managed-ai-archive-records-receipt/1'
-RESTORE_RECEIPT_FORMAT = 'managed-ai-restore-records-receipt/1'
-PROTECTED_IDS = frozenset({'goal', 'research-current'})
-PROTECTED_KINDS = frozenset({'goal', 'obligation', 'received-duty-reference', 'research-current', FEEDBACK_KIND})
+PROTECTED_IDS = frozenset({'goal'})
+PROTECTED_KINDS = frozenset({'goal', 'obligation', 'received-duty-reference', FEEDBACK_KIND})
 
 
 def _decompress_exact(path: Path, expected_bytes: int, expected_sha256: str) -> bytes:
@@ -56,7 +60,11 @@ def _decompress_exact(path: Path, expected_bytes: int, expected_sha256: str) -> 
             os.close(fd)
             raise
     else:
-        if path.is_symlink() or not path.is_file():
+        try:
+            info = path.lstat()
+        except OSError:
+            raise ValueError(f'ordinary archived record blob required: {path}') from None
+        if not is_ordinary_file_stat(info):
             raise ValueError(f'ordinary archived record blob required: {path}')
         stream = path.open('rb')
     with stream:
@@ -222,192 +230,28 @@ def _active_outbound_targets(records: list[dict]) -> set[str]:
     return targets
 
 
-def _extract_hot_record_id(path_value: object) -> str | None:
-    """Return record ID if a path points to hot records/<id>.json under work/."""
-    if not isinstance(path_value, str):
-        return None
-    raw = path_value.strip().replace('\\', '/')
-    if not raw:
-        return None
-    normalized = posixpath.normpath(raw)
-    while normalized.startswith('./'):
-        normalized = normalized[2:]
-    if normalized.startswith('work/'):
-        normalized = normalized[len('work/'):]
-    if normalized.startswith('records/') and normalized.endswith('.json'):
-        leaf = normalized[len('records/'):-5]
-        if leaf and '/' not in leaf:
-            return leaf
-    return None
-
-
-def _packet_is_open(system, pkt_dir: Path, pkt_name: str, req: dict) -> bool:
-    """Return True when a committed packet can still observe work/records/<id>.json on disk."""
-    ret_path = pkt_dir / 'return.json'
-    if not ret_path.exists() and not ret_path.is_symlink():
-        outcome = transport_outcome(system.ex, pkt_dir, req)
-        return outcome is None
-    ret = read_json(ret_path)
-    publications, reconciliations, unreadable = publication_inventory(pkt_dir)
-    if unreadable:
-        return True
-    declared_targets = {
-        row['path'] for row in req.get('targets', ())
-        if isinstance(row, dict) and isinstance(row.get('path'), str)
-    }
-    proposed_targets = {
-        row['path'] for row in ret.get('proposals', ())
-        if isinstance(row, dict) and isinstance(row.get('path'), str)
-    }
-    reconciled_intents = {
-        rec.get('intent_sha256') for rec, _ in reconciliations.values()
-        if isinstance(rec, dict) and isinstance(rec.get('intent_sha256'), str)
-    }
-    completed_targets: set[str] = set()
-    for name, (pub, pub_digest) in publications.items():
-        if not isinstance(pub, dict):
-            return True
-        phase = pub.get('phase')
-        target = pub.get('path')
-        if phase == 'complete':
-            if isinstance(target, str) and publication_matches(pkt_name, req, pub, ret):
-                completed_targets.add(target)
-        else:
-            canonical = _publication_name(target, 'reconcile') if isinstance(target, str) else None
-            if pub_digest in reconciled_intents or (canonical and canonical in reconciliations):
-                if isinstance(target, str):
-                    completed_targets.add(target)
-            else:
-                return True
-    return bool((declared_targets & proposed_targets) - completed_targets)
-
-
 def _external_hot_record_refs(system) -> dict[str, set[str]]:
     """Find hot record IDs pinned by interpretations, open/staged packets, active attention, or uncommitted turns."""
     pinned: dict[str, set[str]] = {}
 
-    def mark(record_id: str | None, reason: str) -> None:
-        if record_id:
+    def mark_map(found: dict[str, list[dict]], reason: str) -> None:
+        for record_id in found:
             pinned.setdefault(record_id, set()).add(reason)
 
-    # 1. work/interpretations/*.json
-    interp_dir = system.work / 'interpretations'
-    if interp_dir.exists():
-        require(not interp_dir.is_symlink() and interp_dir.is_dir(),
-                'ordinary interpretations directory required')
-        for path in sorted(interp_dir.iterdir(), key=lambda p: p.name):
-            if path.name.startswith('.') or not path.name.endswith('.json'):
-                continue
-            doc = read_json(path)
-            evidence = doc.get('evidence', ())
-            require(isinstance(evidence, list), f'malformed interpretation evidence list: {path.name}')
-            for item in evidence:
-                ev_path = item.get('path') if isinstance(item, dict) else item
-                mark(_extract_hot_record_id(ev_path), 'referenced-by-interpretation')
+    interp_refs, _ = scan_interpretation_refs(system, extract_hot_record_id, fail_closed=True)
+    mark_map(interp_refs, 'referenced-by-interpretation')
 
-    # 2. exchange/packets/** (staged .sealed-*/.prepare-* and open committed packets)
-    packets_dir = system.ex.root / 'packets'
-    committed_packets: set[str] = set()
-    if packets_dir.exists():
-        require(not packets_dir.is_symlink() and packets_dir.is_dir(),
-                'ordinary packets directory required')
-        for child in sorted(packets_dir.iterdir(), key=lambda p: p.name):
-            name = child.name
-            staged = name.startswith(('.sealed-', '.prepare-'))
-            if name.startswith('.') and not staged:
-                continue
-            info = child.lstat()
-            require(not stat.S_ISLNK(info.st_mode) and stat.S_ISDIR(info.st_mode),
-                    f'ordinary packet directory required: {name}')
-            req_path = child / 'request.json'
-            if name.startswith('.prepare-') and not req_path.exists() and not req_path.is_symlink():
-                raise ValueError(f'in-flight packet staging directory present: {name}')
-            req = read_json(req_path)
-            if not staged:
-                committed_packets.add(name)
-            if staged or _packet_is_open(system, child, name, req):
-                for role in ('brief', 'methods', 'materials', 'targets'):
-                    rows = [req[role]] if role == 'brief' and isinstance(req.get('brief'), dict) else req.get(role, ())
-                    if isinstance(rows, list):
-                        for item in rows:
-                            if isinstance(item, dict):
-                                mark(_extract_hot_record_id(item.get('path')), 'referenced-by-open-packet')
+    packet_refs, committed_packets, _ = scan_packet_refs(
+        system, extract_hot_record_id, open_only=True, fail_closed=True)
+    mark_map(packet_refs, 'referenced-by-open-packet')
 
-    # 3. Active exchange/attention/index.json (field, active item basis, active latest assessment products)
-    att_index = system.ex.root / 'attention/index.json'
-    if att_index.exists() or att_index.is_symlink():
-        state = system.attention._load()
-        mark(_extract_hot_record_id(state.get('field')), 'referenced-by-active-attention')
-        active_items: set[str] = set()
-        for item_id, obj_key in sorted(state.get('items', {}).items()):
-            spec = system.attention._get(obj_key)
-            if not spec.get('active', True):
-                continue
-            active_items.add(item_id)
-            for basis_path in spec.get('basis', ()):
-                mark(_extract_hot_record_id(basis_path), 'referenced-by-active-attention')
-        if active_items and state.get('receipts'):
-            current = system.attention._current(state)
-            receipt_cache: dict[int, dict] = {}
-            latest_map = current.get('latest', {})
-            for item_id in sorted(active_items):
-                bases = latest_map.get(item_id, {})
-                require(isinstance(bases, dict), f'malformed attention latest entries for {item_id}')
-                for basis_key in sorted(bases):
-                    pos, offset = bases[basis_key]
-                    if pos not in receipt_cache:
-                        receipt_cache[pos] = system.attention._get(state['receipts'][pos])
-                    assessment = receipt_cache[pos]['assessments'][offset]
-                    products = assessment.get('products', ())
-                    require(isinstance(products, list), f'malformed attention assessment products for {item_id}')
-                    for product in products:
-                        prod_path = product.get('path') if isinstance(product, dict) else product
-                        mark(_extract_hot_record_id(prod_path), 'referenced-by-active-attention')
+    att_refs, _ = scan_attention_refs(system, extract_hot_record_id, fail_closed=True)
+    mark_map(att_refs, 'referenced-by-active-attention')
 
-    # 4. Uncommitted work/.system/turns/<turn>/
-    turns_dir = system.work / '.system/turns'
-    if turns_dir.exists():
-        require(not turns_dir.is_symlink() and turns_dir.is_dir(),
-                'ordinary turns working directory required')
-        for entry in sorted(turns_dir.iterdir(), key=lambda p: p.name):
-            if entry.name.startswith('.'):
-                continue
-            info = entry.lstat()
-            require(not stat.S_ISLNK(info.st_mode) and stat.S_ISDIR(info.st_mode),
-                    f'ordinary turn working directory required: {entry.name}')
-            if entry.name in committed_packets:
-                continue
-            prep_file = entry / 'preparation.json'
-            if prep_file.exists() or prep_file.is_symlink():
-                prep = read_json(prep_file)
-                if prep.get('phase') == 'abandoned':
-                    continue
-            req_file = entry / 'request.json'
-            if req_file.exists() or req_file.is_symlink():
-                req = read_json(req_file)
-                for rid in req.get('records', ()):
-                    if isinstance(rid, str):
-                        mark(rid, 'referenced-by-uncommitted-turn')
-                for comp in req.get('compositions', ()):
-                    if isinstance(comp, dict) and isinstance(comp.get('record'), str):
-                        mark(comp['record'], 'referenced-by-uncommitted-turn')
-                for field in ('sources', 'targets', 'methods', 'materials'):
-                    vals = req.get(field, ())
-                    if isinstance(vals, list):
-                        for val in vals:
-                            raw_path = val.get('path') if isinstance(val, dict) else val
-                            mark(_extract_hot_record_id(raw_path), 'referenced-by-uncommitted-turn')
-                brief_val = req.get('brief')
-                brief_path = brief_val.get('path') if isinstance(brief_val, dict) else brief_val
-                mark(_extract_hot_record_id(brief_path), 'referenced-by-uncommitted-turn')
-            sel_file = entry / 'selection.json'
-            if sel_file.exists() or sel_file.is_symlink():
-                sel = read_json(sel_file)
-                view = sel.get('view')
-                if isinstance(view, dict):
-                    for rid in view.get('selected_records', ()):
-                        if isinstance(rid, str):
-                            mark(rid, 'referenced-by-uncommitted-turn')
+    uncom_refs, _ = scan_uncommitted_turn_refs(
+        system, committed_packets, extract_hot_record_id, include_record_ids=True, fail_closed=True)
+    mark_map(uncom_refs, 'referenced-by-uncommitted-turn')
+
     return pinned
 
 
@@ -418,6 +262,7 @@ def _evaluate_candidates(system, candidate_ids: list[str]) -> tuple[list[dict], 
     external_pins = _external_hot_record_refs(system)
     sealed_ids, sealed_paths = _sealed_markers(system)
     already_archived = set(system.record_store.cold_archive.ids())
+    protected_ids = PROTECTED_IDS | getattr(system.domain_selection, 'protected_record_ids', frozenset())
 
     eligible: list[dict] = []
     ineligible: list[dict] = []
@@ -431,12 +276,12 @@ def _evaluate_candidates(system, candidate_ids: list[str]) -> tuple[list[dict], 
                 reasons.append('missing-hot-record')
             ineligible.append({'id': ident, 'reasons': reasons})
             continue
-        if ident in PROTECTED_IDS:
+        if ident in protected_ids:
             reasons.append('protected-governing-id')
         if rec['kind'] in PROTECTED_KINDS:
             reasons.append('protected-record-kind:' + rec['kind'])
         content = rec.get('content')
-        if isinstance(content, dict) and content.get('format') == 'g60-composition/1':
+        if isinstance(content, dict) and content.get('format') == COMPOSITION_FORMAT:
             reasons.append('protected-composition-record')
         if rec.get('active', True):
             reasons.append('active-record')

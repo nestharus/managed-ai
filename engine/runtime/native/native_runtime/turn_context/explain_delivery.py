@@ -1,10 +1,14 @@
 """Explain a frozen context from its captured evidence, without reselecting work."""
 from __future__ import annotations
 
-import json
-
 from continuation_support.exchange import MAX_PACKET_BYTES
-from continuation_support.storage import encode, read_bytes, read_json, sha
+from continuation_support.storage import encode, read_bytes, read_json, sha, strict_json_loads
+from native_runtime.formats import (
+    PACKET_BINDING_FORMAT,
+    TURN_EXPOSURE_FORMAT,
+    TURN_VIEW_FORMAT,
+    validate_optional_format,
+)
 
 
 FORMAT = 'agent-system-context-explanation/1'
@@ -17,18 +21,24 @@ def captured_view(exchange, turn, request):
     prefix = '.system/turns/' + turn + '/'
     exposure = next((r for r in request['materials'] if r['path'] == prefix + 'exposure.json'), None)
     if exposure is not None:
-        binding = json.loads(exchange.objects.read(exposure['sha256']))
-        return json.loads(exchange.objects.read(binding['full_view_object']))
+        binding = strict_json_loads(exchange.objects.read(exposure['sha256']), 'exposure.json')
+        validate_optional_format(binding, TURN_EXPOSURE_FORMAT, 'exposure.json')
+        view = strict_json_loads(exchange.objects.read(binding['full_view_object']), 'view.json')
+        validate_optional_format(view, TURN_VIEW_FORMAT, 'view.json')
+        return view
     original = next((r for r in request['materials'] if r['path'] == prefix + 'view.json'), None)
     if original is None:
         raise ValueError('no captured system view for this turn')
-    return json.loads(exchange.objects.read(original['sha256']))
+    view = strict_json_loads(exchange.objects.read(original['sha256']), 'view.json')
+    validate_optional_format(view, TURN_VIEW_FORMAT, 'view.json')
+    return view
 
 
 def explain_context(exchange, turn):
     directory, request = exchange.load(turn)
     view = captured_view(exchange, turn, request)
     binding = read_json(directory / 'binding.json')
+    validate_optional_format(binding, PACKET_BINDING_FORMAT, 'binding.json')
     carrier = read_bytes(directory / 'context.md', MAX_PACKET_BYTES)
     if sha(carrier) != binding['context_sha256'] or sha(encode(request)) != binding['request_sha256']:
         raise ValueError('frozen request/context changed')
@@ -61,7 +71,7 @@ def explain_context(exchange, turn):
         if key is not None and object_sizes[key] != row['bytes']:
             raise ValueError('captured input byte count differs: ' + row['path'])
         if role == 'materials' and row['path'] in record_paths:
-            record = json.loads(exchange.objects.read(key))
+            record = strict_json_loads(exchange.objects.read(key), row['path'])
             if record.get('id') != record_paths[row['path']]:
                 raise ValueError('captured selected-record identity differs')
             records[record['id']] = record

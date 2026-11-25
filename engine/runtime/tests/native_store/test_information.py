@@ -20,7 +20,7 @@ import unittest
 sys.path.insert(0, str(APP))
 API = runpy.run_path(str(APP / 'system.py'))
 System, exclusive = API['System'], API['exclusive']
-from information import Information, FORMAT, record_identity, pointer
+from native_runtime.information import Information, FORMAT, record_identity, pointer
 
 
 class InformationChecks(unittest.TestCase):

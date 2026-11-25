@@ -8,7 +8,7 @@ from pathlib import Path
 
 from continuation_support.ownership import NativeLayout
 from continuation_support.storage import MAX_BYTES, exclusive, sha
-from context_discovery import canonical
+from native_runtime.context_discovery import canonical
 from native_runtime.identities import digest, exact_fields, identity, nonempty, record_identity, require, strict_json
 
 

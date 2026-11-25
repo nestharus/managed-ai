@@ -12,14 +12,20 @@ def enter_proposal_origin(argument):
     try:
         device, inode, directory = argument.removeprefix('--file-origin=').split(':', 2)
         path = bytes.fromhex(directory)
-        if not os.path.isabs(path) or b'\0' in path:
-            raise ValueError('absolute proposal origin required')
-        # Traverse using search permission. No OS lookup receives the joined pathname.
-        anchor = b'//' if path.startswith(b'//') and not path.startswith(b'///') else b'/'
-        os.chdir(anchor)
-        for component in path.split(b'/'):
-            if component:
-                os.chdir(component)
+        if os.name == 'nt':
+            path_text = os.fsdecode(path)
+            if not os.path.isabs(path_text) or '\0' in path_text:
+                raise ValueError('absolute proposal origin required')
+            os.chdir(path_text)
+        else:
+            if not os.path.isabs(path) or b'\0' in path:
+                raise ValueError('absolute proposal origin required')
+            # Traverse using search permission. No OS lookup receives the joined pathname.
+            anchor = b'//' if path.startswith(b'//') and not path.startswith(b'///') else b'/'
+            os.chdir(anchor)
+            for component in path.split(b'/'):
+                if component:
+                    os.chdir(component)
         cwd = os.stat('.')
         if (cwd.st_dev, cwd.st_ino) != (int(device), int(inode)):
             raise ValueError('proposal origin directory changed')

@@ -14,8 +14,8 @@ import unittest
 from unittest.mock import patch
 import zlib
 
-from composition import Composition
-from context_discovery import Discovery
+from native_runtime.composition import Composition
+from native_runtime.context_discovery import Discovery
 from continuation_support.storage import (
     MAX_BYTES,
     ObjectStore,
@@ -87,6 +87,8 @@ class Wave2RuntimeTests(unittest.TestCase):
             'schemas': {},
             'entry_sources': [],
             'tools': [],
+            'protected_record_ids': ['research-current'],
+            'content_addressed_basis_prefixes': ['evidence/research-originals/'],
             'relation_vocabulary': {
                 'predicates': ['supports', 'contradicts', 'refines', 'answers'],
                 'provenance_self_loop_relations': ['revises native navigation from', 'custom-self-pin'],

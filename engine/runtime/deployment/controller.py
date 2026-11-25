@@ -23,8 +23,19 @@ from importlib.machinery import EXTENSION_SUFFIXES
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / 'continuation'))
-from continuation_support.storage import AdmissionContended, encode, exclusive, owner_admission, shared, atomic_bytes, sha
-from continuation_support.ownership import packet_id
+from continuation_support.storage import (
+    AdmissionContended,
+    atomic_bytes,
+    encode,
+    exclusive,
+    is_ordinary_file_stat,
+    owner_admission,
+    safe_relpath,
+    sha,
+    shared,
+    strict_json_loads,
+)
+from continuation_support.ownership import NativeLayout, packet_id
 
 VERSION = '0.3.0'
 FORMAT = 'agent-system-deployment/2'
@@ -32,39 +43,32 @@ ENGINE_API = 'managed-ai-runtime/1'
 STORE_SCHEMA = 'managed-ai-store/1'
 NATIVE_ENTRY = Path('runtime/native/system.py')
 NATIVE_CONTRACT = Path('runtime/native/native_runtime/selection/domain_selection.py')
-PORTABLE_ENTRY = Path('prototype/agent-system/system.py')
-PORTABLE_CONTRACT = Path('prototype/agent-system/native_runtime/domains.py')
 NON_SOURCE_SUFFIXES = ('.pyc', '.pyo', '.pyd', '.so', *EXTENSION_SUFFIXES)
+CODE_IDENTITY_EXCLUDED_DIRS = frozenset({'tests', 'examples', 'patterns', 'prototype'})
 
 
-def _unique_json(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError('duplicate JSON key in descriptor: ' + key)
-        result[key] = value
-    return result
-
-
-def _descriptor_bytes(path):
-    if path.is_symlink() or not path.is_file():
+def read_descriptor_bytes(path):
+    path = Path(path)
+    try:
+        info = path.lstat()
+    except OSError:
+        raise ValueError('ordinary descriptor required: ' + str(path)) from None
+    if not is_ordinary_file_stat(info):
         raise ValueError('ordinary descriptor required: ' + str(path))
     return path.read_bytes()
 
 
-def _descriptor_object(path, raw):
-    value = json.loads(
-        raw.decode('utf-8'),
-        object_pairs_hook=_unique_json,
-        parse_constant=lambda item: (_ for _ in ()).throw(ValueError('nonfinite JSON in descriptor: ' + item)),
-    )
-    if not isinstance(value, dict):
-        raise ValueError('expected a JSON object in descriptor: ' + str(path))
-    return value
+def read_descriptor(path, raw=None):
+    data = read_descriptor_bytes(path) if raw is None else raw
+    return strict_json_loads(data, path, require_object=True)
+
+
+_descriptor_bytes = read_descriptor_bytes
+_descriptor_object = lambda path, raw: read_descriptor(path, raw)
 
 
 def read(path):
-    return _descriptor_object(path, _descriptor_bytes(path))
+    return read_descriptor(path)
 
 
 def _ordinary_mode(path, info):
@@ -94,7 +98,13 @@ def _engine_directory(path):
     return current.resolve(strict=True)
 
 
+def _is_test_module_name(name: str) -> bool:
+    lower = name.lower()
+    return lower.endswith('.py') and (lower.startswith('test_') or lower.endswith('_test.py'))
+
+
 def code_identity(engine):
+    """Hash executable Python source modules under engine/ (excluding tests, examples, patterns, prototype)."""
     engine = _engine_directory(engine)
 
     def scan_subtree(start_dir, start_cache):
@@ -107,13 +117,15 @@ def code_identity(engine):
                     path = directory / entry.name
                     mode = _ordinary_mode(path, entry.stat(follow_symlinks=False))
                     if stat.S_ISDIR(mode):
+                        if entry.name.casefold() in CODE_IDENTITY_EXCLUDED_DIRS:
+                            continue
                         pending.append((path, cache or path.name.casefold() == '__pycache__'))
                     elif cache:
                         if path.suffix.lower() != '.pyc':
                             raise ValueError(f'ordinary bytecode cache files required below __pycache__: {path}')
                     elif path.name.lower().endswith(NON_SOURCE_SUFFIXES):
                         raise ValueError(f'shared engine requires Python source for executable modules: {path}')
-                    elif path.match('*.py'):
+                    elif path.match('*.py') and not _is_test_module_name(entry.name):
                         found.append(path)
         return found
 
@@ -124,10 +136,12 @@ def code_identity(engine):
             path = engine / entry.name
             mode = _ordinary_mode(path, entry.stat(follow_symlinks=False))
             if stat.S_ISDIR(mode):
+                if entry.name.casefold() in CODE_IDENTITY_EXCLUDED_DIRS:
+                    continue
                 top_subdirs.append((path, path.name.casefold() == '__pycache__'))
             elif path.name.lower().endswith(NON_SOURCE_SUFFIXES):
                 raise ValueError(f'shared engine requires Python source for executable modules: {path}')
-            elif path.match('*.py'):
+            elif path.match('*.py') and not _is_test_module_name(entry.name):
                 paths.append(path)
     if len(top_subdirs) >= 2:
         with ThreadPoolExecutor(max_workers=min(8, len(top_subdirs))) as pool:
@@ -137,10 +151,7 @@ def code_identity(engine):
         for sub_dir, sub_cache in top_subdirs:
             paths.extend(scan_subtree(sub_dir, sub_cache))
     sorted_paths = sorted(paths)
-    interfaces = [(PORTABLE_ENTRY, PORTABLE_CONTRACT)]
-    if (engine / NATIVE_ENTRY).is_file():
-        schema = NATIVE_CONTRACT if (engine / NATIVE_CONTRACT).is_file() else PORTABLE_CONTRACT
-        interfaces.append((NATIVE_ENTRY, schema))
+    interfaces = [(NATIVE_ENTRY, NATIVE_CONTRACT)]
     declaration_paths = {path for pair in interfaces for path in pair}
 
     def hash_one(path):
@@ -230,7 +241,7 @@ class DeploymentSelection:
         packet_id(edition)
         engine = _engine_directory(engine)
         value = dict(self.config, edition=edition,
-                     engine={'path': os.path.relpath(engine, self.root), 'code_sha256': code_identity(engine),
+                     engine={'path': safe_relpath(engine, self.root), 'code_sha256': code_identity(engine),
                              'engine_api': ENGINE_API})
         atomic_bytes(self.root / 'candidate.json', encode(value))
         return {'edition': edition, 'candidate_sha256': sha(encode(value)), 'engine': str(engine)}
@@ -266,6 +277,22 @@ class DeploymentSelection:
             raise ActivationIncomplete(step, sha(descriptor_bytes), exc) from exc
 
 
+def _check_required_domain(runtime: Path, required_domain: str):
+    """Verify the store descriptor selects the named domain without hardcoding an instance UUID."""
+    sys_doc = read_descriptor(runtime / 'system.json')
+    for binding in sys_doc.get('domains', ()):
+        if not isinstance(binding, dict) or not isinstance(binding.get('path'), str):
+            continue
+        dom_path = (runtime / binding['path']).resolve()
+        try:
+            dom_doc = read_descriptor(dom_path)
+        except (OSError, ValueError):
+            continue
+        if dom_doc.get('id') == required_domain:
+            return
+    raise ValueError(f'this entrance requires a {required_domain}-domain deployment')
+
+
 class Deployment(DeploymentSelection):
     """Open the selected engine and store after verifying their declared identities."""
 
@@ -287,9 +314,9 @@ class Deployment(DeploymentSelection):
             raise ValueError('deployment already exists; stage and activate an explicit new selection')
         binding = runtime_binding(runtime)
         value = {'format': FORMAT, 'controller_version': VERSION,
-                 'engine': {'path': os.path.relpath(engine, root), 'code_sha256': code_identity(engine),
+                 'engine': {'path': safe_relpath(engine, root), 'code_sha256': code_identity(engine),
                             'engine_api': ENGINE_API},
-                 'store': {'path': os.path.relpath(runtime, root), **binding},
+                 'store': {'path': safe_relpath(runtime, root), **binding},
                  'account': 'Initial explicit shared engine/store selection.'}
         root.mkdir(parents=True, exist_ok=True)
         atomic_bytes(root / 'deployment.json', encode(value))
@@ -314,31 +341,39 @@ class Deployment(DeploymentSelection):
 
     @classmethod
     @contextmanager
-    def admitted(cls, root, *, engine, instance, deployment_sha, read_only, store_sha=None, deadline=None):
-        """Enter a pinned domain operation under the deployment, then its selected store."""
+    def admitted(cls, root, *, engine=None, instance=None, deployment_sha=None, read_only=True,
+                 store_sha=None, extra_stores=(), require_domain=None, deadline=None):
+        """Enter a pinned domain operation under shared deployment.lock, then sorted store owner.locks."""
         root = Path(root).resolve()
-        guard = shared if read_only else exclusive
+        expected_engine = None if engine is None else Path(engine).resolve()
+        extra_resolved = tuple(Path(p).resolve(strict=True) for p in extra_stores)
+        store_guard = shared if read_only else exclusive
 
         def acquire(guards):
-            guards.enter_context(guard(root / 'deployment.lock'))
-            descriptor = _descriptor_bytes(root / 'deployment.json')
+            guards.enter_context(shared(root / 'deployment.lock'))
+            descriptor = read_descriptor_bytes(root / 'deployment.json')
             selection = DeploymentSelection(root, descriptor=descriptor)
-            if selection.descriptor_sha256 != deployment_sha:
+            if deployment_sha is not None and selection.descriptor_sha256 != deployment_sha:
                 raise ValueError('deployment descriptor differs')
-            if (root / selection.config['engine']['path']).resolve() != engine:
+            actual_engine = (root / selection.config['engine']['path']).resolve()
+            if expected_engine is not None and actual_engine != expected_engine:
                 raise ValueError('selected native engine differs')
-            if selection.config['store']['instance_id'] != instance:
+            if instance is not None and selection.config['store']['instance_id'] != instance:
                 raise ValueError('recipient instance differs')
             runtime = (root / selection.config['store']['path']).resolve()
-            guards.enter_context(guard(runtime / 'exchange/owner.lock'))
+            all_stores = sorted({runtime, *extra_resolved}, key=lambda p: str(p))
+            for store_root in all_stores:
+                guards.enter_context(store_guard(NativeLayout(store_root).exchange / 'owner.lock'))
             return descriptor, runtime
 
         with owner_admission(acquire, deadline=admission_deadline(deadline)) as (descriptor, runtime):
-            if store_sha is not None and sha(_descriptor_bytes(runtime / 'system.json')) != store_sha:
+            if store_sha is not None and sha(read_descriptor_bytes(runtime / 'system.json')) != store_sha:
                 raise ValueError('store descriptor differs')
             selected = cls(root, descriptor=descriptor)
             if selected.runtime != runtime:
                 raise ValueError('selected store path differs')
+            if require_domain is not None:
+                _check_required_domain(selected.runtime, require_domain)
             yield selected
 
     @classmethod
@@ -361,7 +396,14 @@ class Deployment(DeploymentSelection):
 
     def system(self, arguments):
         self._require_current()
-        return self._dispatch(arguments)
+        if arguments[:1] == ['explain-context']:
+            self.verify()
+            return self._dispatch(arguments, already_admitted=True)
+        read_only = _precheck_local_system_args(self.engine, self.runtime, arguments)
+        with type(self).admitted(
+                self.root, engine=self.engine, instance=self.config['store']['instance_id'],
+                deployment_sha=self.descriptor_sha256, read_only=read_only) as bound:
+            return bound._dispatch(arguments, already_admitted=True)
 
     def _dispatch(self, arguments, *, deadline=None, already_admitted=False):
         if not arguments or any(v == '--root' or v.startswith('--root=') for v in arguments):
@@ -371,8 +413,7 @@ class Deployment(DeploymentSelection):
         return self._system_action(arguments, deadline, already_admitted=already_admitted)
 
     def _native_entry(self):
-        entry = self.engine / NATIVE_ENTRY
-        return entry if entry.is_file() else self.engine / PORTABLE_ENTRY
+        return self.engine / NATIVE_ENTRY
 
     def _selected_system(self, arguments, deadline=None, *, already_admitted=False):
         # The controller imported its own core before it verified the selected
@@ -470,7 +511,7 @@ class Deployment(DeploymentSelection):
                              'engine_root': str(self.engine), 'project_root': str(system.work),
                              'project_files': [], 'project_file_count': 0,
                              'selection_scope': 'Per-store catalogues and domains are selected by the native store descriptor.'}
-        system.command_prefix = [sys.executable, '-B', str(self.engine / 'prototype/deploy.py'),
+        system.command_prefix = [sys.executable, '-B', str(self.engine / 'runtime/select_deployment.py'),
                                  '--deployment', str(self.root), 'system']
         return system
 
@@ -508,6 +549,7 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     p.add_argument('--deployment', type=Path, required=True)
     p.add_argument('--expected-descriptor', help='Deployment edition verified by the forwarding entrance')
+    p.add_argument('--require-domain', help=argparse.SUPPRESS)
     p.add_argument('--admission-deadline', type=float, help=argparse.SUPPRESS)
     sub = p.add_subparsers(dest='action', required=True)
     init = sub.add_parser('init', allow_abbrev=False); init.add_argument('--runtime', '--store', dest='runtime', required=True, type=Path)
@@ -521,10 +563,33 @@ def parser():
 
 
 def _precheck_local_system_args(engine, runtime, arguments):
-    """Parse arguments with this controller's own parser before locks (zero store reads, zero code_identity)."""
+    """Parse arguments with the selected engine's parser before locks (zero store reads, zero code_identity)."""
     if not arguments or any(v == '--root' or v.startswith('--root=') for v in arguments):
         raise ValueError('supply a native command; deployment owns its selected store')
+    parser_file = engine / 'runtime/native/native_runtime/command_parser.py'
     if engine != HERE.parents[1]:
+        if parser_file.is_file():
+            try:
+                ext_native = str(engine / 'runtime/native')
+                added_ext = ext_native not in sys.path
+                if added_ext:
+                    sys.path.insert(0, ext_native)
+                try:
+                    mod = runpy.run_path(str(parser_file))
+                    parsed = mod['parser']().parse_args(['--root', str(runtime), *arguments])
+                    if parsed.action in ('show', 'catalogue') and arguments[0] != parsed.action:
+                        raise ValueError('supply the native store observation as the command')
+                    if parsed.action == 'init':
+                        raise ValueError('initialize a store through the central system entrance before deployment')
+                    readonly_fn = mod.get('is_readonly_action')
+                    return bool(readonly_fn(parsed)) if readonly_fn is not None else parsed.action in {'show', 'catalogue'}
+                finally:
+                    if added_ext and ext_native in sys.path:
+                        sys.path.remove(ext_native)
+            except SystemExit:
+                raise
+            except (OSError, KeyError, ImportError):
+                pass
         return arguments[:1] in (['show'], ['catalogue'])
     native_root = str(HERE.parent / 'native')
     added = native_root not in sys.path
@@ -548,15 +613,17 @@ def main():
     root = args.deployment.resolve()
     try:
         if args.action == 'system' and args.arguments[:1] == ['explain-context']:
-            # Read frozen evidence without creating deployment or store lock files.
+            # Read frozen evidence without creating deployment or store lock files (single code_identity).
             selected = Deployment(root)
             if args.expected_descriptor is not None and selected.descriptor_sha256 != args.expected_descriptor:
                 raise ValueError('deployment descriptor differs')
-            result, app_args, api = selected.system(args.arguments)
+            if args.require_domain is not None:
+                _check_required_domain(selected.runtime, args.require_domain)
+            result, app_args, api = selected._dispatch(args.arguments, already_admitted=True)
             api['emit'](result, app_args)
             return
         if args.action == 'system':
-            descriptor = _descriptor_bytes(root / 'deployment.json')
+            descriptor = read_descriptor_bytes(root / 'deployment.json')
             selection = DeploymentSelection(root, descriptor=descriptor)
             if args.expected_descriptor is not None and selection.descriptor_sha256 != args.expected_descriptor:
                 raise ValueError('deployment descriptor differs')
@@ -566,7 +633,8 @@ def main():
             read_only = _precheck_local_system_args(engine, runtime, args.arguments)
             with report_admission(args.action), Deployment.admitted(
                     root, engine=engine, instance=instance, deployment_sha=selection.descriptor_sha256,
-                    read_only=read_only, deadline=args.admission_deadline) as selected:
+                    read_only=read_only, require_domain=args.require_domain,
+                    deadline=args.admission_deadline) as selected:
                 result, app_args, api = selected._dispatch(
                     args.arguments, deadline=args.admission_deadline, already_admitted=True)
             api['emit'](result, app_args)
@@ -586,7 +654,16 @@ def main():
             elif args.action == 'activate':
                 result = DeploymentSelection(root).activate(args.edition, args.expected, args.manifest_sha256, args.reason)
             elif args.action in {'status', 'verify'}:
-                result = Deployment.current_status(root)
+                selected = Deployment(root)
+                if args.require_domain is not None:
+                    _check_required_domain(selected.runtime, args.require_domain)
+                store = selected.config['store']
+                result = {'format': FORMAT, 'deployment': str(selected.root), 'engine': str(selected.engine),
+                          'engine_code_sha256': selected.config['engine']['code_sha256'],
+                          'store': str(selected.runtime), 'instance_id': store['instance_id'],
+                          'store_schema': store['store_schema'], 'engine_api': store['engine_api'],
+                          'descriptor_sha256': selected.descriptor_sha256,
+                          'scope': 'One shared code tree; explicit store and data-domain selection. No copied runtime.'}
         print(json.dumps(result, indent=2))
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         failure = {'status': 'unresolved', 'operation': args.action, 'error': str(exc)}

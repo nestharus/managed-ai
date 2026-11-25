@@ -16,7 +16,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from composition import Composition
+from native_runtime.composition import Composition
 from controller import Deployment
 from native_runtime.capture import TurnCapture
 from system import System

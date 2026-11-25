@@ -18,7 +18,7 @@ from zipfile import ZipFile
 if os.getenv('G60_TEST_PRODUCT'):
     sys.path.insert(0, str(Path(os.environ['G60_TEST_PRODUCT']).resolve() / 'native'))
 import system
-from composition import MAX_PROFILE_BYTES
+from native_runtime.composition import MAX_PROFILE_BYTES
 from continuation_support.storage import MAX_BYTES
 
 PRODUCT = Path(system.__file__).resolve().parents[1]

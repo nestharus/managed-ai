@@ -27,6 +27,9 @@ from continuation_support.storage import (
     MAX_BYTES,
     _OPEN_RO_NOFOLLOW,
     encode,
+    is_ordinary_dir_stat,
+    is_ordinary_file_stat,
+    is_reparse_or_symlink,
     now,
     open_directory,
     read_bytes,
@@ -34,11 +37,22 @@ from continuation_support.storage import (
     sync_dir,
     write_json,
 )
+from native_runtime.formats import (
+    TURN_RETIRE_PLAN_FORMAT as PLAN_FORMAT,
+    TURN_RETIRE_RECEIPT_FORMAT as RECEIPT_FORMAT,
+    TURN_SELECTION_FORMAT,
+    validate_optional_format,
+)
+from native_runtime.hot_refs import (
+    extract_turn_ref as _extract_referenced_turn,
+    scan_attention_refs,
+    scan_interpretation_refs,
+    scan_packet_refs,
+    scan_uncommitted_turn_refs,
+)
 from native_runtime.identities import digest, exact_fields, nonempty, require, strict_json
 from native_runtime.turn_context.preparation_journal import feedback_id
 
-PLAN_FORMAT = 'managed-ai-turn-retirement-plan/1'
-RECEIPT_FORMAT = 'managed-ai-turn-retirement-receipt/1'
 RECEIPT_DIRECTORY = '.system/retirements'
 TURNS_RELATIVE = '.system/turns'
 
@@ -105,31 +119,12 @@ _RECEIPT_REQUIRED = {
 }
 
 
-def _extract_referenced_turn(path_value: Any) -> str | None:
-    """Return the turn name if a structural path points into .system/turns/<turn>."""
-    if not isinstance(path_value, str):
-        return None
-    raw = path_value.strip().replace('\\', '/')
-    if not raw:
-        return None
-    normalized = posixpath.normpath(raw)
-    while normalized.startswith('./'):
-        normalized = normalized[2:]
-    for prefix in ('.system/turns/', 'work/.system/turns/'):
-        if normalized.startswith(prefix):
-            rest = normalized[len(prefix):]
-            turn_name = rest.split('/', 1)[0]
-            if turn_name and turn_name not in ('.', '..'):
-                return turn_name
-    return None
-
-
 def _read_strict_file(path: Path, limit: int = MAX_BYTES) -> dict[str, Any]:
     return strict_json(read_bytes(path, limit))
 
 
 def _scan_turn_directory(turn_dir: Path) -> tuple[int, int, str, list[str], dict[str, str], list[str]]:
-    """Inspect a working turn directory without following symlinks.
+    """Inspect a working turn directory without following symlinks or reparse points.
 
     Returns (file_count, total_bytes, inventory_sha256, structural_issues, file_hashes, dir_paths).
     """
@@ -146,7 +141,7 @@ def _scan_turn_directory(turn_dir: Path) -> tuple[int, int, str, list[str], dict
             rel = f'{rel_prefix}/{child.name}' if rel_prefix else child.name
             info = child.lstat()
             mode = info.st_mode
-            if stat.S_ISLNK(mode):
+            if is_reparse_or_symlink(info):
                 issues.append(f'symlink:{rel}')
                 continue
             if stat.S_ISDIR(mode):
@@ -154,7 +149,9 @@ def _scan_turn_directory(turn_dir: Path) -> tuple[int, int, str, list[str], dict
                 entries.append({'path': rel, 'type': 'dir'})
                 walk_dir(child, rel)
             elif stat.S_ISREG(mode):
-                with open(child, 'rb', opener=lambda p, flags: os.open(p, _OPEN_RO_NOFOLLOW)) as stream:
+                ctx = (open(child, 'rb', opener=lambda p, flags: os.open(p, _OPEN_RO_NOFOLLOW))
+                       if hasattr(os, 'O_NOFOLLOW') else child.open('rb'))
+                with ctx as stream:
                     finfo = os.fstat(stream.fileno())
                     if not stat.S_ISREG(finfo.st_mode):
                         issues.append(f'non_regular:{rel}')
@@ -315,163 +312,32 @@ def _collect_record_references(system, candidate_set: set[str]) -> tuple[dict[st
 
 def _collect_cross_packet_references(system, candidate_set: set[str]) -> tuple[dict[str, list[dict[str, str]]], list[str]]:
     """Scan all exchange/packets/*/request.json (including staged .sealed-*/.prepare-*) for cross-turn refs."""
-    refs: dict[str, list[dict[str, str]]] = {}
-    scan_errors: list[str] = []
     if not candidate_set:
-        return refs, scan_errors
-    packets_root = system.ex.root / 'packets'
-    if not packets_root.is_dir():
-        return refs, scan_errors
-    for pkt_dir in sorted(packets_root.iterdir(), key=lambda p: p.name):
-        entry_name = pkt_dir.name
-        staged = False
-        if entry_name.startswith('.sealed-'):
-            pkt_name = entry_name[len('.sealed-'):]
-            staged = True
-        elif entry_name.startswith('.prepare-'):
-            pkt_name = entry_name
-            staged = True
-        elif entry_name.startswith('.'):
-            continue
-        else:
-            pkt_name = entry_name
-        info = pkt_dir.lstat()
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-            scan_errors.append(f'non-directory packet entry: {entry_name}')
-            continue
-        req_path = pkt_dir / 'request.json'
-        if entry_name.startswith('.prepare-') and not req_path.exists() and not req_path.is_symlink():
-            scan_errors.append(f'in-flight packet staging directory present: {entry_name}')
-            continue
-        try:
-            request = _read_strict_file(req_path)
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            scan_errors.append(f'unreadable packet request {entry_name}: {exc}')
-            continue
-        if staged and isinstance(request.get('packet'), str) and request['packet']:
-            pkt_name = request['packet']
-        for role in ('brief', 'methods', 'materials', 'targets'):
-            rows = [request[role]] if role == 'brief' and isinstance(request.get('brief'), dict) else request.get(role, [])
-            if not isinstance(rows, list):
-                scan_errors.append(f'malformed {role} in packet {entry_name}')
-                continue
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                path = row.get('path')
-                target_turn = _extract_referenced_turn(path)
-                if target_turn in candidate_set and target_turn != pkt_name:
-                    refs.setdefault(target_turn, []).append({
-                        'packet': entry_name,
-                        'role': role,
-                        'path': path,
-                    })
-    for turn_refs in refs.values():
-        turn_refs.sort(key=lambda r: (r['packet'], r['role'], r['path']))
-    return refs, scan_errors
+        return {}, []
+    all_refs, _, scan_errors = scan_packet_refs(
+        system,
+        _extract_referenced_turn,
+        open_only=False,
+        skip_self_packet=True,
+        fail_closed=False,
+    )
+    return {turn: rows for turn, rows in all_refs.items() if turn in candidate_set}, scan_errors
 
 
 def _collect_attention_references(system, candidate_set: set[str]) -> tuple[dict[str, list[dict[str, str]]], str | None]:
     """Scan active native Attention field, item basis, and latest assessment products for working-dir refs."""
-    refs: dict[str, list[dict[str, str]]] = {}
     if not candidate_set:
-        return refs, None
-    try:
-        state = system.attention._load()
-        field_turn = _extract_referenced_turn(state.get('field'))
-        if field_turn in candidate_set:
-            refs.setdefault(field_turn, []).append({'owner': 'attention.field', 'path': state['field']})
-        active_items: set[str] = set()
-        for item_id, obj_key in sorted(state.get('items', {}).items()):
-            spec = system.attention._get(obj_key)
-            if not spec.get('active', True):
-                continue
-            active_items.add(item_id)
-            for path in spec.get('basis', []):
-                target_turn = _extract_referenced_turn(path)
-                if target_turn in candidate_set:
-                    refs.setdefault(target_turn, []).append({
-                        'owner': 'attention.item',
-                        'item': item_id,
-                        'path': path,
-                    })
-        if active_items and state.get('receipts'):
-            current = system.attention._current(state)
-            receipt_cache: dict[int, dict[str, Any]] = {}
-            latest_map = current.get('latest', {})
-            for item_id in sorted(active_items):
-                bases = latest_map.get(item_id, {})
-                if not isinstance(bases, dict):
-                    return refs, f'malformed attention latest entries for {item_id}'
-                for basis_key in sorted(bases):
-                    pos, offset = bases[basis_key]
-                    if pos not in receipt_cache:
-                        receipt_cache[pos] = system.attention._get(state['receipts'][pos])
-                    receipt_doc = receipt_cache[pos]
-                    assessment = receipt_doc['assessments'][offset]
-                    products = assessment.get('products', [])
-                    if not isinstance(products, list):
-                        return refs, f'malformed attention assessment products for {item_id}'
-                    for product in products:
-                        prod_path = product.get('path') if isinstance(product, dict) else product
-                        target_turn = _extract_referenced_turn(prod_path)
-                        if target_turn in candidate_set:
-                            refs.setdefault(target_turn, []).append({
-                                'owner': 'attention.assessment.product',
-                                'item': item_id,
-                                'receipt': str(receipt_doc.get('id', '')),
-                                'path': prod_path,
-                            })
-    except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
-        return refs, str(exc)
-    for turn_refs in refs.values():
-        turn_refs.sort(key=lambda r: (r['owner'], r.get('item', ''), r.get('receipt', ''), r['path']))
-    return refs, None
+        return {}, None
+    all_refs, err = scan_attention_refs(system, _extract_referenced_turn, fail_closed=False)
+    return {turn: rows for turn, rows in all_refs.items() if turn in candidate_set}, err
 
 
 def _collect_interpretation_references(system, candidate_set: set[str]) -> tuple[dict[str, list[dict[str, str]]], list[str]]:
     """Scan work/interpretations/*.json evidence paths (snapshot dicts or strings) for working-dir refs."""
-    refs: dict[str, list[dict[str, str]]] = {}
-    errors: list[str] = []
     if not candidate_set:
-        return refs, errors
-    interp_dir = system.ex.path('interpretations')
-    if not interp_dir.exists():
-        return refs, errors
-    require(not interp_dir.is_symlink() and interp_dir.is_dir(),
-            'ordinary interpretations directory required')
-    for path in sorted(interp_dir.iterdir(), key=lambda p: p.name):
-        if path.name.startswith('.') or not path.name.endswith('.json'):
-            continue
-        if path.is_symlink():
-            errors.append(f'symlink interpretation file: {path.name}')
-            continue
-        try:
-            doc = _read_strict_file(path)
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            errors.append(f'unreadable interpretation {path.name}: {exc}')
-            continue
-        evidence = doc.get('evidence', [])
-        if not isinstance(evidence, list):
-            errors.append(f'malformed evidence list in interpretation {path.name}')
-            continue
-        for ev in evidence:
-            if isinstance(ev, dict):
-                ev_path = ev.get('path')
-                if not isinstance(ev_path, str):
-                    errors.append(f'malformed evidence entry in interpretation {path.name}')
-                    continue
-            elif isinstance(ev, str):
-                ev_path = ev
-            else:
-                errors.append(f'malformed evidence entry in interpretation {path.name}')
-                continue
-            target_turn = _extract_referenced_turn(ev_path)
-            if target_turn in candidate_set:
-                refs.setdefault(target_turn, []).append({'interpretation': path.name, 'path': ev_path})
-    for turn_refs in refs.values():
-        turn_refs.sort(key=lambda r: (r['interpretation'], r['path']))
-    return refs, errors
+        return {}, []
+    all_refs, errors = scan_interpretation_refs(system, _extract_referenced_turn, fail_closed=False)
+    return {turn: rows for turn, rows in all_refs.items() if turn in candidate_set}, errors
 
 
 def _collect_uncommitted_turn_references(
@@ -480,70 +346,22 @@ def _collect_uncommitted_turn_references(
     candidate_set: set[str],
 ) -> tuple[dict[str, list[dict[str, str]]], list[str]]:
     """Check active uncommitted turn staging requests under work/.system/turns/ for references."""
-    refs: dict[str, list[dict[str, str]]] = {}
-    errors: list[str] = []
     if not candidate_set or not turns_root.is_dir():
-        return refs, errors
-    for entry in sorted(turns_root.iterdir(), key=lambda p: p.name):
-        if entry.name.startswith('.'):
-            continue
-        try:
-            info = entry.lstat()
-        except OSError as exc:
-            errors.append(f'unreadable turn directory entry {entry.name}: {exc}')
-            continue
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-            continue
-        other = entry.name
-        if (system.ex.root / 'packets' / other).exists():
-            continue
-        marker = entry / 'preparation.json'
-        if marker.exists() or marker.is_symlink():
-            if marker.is_symlink():
-                errors.append(f'symlink preparation marker in uncommitted turn {other}')
-                continue
-            try:
-                phase = _read_strict_file(marker).get('phase')
-            except (OSError, ValueError) as exc:
-                errors.append(f'unreadable preparation marker in uncommitted turn {other}: {exc}')
-                continue
-            if phase == 'abandoned':
-                continue
-        req_file = entry / 'request.json'
-        if not req_file.exists() and not req_file.is_symlink():
-            continue
-        if req_file.is_symlink():
-            errors.append(f'symlink request file in uncommitted turn {other}')
-            continue
-        try:
-            req = _read_strict_file(req_file)
-        except (OSError, ValueError) as exc:
-            errors.append(f'unreadable request in uncommitted turn {other}: {exc}')
-            continue
-        for field in ('sources', 'targets', 'methods', 'materials'):
-            values = req.get(field, [])
-            if isinstance(values, list):
-                for val in values:
-                    raw_path = val.get('path') if isinstance(val, dict) else val
-                    target_turn = _extract_referenced_turn(raw_path)
-                    if target_turn in candidate_set and target_turn != other:
-                        refs.setdefault(target_turn, []).append({
-                            'uncommitted_turn': other,
-                            'field': field,
-                            'path': raw_path,
-                        })
-        brief_val = req.get('brief')
-        brief_path = brief_val.get('path') if isinstance(brief_val, dict) else brief_val
-        brief_turn = _extract_referenced_turn(brief_path)
-        if brief_turn in candidate_set and brief_turn != other:
-            refs.setdefault(brief_turn, []).append({
-                'uncommitted_turn': other,
-                'field': 'brief',
-                'path': brief_path,
-            })
-    for turn_refs in refs.values():
-        turn_refs.sort(key=lambda r: (r['uncommitted_turn'], r['field'], r['path']))
-    return refs, errors
+        return {}, []
+    packets_root = system.ex.root / 'packets'
+    committed = (
+        {p.name for p in packets_root.iterdir() if not p.name.startswith('.')}
+        if packets_root.is_dir() else set()
+    )
+    all_refs, errors = scan_uncommitted_turn_refs(
+        system,
+        committed,
+        _extract_referenced_turn,
+        include_record_ids=False,
+        skip_self_turn=True,
+        fail_closed=False,
+    )
+    return {turn: rows for turn, rows in all_refs.items() if turn in candidate_set}, errors
 
 
 def _evaluate_turn(
@@ -813,7 +631,8 @@ def _evaluate_turn(
                 allowed_files.add('selection.json')
                 try:
                     sel_doc = _read_strict_file(turn_dir / 'selection.json')
-                    exact_fields(sel_doc, {'request', 'view', 'attention_feedback'}, set(), 'selection.json')
+                    exact_fields(sel_doc, {'request', 'view', 'attention_feedback'}, {'format'}, 'selection.json')
+                    validate_optional_format(sel_doc, TURN_SELECTION_FORMAT, 'selection.json')
                     require(sel_doc['attention_feedback'] == feedback_id(turn),
                             'selection.json feedback differs')
                     require(isinstance(full_view_object, str)
@@ -1059,8 +878,7 @@ def _safe_remove_turn_dir(system, turn: str) -> None:
     require(target.parent == turns_root and target.is_relative_to(turns_root),
             f'turn path escapes {TURNS_RELATIVE}: {turn}')
     info = target.lstat()
-    require(not stat.S_ISLNK(info.st_mode) and stat.S_ISDIR(info.st_mode),
-            f'ordinary turn working directory required: {turn}')
+    require(is_ordinary_dir_stat(info), f'ordinary turn working directory required: {turn}')
 
     if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
         with system.ex.open_workspace_dir(TURNS_RELATIVE) as turns_fd:
@@ -1070,7 +888,7 @@ def _safe_remove_turn_dir(system, turn: str) -> None:
         def remove_fallback(current: Path) -> None:
             for child in sorted(current.iterdir(), key=lambda p: p.name):
                 cinfo = child.lstat()
-                if stat.S_ISLNK(cinfo.st_mode):
+                if is_reparse_or_symlink(cinfo):
                     raise ValueError(f'refused symlink during turn removal: {child}')
                 if stat.S_ISDIR(cinfo.st_mode):
                     remove_fallback(child)

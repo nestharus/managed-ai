@@ -6,6 +6,7 @@ from pathlib import Path
 from continuation_support.attention import Attention
 from continuation_support.storage import now, read_json, sha, sync_dir, write_json
 from continuation_support.ownership import packet_id
+from native_runtime.formats import TURN_PREPARATION_FORMAT, validate_optional_format
 
 
 def feedback_id(turn):
@@ -38,7 +39,11 @@ class TurnPreparation:
             raise
 
     def state(self):
-        return read_json(self.marker) if self.marker.is_file() else {'phase': 'unrecorded'}
+        if not self.marker.is_file():
+            return {'phase': 'unrecorded'}
+        doc = read_json(self.marker)
+        validate_optional_format(doc, TURN_PREPARATION_FORMAT, 'preparation.json')
+        return doc
 
     def discard_inputs(self):
         phase = self.state()['phase']
@@ -65,13 +70,13 @@ class TurnPreparation:
         # An unsealed, unused staging directory does not reserve the public identity.
         with TemporaryDirectory(prefix='.new-', dir=parent) as tmp:
             staging = Path(tmp)
-            write_json(staging / 'preparation.json', {'phase': 'draft'})
+            write_json(staging / 'preparation.json', {'format': TURN_PREPARATION_FORMAT, 'phase': 'draft'})
             os.rename(staging, self.directory)
             sync_dir(parent)
         return self.live.start_draft(self.draft)
 
     def seal(self, before, feedback, packet):
-        write_json(self.marker, dict(phase='sealed', before=before,
+        write_json(self.marker, dict(format=TURN_PREPARATION_FORMAT, phase='sealed', before=before,
                    after=self.draft.index_identity(), feedback=feedback_id(self.turn),
                    feedback_object=feedback['feedback_object'], request_sha256=packet['request_sha256'],
                    context_sha256=packet['context_sha256']))
@@ -115,6 +120,6 @@ class TurnPreparation:
             raise ValueError('preparation already abandoned')
         if before['phase'] == 'sealed' and self.live.feedback_object(before['feedback']) == before['feedback_object']:
             raise ValueError('Attention occurrence is installed; use resume-context to finish delivery')
-        marker = dict(before, phase='abandoned', previous_phase=before['phase'], account=account, at=now())
+        marker = dict(before, format=TURN_PREPARATION_FORMAT, phase='abandoned', previous_phase=before['phase'], account=account, at=now())
         write_json(self.marker, marker)
         return marker

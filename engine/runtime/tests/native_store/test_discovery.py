@@ -16,7 +16,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from context_discovery import Discovery
+from native_runtime.context_discovery import Discovery
 from system import System
 
 
@@ -383,7 +383,7 @@ class DiscoveryChecks(unittest.TestCase):
             self.system.context('pin-without-project-body', {'source_pins': [project_pin]})
         request = dict(result['context_request'], source_pins=pins, task='Use these exact discovered bodies.')
         prepared = self.system.context('pinned-current', request)
-        original = Path(prepared['context']).read_text()
+        original = Path(prepared['context']).read_bytes().decode('utf-8')
         self.assertIn('Current receiver migration note with newly accepted information.', original)
         self.assertEqual(self.system.view('pinned-current')['source_pins'], pins)
         self.assertEqual(self.system.recover('pinned-current')['context'], original)

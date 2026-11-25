@@ -61,8 +61,8 @@ class SystemChecks(unittest.TestCase):
                                    [target + '=' + str(proposal)])
 
     def test_recomposition_rejects_different_basis_captured_by_put(self):
-        from composition import Composition
-        from composition_revision import revise
+        from native_runtime.composition import Composition
+        from native_runtime.composition_revision import revise
         from native_runtime.identities import record_identity
 
         source = self.write('sources/contract', 'Both obligations apply.')
@@ -93,7 +93,7 @@ class SystemChecks(unittest.TestCase):
         self.assertEqual(accepted['head']['revision'], 2)
 
     def test_selected_receiver_reuses_one_guarded_read_and_pays_both_charges(self):
-        from composition_revision import revise
+        from native_runtime.composition_revision import revise
         from native_runtime.identities import record_identity
 
         store = self.system.record_store
@@ -120,7 +120,7 @@ class SystemChecks(unittest.TestCase):
             revise(self.system, q, accept=review['review_sha256'], reason='Use the checked goal.')
 
     def test_delayed_consumer_uses_only_a_verified_selected_capture(self):
-        from composition_revision import revise
+        from native_runtime.composition_revision import revise
         from native_runtime.identities import record_identity
         from native_runtime.loading import Loading
 
@@ -224,7 +224,7 @@ class SystemChecks(unittest.TestCase):
         self.assertEqual(binding(q), found)
 
     def test_recomposition_locates_consumers_by_edition_and_typed_row(self):
-        from composition_revision import revise
+        from native_runtime.composition_revision import revise
         from native_runtime.identities import record_identity
 
         def put(name, content, revision=0):
@@ -264,7 +264,7 @@ class SystemChecks(unittest.TestCase):
             revise(self.system, dict(q, bounds=dict(q['bounds'], scan_limit=3)))
         with self.assertRaisesRegex(ValueError, 'byte bound'):
             revise(self.system, dict(q, bounds=dict(q['bounds'], max_bytes=self.system.record_store.size('goal') + 1)))
-        with patch('composition_revision.MAX_VIEW_BYTES', 128):
+        with patch('native_runtime.composition_revision.MAX_VIEW_BYTES', 128):
             with self.assertRaisesRegex(ValueError, 'view byte bound'):
                 revise(self.system, q)
         put('remarks', parent, 1)
@@ -278,7 +278,7 @@ class SystemChecks(unittest.TestCase):
         self.assertEqual(self.system.show('named')['revision'], 1)
 
     def test_recomposition_rechecks_external_original_at_reviewed_write(self):
-        from composition_revision import revise
+        from native_runtime.composition_revision import revise
         from native_runtime.identities import record_identity
 
         self.system.put(dict(id='plan', kind='note', content=dict(format='g60-composition/1', purpose='Read grant.')), 0)
@@ -559,7 +559,8 @@ class SystemChecks(unittest.TestCase):
             for member in asset['members']:
                 installed = self.work / 'operations' / member['path']
                 self.assertEqual(sha(installed.read_bytes()), member['sha256'])
-                self.assertEqual(installed.stat().st_mode & 0o777, member['mode'] & 0o777)
+                if sys.platform != 'win32':
+                    self.assertEqual(installed.stat().st_mode & 0o777, member['mode'] & 0o777)
             self.assertFalse((self.root / 'exchange/carrier').exists())
             with self.assertRaisesRegex(ValueError, 'already exists'):
                 self.system.materialize(operation)

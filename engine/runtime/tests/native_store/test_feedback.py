@@ -12,8 +12,8 @@ from unittest.mock import patch
 
 from system import System
 from continuation_support.collector import Collector
-from feedback import Feedback
-from information import record_identity
+from native_runtime.feedback import Feedback
+from native_runtime.information import record_identity
 
 
 class FeedbackChecks(unittest.TestCase):

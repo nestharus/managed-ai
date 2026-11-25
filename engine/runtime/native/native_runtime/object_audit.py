@@ -15,22 +15,26 @@ from continuation_support.storage import (
     _OPEN_RO_NOFOLLOW,
     atomic_bytes,
     encode,
+    is_ordinary_dir_stat,
+    is_ordinary_file_stat,
     now,
     read_json,
     sha,
     sync_dir,
     write_json,
 )
+from native_runtime.formats import (
+    COMPACT_PLAN_FORMAT,
+    COMPACT_RECEIPT_FORMAT,
+    DEDUP_PLAN_FORMAT,
+    DEDUP_RECEIPT_FORMAT,
+    OBJECT_AUDIT_FORMAT as AUDIT_FORMAT,
+    OBJECT_GC_RECEIPT_FORMAT as GC_RECEIPT_FORMAT,
+)
 from native_runtime.identities import digest, exact_fields, require, strict_json
 from native_runtime.inputs import integer, text
 
 
-DEDUP_PLAN_FORMAT = 'managed-ai-deduplicate-originals-plan/1'
-DEDUP_RECEIPT_FORMAT = 'managed-ai-deduplicate-originals-receipt/1'
-COMPACT_PLAN_FORMAT = 'managed-ai-compact-objects-plan/1'
-COMPACT_RECEIPT_FORMAT = 'managed-ai-compact-objects-receipt/1'
-AUDIT_FORMAT = 'managed-ai-object-audit/1'
-GC_RECEIPT_FORMAT = 'managed-ai-gc-objects-receipt/1'
 _SHA_RE = re.compile(r'^[0-9a-f]{64}$')
 _CONTENT_ADDRESSED_NAME_RE = re.compile(r'^([0-9a-f]{2})/([0-9a-f]{64})\.([A-Za-z0-9._-]+)$')
 
@@ -53,7 +57,11 @@ def _read_ordinary_unbounded(path: Path) -> bytes:
             raise
         with stream:
             return stream.read()
-    if path.is_symlink() or not path.is_file():
+    try:
+        info = path.lstat()
+    except OSError:
+        raise ValueError(f'ordinary file required: {path}') from None
+    if not is_ordinary_file_stat(info):
         raise ValueError(f'ordinary file required: {path}')
     return path.read_bytes()
 
@@ -84,11 +92,11 @@ def _verify_plan(plan: dict, expected_format: str, required_fields: set[str],
 # ---------------------------------------------------------------------------
 
 def _walk_ordinary_files(root: Path, base: Path) -> list[Path]:
-    """Walk ordinary subdirectories without following symlinks."""
+    """Walk ordinary subdirectories without following symlinks or reparse points."""
     if not root.exists():
         return []
     info = root.lstat()
-    if not stat.S_ISDIR(info.st_mode):
+    if not is_ordinary_dir_stat(info):
         raise ValueError(f'ordinary directory required: {root}')
     found: list[Path] = []
     pending = [root]
@@ -98,9 +106,9 @@ def _walk_ordinary_files(root: Path, base: Path) -> list[Path]:
             for item in items:
                 child = cur / item.name
                 st = item.stat(follow_symlinks=False)
-                if stat.S_ISDIR(st.st_mode):
+                if is_ordinary_dir_stat(st):
                     pending.append(child)
-                elif stat.S_ISREG(st.st_mode):
+                elif is_ordinary_file_stat(st):
                     found.append(child)
                 else:
                     raise ValueError(f'ordinary file or directory required: {child}')
@@ -108,8 +116,13 @@ def _walk_ordinary_files(root: Path, base: Path) -> list[Path]:
     return found
 
 
-def plan_deduplicate_originals(system, *, prefix: str = 'evidence/research-originals') -> dict:
+def plan_deduplicate_originals(system, *, prefix: str | None = None) -> dict:
     """Verify byte+SHA-256 parity in exchange/objects for content-addressed workspace copies."""
+    if prefix is None:
+        declared = getattr(system.domain_selection, 'content_addressed_basis_prefixes', ())
+        require(len(declared) == 1,
+                'supply --prefix or declare one content_addressed_basis_prefixes entry in a selected domain manifest')
+        prefix = declared[0]
     rel_prefix = relative_path(prefix.rstrip('/'))
     target_dir = system.ex.path(rel_prefix)
     files = _walk_ordinary_files(target_dir, system.work) if target_dir.exists() else []

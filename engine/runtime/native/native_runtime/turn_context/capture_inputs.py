@@ -5,10 +5,10 @@ from pathlib import Path
 
 from continuation_support.ownership import packet_id, relative_path
 from continuation_support.storage import encode, write_json
-from composition import Composition
-from context_discovery import Discovery
-from feedback import Feedback
-from information import Information
+from native_runtime.composition import Composition
+from native_runtime.context_discovery import Discovery
+from native_runtime.feedback import Feedback
+from native_runtime.information import Information
 from native_runtime.inputs import (accounted_closure, artifact_target, fields, integer, strings,
                                    text, write_input)
 from native_runtime.records import is_content_addressed_basis
@@ -61,7 +61,7 @@ class TurnCapture:
         normalized['project_sources'] = [relative_path(p) for p in normalized['project_sources']]
         strings(normalized['project_sources'], 'normalized project_sources')
         if normalized['project_sources'] and self.projects.current is None:
-            raise ValueError('project_sources requires an explicitly selected deployment; use deploy.py ... system context')
+            raise ValueError('project_sources requires an explicitly selected deployment; use select_deployment.py ... system context')
         normalized['targets'] = [artifact_target(p) for p in normalized['targets']]
         for key, default in (('record_limit', 20), ('attention_limit', 8), ('attention_max_bytes', 16000)):
             normalized[key] = integer(request.get(key, default), key, 1)
@@ -129,7 +129,8 @@ class TurnCapture:
                     self._origin('materials', basis_path, kind='selected-record-basis',
                                  record=record['id'], revision=record['revision'],
                                  expected={k: item.get(k) for k in ('sha256', 'bytes')})
-                elif (is_content_addressed_basis(item) and item.get('sha256')
+                elif (is_content_addressed_basis(item, prefixes=self.records.content_addressed_basis_prefixes)
+                      and item.get('sha256')
                       and self.records.objects.has(item['sha256'])):
                     try:
                         raw = self.records.objects.read(
@@ -176,19 +177,22 @@ class TurnCapture:
         return self._write_input(directory, 'discovery-summary.json', encode(summary))
 
     def _working_view(self, directory, turn, techniques, view):
-        encoded = encode(view)
+        from native_runtime.formats import TURN_EXPOSURE_FORMAT, TURN_VIEW_FORMAT
+        view_doc = dict(view, format=TURN_VIEW_FORMAT)
+        encoded = encode(view_doc)
         full_view = self._write_input(directory, 'view.json', encoded)
         exposure = {k: v for k, v in view.items() if k not in
                     {'outside_techniques', 'outside_project_sources', 'outside_record_basis', 'discovery',
                      'compositions', 'feedback_guard', 'inclusion_origins'}}
-        exposure.update(full_view_object=self.ex.objects.put(encoded), full_view_path=full_view,
+        exposure.update(format=TURN_EXPOSURE_FORMAT, full_view_object=self.ex.objects.put(encoded),
+                        full_view_path=full_view,
                         full_view_recovery=self.command('view', turn),
                         outside_technique_count=len(view['outside_techniques']),
                         outside_project_source_count=len(view['outside_project_sources']),
                         outside_record_basis_count=len(view['outside_record_basis']),
                         selected_technique_ids=techniques, omitted_technique_ids=[],
                         scope='Complete selected bodies delivered; outside identities are recoverable, not read or applied.')
-        return exposure
+        return exposure, view_doc
 
     def build(self, prep: TurnPreparation, request: dict) -> tuple[dict, dict]:
         turn = prep.turn
@@ -314,7 +318,8 @@ class TurnCapture:
                       for (role, path), reasons in self.origins.items()],
             'scope': 'Reasons observed at capture additions. A shared input can have several reasons; '
                      'reason multiplicity does not multiply its delivered bytes or establish semantic need.'}
-        exposure = self._working_view(directory, turn, request['techniques'], view)
+        from native_runtime.formats import TURN_SELECTION_FORMAT
+        exposure, view_doc = self._working_view(directory, turn, request['techniques'], view)
         materials.append(self._write_input(directory, 'exposure.json', encode(exposure)))
         brief_text = '# Current receiving task\n\n' + request['task'] + '\n'
         if routes:
@@ -322,8 +327,8 @@ class TurnCapture:
             for row in routes:
                 brief_text += f"\n- {row['id']} ({row['state']}) — {row['scope']}: {row['next']}\n"
         brief = self._write_input(directory, 'brief.md', brief_text.encode())
-        write_json(directory / 'selection.json', {'request': request, 'view': view,
-                                                'attention_feedback': feedback_id(turn)})
+        write_json(directory / 'selection.json', {'format': TURN_SELECTION_FORMAT, 'request': request,
+                                                  'view': view_doc, 'attention_feedback': feedback_id(turn)})
         result = self.ex.prepare(turn, request['consumer'], brief, methods,
                                  list(dict.fromkeys(materials)), request['targets'],
                                  request['returns'], request['artifacts'], staged=True)

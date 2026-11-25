@@ -7,10 +7,14 @@ import os
 from pathlib import Path
 import re
 
-from continuation_support.storage import atomic_bytes, sha
+from continuation_support.storage import atomic_bytes, has_ordinary_file, sha
+from native_runtime.formats import (
+    HEAD_INDEX_FORMAT as INDEX_FORMAT,
+    HEAD_INDEX_FORMAT_V1 as INDEX_FORMAT_V1,
+    HEAD_INDEX_SUPPORTED_FORMATS,
+)
 from native_runtime.inputs import parse_input_bytes
 
-INDEX_FORMAT = 'managed-ai-head-index/1'
 INDEX_DOMAIN = b'g60/verified-head-index/1\0'
 _WORD_RE = re.compile(r'\w+')
 _MAX_TOKENS_PER_RECORD = 512
@@ -220,13 +224,13 @@ class HeadIndex:
         self.path = self.directory / 'head-index.json'
         self.receipts = receipts
 
-    def load(self, record_format: str) -> dict[str, dict] | None:
-        """Read and HMAC-verify the stored index without creating keys or files."""
+    def load_with_format(self, record_format: str) -> tuple[dict[str, dict], str] | None:
+        """Read and HMAC-verify the stored index, returning (entries, index_format) or None."""
         key = self.receipts._key(create=False)
         if key is None:
             return None
         try:
-            if self.path.is_symlink() or not self.path.is_file():
+            if not has_ordinary_file(self.path):
                 return None
             raw = self.path.read_bytes()
         except OSError:
@@ -248,14 +252,15 @@ class HeadIndex:
                     doc = json.loads(payload)
                 except (UnicodeDecodeError, ValueError):
                     return None
+                fmt = doc.get('format') if isinstance(doc, dict) else None
                 if (isinstance(doc, dict)
-                        and doc.get('format') == INDEX_FORMAT
+                        and fmt in HEAD_INDEX_SUPPORTED_FORMATS
                         and doc.get('record_format') == record_format
                         and isinstance(doc.get('entries'), dict)):
-                    return doc['entries']
+                    return doc['entries'], fmt
                 return None
 
-        # Backward-compatible fallback for Wave 1 sorted-key JSON envelope.
+        # Backward-compatible fallback for Wave 1 sorted-key JSON envelope (v1 or v2).
         try:
             doc = parse_input_bytes(raw, self.path)
         except (OSError, UnicodeDecodeError, ValueError):
@@ -265,7 +270,8 @@ class HeadIndex:
         tag = doc.get('hmac')
         if not isinstance(tag, str) or len(tag) != 64:
             return None
-        if doc.get('format') != INDEX_FORMAT or doc.get('record_format') != record_format:
+        fmt = doc.get('format')
+        if fmt not in HEAD_INDEX_SUPPORTED_FORMATS or doc.get('record_format') != record_format:
             return None
         entries = doc.get('entries')
         if not isinstance(entries, dict):
@@ -278,7 +284,12 @@ class HeadIndex:
         expected = hmac.digest(key, INDEX_DOMAIN + payload, 'sha256').hex()
         if not hmac.compare_digest(tag, expected):
             return None
-        return entries
+        return entries, fmt
+
+    def load(self, record_format: str) -> dict[str, dict] | None:
+        """Read and HMAC-verify the stored index without creating keys or files."""
+        loaded = self.load_with_format(record_format)
+        return None if loaded is None else loaded[0]
 
     def save(self, record_format: str, entries: dict[str, dict], *, create_key: bool = True) -> dict:
         """Atomically write the HMAC-signed compact JSON index under an exclusive store lock."""

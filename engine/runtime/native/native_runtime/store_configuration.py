@@ -3,12 +3,13 @@ from pathlib import Path
 import json
 
 from continuation_support.ownership import packet_id
-from continuation_support.storage import encode, sha, write_json
+from continuation_support.storage import encode, sha, strict_json_loads, write_json
+from native_runtime.formats import REVIEWED_CONFIGURE_FORMAT as REVIEWED_CONFIGURE
 from native_runtime.selection.domain_selection import DomainSelection, ordinary, pin
 
 
-REVIEWED_CONFIGURE = 'managed-ai-reviewed-configure/1'
 SELECTION_KEYS = ('domains', 'catalogues')
+LEGACY_CONFIGURE_ALLOWED = frozenset({'expected_sha256', 'account', 'domains', 'catalogues', 'record_retention'})
 
 
 def _reviewed_prior_digest(spec):
@@ -32,7 +33,7 @@ def _read_current_descriptor(root, expected, account):
         raise ValueError('store selection revision conflict')
     if not isinstance(account, str) or not account.strip():
         raise ValueError('selection change needs a receiving account')
-    return dict(json.loads(raw))
+    return dict(strict_json_loads(raw, root / 'system.json', require_object=True))
 
 
 def _refresh_reviewed_bindings(root, current, spec):
@@ -56,6 +57,9 @@ def _refresh_reviewed_bindings(root, current, spec):
 
 
 def _apply_selection_changes(root, current, spec):
+    extra = set(spec) - LEGACY_CONFIGURE_ALLOWED
+    if extra:
+        raise ValueError('unknown configure specification fields: ' + ', '.join(sorted(extra)))
     if 'record_retention' in spec:
         if spec['record_retention'] not in {'current-use', 'append-history'}:
             raise ValueError('unsupported native record retention policy')

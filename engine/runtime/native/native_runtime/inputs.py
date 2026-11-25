@@ -8,7 +8,7 @@ from pathlib import Path
 from stat import S_ISREG
 from typing import Any
 
-from continuation_support.storage import atomic_bytes
+from continuation_support.storage import atomic_bytes, is_ordinary_file_stat, strict_json_loads
 from continuation_support.ownership import relative_path
 
 _OPEN_RO_NOFOLLOW = (
@@ -59,7 +59,7 @@ def _ordinary_file_size(path: Path, role: str) -> int:
     except (FileNotFoundError, NotADirectoryError):
         pass
     else:
-        if S_ISREG(info.st_mode):
+        if is_ordinary_file_stat(info):
             return info.st_size
     raise ValueError(f'ordinary {role} file required: {path}')
 
@@ -70,14 +70,18 @@ def _check_limit(limit: int) -> None:
 
 
 def _open_source(name, flags):
-    return os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY)
+    return os.open(name, flags | _OPEN_RO_NOFOLLOW)
 
 
 def _bounded_bytes(path: Path, limit: int, size: int) -> bytes:
     if size > limit:
         raise ValueError(f'source exceeds byte bound: {path}')
-    with open(path, 'rb', opener=_open_source) as stream:
-        if not S_ISREG(os.fstat(stream.fileno()).st_mode):
+    if hasattr(os, 'O_NOFOLLOW'):
+        stream_ctx = open(path, 'rb', opener=_open_source)
+    else:
+        stream_ctx = path.open('rb')
+    with stream_ctx as stream:
+        if not is_ordinary_file_stat(os.fstat(stream.fileno())):
             raise ValueError(f'ordinary source file required: {path}')
         chunks, remaining = [], limit + 1
         while remaining:
@@ -140,11 +144,7 @@ def bounded_source_bytes(path: Path, limit: int) -> bytes:
 
 
 def parse_input_bytes(data: bytes, path: Path | str) -> dict:
-    obj = json.loads(data.decode('utf-8'), object_pairs_hook=unique_json,
-                     parse_constant=lambda value: (_ for _ in ()).throw(ValueError('nonfinite JSON: ' + value)))
-    if not isinstance(obj, dict):
-        raise ValueError(f'JSON object required: {path}')
-    return obj
+    return strict_json_loads(data, path, require_object=True)
 
 
 def read_input(path: Path, *, byte_limit: int | None = None,

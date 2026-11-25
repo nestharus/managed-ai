@@ -13,7 +13,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from composition import Composition, MAX_VIEW_BYTES
+from native_runtime.composition import Composition, MAX_VIEW_BYTES
 
 
 class OwnerPaths:

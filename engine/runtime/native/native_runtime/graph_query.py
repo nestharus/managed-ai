@@ -4,15 +4,16 @@ from __future__ import annotations
 from collections import deque
 import re
 
+from native_runtime.formats import (
+    GRAPH_LINKS_FORMAT,
+    GRAPH_LINT_FORMAT,
+    GRAPH_NEIGHBORS_FORMAT,
+    GRAPH_PATH_FORMAT,
+    HEAD_INDEX_FORMAT,
+)
 from native_runtime.head_index import extract_graph_hints
 from native_runtime.identities import require
 from native_runtime.inputs import integer, strings, text
-
-
-GRAPH_NEIGHBORS_FORMAT = 'managed-ai-graph-neighbors/1'
-GRAPH_LINKS_FORMAT = 'managed-ai-graph-links/1'
-GRAPH_PATH_FORMAT = 'managed-ai-graph-path/1'
-GRAPH_LINT_FORMAT = 'managed-ai-graph-lint/1'
 
 _RECORD_ID_RE = re.compile(r'^[A-Za-z0-9_-]{1,120}$')
 _PROVENANCE_RELATION_LABELS = frozenset({
@@ -27,28 +28,30 @@ _OPEN_QUESTION_STATES = frozenset({'', 'open', 'qualified_unissued'})
 
 
 def _load_graph_nodes(system) -> tuple[dict[str, dict], set[str], bool]:
-    """Load verified graph metadata from HeadIndex (if enriched) or fall back to scan_records()."""
+    """Load verified graph metadata from HeadIndex v2 or fall back to scan_records()."""
     store = system.record_store
     cold_ids = set(store.cold_archive.ids())
-    summaries = store.indexed_summaries()
-    if summaries is not None and all(isinstance(e.get('graph'), dict) for e in summaries.values()):
-        nodes = {}
-        for ident, entry in summaries.items():
-            g = entry['graph']
-            nodes[ident] = {
-                'id': ident,
-                'kind': entry['kind'],
-                'revision': entry['revision'],
-                'sha256': entry['sha256'],
-                'active': entry['active'],
-                'relations': g.get('relations', []),
-                'duplicate_relations': g.get('duplicate_relations', []),
-                'content_links': g.get('content_links', {}),
-                'title': g.get('title', ''),
-                'selection_state': g.get('selection_state', ''),
-                'question_norm': g.get('question_norm'),
-            }
-        return nodes, set(nodes.keys()) | cold_ids, True
+    loaded = store.indexed_summaries_with_format()
+    if loaded is not None:
+        summaries, index_format = loaded
+        if index_format == HEAD_INDEX_FORMAT:
+            nodes = {}
+            for ident, entry in summaries.items():
+                g = entry['graph']
+                nodes[ident] = {
+                    'id': ident,
+                    'kind': entry['kind'],
+                    'revision': entry['revision'],
+                    'sha256': entry['sha256'],
+                    'active': entry['active'],
+                    'relations': g.get('relations', []),
+                    'duplicate_relations': g.get('duplicate_relations', []),
+                    'content_links': g.get('content_links', {}),
+                    'title': g.get('title', ''),
+                    'selection_state': g.get('selection_state', ''),
+                    'question_norm': g.get('question_norm'),
+                }
+            return nodes, set(nodes.keys()) | cold_ids, True
 
     nodes = {}
     for rec in store.scan_records():

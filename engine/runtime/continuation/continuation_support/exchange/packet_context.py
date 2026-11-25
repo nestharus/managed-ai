@@ -103,7 +103,8 @@ class PacketContext:
                 info = os.lstat(cursor)
             except (FileNotFoundError, NotADirectoryError):
                 break
-            if stat.S_ISLNK(info.st_mode):
+            if stat.S_ISLNK(info.st_mode) or bool(
+                    getattr(info, 'st_file_attributes', 0) & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)):
                 raise ValueError('workspace symlinks are not supported')
         path = self.workspace / rel
         if not path.is_relative_to(self.workspace):
@@ -143,11 +144,23 @@ class PacketContext:
             return {}
         unique = list(dict.fromkeys(_relative(p) for p in paths))
         if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
-            results = {}
-            for rel in unique:
+            from ..storage import is_ordinary_file_stat
+
+            def hash_win_one(rel):
                 path = self.path(rel)
-                results[rel] = sha(path.read_bytes()) if path.is_file() else None
-            return results
+                try:
+                    info = path.lstat()
+                except (FileNotFoundError, NotADirectoryError):
+                    return rel, None
+                if not is_ordinary_file_stat(info):
+                    raise ValueError('workspace symlinks are not supported')
+                with path.open('rb') as stream:
+                    return rel, hashlib.file_digest(stream, 'sha256').hexdigest()
+
+            if len(unique) >= 16:
+                with ThreadPoolExecutor(max_workers=min(max_workers, len(unique))) as pool:
+                    return dict(pool.map(hash_win_one, unique))
+            return dict(hash_win_one(rel) for rel in unique)
         by_dir: dict[str, list[tuple[str, str]]] = {}
         for rel in unique:
             parent, _, name = rel.rpartition('/')
@@ -240,6 +253,8 @@ class PacketContext:
                         _objects_fd: int | None = None,
                         _memo_lock=None) -> tuple[Path, dict[str, Any]]:
         binding = read_json(directory / 'binding.json')
+        if binding.get('format') not in (None, 'managed-ai-packet-binding/1'):
+            raise ValueError('unsupported packet binding format')
         request = read_json(directory / 'request.json')
         if sha(encode(request)) != binding['request_sha256'] or sha(_bytes(directory / 'context.md', MAX_PACKET_BYTES)) != binding['context_sha256']:
             raise ValueError('frozen request/context changed')
@@ -414,7 +429,11 @@ class PacketContext:
         try:
             write_json(staging / 'request.json', request)
             _atomic_bytes(staging / 'context.md', context)
-            write_json(staging / 'binding.json', {'request_sha256': sha(encode(request)), 'context_sha256': sha(context)})
+            write_json(staging / 'binding.json', {
+                'format': 'managed-ai-packet-binding/1',
+                'request_sha256': sha(encode(request)),
+                'context_sha256': sha(context),
+            })
             os.rename(staging, self.prepared_directory(packet) if staged else directory)
             sync_dir(directory.parent)
         finally:

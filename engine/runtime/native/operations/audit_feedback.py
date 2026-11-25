@@ -22,7 +22,7 @@ def history(product, root, ident):
 def scan(product, root, ident):
     records = history(product, root, ident)
     current = next(records)
-    from feedback import Feedback, KIND
+    from native_runtime.feedback import Feedback, KIND
     if current['kind'] != KIND:
         raise ValueError('record does not own a feedback use')
     head_revision = current['revision']

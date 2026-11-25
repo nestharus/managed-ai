@@ -6,15 +6,13 @@ import uuid
 
 from continuation_support.ownership import packet_id, relative_path
 from continuation_support.storage import sha
+from native_runtime.formats import INSTALLED_CATALOGUE_FORMAT
 from native_runtime.inputs import bounded_source_bytes, integer, read
 
 
 class InstalledCatalogue:
     def __init__(self, root: Path, selection=None):
         self.root = root.resolve()
-        native = Path(__file__).resolve().parents[2]
-        if self.root == native.parents[1] / 'prototype/agent-system':
-            self.root = native
         self.selection = selection
 
     def index(self) -> dict:
@@ -22,7 +20,7 @@ class InstalledCatalogue:
         if not path.is_file():
             return {'format': 'pending-catalogue', 'entries': []}
         result = read(path)
-        if 'format' in result and result['format'] != 'agent-system-catalogue/1':
+        if 'format' in result and result['format'] != INSTALLED_CATALOGUE_FORMAT:
             raise ValueError('unsupported installed catalogue format')
         # Bind each declared root once for this read of the installed catalogue.
         # Keep the bindings local so the next index observes a relocated source.

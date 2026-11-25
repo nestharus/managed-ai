@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from feedback import KIND as FEEDBACK_KIND
+from native_runtime.feedback import KIND as FEEDBACK_KIND
 
 
 @dataclass

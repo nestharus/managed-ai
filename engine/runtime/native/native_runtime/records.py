@@ -12,35 +12,51 @@ import re
 import stat
 
 from continuation_support.ownership import packet_id, relative_path
-from continuation_support.storage import MAX_BYTES, _OPEN_RO_NOFOLLOW, atomic_bytes, encode, now, read_bytes, sha
-from feedback import KIND as FEEDBACK_KIND
+from continuation_support.storage import (
+    MAX_BYTES,
+    _OPEN_RO_NOFOLLOW,
+    atomic_bytes,
+    encode,
+    is_ordinary_dir_stat,
+    is_ordinary_file_stat,
+    now,
+    read_bytes,
+    sha,
+)
 from native_runtime.cold_archive import ColdArchive
+from native_runtime.feedback import KIND as FEEDBACK_KIND
 from native_runtime.head_index import HeadIndex, build_entry
 from native_runtime.head_receipts import HeadReceipts, MIN_BYTES
 from native_runtime.identities import digest, exact_fields, identity, record_identity, require, strict_json
 from native_runtime.inputs import accounted_closure, fields, integer, parse_input_bytes, read_input, strings, text
 
 
-_CONTENT_ADDRESSED_BASIS_RE = re.compile(
-    r'^evidence/research-originals/([0-9a-f]{2})/([0-9a-f]{64})\.[A-Za-z0-9._-]+$'
-)
+_SHARD_CONTENT_RE = re.compile(r'^([0-9a-f]{2})/([0-9a-f]{64})\.[A-Za-z0-9._-]+$')
 _OBJECT_BASIS_RE = re.compile(r'^object:([0-9a-f]{64})$')
 
 
-def content_addressed_sha(path: str) -> str | None:
-    """Return the embedded 64-hex digest if path is an immutable content-addressed basis reference."""
+def content_addressed_sha(path: str, *, prefixes: tuple[str, ...] = ()) -> str | None:
+    """Return the embedded 64-hex digest if path is an immutable content-addressed basis reference.
+
+    Always recognizes generic `object:<64hex>`. Also recognizes domain-declared
+    content-addressed workspace prefixes `<prefix><sha[:2]>/<sha>.<ext>`.
+    """
     if not isinstance(path, str):
         return None
     obj_match = _OBJECT_BASIS_RE.fullmatch(path)
     if obj_match:
         return obj_match.group(1)
-    orig_match = _CONTENT_ADDRESSED_BASIS_RE.fullmatch(path)
-    if orig_match and orig_match.group(1) == orig_match.group(2)[:2]:
-        return orig_match.group(2)
+    for prefix in prefixes:
+        norm = prefix if prefix.endswith('/') else prefix + '/'
+        if path.startswith(norm):
+            sub = path[len(norm):]
+            orig_match = _SHARD_CONTENT_RE.fullmatch(sub)
+            if orig_match and orig_match.group(1) == orig_match.group(2)[:2]:
+                return orig_match.group(2)
     return None
 
 
-def is_content_addressed_basis(item: dict) -> bool:
+def is_content_addressed_basis(item: dict, *, prefixes: tuple[str, ...] = ()) -> bool:
     """Return True when a captured basis pin matches its own content-addressed path digest."""
     if not isinstance(item, dict):
         return False
@@ -48,12 +64,13 @@ def is_content_addressed_basis(item: dict) -> bool:
     size = item.get('bytes')
     if not isinstance(expected, str) or type(size) is not int or size < 0:
         return False
-    embedded = content_addressed_sha(item.get('path', ''))
+    embedded = content_addressed_sha(item.get('path', ''), prefixes=prefixes)
     return embedded is not None and embedded == expected
 
 
 class RecordStore:
-    def __init__(self, exchange, record_format, envelope):
+    def __init__(self, exchange, record_format, envelope, *,
+                 content_addressed_basis_prefixes: tuple[str, ...] = ()):
         self.ex = exchange
         self.work = exchange.workspace
         self.objects = exchange.objects
@@ -64,6 +81,7 @@ class RecordStore:
         self.envelope = envelope
         self.payload_validator = None
         self.retention_policy = 'append-history'
+        self.content_addressed_basis_prefixes = tuple(content_addressed_basis_prefixes)
         self._deferred_index_ids: list[str] | None = None
 
     @contextmanager
@@ -110,7 +128,16 @@ class RecordStore:
             packet_id(ident)
         except ValueError:
             return False
-        return self.path(ident).is_file() or self.cold_archive.has(ident)
+        hot = self.path(ident)
+        if hot.is_file():
+            if os.name == 'nt' or (hasattr(os, 'uname') and os.uname().sysname == 'Darwin'):
+                try:
+                    if hot.resolve().name != f'{ident}.json':
+                        return self.cold_archive.has(ident)
+                except OSError:
+                    return False
+            return True
+        return self.cold_archive.has(ident)
 
     def show(self, ident: str) -> dict:
         return self.read(ident)[0]
@@ -237,58 +264,100 @@ class RecordStore:
         for ident in idents:
             yield self._read_scoped_one(ident, needs_body, indexed, None)
 
+    def indexed_summaries_with_format(self, *, max_workers: int = 16) -> tuple[dict[str, dict], str] | None:
+        """Return (verified_entries, index_format) or None if unindexed (works on POSIX and Windows)."""
+        loaded = self.index.load_with_format(self.format)
+        if loaded is None:
+            return None
+        indexed, index_format = loaded
+        idents = self.ids()
+        if not idents:
+            return {}, index_format
+
+        if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
+            with self.ex.open_workspace_dir('records') as records_fd:
+                def check_one_posix(ident):
+                    filename = packet_id(ident) + '.json'
+                    full_path = self.work / 'records' / filename
+                    try:
+                        info = os.stat(filename, dir_fd=records_fd, follow_symlinks=False)
+                    except OSError as exc:
+                        if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR):
+                            raise ValueError(f'ordinary JSON file required: {full_path}') from None
+                        raise
+                    if not stat.S_ISREG(info.st_mode):
+                        raise ValueError(f'ordinary JSON file required: {full_path}')
+                    entry = indexed.get(ident)
+                    if (entry is not None
+                            and entry.get('format') == self.format
+                            and entry.get('id') == ident
+                            and entry.get('size') == info.st_size
+                            and entry.get('mtime_ns') == info.st_mtime_ns
+                            and entry.get('ino') == info.st_ino):
+                        return ident, entry
+                    record, raw = self.read(ident, dir_fd=records_fd)
+                    return ident, build_entry(record, raw, info)
+
+                if len(idents) >= 16:
+                    workers = min(max_workers, len(idents))
+                    step = (len(idents) + workers - 1) // workers
+                    chunks = [idents[i:i + step] for i in range(0, len(idents), step)]
+                    pairs = []
+                    with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+                        for batch in pool.map(lambda c: [check_one_posix(i) for i in c], chunks):
+                            pairs.extend(batch)
+                else:
+                    pairs = [check_one_posix(ident) for ident in idents]
+            return dict(pairs), index_format
+
+        # Native Windows fallback: verify records/ directory once, then stat+match in parallel chunks.
+        records_dir = self.ex.path('records')
+        try:
+            dir_info = records_dir.lstat()
+        except OSError:
+            raise ValueError(f'ordinary records directory required: {records_dir}') from None
+        if not is_ordinary_dir_stat(dir_info):
+            raise ValueError(f'ordinary records directory required: {records_dir}')
+
+        def check_one_win(ident):
+            full_path = records_dir / (packet_id(ident) + '.json')
+            try:
+                info = full_path.lstat()
+            except OSError:
+                raise ValueError(f'ordinary JSON file required: {full_path}') from None
+            if not is_ordinary_file_stat(info):
+                raise ValueError(f'ordinary JSON file required: {full_path}')
+            entry = indexed.get(ident)
+            if (entry is not None
+                    and entry.get('format') == self.format
+                    and entry.get('id') == ident
+                    and entry.get('size') == info.st_size
+                    and entry.get('mtime_ns') == info.st_mtime_ns
+                    and entry.get('ino') == info.st_ino):
+                return ident, entry
+            record, raw = self.read(ident)
+            return ident, build_entry(record, raw, info)
+
+        if len(idents) >= 16:
+            workers = min(max_workers, len(idents))
+            step = (len(idents) + workers - 1) // workers
+            chunks = [idents[i:i + step] for i in range(0, len(idents), step)]
+            pairs = []
+            with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+                for batch in pool.map(lambda c: [check_one_win(i) for i in c], chunks):
+                    pairs.extend(batch)
+        else:
+            pairs = [check_one_win(ident) for ident in idents]
+        return dict(pairs), index_format
+
     def indexed_summaries(self, *, max_workers: int = 16) -> dict[str, dict] | None:
         """Return HMAC + (size, mtime_ns, ino) verified head summaries, or None if unindexed.
 
         Any file absent from the index or whose filesystem metadata changed is
         verified through RecordStore.read() immediately. Never creates keys or writes files.
         """
-        indexed = self.index.load(self.format)
-        if indexed is None:
-            return None
-        idents = self.ids()
-        if not idents:
-            return {}
-        if not (hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY')):
-            return None
-        with self.ex.open_workspace_dir('records') as records_fd:
-            def check_one(ident):
-                filename = packet_id(ident) + '.json'
-                full_path = self.work / 'records' / filename
-                try:
-                    info = os.stat(filename, dir_fd=records_fd, follow_symlinks=False)
-                except OSError as exc:
-                    if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR):
-                        raise ValueError(f'ordinary JSON file required: {full_path}') from None
-                    raise
-                if not stat.S_ISREG(info.st_mode):
-                    raise ValueError(f'ordinary JSON file required: {full_path}')
-                entry = indexed.get(ident)
-                if (entry is not None
-                        and entry.get('format') == self.format
-                        and entry.get('id') == ident
-                        and entry.get('size') == info.st_size
-                        and entry.get('mtime_ns') == info.st_mtime_ns
-                        and entry.get('ino') == info.st_ino):
-                    return ident, entry
-                record, raw = self.read(ident, dir_fd=records_fd)
-                return ident, build_entry(record, raw, info)
-
-            if len(idents) >= 16:
-                workers = min(max_workers, len(idents))
-                step = (len(idents) + workers - 1) // workers
-                chunks = [idents[i:i + step] for i in range(0, len(idents), step)]
-
-                def check_chunk(chunk):
-                    return [check_one(ident) for ident in chunk]
-
-                pairs = []
-                with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
-                    for batch in pool.map(check_chunk, chunks):
-                        pairs.extend(batch)
-            else:
-                pairs = [check_one(ident) for ident in idents]
-        return dict(pairs)
+        loaded = self.indexed_summaries_with_format(max_workers=max_workers)
+        return None if loaded is None else loaded[0]
 
     def scan_records(self, idents=None, *, max_workers: int = 16) -> list[dict]:
         """Read and cryptographically verify nominated records (or all records) via openat."""
@@ -455,7 +524,7 @@ class RecordStore:
         rel = relative_path(source)
         path = self.ex.path(rel)
         if not path.exists():
-            embedded = content_addressed_sha(rel)
+            embedded = content_addressed_sha(rel, prefixes=self.content_addressed_basis_prefixes)
             if embedded is not None and self.objects.has(embedded):
                 raw = self.objects.read(embedded, retained=True)
                 return {'path': rel, 'sha256': embedded, 'bytes': len(raw)}
@@ -586,7 +655,9 @@ class RecordStore:
         for item in basis:
             path = item['path']
             current = None if path.startswith('object:') else hashes.get(path)
-            if current is None and is_content_addressed_basis(item) and self.objects.has(item['sha256']):
+            if (current is None
+                    and is_content_addressed_basis(item, prefixes=self.content_addressed_basis_prefixes)
+                    and self.objects.has(item['sha256'])):
                 obj_key = (item['sha256'], item['bytes'])
                 if verified_objects is not None and obj_key in verified_objects:
                     current = item['sha256']

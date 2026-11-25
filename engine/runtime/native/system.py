@@ -32,8 +32,8 @@ from continuation_support import exchange
 from continuation_support.exchange import Exchange
 from continuation_support.ownership import NativeLayout, packet_id
 from continuation_support.storage import AdmissionContended, encode, exclusive, owner_admission, shared, now, sha, write_json
-from feedback import Feedback
-from information import InformationEnvelope
+from native_runtime.feedback import Feedback
+from native_runtime.information import InformationEnvelope
 from native_runtime.turn_context.capture_inputs import TurnCapture
 from native_runtime.projects import ProjectSelection
 from native_runtime.selection.installed_catalogue import InstalledCatalogue
@@ -82,7 +82,10 @@ class System:
         if self.ex.workspace != self.work.resolve():
             raise ValueError('system workspace binding changed')
         self.attention = Attention(self.ex)
-        self.record_store = RecordStore(self.ex, FORMAT, InformationEnvelope(self.ex.objects))
+        self.record_store = RecordStore(
+            self.ex, FORMAT, InformationEnvelope(self.ex.objects),
+            content_addressed_basis_prefixes=self.domain_selection.content_addressed_basis_prefixes,
+        )
         self.record_store.payload_validator = self.domain_selection.validate_record
         self.record_store.retention_policy = self.descriptor.get('record_retention',
             'current-use' if self.descriptor.get('store_schema') == STORE_SCHEMA else 'append-history')
@@ -444,12 +447,12 @@ class System:
             return {'dispatch': dispatch, 'return': received}
 
     def discover(self, request: dict) -> dict:
-        from context_discovery import Discovery
+        from native_runtime.context_discovery import Discovery
         return Discovery(self).search(request)
 
     def compose(self, record: str, focus: str | None = None, limit: int = 20,
                 pair_limit: int = 200) -> dict:
-        from composition import Composition
+        from native_runtime.composition import Composition
         return Composition(self).inspect(record, focus=focus, limit=limit, pair_limit=pair_limit)
 
 

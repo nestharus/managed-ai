@@ -110,7 +110,8 @@ def _store_commands(sub):
                            help='plan or execute deduplication of object-backed content-addressed originals').add_subparsers(
                                dest='dedup_action', required=True)
     dedup_plan = dedup.add_parser('plan', allow_abbrev=False)
-    dedup_plan.add_argument('--prefix', default='evidence/research-originals')
+    dedup_plan.add_argument('--prefix', default=None,
+                            help='Workspace prefix for content-addressed originals (defaults to selected domain configuration)')
     dedup_exec = dedup.add_parser('execute', allow_abbrev=False)
     dedup_exec.add_argument('--plan', required=True, type=Path)
     dedup_exec.add_argument('--expected-plan', required=True)

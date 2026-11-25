@@ -3,11 +3,11 @@ from collections import defaultdict
 from contextlib import ExitStack
 from types import SimpleNamespace
 
-from composition import COLLECTIONS, MAX_VIEW_BYTES, PREFIXES, PROFILE, Composition
+from native_runtime.composition import COLLECTIONS, MAX_VIEW_BYTES, PREFIXES, PROFILE, Composition
 from continuation_support.ownership import NativeLayout
 from continuation_support.storage import sha
-from context_discovery import canonical, request as discovery_request
-from information import pointer
+from native_runtime.context_discovery import canonical, request as discovery_request
+from native_runtime.information import pointer
 from native_runtime.identities import exact_fields, identity, nonempty, record_identity, require, strict_json
 
 
@@ -426,7 +426,7 @@ def revise(system, req, *, accept=None, retain=None, reason=None, external_reade
     with ExitStack() as stack:
         bound = None
         if 'proof_preservation' in req:
-            from composition_opportunities import BoundOpportunities, guarded_inventory
+            from native_runtime.composition_opportunities import BoundOpportunities, guarded_inventory
             try:
                 before = original['content']['content']
                 after = staged['content']['content']

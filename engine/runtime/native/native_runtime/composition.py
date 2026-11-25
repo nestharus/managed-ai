@@ -169,7 +169,9 @@ class Composition:
             try:
                 path = None if name.startswith('object:') else self.system.ex.path(name)
                 if path is None or not path.is_file():
-                    if is_content_addressed_basis(row) and self.system.ex.objects.has(row['sha256']):
+                    prefixes = getattr(getattr(self.system, 'record_store', None), 'content_addressed_basis_prefixes', ())
+                    if (is_content_addressed_basis(row, prefixes=prefixes)
+                            and self.system.ex.objects.has(row['sha256'])):
                         size = row['bytes']
                         if size > MAX_PROFILE_BYTES:
                             observed['status'] = 'per-source-byte-bound'

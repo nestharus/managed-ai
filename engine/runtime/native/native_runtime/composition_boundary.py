@@ -2,9 +2,9 @@
 import hashlib
 import json
 
-from information import CONTRACT_KIND
+from native_runtime.information import CONTRACT_KIND
 from native_runtime.identities import exact_fields, identity, record_identity, require, strict_json
-from composition import Composition, MAX_PROFILE_BYTES, MAX_VIEW_BYTES, _integer, _strings, _text
+from native_runtime.composition import Composition, MAX_PROFILE_BYTES, MAX_VIEW_BYTES, _integer, _strings, _text
 
 
 TRIAL_V1 = 'g60-boundary-observations/1'

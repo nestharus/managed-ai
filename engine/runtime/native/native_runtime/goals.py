@@ -72,12 +72,13 @@ class GoalUse:
         body = account.read_text(encoding='utf-8')
         text(body, 'public current-use account')
         captured = [self.ex.snapshot(relative_path(p)) for p in strings(evidence, 'evidence')]
+        heads = self.records.all()
         row = {'format': self.records.format, 'id': uuid.uuid4().hex, 'created_at': now(),
                'goal_source': self.records.pin(goal),
                'goal_revision': revision, 'goal_sha256': goal['sha256'],
                'disposition': disposition, 'account': body, 'evidence': captured,
-               'obligation_basis': self._obligation_basis(self.records.all()),
-               'obligation_sources': [self.records.pin(r) for r in self.records.all() if r['kind'] == 'obligation'],
+               'obligation_basis': self._obligation_basis(heads),
+               'obligation_sources': [self.records.pin(r) for r in heads if r['kind'] == 'obligation'],
                'condition': condition, 'scope': 'Caller-authored whole-goal interpretation.'}
         write_json(self.records.work / 'interpretations' / (row['created_at'].replace(':', '-') + '-' + row['id'] + '.json'), row)
         return row

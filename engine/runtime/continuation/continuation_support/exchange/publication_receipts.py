@@ -1,11 +1,10 @@
 """Read and validate publication intents, completions and reconciliation receipts."""
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta
-from stat import FILE_ATTRIBUTE_REPARSE_POINT, S_ISREG
+from stat import S_ISREG
 
-from ..storage import encode, sha
+from ..storage import encode, is_ordinary_file_stat, sha, strict_json_loads
 
 
 def _publication_name(target: str, prefix: str = 'publish') -> str:
@@ -77,13 +76,10 @@ def publication_inventory(directory):
             continue
         try:
             entry = path.lstat()
-            if (not S_ISREG(entry.st_mode)
-                    or getattr(entry, 'st_file_attributes', 0) & FILE_ATTRIBUTE_REPARSE_POINT):
+            if not is_ordinary_file_stat(entry):
                 raise ValueError('ordinary publication record required: ' + path.name)
             raw = path.read_bytes()
-            record = json.loads(raw)
-            if not isinstance(record, dict):
-                raise ValueError('publication record must be an object: ' + path.name)
+            record = strict_json_loads(raw, path.name, require_object=True)
             inventory[path.name] = (record, sha(raw))
         except (OSError, ValueError) as exc:
             unreadable[path.name] = exc
