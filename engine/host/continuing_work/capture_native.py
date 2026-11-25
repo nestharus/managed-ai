@@ -109,24 +109,80 @@ def turn_summary(system, turn: str, observed=None) -> dict:
         return {'packet': turn, 'transport': 'record-unresolved', 'error': str(exc)}
 
 
+def _exchange_root(native, root: Path) -> tuple[Path, Path]:
+    """Resolve and validate the native root and exchange lock root before locking."""
+    resolved_root = native.external(root) if hasattr(native, 'external') else root.expanduser().resolve()
+    raw_exchange = native.NativeLayout(resolved_root).exchange if hasattr(native, 'NativeLayout') else resolved_root / 'exchange'
+    exchange_root = native.external(raw_exchange) if hasattr(native, 'external') else raw_exchange.expanduser().resolve()
+    return resolved_root, exchange_root
+
+
+def _reconcile_assessment(native, system, turn: str, receipt: Path, producer: str, observed: dict) -> dict:
+    """Verify an already-committed native Attention receipt matches this exact capture request."""
+    supplied = native.read(receipt)
+    if not isinstance(supplied, dict) or set(supplied) != {'id', 'assessments'}:
+        raise ValueError('receipt must contain id and assessments')
+    raw_id = supplied['id']
+    if not isinstance(raw_id, str):
+        raise ValueError('receipt identity not recorded in native Attention')
+    expected_source_sha = native.sha(native.encode(supplied))
+    expected_feedback = native.feedback_id(turn)
+    state = system.attention._load()
+    current = system.attention._current(state)
+    position = current['receipt_ids'].get(raw_id)
+    if position is None:
+        raise ValueError('receipt identity not recorded in native Attention')
+    rid = native.packet_id(raw_id)
+    obj_key = state['receipts'][position]
+    record = system.attention._get(obj_key)
+    if (record.get('id') != rid
+            or record.get('feedback') != expected_feedback
+            or record.get('feedback_object') != state['feedbacks'].get(expected_feedback)
+            or record.get('producer') != producer
+            or record.get('source', {}).get('sha256') != expected_source_sha):
+        raise ValueError('receipt identity already used')
+    attention = {
+        'receipt': record['id'],
+        'object': obj_key,
+        'recorded': [item['item'] for item in record['assessments']],
+        'boundary': record['boundary'],
+    }
+    return {
+        'attention': attention,
+        'status': {'turns': [turn_summary(system, turn, observed)]},
+        'reconciled': True,
+    }
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--engine', required=True, type=Path)
     parser.add_argument('--root', required=True, type=Path)
     commands = parser.add_subparsers(dest='action', required=True)
-    capture = commands.add_parser('assess')
+    capture = commands.add_parser('assess', allow_abbrev=False)
     capture.add_argument('turn')
     capture.add_argument('--receipt', required=True, type=Path)
     capture.add_argument('--producer', required=True)
-    inspect = commands.add_parser('inspect-turn', help='read-only compatibility observation')
+    reconcile = commands.add_parser('reconcile-assess', allow_abbrev=False,
+                                    help='verify and recover an already-committed assessment receipt')
+    reconcile.add_argument('turn')
+    reconcile.add_argument('--receipt', required=True, type=Path)
+    reconcile.add_argument('--producer', required=True)
+    inspect = commands.add_parser('inspect-turn', allow_abbrev=False, help='read-only compatibility observation')
     inspect.add_argument('turn')
     args = parser.parse_args()
     try:
         native, profile = reviewed_engine(args.engine)
-        system = native.System(args.root)
-        with native.exclusive(system.ex.root / 'owner.lock'):
+        root, exchange_root = _exchange_root(native, args.root)
+        with native.exclusive(exchange_root / 'owner.lock'):
+            system = native.System(root)
+            if system.ex.root.resolve() != exchange_root.resolve():
+                raise ValueError('native exchange lock root differs from selected system exchange')
             if args.action == 'inspect-turn':
                 result = {'turn': turn_summary(system, args.turn)}
+            elif args.action == 'reconcile-assess':
+                observed = system.ex.inspect(args.turn)
+                result = _reconcile_assessment(native, system, args.turn, args.receipt, args.producer, observed)
             else:
                 # Keep the open-turn check and retention in one cooperative
                 # owner invocation. assess only changes Attention, so this
@@ -143,7 +199,7 @@ def main():
         print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         print(json.dumps({'status': 'unresolved', 'operation': args.action,
-                          'error': str(exc), **getattr(exc, 'details', {})}), file=sys.stderr)
+                          'error': str(exc), **getattr(exc, 'details', {})}, allow_nan=False), file=sys.stderr)
         raise SystemExit(2)
 
 

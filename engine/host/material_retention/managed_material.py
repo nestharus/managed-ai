@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import collections
+from contextlib import contextmanager
 import datetime as dt
+import errno
 import fnmatch
 import hashlib
 import io
@@ -20,9 +22,21 @@ import shutil
 import stat
 import struct
 import sys
+import threading
 import time
+import uuid
 import zipfile
 import zlib
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
 
 FORMAT = "managed-material/1"
 MAX_ZIP_DEPTH = 12
@@ -32,14 +46,36 @@ MAX_EXPANDED_BYTES = 4 * 1024 ** 3
 LOADED_PRODUCER_BYTES = Path(__file__).read_bytes()
 RAW_BODY_KINDS = {"blob", "slice-view", "record-view", "recipe-view"}
 IMMUTABLE_RECORD_DIRS = ("manifests", "selections", "lifecycle", "occurrences", "transitions")
+_LOCK_REGISTRY_GUARD = threading.Lock()
+_LOCK_REGISTRY: dict[Path, tuple[threading.RLock, threading.local]] = {}
+_EVENT_LOCKS_GUARD = threading.Lock()
+_EVENT_LOCKS: dict[Path, threading.Lock] = {}
 
 
 def sha(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
+def _unique_json(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON key: " + key)
+        result[key] = value
+    return result
+
+
+def _reject_constant(value):
+    raise ValueError("Nonfinite JSON constant: " + value)
+
+
+def loads_json(raw):
+    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+    return json.loads(text, object_pairs_hook=_unique_json, parse_constant=_reject_constant)
+
+
 def js(value):
-    return (json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    return (json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode()
 
 
 def utc():
@@ -51,25 +87,169 @@ def require(ok, message):
         raise ValueError(message)
 
 
+def sync_dir(path):
+    if not hasattr(os, "O_DIRECTORY"):
+        return
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    except OSError as exc:
+        if exc.errno not in (errno.EINVAL, errno.EBADF, errno.EROFS):
+            raise
+    finally:
+        os.close(fd)
+
+
+def _lock_entry(root):
+    key = Path(root).resolve()
+    with _LOCK_REGISTRY_GUARD:
+        entry = _LOCK_REGISTRY.get(key)
+        if entry is None:
+            entry = (threading.RLock(), threading.local())
+            _LOCK_REGISTRY[key] = entry
+        return entry
+
+
+def _event_lock(path):
+    key = Path(path).resolve()
+    with _EVENT_LOCKS_GUARD:
+        lock = _EVENT_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _EVENT_LOCKS[key] = lock
+        return lock
+
+
+def _msvcrt_lock(stream, lock_path, *, nonblocking=False, timeout=60.0):
+    stream.seek(0, os.SEEK_END)
+    if stream.tell() == 0:
+        stream.write(b"\0")
+        stream.flush()
+    deadline = time.monotonic() + timeout
+    while True:
+        stream.seek(0)
+        try:
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            return
+        except OSError as exc:
+            if exc.errno not in (errno.EACCES, errno.EDEADLK):
+                raise
+            if nonblocking or time.monotonic() >= deadline:
+                raise BlockingIOError("Managed material store is busy: " + str(lock_path)) from exc
+            time.sleep(0.02)
+
+
+def _msvcrt_unlock(stream):
+    stream.seek(0)
+    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+@contextmanager
+def store_lock(root, *, shared=False, nonblocking=False):
+    """Cooperative store lock serializing index/CURRENT mutations across processes and threads."""
+    root = Path(root)
+    rlock, state = _lock_entry(root)
+    if not rlock.acquire(blocking=not nonblocking):
+        raise BlockingIOError("Managed material store is busy: " + str(root / ".store.lock"))
+    try:
+        depth = getattr(state, "depth", 0)
+        if depth > 0:
+            if not shared and not getattr(state, "exclusive", False):
+                raise RuntimeError("Cannot upgrade a shared managed-material store lock to exclusive")
+            state.depth = depth + 1
+            try:
+                yield
+            finally:
+                state.depth -= 1
+            return
+        lock_path = root / ".store.lock"
+        writable = True
+        if shared:
+            require(not lock_path.is_symlink(), "Store lock path must not be a symlink: " + str(lock_path))
+            try:
+                stream = lock_path.open("a+b")
+            except OSError as open_exc:
+                if open_exc.errno not in (errno.ENOENT, errno.EACCES, errno.EPERM, errno.EROFS):
+                    raise
+                writable = False
+                try:
+                    stream = lock_path.open("rb")
+                except OSError as read_exc:
+                    if read_exc.errno in (errno.ENOENT, errno.EACCES, errno.EPERM, errno.EROFS):
+                        state.depth = 1
+                        state.exclusive = False
+                        try:
+                            yield
+                        finally:
+                            state.depth = 0
+                        return
+                    raise open_exc from read_exc
+        else:
+            root.mkdir(parents=True, exist_ok=True)
+            require(not lock_path.is_symlink(), "Store lock path must not be a symlink: " + str(lock_path))
+            stream = lock_path.open("a+b")
+        with stream:
+            locked = False
+            try:
+                if fcntl is not None:
+                    mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+                    if nonblocking:
+                        mode |= fcntl.LOCK_NB
+                    fcntl.flock(stream.fileno(), mode)
+                    locked = True
+                elif msvcrt is not None and writable:
+                    _msvcrt_lock(stream, lock_path, nonblocking=nonblocking)
+                    locked = True
+                state.depth = 1
+                state.exclusive = not shared
+                try:
+                    yield
+                finally:
+                    state.depth = 0
+                    state.exclusive = False
+            finally:
+                if locked:
+                    if fcntl is not None:
+                        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+                    elif msvcrt is not None:
+                        _msvcrt_unlock(stream)
+    finally:
+        rlock.release()
+
+
 def immutable(path, raw):
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    require(not path.is_symlink(), "Immutable object must not be a symlink: " + str(path))
     if path.exists():
         require(path.read_bytes() == raw, "Immutable object conflict: " + str(path))
         return
-    with path.open("xb") as f:
-        f.write(raw)
-        f.flush()
-        os.fsync(f.fileno())
+    temp = path.with_name("." + path.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        with temp.open("xb") as f:
+            f.write(raw)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp, path)
+        sync_dir(path.parent)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def replace_json(path, value):
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + ".pending")
-    with temp.open("wb") as f:
-        f.write(js(value))
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(temp, path)
+    require(not path.is_symlink(), "Replaced JSON target must not be a symlink: " + str(path))
+    temp = path.with_name("." + path.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        with temp.open("xb") as f:
+            f.write(js(value))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp, path)
+        sync_dir(path.parent)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def deflate(raw, level=6, mem_level=8, strategy=zlib.Z_DEFAULT_STRATEGY):
@@ -87,17 +267,26 @@ def safe_relative(value):
 class Store:
     def __init__(self, root, create=False):
         self.root = Path(root)
+        self._create = create
+        self.cache = collections.OrderedDict()
+        self.cache_bytes = 0
+        self.building = set()
+        self.zip_expanded = 0
+        self.observations = []
+        self.reload(create=create)
+
+    def reload(self, create=None):
+        if create is None:
+            create = self._create
         index = self.root / "index.json"
         if index.exists():
-            record = json.loads(index.read_bytes())
+            record = loads_json(index.read_bytes())
             require(record["format"] == FORMAT, "Unknown store format")
             self.objects = record["objects"]
         else:
             require(create, "Store index does not exist")
             self.root.mkdir(parents=True, exist_ok=True)
             self.objects = {}
-        self.cache = collections.OrderedDict()
-        self.cache_bytes = 0
         self.encoded_sources = {row["encoded_sha256"]: key for key, row in self.objects.items()
                                 if row["kind"] in RAW_BODY_KINDS and "encoded_sha256" in row}
         self.recipe_sources = {row["recipe_sha256"]: key for key, row in self.objects.items() if row["kind"] == "zip-recipe"}
@@ -112,19 +301,41 @@ class Store:
                 if directory != "occurrences":
                     require(path.stem == ident, "Immutable record name differs: " + str(path))
                 self.record_sources.setdefault(ident, path.relative_to(self.root).as_posix())
-        self.building = set()
-        self.zip_expanded = 0
-        self.observations = []
 
     def event(self, kind, data):
         path = self.root / "events.jsonl"
-        with path.open("ab") as f:
-            f.write(js({"at": utc(), "kind": kind, **data}))
-            f.flush()
-            os.fsync(f.fileno())
+        lock_path = self.root / ".events.lock"
+        payload = js({"at": utc(), "kind": kind, **data})
+        self.root.mkdir(parents=True, exist_ok=True)
+        with _event_lock(path):
+            require(not path.is_symlink(), "Event log must not be a symlink: " + str(path))
+            require(not lock_path.is_symlink(), "Event lock must not be a symlink: " + str(lock_path))
+            created = not path.exists()
+            with lock_path.open("a+b") as lock_stream:
+                locked = False
+                try:
+                    if fcntl is not None:
+                        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX)
+                        locked = True
+                    elif msvcrt is not None:
+                        _msvcrt_lock(lock_stream, lock_path, nonblocking=False)
+                        locked = True
+                    with path.open("ab") as f:
+                        f.write(payload)
+                        f.flush()
+                        os.fsync(f.fileno())
+                finally:
+                    if locked:
+                        if fcntl is not None:
+                            fcntl.flock(lock_stream.fileno(), fcntl.LOCK_UN)
+                        elif msvcrt is not None:
+                            _msvcrt_unlock(lock_stream)
+            if created:
+                sync_dir(self.root)
 
     def commit_index(self):
-        replace_json(self.root / "index.json", {"format": FORMAT, "objects": self.objects})
+        with store_lock(self.root):
+            replace_json(self.root / "index.json", {"format": FORMAT, "objects": self.objects})
 
     def cache_put(self, key, raw):
         if len(raw) > 64 * 1024 ** 2:
@@ -386,7 +597,7 @@ class Store:
         return raw
 
     def recipe(self, key):
-        return json.loads(self.recipe_raw(key))
+        return loads_json(self.recipe_raw(key))
 
     def materialize(self, key, stack=()):
         if key in self.cache:
@@ -579,11 +790,6 @@ def _retain_snapshot(store, spec, attempt, occurrence_path, rows):
                 "scope": "Per-file stable custody plus final identity recheck; not an atomic source transaction, semantic acceptance, runtime relocation, or deletion authority."}
     raw = js(manifest)
     manifest_hash = sha(raw)
-    store.commit_index()
-    immutable(store.root / "manifests" / (manifest_hash + ".json"), raw)
-    pointer = {"format": "managed-material-occurrence-pointer/1", "id": spec["id"], "manifest": manifest_hash,
-               "path": "manifests/" + manifest_hash + ".json"}
-    immutable(occurrence_path, js(pointer))
     selection = {"format": "managed-material-current-selection/1", "occurrence": spec["id"],
                  "manifest": manifest_hash, "current": currents,
                  "account": spec.get("account", "Observed selection; no implied acceptance.")}
@@ -592,61 +798,189 @@ def _retain_snapshot(store, spec, attempt, occurrence_path, rows):
     selection["materializations"] = observed_materialization_state(prior_states, manifest, manifest_hash)
     selection_raw = js(selection)
     selection_hash = sha(selection_raw)
+    store.commit_index()
+    immutable(store.root / "manifests" / (manifest_hash + ".json"), raw)
     immutable(store.root / "selections" / (selection_hash + ".json"), selection_raw)
+    pointer = {"format": "managed-material-occurrence-pointer/1", "id": spec["id"], "manifest": manifest_hash,
+               "path": "manifests/" + manifest_hash + ".json"}
+    immutable(occurrence_path, js(pointer))
     return manifest_hash, selection_hash, effective_policy
 
 
 def snapshot(store, spec_path):
     spec_raw = Path(spec_path).read_bytes()
-    spec = json.loads(spec_raw)
+    spec = loads_json(spec_raw)
     require(spec.get("format") == "managed-material-selection/1", "Unknown selection spec")
     require(spec.get("id"), "Explicit occurrence identity is required")
-    existing = store.root / "occurrences" / (spec["id"] + ".json")
-    require(not existing.exists(), "Occurrence identity already exists; retain it and select a new identity")
     safe_relative(spec["id"])
-    attempt = {"id": spec["id"], "spec_sha256": sha(spec_raw), "started_at": utc()}
-    store.event("snapshot-started", attempt)
-    rows = []
-    started = time.monotonic()
-    try:
-        manifest_hash, selection_hash, policy = _retain_snapshot(store, spec, attempt, existing, rows)
-        replace_json(store.root / "CURRENT.json", {"selection": selection_hash,
-                                                   "path": "selections/" + selection_hash + ".json"})
-    except Exception as exc:
-        store.commit_index()
-        store.event("snapshot-failed", {**attempt, "error_type": type(exc).__name__, "error": str(exc),
-                                        "completed_entries": len(rows), "selection_published": False})
-        raise
+    with store_lock(store.root):
+        store.reload(create=True)
+        store.observations = []
+        existing = store.root / "occurrences" / (spec["id"] + ".json")
+        require(not existing.exists(), "Occurrence identity already exists; retain it and select a new identity")
+        attempt = {"id": spec["id"], "spec_sha256": sha(spec_raw), "started_at": utc()}
+        store.event("snapshot-started", attempt)
+        rows = []
+        started = time.monotonic()
+        manifest_hash = None
+        selection_hash = None
+        try:
+            manifest_hash, selection_hash, policy = _retain_snapshot(store, spec, attempt, existing, rows)
+            replace_json(store.root / "CURRENT.json", {"selection": selection_hash,
+                                                       "path": "selections/" + selection_hash + ".json"})
+        except Exception as exc:
+            store.commit_index()
+            retained = existing.is_file()
+            failure = {**attempt, "error_type": type(exc).__name__, "error": str(exc),
+                       "completed_entries": len(rows), "selection_published": False,
+                       "occurrence_retained": retained}
+            if manifest_hash is not None:
+                failure["manifest"] = manifest_hash
+            if selection_hash is not None:
+                failure["selection"] = selection_hash
+            if retained:
+                failure["recovery"] = ("Occurrence and selection were retained before CURRENT.json replacement failed; "
+                                       "inspect the retained occurrence or select a new occurrence identity.")
+            store.event("snapshot-failed", failure)
+            raise
 
-    try:
-        closure = store.closure(r["object"] for r in rows if "object" in r)
-        result = {"id": spec["id"], "manifest": manifest_hash, "selection": selection_hash,
-                  "retention_policy": policy,
-                  "occurrence_entries": len(rows), "file_occurrences": sum(r["type"] == "file" for r in rows),
-                  "source_bytes": sum(r.get("bytes", 0) for r in rows), "seconds": round(time.monotonic() - started, 3),
-                  **store.stats(closure)}
-        store.event("snapshot-completed", result)
-        return result
-    except Exception as exc:
-        store.event("snapshot-failed", {**attempt, "error_type": type(exc).__name__, "error": str(exc),
-                                        "completed_entries": len(rows), "selection_published": True,
-                                        "manifest": manifest_hash, "selection": selection_hash})
-        raise
+        try:
+            closure = store.closure(r["object"] for r in rows if "object" in r)
+            result = {"id": spec["id"], "manifest": manifest_hash, "selection": selection_hash,
+                      "retention_policy": policy,
+                      "occurrence_entries": len(rows), "file_occurrences": sum(r["type"] == "file" for r in rows),
+                      "source_bytes": sum(r.get("bytes", 0) for r in rows), "seconds": round(time.monotonic() - started, 3),
+                      **store.stats(closure)}
+            store.event("snapshot-completed", result)
+            return result
+        except Exception as exc:
+            store.event("snapshot-failed", {**attempt, "error_type": type(exc).__name__, "error": str(exc),
+                                            "completed_entries": len(rows), "selection_published": True,
+                                            "occurrence_retained": True,
+                                            "manifest": manifest_hash, "selection": selection_hash})
+            raise
+
+
+def unpublished_occurrences(store):
+    """Report retained occurrences that were never published to CURRENT.json."""
+    with store_lock(store.root, shared=True):
+        if (store.root / "index.json").exists():
+            store.reload(create=False)
+        published_ids = set()
+        published_manifests = set()
+        if (store.root / "CURRENT.json").exists():
+            current_key, _ = current_selection(store)
+            selections, _, manifests, _ = selection_closure(store, current_key)
+            published_manifests.update(manifests)
+            published_ids.update(m["id"] for m, _ in manifests.values())
+            published_ids.update(s["occurrence"] for s, _ in selections.values() if "occurrence" in s)
+        failed = {}
+        events_path = store.root / "events.jsonl"
+        if events_path.is_file():
+            for line in events_path.read_bytes().splitlines():
+                if not line.strip():
+                    continue
+                row = loads_json(line)
+                kind = row.get("kind")
+                if kind == "snapshot-completed":
+                    if row.get("id"):
+                        published_ids.add(row["id"])
+                        failed.pop(row["id"], None)
+                    if row.get("manifest"):
+                        published_manifests.add(row["manifest"])
+                elif kind == "historical-artifact-retained":
+                    if row.get("occurrence"):
+                        published_ids.add(row["occurrence"])
+                        failed.pop(row["occurrence"], None)
+                    if row.get("manifest"):
+                        published_manifests.add(row["manifest"])
+                elif kind == "snapshot-failed" and row.get("id"):
+                    if row.get("selection_published"):
+                        published_ids.add(row["id"])
+                        failed.pop(row["id"], None)
+                        if row.get("manifest"):
+                            published_manifests.add(row["manifest"])
+                    elif row.get("occurrence_retained"):
+                        failed[row["id"]] = {
+                            "id": row["id"],
+                            "manifest": row.get("manifest"),
+                            "selection": row.get("selection"),
+                            "error": row.get("error"),
+                            "reason": "snapshot-failed-before-current-publish",
+                        }
+                elif kind == "historical-artifact-retention-failed" and row.get("occurrence"):
+                    if row.get("selection_published"):
+                        published_ids.add(row["occurrence"])
+                        failed.pop(row["occurrence"], None)
+                        if row.get("manifest"):
+                            published_manifests.add(row["manifest"])
+                    elif row.get("occurrence_retained"):
+                        failed[row["occurrence"]] = {
+                            "id": row["occurrence"],
+                            "manifest": row.get("manifest"),
+                            "selection": row.get("selection"),
+                            "error": row.get("error"),
+                            "reason": "historical-artifact-retention-failed-before-current-publish",
+                        }
+        selection_by_manifest = {}
+        selections_dir = store.root / "selections"
+        if selections_dir.is_dir():
+            for spath in sorted(selections_dir.rglob("*.json")):
+                if spath.is_symlink():
+                    continue
+                sraw = spath.read_bytes()
+                skey = sha(sraw)
+                if spath.stem != skey:
+                    continue
+                sel = loads_json(sraw)
+                if sel.get("format") != "managed-material-current-selection/1":
+                    continue
+                if sel.get("manifest"):
+                    selection_by_manifest.setdefault(sel["manifest"], skey)
+                for extra_manifest in sel.get("additional_manifests", []):
+                    selection_by_manifest.setdefault(extra_manifest, skey)
+        results = []
+        occurrences_dir = store.root / "occurrences"
+        if occurrences_dir.is_dir():
+            for opath in sorted(occurrences_dir.rglob("*.json")):
+                require(not opath.is_symlink(), "Immutable record must not be a symlink")
+                pointer = loads_json(opath.read_bytes())
+                ident = pointer.get("id", opath.stem)
+                manifest_key = pointer.get("manifest")
+                if ident in published_ids or (manifest_key and manifest_key in published_manifests):
+                    continue
+                info = failed.get(ident)
+                if info is not None:
+                    entry = dict(info)
+                    if not entry.get("manifest"):
+                        entry["manifest"] = manifest_key
+                    if not entry.get("selection") and manifest_key:
+                        entry["selection"] = selection_by_manifest.get(manifest_key)
+                else:
+                    entry = {
+                        "id": ident,
+                        "manifest": manifest_key,
+                        "selection": selection_by_manifest.get(manifest_key) if manifest_key else None,
+                        "error": None,
+                        "reason": "unconfirmed-occurrence-not-published",
+                    }
+                results.append(entry)
+        return sorted(results, key=lambda r: r["id"])
 
 
 def read_manifest(store, occurrence=None):
     if occurrence:
         safe_relative(occurrence)
-        p = json.loads((store.root / "occurrences" / (occurrence + ".json")).read_bytes())
+        p = loads_json((store.root / "occurrences" / (occurrence + ".json")).read_bytes())
         key = p["manifest"]
     else:
-        c = json.loads((store.root / "CURRENT.json").read_bytes())
+        c = loads_json((store.root / "CURRENT.json").read_bytes())
         sraw = (store.root / c["path"]).read_bytes()
         require(sha(sraw) == c["selection"], "Current selection differs")
-        key = json.loads(sraw)["manifest"]
+        key = loads_json(sraw)["manifest"]
     raw = (store.root / "manifests" / (key + ".json")).read_bytes()
     require(sha(raw) == key, "Occurrence manifest differs")
-    return key, json.loads(raw), raw
+    return key, loads_json(raw), raw
 
 
 def manifest_closure(store, key):
@@ -658,7 +992,7 @@ def manifest_closure(store, key):
         require(len(ident) == 64 and all(c in "0123456789abcdef" for c in ident), "Invalid manifest identity")
         raw = (store.root / "manifests" / (ident + ".json")).read_bytes()
         require(sha(raw) == ident, "Historical manifest differs")
-        manifest = json.loads(raw)
+        manifest = loads_json(raw)
         require(manifest["format"] == "managed-material-occurrence/1", "Unknown historical manifest format")
         found[ident] = (manifest, raw)
         material.update(r["object"] for r in manifest["files"] if "object" in r)
@@ -669,12 +1003,12 @@ def manifest_closure(store, key):
 
 
 def current_selection(store):
-    pointer = json.loads((store.root / "CURRENT.json").read_bytes())
+    pointer = loads_json((store.root / "CURRENT.json").read_bytes())
     key = pointer["selection"]
     require(pointer["path"] == "selections/" + key + ".json", "Current selection path differs")
     raw = (store.root / pointer["path"]).read_bytes()
     require(sha(raw) == key, "Current selection differs")
-    selected = json.loads(raw)
+    selected = loads_json(raw)
     require(selected["format"] == "managed-material-current-selection/1", "Unknown selection format")
     return key, selected
 
@@ -689,7 +1023,7 @@ def selection_closure(store, key, root=None):
         require(len(ident) == 64 and all(c in "0123456789abcdef" for c in ident), "Invalid selection identity")
         raw = js(root) if ident == key and root is not None else (store.root / "selections" / (ident + ".json")).read_bytes()
         require(sha(raw) == ident, "Retained selection differs")
-        selected = json.loads(raw)
+        selected = loads_json(raw)
         require(selected["format"] == "managed-material-current-selection/1", "Unknown retained selection format")
         selections[ident] = (selected, raw)
         selected_manifests, selected_objects = manifest_closure(store, selected["manifest"])
@@ -707,7 +1041,7 @@ def selection_closure(store, key, root=None):
             require(len(receipt_id) == 64 and all(c in "0123456789abcdef" for c in receipt_id), "Invalid lifecycle identity")
             receipt_raw = (store.root / "lifecycle" / (receipt_id + ".json")).read_bytes()
             require(sha(receipt_raw) == receipt_id, "Lifecycle receipt differs")
-            receipt = json.loads(receipt_raw)
+            receipt = loads_json(receipt_raw)
             require(receipt["format"] == "managed-material-retirement/1", "Unknown lifecycle receipt format")
             receipts[receipt_id] = (receipt, receipt_raw)
             receipt_manifests, receipt_objects = manifest_closure(store, receipt["source_manifest"])
@@ -736,7 +1070,7 @@ def representation_closure(store, selections):
                 "Invalid representation transition identity")
         raw = (store.root / "transitions" / (key + ".json")).read_bytes()
         require(sha(raw) == key, "Representation transition differs")
-        record = json.loads(raw)
+        record = loads_json(raw)
         require(record["format"] == "managed-material-representation-transition/1", "Unknown representation transition")
         records[key] = (record, raw)
         roots.update(record.get("evidence_objects", []))
@@ -793,7 +1127,7 @@ def materialization_state(store, selections):
         if manifest_key not in seen_manifests:
             raw = (store.root / "manifests" / (manifest_key + ".json")).read_bytes()
             require(sha(raw) == manifest_key, "Materialization basis differs")
-            states = observed_materialization_state(states, json.loads(raw), manifest_key)
+            states = observed_materialization_state(states, loads_json(raw), manifest_key)
             seen_manifests.add(manifest_key)
         by_identity = {(r["prefix"], r["source_path"]): r for r in states}
         for materialization in selected.get("materializations", []):
@@ -801,7 +1135,7 @@ def materialization_state(store, selections):
             if row.get("receipt"):
                 receipt_raw = (store.root / "lifecycle" / (row["receipt"] + ".json")).read_bytes()
                 require(sha(receipt_raw) == row["receipt"], "Materialization receipt differs")
-                receipt = json.loads(receipt_raw)
+                receipt = loads_json(receipt_raw)
                 matches = [r for r in receipt["retired"] if r["prefix"] == row["prefix"]]
                 require(len(matches) == 1, "Materialization lacks an unambiguous retirement basis")
                 row["source_path"] = matches[0]["source_path"]
@@ -828,203 +1162,213 @@ def selected_for_manifest(store, manifest_key, manifest):
 
 
 def verify(store, occurrence=None):
-    key, manifest, _ = read_manifest(store, occurrence)
-    selection_key, selected = selected_for_manifest(store, key, manifest)
-    selections, receipts, manifests, keys = selection_closure(store, selection_key, selected)
-    started = time.monotonic()
-    store.cache.clear(); store.cache_bytes = 0
-    for obj in sorted(keys):
-        store.materialize(obj)
-    return {"manifest": key, "objects_verified": len(keys), "historical_manifests_verified": len(manifests),
-            "selections_verified": len(selections), "lifecycle_receipts_verified": len(receipts),
-            "current_materializations": materialization_state(store, selections),
-            "file_occurrences_covered": sum(r["type"] == "file" for m, _ in manifests.values() for r in m["files"]),
-            "seconds": round(time.monotonic() - started, 3),
-            "exact_recovery": "Every reachable body's original SHA-256 and byte count, including complete ZIP transports, matched.",
-            "zlib_runtime": zlib.ZLIB_RUNTIME_VERSION, **store.stats(keys)}
+    with store_lock(store.root, shared=True):
+        store.reload(create=False)
+        key, manifest, _ = read_manifest(store, occurrence)
+        selection_key, selected = selected_for_manifest(store, key, manifest)
+        selections, receipts, manifests, keys = selection_closure(store, selection_key, selected)
+        started = time.monotonic()
+        store.cache.clear(); store.cache_bytes = 0
+        for obj in sorted(keys):
+            store.materialize(obj)
+        return {"manifest": key, "objects_verified": len(keys), "historical_manifests_verified": len(manifests),
+                "selections_verified": len(selections), "lifecycle_receipts_verified": len(receipts),
+                "current_materializations": materialization_state(store, selections),
+                "file_occurrences_covered": sum(r["type"] == "file" for m, _ in manifests.values() for r in m["files"]),
+                "seconds": round(time.monotonic() - started, 3),
+                "exact_recovery": "Every reachable body's original SHA-256 and byte count, including complete ZIP transports, matched.",
+                "zlib_runtime": zlib.ZLIB_RUNTIME_VERSION, **store.stats(keys)}
 
 
 def export(store, output, occurrence=None):
-    key, manifest, manifest_raw = read_manifest(store, occurrence)
     output = Path(output)
-    require(not output.exists(), "Preserve prior export; select a new output identity")
-    selection_key, selection = selected_for_manifest(store, key, manifest)
-    selections, receipts, manifests, keys = selection_closure(store, selection_key, selection)
-    # Export is constructed from a verified reference closure, never a folder walk.
-    checked = verify(store, occurrence)
-    files = {"index.json": js({"format": FORMAT, "objects": {k: store.objects[k] for k in sorted(keys)}}),
-             "manifests/" + key + ".json": manifest_raw,
-             "occurrences/" + manifest["id"] + ".json": js({"format": "managed-material-occurrence-pointer/1",
-                 "id": manifest["id"], "manifest": key, "path": "manifests/" + key + ".json"}),
-             "managed_material.py": LOADED_PRODUCER_BYTES,
-             "RECOVERY.json": js({"format": "managed-material-recovery/1", "manifest": key,
-                 "verify": "python managed_material.py verify --store . --occurrence " + manifest["id"],
-                 "restore": "python managed_material.py restore --store . --occurrence " + manifest["id"] + " --output ../restored",
-                 "codec_boundary": "Stored bodies decode with DEFLATE. Historical deflate-recipe parts require the recorded encoder or another encoder producing the same pinned compressed hash; mismatch refuses exact replay.",
-                 "verified": checked})}
-    files["CURRENT.json"] = js({"selection": selection_key, "path": "selections/" + selection_key + ".json"})
-    for selected_key, (_, selected_raw) in selections.items():
-        files["selections/" + selected_key + ".json"] = selected_raw
-    for receipt_key, (_, receipt_raw) in receipts.items():
-        files["lifecycle/" + receipt_key + ".json"] = receipt_raw
-    transitions, _, transition_files = representation_closure(store, selections)
-    files.update(transition_files)
-    for transition_key, (_, transition_raw) in transitions.items():
-        files["transitions/" + transition_key + ".json"] = transition_raw
-    for old_key, (old_manifest, old_raw) in manifests.items():
-        files["manifests/" + old_key + ".json"] = old_raw
-        files["occurrences/" + old_manifest["id"] + ".json"] = js({"format": "managed-material-occurrence-pointer/1",
-            "id": old_manifest["id"], "manifest": old_key, "path": "manifests/" + old_key + ".json"})
-    for obj in sorted(keys):
-        row = store.objects[obj]
-        if "path" in row:
-            files[row["path"]] = store.root / row["path"]
-        if row["kind"] == "record-view":
-            files[row["record_path"]] = store.root / row["record_path"]
-    output.parent.mkdir(parents=True, exist_ok=True)
-    manifest_entries = []
-    with zipfile.ZipFile(output, "x") as z:
-        for name, source in sorted(files.items()):
-            raw = source.read_bytes() if isinstance(source, Path) else source
-            info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
-            info.external_attr = (0o644 | stat.S_IFREG) << 16
-            info.compress_type = zipfile.ZIP_STORED if name.endswith(".deflate") else zipfile.ZIP_DEFLATED
-            z.writestr(info, raw)
-            manifest_entries.append({"path": name, "sha256": sha(raw), "bytes": len(raw)})
-        info = zipfile.ZipInfo("EXPORT-MANIFEST.json", (1980, 1, 1, 0, 0, 0))
-        info.compress_type = zipfile.ZIP_DEFLATED
-        z.writestr(info, js({"format": "managed-material-export/1", "source_manifest": key,
-                            "entries": manifest_entries, "nested_archive_payloads": 0}))
-    with zipfile.ZipFile(output) as z:
-        for row in manifest_entries:
-            require(sha(z.read(row["path"])) == row["sha256"], "Export member readback differs")
-    result = {"output": str(output), "sha256": sha(output.read_bytes()), "bytes": output.stat().st_size,
-              "source_manifest": key, "archive_entries": len(files) + 1, "nested_zip_files": 0,
-              "historical_manifests": len(manifests),
-              "retained_selections": len(selections), "retained_lifecycle_receipts": len(receipts),
-              "source_occurrence_bytes": sum(r.get("bytes", 0) for r in manifest["files"]),
-              "recovery_verified": True, **store.stats(keys)}
+    with store_lock(store.root, shared=True):
+        store.reload(create=False)
+        key, manifest, manifest_raw = read_manifest(store, occurrence)
+        require(not output.exists(), "Preserve prior export; select a new output identity")
+        selection_key, selection = selected_for_manifest(store, key, manifest)
+        selections, receipts, manifests, keys = selection_closure(store, selection_key, selection)
+        # Export is constructed from a verified reference closure, never a folder walk.
+        checked = verify(store, occurrence)
+        files = {"index.json": js({"format": FORMAT, "objects": {k: store.objects[k] for k in sorted(keys)}}),
+                 "manifests/" + key + ".json": manifest_raw,
+                 "occurrences/" + manifest["id"] + ".json": js({"format": "managed-material-occurrence-pointer/1",
+                     "id": manifest["id"], "manifest": key, "path": "manifests/" + key + ".json"}),
+                 "managed_material.py": LOADED_PRODUCER_BYTES,
+                 "RECOVERY.json": js({"format": "managed-material-recovery/1", "manifest": key,
+                     "verify": "python managed_material.py verify --store . --occurrence " + manifest["id"],
+                     "restore": "python managed_material.py restore --store . --occurrence " + manifest["id"] + " --output ../restored",
+                     "codec_boundary": "Stored bodies decode with DEFLATE. Historical deflate-recipe parts require the recorded encoder or another encoder producing the same pinned compressed hash; mismatch refuses exact replay.",
+                     "verified": checked})}
+        files["CURRENT.json"] = js({"selection": selection_key, "path": "selections/" + selection_key + ".json"})
+        for selected_key, (_, selected_raw) in selections.items():
+            files["selections/" + selected_key + ".json"] = selected_raw
+        for receipt_key, (_, receipt_raw) in receipts.items():
+            files["lifecycle/" + receipt_key + ".json"] = receipt_raw
+        transitions, _, transition_files = representation_closure(store, selections)
+        files.update(transition_files)
+        for transition_key, (_, transition_raw) in transitions.items():
+            files["transitions/" + transition_key + ".json"] = transition_raw
+        for old_key, (old_manifest, old_raw) in manifests.items():
+            files["manifests/" + old_key + ".json"] = old_raw
+            files["occurrences/" + old_manifest["id"] + ".json"] = js({"format": "managed-material-occurrence-pointer/1",
+                "id": old_manifest["id"], "manifest": old_key, "path": "manifests/" + old_key + ".json"})
+        for obj in sorted(keys):
+            row = store.objects[obj]
+            if "path" in row:
+                files[row["path"]] = store.root / row["path"]
+            if row["kind"] == "record-view":
+                files[row["record_path"]] = store.root / row["record_path"]
+        output.parent.mkdir(parents=True, exist_ok=True)
+        manifest_entries = []
+        with zipfile.ZipFile(output, "x") as z:
+            for name, source in sorted(files.items()):
+                raw = source.read_bytes() if isinstance(source, Path) else source
+                info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
+                info.external_attr = (0o644 | stat.S_IFREG) << 16
+                info.compress_type = zipfile.ZIP_STORED if name.endswith(".deflate") else zipfile.ZIP_DEFLATED
+                z.writestr(info, raw)
+                manifest_entries.append({"path": name, "sha256": sha(raw), "bytes": len(raw)})
+            info = zipfile.ZipInfo("EXPORT-MANIFEST.json", (1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(info, js({"format": "managed-material-export/1", "source_manifest": key,
+                                "entries": manifest_entries, "nested_archive_payloads": 0}))
+        with zipfile.ZipFile(output) as z:
+            for row in manifest_entries:
+                require(sha(z.read(row["path"])) == row["sha256"], "Export member readback differs")
+        result = {"output": str(output), "sha256": sha(output.read_bytes()), "bytes": output.stat().st_size,
+                  "source_manifest": key, "archive_entries": len(files) + 1, "nested_zip_files": 0,
+                  "historical_manifests": len(manifests),
+                  "retained_selections": len(selections), "retained_lifecycle_receipts": len(receipts),
+                  "source_occurrence_bytes": sum(r.get("bytes", 0) for r in manifest["files"]),
+                  "recovery_verified": True, **store.stats(keys)}
     immutable(output.with_suffix(output.suffix + ".receipt.json"), js(result))
     store.event("export-completed", result)
     return result
 
 
 def restore(store, output, occurrence=None, prefix=None):
-    key, manifest, _ = read_manifest(store, occurrence)
-    output = Path(output)
-    require(not output.exists(), "Restore target must not exist")
-    output.mkdir(parents=True)
-    count, byte_count, directories = 0, 0, []
-    for row in manifest["files"]:
-        if prefix and not (row["path"] == prefix or row["path"].startswith(prefix.rstrip("/") + "/")):
-            continue
-        rel = safe_relative(row["path"])
-        target = output.joinpath(*rel.parts)
-        # A captured symlink must never become an ancestor used by another row.
-        for parent in target.parents:
-            if parent == output:
-                break
-            require(not parent.is_symlink(), "Symlink ancestor during restore")
-        if row["type"] == "directory":
-            target.mkdir(parents=True, exist_ok=True); directories.append((target, row))
-        elif row["type"] == "symlink":
-            target.parent.mkdir(parents=True, exist_ok=True)
-            os.symlink(os.fsdecode(store.materialize(row["object"])), target)
-            count += 1
-        elif row["type"] == "file":
-            target.parent.mkdir(parents=True, exist_ok=True)
-            raw = store.materialize(row["object"])
-            immutable(target, raw)
+    with store_lock(store.root, shared=True):
+        store.reload(create=False)
+        key, manifest, _ = read_manifest(store, occurrence)
+        output = Path(output)
+        require(not output.exists(), "Restore target must not exist")
+        output.mkdir(parents=True)
+        count, byte_count, directories = 0, 0, []
+        for row in manifest["files"]:
+            if prefix and not (row["path"] == prefix or row["path"].startswith(prefix.rstrip("/") + "/")):
+                continue
+            rel = safe_relative(row["path"])
+            target = output.joinpath(*rel.parts)
+            # A captured symlink must never become an ancestor used by another row.
+            for parent in target.parents:
+                if parent == output:
+                    break
+                require(not parent.is_symlink(), "Symlink ancestor during restore")
+            if row["type"] == "directory":
+                target.mkdir(parents=True, exist_ok=True); directories.append((target, row))
+            elif row["type"] == "symlink":
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.symlink(os.fsdecode(store.materialize(row["object"])), target)
+                count += 1
+            elif row["type"] == "file":
+                target.parent.mkdir(parents=True, exist_ok=True)
+                raw = store.materialize(row["object"])
+                immutable(target, raw)
+                os.chmod(target, row["mode"])
+                os.utime(target, ns=(row["mtime_ns"], row["mtime_ns"]))
+                require(sha(target.read_bytes()) == row["object"], "Restored file readback differs")
+                count += 1; byte_count += len(raw)
+            else:
+                raise ValueError("Unknown occurrence type")
+        for target, row in reversed(directories):
             os.chmod(target, row["mode"])
             os.utime(target, ns=(row["mtime_ns"], row["mtime_ns"]))
-            require(sha(target.read_bytes()) == row["object"], "Restored file readback differs")
-            count += 1; byte_count += len(raw)
-        else:
-            raise ValueError("Unknown occurrence type")
-    for target, row in reversed(directories):
-        os.chmod(target, row["mode"])
-        os.utime(target, ns=(row["mtime_ns"], row["mtime_ns"]))
-    return {"manifest": key, "output": str(output), "entries_restored": count, "bytes": byte_count,
-            "prefix": prefix, "readback": "All restored file bytes matched original identities; no relocation of captured paths."}
+        return {"manifest": key, "output": str(output), "entries_restored": count, "bytes": byte_count,
+                "prefix": prefix, "readback": "All restored file bytes matched original identities; no relocation of captured paths."}
 
 
 def retirement_plan(store, spec_path, occurrence=None):
     """Verify selected copies without removing them or deciding their applicability."""
-    key, manifest, _ = read_manifest(store, occurrence)
-    proposal = spec_path if isinstance(spec_path, dict) else json.loads(Path(spec_path).read_bytes())
-    require(proposal.get("format") == "managed-material-retirement-proposal/1", "Unknown retirement proposal")
-    require(proposal.get("account"), "Retirement proposal needs an applicability account")
-    protected = proposal.get("protected_prefixes", [])
-    require(protected, "Explicitly declare protected active paths")
-    groups = manifest.get("materialization_groups", [])
-    protected = protected + [g["prefix"] for g in groups if g["state"] == "active"]
-    nominated = {g["prefix"] for g in groups if g["state"] == "retirement-candidate"}
-    require(all(p in nominated for p in proposal["prefixes"]), "Retire only groups declared candidates in the captured selection")
-    for i, prefix in enumerate(proposal["prefixes"]):
-        require(not any(prefix == other or prefix.startswith(other.rstrip("/") + "/") or
-                        other.startswith(prefix.rstrip("/") + "/") for other in proposal["prefixes"][i+1:]),
-                "Overlapping retirement prefixes")
-    rows_by_path = {r["path"]: r for r in manifest["files"]}
-    recoverable = verify(store, occurrence)
-    results = []
-    for prefix in proposal["prefixes"]:
-        safe_relative(prefix)
-        require(not any(prefix == p or prefix.startswith(p.rstrip("/") + "/") or
-                        p.startswith(prefix.rstrip("/") + "/") for p in protected),
-                "Proposal overlaps a protected active materialization: " + prefix)
-        require(prefix in rows_by_path, "Proposed root was not captured: " + prefix)
-        require(not any(c["path"] == prefix or c["path"].startswith(prefix.rstrip("/") + "/") for c in manifest["current"]),
-                "Proposed path supplies an explicitly current selected body")
-        root_row = rows_by_path[prefix]
-        captured = [r for r in manifest["files"] if r["path"] == prefix or r["path"].startswith(prefix.rstrip("/") + "/")]
-        source = Path(root_row["source_path"])
-        require(source.exists() or source.is_symlink(), "Proposed materialization is absent")
-        observed = {source}
-        if source.is_dir() and not source.is_symlink():
-            for parent, dirs, files in os.walk(source, followlinks=False):
-                observed.update(Path(parent) / n for n in dirs + files)
-        require(observed == {Path(r["source_path"]) for r in captured},
-                "Materialization inventory changed or was excluded: " + prefix)
-        for row in captured:
-            path = Path(row["source_path"])
-            require(stat.S_IMODE(path.lstat().st_mode) == row["mode"], "Mode changed after capture: " + str(path))
-            if row["type"] == "file":
-                require(path.is_file() and not path.is_symlink() and sha(path.read_bytes()) == row["object"],
-                        "Live file changed after capture: " + str(path))
-            elif row["type"] == "symlink":
-                require(path.is_symlink() and sha(os.fsencode(os.readlink(path))) == row["object"],
-                        "Live symlink changed after capture: " + str(path))
-            else:
-                require(path.is_dir() and not path.is_symlink(), "Live directory kind changed")
-        results.append({"prefix": prefix, "source_path": str(source), "entries": len(captured),
-                        "bytes": sum(r.get("bytes", 0) for r in captured),
-                        "restore": {"manifest": key, "occurrence": manifest["id"], "prefix": prefix},
-                        "observed_at": utc(), "state": "byte-recoverable-and-currently-matching"})
-    return {"format": "managed-material-retirement-plan/1", "source_manifest": key,
-            "proposal": proposal, "recovery_verification": recoverable, "materializations": results,
-            "state": "ready-for-owner-receiving", "removed_paths": 0,
-            "boundary": "Physical recoverability and live equality only. Owner must establish no active dependency, select the semantic retirement and recheck immediately before any removal. This producer performs no deletion."}
+    with store_lock(store.root, shared=True):
+        store.reload(create=False)
+        key, manifest, _ = read_manifest(store, occurrence)
+        proposal = spec_path if isinstance(spec_path, dict) else loads_json(Path(spec_path).read_bytes())
+        require(proposal.get("format") == "managed-material-retirement-proposal/1", "Unknown retirement proposal")
+        require(proposal.get("account"), "Retirement proposal needs an applicability account")
+        protected = proposal.get("protected_prefixes", [])
+        require(protected, "Explicitly declare protected active paths")
+        groups = manifest.get("materialization_groups", [])
+        protected = protected + [g["prefix"] for g in groups if g["state"] == "active"]
+        nominated = {g["prefix"] for g in groups if g["state"] == "retirement-candidate"}
+        require(all(p in nominated for p in proposal["prefixes"]), "Retire only groups declared candidates in the captured selection")
+        for i, prefix in enumerate(proposal["prefixes"]):
+            require(not any(prefix == other or prefix.startswith(other.rstrip("/") + "/") or
+                            other.startswith(prefix.rstrip("/") + "/") for other in proposal["prefixes"][i+1:]),
+                    "Overlapping retirement prefixes")
+        rows_by_path = {r["path"]: r for r in manifest["files"]}
+        recoverable = verify(store, occurrence)
+        results = []
+        for prefix in proposal["prefixes"]:
+            safe_relative(prefix)
+            require(not any(prefix == p or prefix.startswith(p.rstrip("/") + "/") or
+                            p.startswith(prefix.rstrip("/") + "/") for p in protected),
+                    "Proposal overlaps a protected active materialization: " + prefix)
+            require(prefix in rows_by_path, "Proposed root was not captured: " + prefix)
+            require(not any(c["path"] == prefix or c["path"].startswith(prefix.rstrip("/") + "/") for c in manifest["current"]),
+                    "Proposed path supplies an explicitly current selected body")
+            root_row = rows_by_path[prefix]
+            captured = [r for r in manifest["files"] if r["path"] == prefix or r["path"].startswith(prefix.rstrip("/") + "/")]
+            source = Path(root_row["source_path"])
+            require(source.exists() or source.is_symlink(), "Proposed materialization is absent")
+            observed = {source}
+            if source.is_dir() and not source.is_symlink():
+                for parent, dirs, files in os.walk(source, followlinks=False):
+                    observed.update(Path(parent) / n for n in dirs + files)
+            require(observed == {Path(r["source_path"]) for r in captured},
+                    "Materialization inventory changed or was excluded: " + prefix)
+            for row in captured:
+                path = Path(row["source_path"])
+                require(stat.S_IMODE(path.lstat().st_mode) == row["mode"], "Mode changed after capture: " + str(path))
+                if row["type"] == "file":
+                    require(path.is_file() and not path.is_symlink() and sha(path.read_bytes()) == row["object"],
+                            "Live file changed after capture: " + str(path))
+                elif row["type"] == "symlink":
+                    require(path.is_symlink() and sha(os.fsencode(os.readlink(path))) == row["object"],
+                            "Live symlink changed after capture: " + str(path))
+                else:
+                    require(path.is_dir() and not path.is_symlink(), "Live directory kind changed")
+            results.append({"prefix": prefix, "source_path": str(source), "entries": len(captured),
+                            "bytes": sum(r.get("bytes", 0) for r in captured),
+                            "restore": {"manifest": key, "occurrence": manifest["id"], "prefix": prefix},
+                            "observed_at": utc(), "state": "byte-recoverable-and-currently-matching"})
+        return {"format": "managed-material-retirement-plan/1", "source_manifest": key,
+                "proposal": proposal, "recovery_verification": recoverable, "materializations": results,
+                "state": "ready-for-owner-receiving", "removed_paths": 0,
+                "boundary": "Physical recoverability and live equality only. Owner must establish no active dependency, select the semantic retirement and recheck immediately before any removal. This producer performs no deletion."}
 
 
 def retire(store, plan_path, expected_plan, expected_selection):
     """Explicit operator command; never invoked by snapshot, verify or export."""
     plan_raw = Path(plan_path).read_bytes()
     require(sha(plan_raw) == expected_plan, "Retirement plan differs from the received plan")
-    plan = json.loads(plan_raw)
-    pointer = json.loads((store.root / "CURRENT.json").read_bytes())
-    require(pointer["selection"] == expected_selection, "Current selection changed since receiving")
-    current_raw = (store.root / pointer["path"]).read_bytes()
-    require(sha(current_raw) == expected_selection, "Current selection bytes differ")
-    current = json.loads(current_raw)
-    require(current["manifest"] == plan["source_manifest"], "Retirement is against a different captured occurrence")
-    require(plan["state"] == "ready-for-owner-receiving", "Plan was not physically validated")
-    fresh = retirement_plan(store, plan["proposal"])
-    expected = [{k: r[k] for k in ("prefix", "source_path", "entries", "bytes", "restore")} for r in plan["materializations"]]
-    observed = [{k: r[k] for k in ("prefix", "source_path", "entries", "bytes", "restore")} for r in fresh["materializations"]]
-    require(expected == observed, "Live materializations differ from received plan")
-    removed = _remove_planned_materializations(store, fresh["materializations"], expected,
-                                              expected_plan, expected_selection)
-    return _record_retirement(store, current, plan, removed, expected_plan, expected_selection)
+    plan = loads_json(plan_raw)
+    with store_lock(store.root):
+        store.reload(create=False)
+        pointer = loads_json((store.root / "CURRENT.json").read_bytes())
+        require(pointer["selection"] == expected_selection, "Current selection changed since receiving")
+        current_raw = (store.root / pointer["path"]).read_bytes()
+        require(sha(current_raw) == expected_selection, "Current selection bytes differ")
+        current = loads_json(current_raw)
+        require(current["manifest"] == plan["source_manifest"], "Retirement is against a different captured occurrence")
+        require(plan["state"] == "ready-for-owner-receiving", "Plan was not physically validated")
+        fresh = retirement_plan(store, plan["proposal"])
+        expected = [{k: r[k] for k in ("prefix", "source_path", "entries", "bytes", "restore")} for r in plan["materializations"]]
+        observed = [{k: r[k] for k in ("prefix", "source_path", "entries", "bytes", "restore")} for r in fresh["materializations"]]
+        require(expected == observed, "Live materializations differ from received plan")
+        removed = _remove_planned_materializations(store, fresh["materializations"], expected,
+                                                  expected_plan, expected_selection)
+        return _record_retirement(store, current, plan, removed, expected_plan, expected_selection)
 
 
 def _remove_planned_materializations(store, materializations, expected, expected_plan, expected_selection):
@@ -1054,7 +1398,7 @@ def _record_retirement(store, current, plan, removed, expected_plan, expected_se
                "plan_sha256": expected_plan, "previous_selection": expected_selection,
                "source_manifest": current["manifest"], "retired": removed,
                "recovery": "Bodies, occurrences and original transports remain in the managed reference closure.",
-               "boundary": "Cooperative local maintenance; no cross-filesystem atomicity or concurrency lock against external editors."}
+               "boundary": "Cooperative local maintenance; store mutations serialize via cooperative store lock, with no cross-filesystem atomicity or lock against external editors."}
     raw = js(receipt); key = sha(raw)
     immutable(store.root / "lifecycle" / (key + ".json"), raw)
     successor = {**current, "previous_selection": expected_selection,
@@ -1063,7 +1407,13 @@ def _record_retirement(store, current, plan, removed, expected_plan, expected_se
                       *({"prefix": r["prefix"], "state": "retired", "receipt": key} for r in removed)]}
     successor_raw = js(successor); successor_key = sha(successor_raw)
     immutable(store.root / "selections" / (successor_key + ".json"), successor_raw)
-    replace_json(store.root / "CURRENT.json", {"selection": successor_key, "path": "selections/" + successor_key + ".json"})
+    try:
+        replace_json(store.root / "CURRENT.json", {"selection": successor_key, "path": "selections/" + successor_key + ".json"})
+    except Exception as exc:
+        store.event("retirement-selection-failed", {"receipt": key, "selection": successor_key,
+                                                    "selection_published": False,
+                                                    "error_type": type(exc).__name__, "error": str(exc)})
+        raise
     return {"receipt": key, "selection": successor_key, "retired_materializations": len(removed),
             "retired_occurrence_bytes": sum(r["bytes"] for r in removed), "canonical_objects_removed": 0}
 
@@ -1077,7 +1427,7 @@ def rebuild(source_path, output, expected_index, expected_selection, account):
     index_raw = (source_path / "index.json").read_bytes()
     current_raw = (source_path / "CURRENT.json").read_bytes()
     require(sha(index_raw) == expected_index, "Source index differs from received identity")
-    require(json.loads(current_raw)["selection"] == expected_selection, "Source selection differs from received identity")
+    require(loads_json(current_raw)["selection"] == expected_selection, "Source selection differs from received identity")
     require(account, "Representation transition needs an owner account")
     source = Store(source_path)
     source_selected_key, source_selected = current_selection(source)
@@ -1108,13 +1458,13 @@ def rebuild(source_path, output, expected_index, expected_selection, account):
         for number, (_, _, key) in enumerate(sorted(archive_order), 1):
             raw = source.materialize(key)
             require(target.ingest(raw, "retained.zip") == key, "Regenerated transport identity differs")
-            print(json.dumps({"phase": "rebuild-transports", "completed": number, "total": len(archive_order)}), file=sys.stderr, flush=True)
+            print(json.dumps({"phase": "rebuild-transports", "completed": number, "total": len(archive_order)}, allow_nan=False), file=sys.stderr, flush=True)
         for number, key in enumerate(sorted(source.objects), 1):
             if key not in target.objects:
                 raw = source.materialize(key)
                 require(target.ingest(raw) == key, "Regenerated retained body differs")
             if number % 20000 == 0:
-                print(json.dumps({"phase": "rebuild-content", "completed": number, "total": len(source.objects)}), file=sys.stderr, flush=True)
+                print(json.dumps({"phase": "rebuild-content", "completed": number, "total": len(source.objects)}, allow_nan=False), file=sys.stderr, flush=True)
         # Full raw-identity readback covers old internal frame/encoding identities
         # too; they remain addressable even when represented as verified views.
         target.cache.clear(); target.cache_bytes = 0
@@ -1122,7 +1472,7 @@ def rebuild(source_path, output, expected_index, expected_selection, account):
             raw = target.materialize(key)
             require(len(raw) == source.objects[key]["bytes"], "Rebuilt original byte count differs")
             if number % 20000 == 0:
-                print(json.dumps({"phase": "rebuild-readback", "completed": number, "total": len(source.objects)}), file=sys.stderr, flush=True)
+                print(json.dumps({"phase": "rebuild-readback", "completed": number, "total": len(source.objects)}, allow_nan=False), file=sys.stderr, flush=True)
         require((source_path / "index.json").read_bytes() == index_raw and
                 (source_path / "CURRENT.json").read_bytes() == current_raw,
                 "Source store changed during representation regeneration")
@@ -1169,42 +1519,52 @@ def retain_artifact(store, path, label, account):
     """Add exact historical evidence without changing the main current artifact."""
     path = Path(path).resolve(strict=True); safe_relative(label)
     require("/" not in label and account, "Retained artifact needs one label and an account")
-    before = path_state(path); raw = path.read_bytes()
-    require(path_state(path) == before, "Historical input changed while reading")
-    previous_key, previous = current_selection(store)
-    object_key = store.ingest(raw, path.name)
-    require(sha(path.read_bytes()) == object_key, "Historical input changed before retention")
-    occurrence = "retained-" + label + "-" + object_key[:16]
-    require(not (store.root / "occurrences" / (occurrence + ".json")).exists(), "Retained artifact occurrence already exists")
-    producer = store.blob(LOADED_PRODUCER_BYTES)
-    manifest = {"format": "managed-material-occurrence/1", "id": occurrence, "started_at": utc(),
-                "completed_at": utc(), "spec": {"account": account}, "files": [{"path": label,
-                "source_path": str(path), "type": "file", "object": object_key, "bytes": len(raw),
-                "mode": before["mode"], "mtime_ns": before["mtime_ns"], "role": "historical-evidence",
-                "materialization": "observed-transport-copy"}], "history": [], "current": [],
-                "materialization_groups": [], "producer": {"object": producer, "sha256": producer},
-                "scope": "Exact explicitly selected historical artifact; main current roles unchanged."}
-    manifest_raw = js(manifest); manifest_key = sha(manifest_raw)
-    immutable(store.root / "manifests" / (manifest_key + ".json"), manifest_raw)
-    immutable(store.root / "occurrences" / (occurrence + ".json"), js({"format": "managed-material-occurrence-pointer/1",
-        "id": occurrence, "manifest": manifest_key, "path": "manifests/" + manifest_key + ".json"}))
-    selected = {**previous, "previous_selection": previous_key,
-                "additional_manifests": [*previous.get("additional_manifests", []), manifest_key]}
-    selected_raw = js(selected); selected_key = sha(selected_raw)
-    immutable(store.root / "selections" / (selected_key + ".json"), selected_raw)
-    store.commit_index()
-    replace_json(store.root / "CURRENT.json", {"selection": selected_key, "path": "selections/" + selected_key + ".json"})
-    result = {"object": object_key, "bytes": len(raw), "occurrence": occurrence,
-              "manifest": manifest_key, "selection": selected_key, "current_roles_unchanged": True}
-    store.event("historical-artifact-retained", result)
-    return result
+    with store_lock(store.root):
+        store.reload(create=False)
+        before = path_state(path); raw = path.read_bytes()
+        require(path_state(path) == before, "Historical input changed while reading")
+        previous_key, previous = current_selection(store)
+        object_key = store.ingest(raw, path.name)
+        require(sha(path.read_bytes()) == object_key, "Historical input changed before retention")
+        occurrence = "retained-" + label + "-" + object_key[:16]
+        occurrence_path = store.root / "occurrences" / (occurrence + ".json")
+        require(not occurrence_path.exists(), "Retained artifact occurrence already exists")
+        producer = store.blob(LOADED_PRODUCER_BYTES)
+        manifest = {"format": "managed-material-occurrence/1", "id": occurrence, "started_at": utc(),
+                    "completed_at": utc(), "spec": {"account": account}, "files": [{"path": label,
+                    "source_path": str(path), "type": "file", "object": object_key, "bytes": len(raw),
+                    "mode": before["mode"], "mtime_ns": before["mtime_ns"], "role": "historical-evidence",
+                    "materialization": "observed-transport-copy"}], "history": [], "current": [],
+                    "materialization_groups": [], "producer": {"object": producer, "sha256": producer},
+                    "scope": "Exact explicitly selected historical artifact; main current roles unchanged."}
+        manifest_raw = js(manifest); manifest_key = sha(manifest_raw)
+        selected = {**previous, "previous_selection": previous_key,
+                    "additional_manifests": [*previous.get("additional_manifests", []), manifest_key]}
+        selected_raw = js(selected); selected_key = sha(selected_raw)
+        store.commit_index()
+        immutable(store.root / "manifests" / (manifest_key + ".json"), manifest_raw)
+        immutable(store.root / "selections" / (selected_key + ".json"), selected_raw)
+        immutable(occurrence_path, js({"format": "managed-material-occurrence-pointer/1",
+            "id": occurrence, "manifest": manifest_key, "path": "manifests/" + manifest_key + ".json"}))
+        try:
+            replace_json(store.root / "CURRENT.json", {"selection": selected_key, "path": "selections/" + selected_key + ".json"})
+        except Exception as exc:
+            store.event("historical-artifact-retention-failed", {
+                "occurrence": occurrence, "manifest": manifest_key, "selection": selected_key,
+                "occurrence_retained": occurrence_path.is_file(), "selection_published": False,
+                "error_type": type(exc).__name__, "error": str(exc)})
+            raise
+        result = {"object": object_key, "bytes": len(raw), "occurrence": occurrence,
+                  "manifest": manifest_key, "selection": selected_key, "current_roles_unchanged": True}
+        store.event("historical-artifact-retained", result)
+        return result
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("snapshot", "verify", "export", "restore", "get", "stats", "retirement-plan", "retire", "rebuild", "retain"):
-        p = sub.add_parser(name)
+        p = sub.add_parser(name, allow_abbrev=False)
         if name != "rebuild":
             p.add_argument("--store", required=True, type=Path)
         if name in ("verify", "export", "restore", "retirement-plan"):
@@ -1234,31 +1594,36 @@ def main():
     args = parser.parse_args()
     if args.command == "rebuild":
         result = rebuild(args.source_store, args.output, args.expected_index, args.expected_selection, args.account)
-        print(json.dumps(result, indent=2))
+        print(json.dumps(result, indent=2, allow_nan=False))
         return
-    store = Store(args.store, create=args.command == "snapshot")
-    if args.command == "snapshot":
-        result = snapshot(store, args.spec)
-    elif args.command == "verify":
-        result = verify(store, args.occurrence)
-    elif args.command == "export":
-        result = export(store, args.output, args.occurrence)
-    elif args.command == "restore":
-        result = restore(store, args.output, args.occurrence, args.prefix)
-    elif args.command == "get":
-        require(not args.output.exists(), "Preserve existing materialization")
-        raw = store.materialize(args.object)
-        immutable(args.output, raw)
-        result = {"object": args.object, "output": str(args.output), "bytes": len(raw), "verified": True}
-    elif args.command == "retirement-plan":
-        result = retirement_plan(store, args.spec, args.occurrence)
-    elif args.command == "retire":
-        result = retire(store, args.plan, args.expected_plan, args.expected_selection)
-    elif args.command == "retain":
-        result = retain_artifact(store, args.path, args.label, args.account)
+    if args.command in ("snapshot", "retire", "retain"):
+        with store_lock(args.store):
+            store = Store(args.store, create=args.command == "snapshot")
+            if args.command == "snapshot":
+                result = snapshot(store, args.spec)
+            elif args.command == "retire":
+                result = retire(store, args.plan, args.expected_plan, args.expected_selection)
+            else:
+                result = retain_artifact(store, args.path, args.label, args.account)
     else:
-        result = store.stats()
-    print(json.dumps(result, indent=2))
+        with store_lock(args.store, shared=True):
+            store = Store(args.store, create=False)
+            if args.command == "verify":
+                result = verify(store, args.occurrence)
+            elif args.command == "export":
+                result = export(store, args.output, args.occurrence)
+            elif args.command == "restore":
+                result = restore(store, args.output, args.occurrence, args.prefix)
+            elif args.command == "get":
+                require(not args.output.exists(), "Preserve existing materialization")
+                raw = store.materialize(args.object)
+                immutable(args.output, raw)
+                result = {"object": args.object, "output": str(args.output), "bytes": len(raw), "verified": True}
+            elif args.command == "retirement-plan":
+                result = retirement_plan(store, args.spec, args.occurrence)
+            else:
+                result = store.stats()
+    print(json.dumps(result, indent=2, allow_nan=False))
 
 
 if __name__ == "__main__":
