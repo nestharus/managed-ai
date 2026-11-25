@@ -231,6 +231,39 @@ class SignalFieldQueueTests(unittest.TestCase):
             self.assertEqual(res_big['worker']['stderr_bytes'], big_size)
             self.assertEqual(len(res_big['worker']['stderr'].encode('utf-8')), queue_mod.MAX_WORKER_STREAM_BYTES)
 
+            # 6. Unhashable worker state (e.g. list) is caught cleanly as invalid-return and recorded in SQLite.
+            reopened.retry(job_id, reopened.inspect(job_id=job_id)['token'])
+            res_unhashable = reopened.run(
+                [sys.executable, '-c', 'import json; print(json.dumps({"state": ["complete"], "account": "bad"}))'],
+                budget=1, timeout=10,
+            )
+            self.assertEqual(res_unhashable['status'], 'worker-unresolved')
+            self.assertEqual(res_unhashable['worker']['kind'], 'invalid-return')
+            self.assertEqual(res_unhashable['worker']['returncode'], 0)
+            self.assertEqual(reopened.inspect(job_id=job_id)['worker_outcome']['kind'], 'invalid-return')
+
+    def test_multijob_worker_unresolved_preserves_prior_returns(self):
+        with queue_mod.Field(self.db_path) as field:
+            field.enroll(sample_use('u1'))
+            field.enroll(sample_use('u2'))
+            worker_script = (
+                "import json, sys\n"
+                "pkt = json.loads(sys.stdin.read())\n"
+                "if pkt['use'] == 'u1':\n"
+                "    print(json.dumps({'state': 'complete', 'account': 'Done u1.'}))\n"
+                "else:\n"
+                "    sys.stderr.write('u2 failed')\n"
+                "    sys.exit(9)\n"
+            )
+            res = field.run([sys.executable, '-c', worker_script], budget=2, timeout=10)
+            self.assertEqual(res['status'], 'worker-unresolved')
+            self.assertEqual(res['invocations'], 2)
+            self.assertEqual(len(res['returns']), 1)
+            self.assertEqual(res['returns'][0]['status'], 'received')
+            self.assertEqual(res['in_flight_job'], 'use:u2')
+            self.assertEqual(res['worker']['returncode'], 9)
+            self.assertEqual(res['worker']['stderr'], 'u2 failed')
+
     def test_legacy_database_without_worker_outcome_column_migrates_cleanly(self):
         legacy_db = self.root / 'legacy.sqlite'
         conn = sqlite3.connect(legacy_db)

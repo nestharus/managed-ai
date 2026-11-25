@@ -54,8 +54,11 @@ def _safe_jsonl(row) -> bytes:
 
 def capture_error(raw):
     """Preserve known selected-capture errors, not arbitrary owner history."""
-    try: detail=json.loads(raw).get('error')
-    except (ValueError,AttributeError): detail=None
+    try:
+        parsed = loads_strict(raw)
+        detail = parsed.get('error') if isinstance(parsed, dict) else None
+    except (ValueError, AttributeError):
+        detail = None
     safe={'disposition must be considered or deferred',
           'each assessment must name a distinct actually delivered item',
           'receipt identity already used','receipt identity not recorded in native Attention',
@@ -129,7 +132,7 @@ def overlap_rows(previous_scopes, sources, reads, writes):
         rows.append({'scope':previous['id'],'prepared_at_utc':previous['prepared_at_utc'],
                      'read_write':conflict,'shared_reads':shared,'shared_source_bodies':same,
                      'received_output_uses':output_uses,
-                     'scope_state':'returned' if 'result' in previous else 'superseded-without-output' if 'superseded' in previous else 'prepared-or-unreconciled',
+                     'scope_state':'partially-received' if previous.get('result',{}).get('partial') else 'returned' if 'result' in previous else 'superseded-without-output' if 'superseded' in previous else 'prepared-or-unreconciled',
                      'successor':previous.get('superseded',{}).get('successor'),
                      'return_sha256':previous.get('result',{}).get('return',{}).get('return_sha256')})
     # These categories expose concrete relationships first; they are not inferred importance.
@@ -221,7 +224,7 @@ class Host(RepairCustody):
         self.event('native-call', {'argv':argv, 'exit':p.returncode, 'stdout':p.stdout, 'stderr':p.stderr})
         if p.returncode:
             raise ValueError(capture_error(p.stderr or p.stdout) if scoped_errors else p.stderr or p.stdout)
-        return json.loads(p.stdout)
+        return loads_strict(p.stdout)
 
     def inspect_native(self,sid,scoped_errors=False):
         engine=Path(self.engine).with_name('exchange_packets.py' if Path(self.engine).name == 'manage_store.py' else 'work.py')
@@ -229,7 +232,7 @@ class Host(RepairCustody):
         p=subprocess.run(argv,capture_output=True,text=True)
         self.event('native-inspection',{'argv':argv,'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr})
         if p.returncode: raise ValueError(capture_error(p.stderr or p.stdout) if scoped_errors else p.stderr or p.stdout)
-        return json.loads(p.stdout)
+        return loads_strict(p.stdout)
 
     def capture_native(self,sid,receipt,producer):
         """Use the qualified host adapter over the unchanged selected engine."""
@@ -240,7 +243,7 @@ class Host(RepairCustody):
         self.event('native-call',{'argv':argv,'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr,
                                  'capture_adapter':self.pin(adapter)})
         if p.returncode: raise ValueError(capture_error(p.stderr or p.stdout))
-        return json.loads(p.stdout)
+        return loads_strict(p.stdout)
 
     def reconcile_capture_native(self,sid,receipt,producer):
         """Verify an already-committed native Attention receipt for crash recovery."""
@@ -251,7 +254,7 @@ class Host(RepairCustody):
         self.event('native-capture-reconciliation',{'argv':argv,'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr,
                                                     'capture_adapter':self.pin(adapter)})
         if p.returncode: raise ValueError(capture_error(p.stderr or p.stdout))
-        return json.loads(p.stdout)
+        return loads_strict(p.stdout)
 
     def temp(self, name, value):
         p=self.root/'requests'/name
@@ -360,7 +363,7 @@ class Host(RepairCustody):
                                                      'stdout':result.stdout,'stderr':result.stderr})
         if result.returncode:
             raise ValueError(result.stderr or result.stdout)
-        observed=json.loads(result.stdout)
+        observed=loads_strict(result.stdout)
         if observed['omitted'] or len(observed['delivered'])!=1 or observed['delivered'][0]['id']!='continuing-commission':
             raise ValueError('The continuing inquiry was not completely delivered; preserve the observation and inspect it')
         before=observed['delivered'][0]['spec']
@@ -417,11 +420,13 @@ class Host(RepairCustody):
             self.config=previous
             raise ValueError('Current goal changed while checking the selected release')
         write(self.config_path,self.config)
-        event=self.event('producing-release-selected',{'before_engine':self.pin(old),'current_engine':self.pin(new),
-            'host_producer':self.pin(Path(__file__).resolve()),
-               'host_dependencies':self.producer_dependencies(),'host_method':self.pin(HERE/'OPERATION.md'),
+        host_producer=self.pin(Path(__file__).resolve())
+        host_dependencies=self.producer_dependencies()
+        host_method=self.pin(HERE/'OPERATION.md')
+        self.event('producing-release-selected',{'before_engine':self.pin(old),'current_engine':self.pin(new),
+            'host_producer':host_producer,'host_dependencies':host_dependencies,'host_method':host_method,
             'account':account,'native_programs_unchanged':True,'prior_captures_unchanged':True})
-        return {'engine':str(new),'host_producer':event['host_producer'],'host_method':event['host_method'],'host_dependencies':event['host_dependencies'],
+        return {'engine':str(new),'host_producer':host_producer,'host_method':host_method,'host_dependencies':host_dependencies,
                 'native_programs_unchanged':True,'parent_duties_unchanged':True}
 
     def refresh_resource(self, rid, source):
@@ -645,7 +650,26 @@ class Host(RepairCustody):
             raise ValueError('Retain the existing candidate capture; use a fresh receipt for a new occurrence')
         receipt_obj, receipt_sha = self._put_object_bytes(body)
         pending_path=self.root/'captures'/sid/f'.pending-{rid}.json'
+        (self.root/'requests').mkdir(parents=True,exist_ok=True)
         created_pending = not pending_path.exists()
+        if not created_pending:
+            existing_pending = read(pending_path)
+            if (existing_pending.get('receipt_sha256') != receipt_sha
+                    or existing_pending.get('producer') != producer):
+                # Distinguish a genuinely committed crashed capture from an uncommitted stale pre-commit failure.
+                old_obj = self.root / existing_pending['receipt_object']
+                old_body = old_obj.read_bytes() if old_obj.is_file() and not old_obj.is_symlink() else None
+                if old_body is not None and digest(old_body) == existing_pending.get('receipt_sha256'):
+                    with NamedTemporaryFile(dir=self.root/'requests', suffix='.json') as prior:
+                        prior.write(old_body)
+                        prior.flush()
+                        try:
+                            self.reconcile_capture_native(sid, Path(prior.name), existing_pending['producer'])
+                        except ValueError as prior_exc:
+                            if str(prior_exc) == 'receipt identity not recorded in native Attention':
+                                created_pending = True
+                        else:
+                            raise ValueError('receipt identity already used')
         if created_pending:
             write(pending_path, {'id': sid, 'receipt': rid, 'producer': producer,
                                  'receipt_object': receipt_obj, 'receipt_sha256': receipt_sha,
@@ -655,7 +679,6 @@ class Host(RepairCustody):
         # The host lock does not protect the caller's path. Give native strict
         # JSON validation and Attention exactly the bytes used to name this capture.
         reconciled=False
-        (self.root/'requests').mkdir(parents=True,exist_ok=True)
         with NamedTemporaryFile(dir=self.root/'requests', suffix='.json') as selected:
             selected.write(body)
             selected.flush()
@@ -663,16 +686,23 @@ class Host(RepairCustody):
                 result=self.capture_native(sid,Path(selected.name),producer)
             except ValueError as exc:
                 if str(exc) != 'receipt identity already used':
-                    if created_pending and str(exc) in {
-                        'disposition must be considered or deferred',
-                        'each assessment must name a distinct actually delivered item',
-                        'receipt must contain id and assessments',
-                        'invalid assessment fields',
-                        'nonempty bounded assessments required',
-                        'Native return already exists; use its retained body or a new current occurrence',
-                        'Selected native engine does not match the reviewed capture adapter; requalify this adapter before capture',
-                    }:
-                        pending_path.unlink(missing_ok=True)
+                    if created_pending:
+                        if str(exc) in {
+                            'disposition must be considered or deferred',
+                            'each assessment must name a distinct actually delivered item',
+                            'receipt must contain id and assessments',
+                            'invalid assessment fields',
+                            'nonempty bounded assessments required',
+                            'Native return already exists; use its retained body or a new current occurrence',
+                            'Selected native engine does not match the reviewed capture adapter; requalify this adapter before capture',
+                        }:
+                            pending_path.unlink(missing_ok=True)
+                        else:
+                            try:
+                                self.reconcile_capture_native(sid, Path(selected.name), producer)
+                            except ValueError as probe_exc:
+                                if str(probe_exc) == 'receipt identity not recorded in native Attention':
+                                    pending_path.unlink(missing_ok=True)
                     raise
                 try:
                     result=self.reconcile_capture_native(sid,Path(selected.name),producer)
@@ -848,26 +878,25 @@ class Host(RepairCustody):
                 if reconciled_captures:
                     res['reconciled_captures']=reconciled_captures
                 return res
-        if remaining_targets or not settle_partial:
-            try:
-                if goal['sha256']!=scope['parent_goal']['sha256']:
-                    raise ValueError('Parent duty changed; preserve old return and prepare a new current receiving scope')
-                self.current(self.config['commission'],'Current commission')
-                for source in scope['sources']: self.current(source,'Selected current source '+source['id'])
-            except ValueError as exc:
-                if completed_pubs and remaining_targets:
-                    detail = str(exc).strip()
-                    self._record_partial_publication(
-                        path, scope, producer=returned['producer'], account=account, returned=returned,
-                        publications=completed_pubs, published_outputs=completed_outputs,
-                        pending_targets=remaining_targets,
-                        state='partial-publication-needs-reconciliation', error=detail)
-                    raise ValueError(
-                        f'{sid}: partial publication recorded ({len(completed_pubs)} published, '
-                        f'{len(remaining_targets)} pending); {detail}. '
-                        'Inspect and settle with settle_partial=true or prepare a fresh receiving scope'
-                    ) from exc
-                raise
+        try:
+            if goal['sha256']!=scope['parent_goal']['sha256']:
+                raise ValueError('Parent duty changed; preserve old return and prepare a new current receiving scope')
+            self.current(self.config['commission'],'Current commission')
+            for source in scope['sources']: self.current(source,'Selected current source '+source['id'])
+        except ValueError as exc:
+            if completed_pubs and remaining_targets:
+                detail = str(exc).strip()
+                self._record_partial_publication(
+                    path, scope, producer=returned['producer'], account=account, returned=returned,
+                    publications=completed_pubs, published_outputs=completed_outputs,
+                    pending_targets=remaining_targets,
+                    state='partial-publication-needs-reconciliation', error=detail)
+                raise ValueError(
+                    f'{sid}: partial publication recorded ({len(completed_pubs)} published, '
+                    f'{len(remaining_targets)} pending); {detail}. '
+                    'Inspect and settle with settle_partial=true or prepare a fresh receiving scope'
+                ) from exc
+            raise
         pubs_by_target={p['path']:p for p in completed_pubs}
         outs_by_target={p['path']:o for p,o in zip(completed_pubs,completed_outputs)}
         for idx,target in enumerate(remaining_targets):

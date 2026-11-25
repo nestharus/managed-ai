@@ -120,12 +120,38 @@ def _event_lock(path):
         return lock
 
 
+def _msvcrt_lock(stream, lock_path, *, nonblocking=False, timeout=60.0):
+    stream.seek(0, os.SEEK_END)
+    if stream.tell() == 0:
+        stream.write(b"\0")
+        stream.flush()
+    deadline = time.monotonic() + timeout
+    while True:
+        stream.seek(0)
+        try:
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            return
+        except OSError as exc:
+            if exc.errno not in (errno.EACCES, errno.EDEADLK):
+                raise
+            if nonblocking or time.monotonic() >= deadline:
+                raise BlockingIOError("Managed material store is busy: " + str(lock_path)) from exc
+            time.sleep(0.02)
+
+
+def _msvcrt_unlock(stream):
+    stream.seek(0)
+    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 @contextmanager
 def store_lock(root, *, shared=False, nonblocking=False):
     """Cooperative store lock serializing index/CURRENT mutations across processes and threads."""
     root = Path(root)
     rlock, state = _lock_entry(root)
-    with rlock:
+    if not rlock.acquire(blocking=not nonblocking):
+        raise BlockingIOError("Managed material store is busy: " + str(root / ".store.lock"))
+    try:
         depth = getattr(state, "depth", 0)
         if depth > 0:
             if not shared and not getattr(state, "exclusive", False):
@@ -137,27 +163,27 @@ def store_lock(root, *, shared=False, nonblocking=False):
                 state.depth -= 1
             return
         lock_path = root / ".store.lock"
+        writable = True
         if shared:
-            if not lock_path.exists():
-                state.depth = 1
-                state.exclusive = False
-                try:
-                    yield
-                finally:
-                    state.depth = 0
-                return
+            require(not lock_path.is_symlink(), "Store lock path must not be a symlink: " + str(lock_path))
             try:
-                stream = lock_path.open("rb")
-            except OSError as exc:
-                if exc.errno in (errno.ENOENT, errno.EACCES, errno.EPERM, errno.EROFS):
-                    state.depth = 1
-                    state.exclusive = False
-                    try:
-                        yield
-                    finally:
-                        state.depth = 0
-                    return
-                raise
+                stream = lock_path.open("a+b")
+            except OSError as open_exc:
+                if open_exc.errno not in (errno.ENOENT, errno.EACCES, errno.EPERM, errno.EROFS):
+                    raise
+                writable = False
+                try:
+                    stream = lock_path.open("rb")
+                except OSError as read_exc:
+                    if read_exc.errno in (errno.ENOENT, errno.EACCES, errno.EPERM, errno.EROFS):
+                        state.depth = 1
+                        state.exclusive = False
+                        try:
+                            yield
+                        finally:
+                            state.depth = 0
+                        return
+                    raise open_exc from read_exc
         else:
             root.mkdir(parents=True, exist_ok=True)
             require(not lock_path.is_symlink(), "Store lock path must not be a symlink: " + str(lock_path))
@@ -171,21 +197,9 @@ def store_lock(root, *, shared=False, nonblocking=False):
                         mode |= fcntl.LOCK_NB
                     fcntl.flock(stream.fileno(), mode)
                     locked = True
-                elif msvcrt is not None and not shared:
-                    stream.seek(0, os.SEEK_END)
-                    if stream.tell() == 0:
-                        stream.write(b"\0")
-                        stream.flush()
-                    stream.seek(0)
-                    mode = msvcrt.LK_NBLCK if nonblocking else msvcrt.LK_LOCK
-                    try:
-                        msvcrt.locking(stream.fileno(), mode, 1)
-                        locked = True
-                    except OSError as exc:
-                        if nonblocking:
-                            raise BlockingIOError("Managed material store is busy: " + str(lock_path)) from exc
-                        if exc.errno not in (errno.EINVAL, errno.EACCES):
-                            raise
+                elif msvcrt is not None and writable:
+                    _msvcrt_lock(stream, lock_path, nonblocking=nonblocking)
+                    locked = True
                 state.depth = 1
                 state.exclusive = not shared
                 try:
@@ -198,8 +212,9 @@ def store_lock(root, *, shared=False, nonblocking=False):
                     if fcntl is not None:
                         fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
                     elif msvcrt is not None:
-                        stream.seek(0)
-                        msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                        _msvcrt_unlock(stream)
+    finally:
+        rlock.release()
 
 
 def immutable(path, raw):
@@ -289,21 +304,32 @@ class Store:
 
     def event(self, kind, data):
         path = self.root / "events.jsonl"
+        lock_path = self.root / ".events.lock"
         payload = js({"at": utc(), "kind": kind, **data})
         self.root.mkdir(parents=True, exist_ok=True)
         with _event_lock(path):
             require(not path.is_symlink(), "Event log must not be a symlink: " + str(path))
+            require(not lock_path.is_symlink(), "Event lock must not be a symlink: " + str(lock_path))
             created = not path.exists()
-            with path.open("ab") as f:
-                if fcntl is not None:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            with lock_path.open("a+b") as lock_stream:
+                locked = False
                 try:
-                    f.write(payload)
-                    f.flush()
-                    os.fsync(f.fileno())
-                finally:
                     if fcntl is not None:
-                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX)
+                        locked = True
+                    elif msvcrt is not None:
+                        _msvcrt_lock(lock_stream, lock_path, nonblocking=False)
+                        locked = True
+                    with path.open("ab") as f:
+                        f.write(payload)
+                        f.flush()
+                        os.fsync(f.fileno())
+                finally:
+                    if locked:
+                        if fcntl is not None:
+                            fcntl.flock(lock_stream.fileno(), fcntl.LOCK_UN)
+                        elif msvcrt is not None:
+                            _msvcrt_unlock(lock_stream)
             if created:
                 sync_dir(self.root)
 
@@ -836,12 +862,16 @@ def snapshot(store, spec_path):
 
 
 def unpublished_occurrences(store):
-    """Report retained occurrences whose snapshot failed before CURRENT.json publication."""
+    """Report retained occurrences that were never published to CURRENT.json."""
     with store_lock(store.root, shared=True):
+        if (store.root / "index.json").exists():
+            store.reload(create=False)
         published_ids = set()
+        published_manifests = set()
         if (store.root / "CURRENT.json").exists():
             current_key, _ = current_selection(store)
             selections, _, manifests, _ = selection_closure(store, current_key)
+            published_manifests.update(manifests)
             published_ids.update(m["id"] for m, _ in manifests.values())
             published_ids.update(s["occurrence"] for s, _ in selections.values() if "occurrence" in s)
         failed = {}
@@ -852,22 +882,90 @@ def unpublished_occurrences(store):
                     continue
                 row = loads_json(line)
                 kind = row.get("kind")
-                if kind == "snapshot-completed" and row.get("id"):
-                    published_ids.add(row["id"])
-                    failed.pop(row["id"], None)
+                if kind == "snapshot-completed":
+                    if row.get("id"):
+                        published_ids.add(row["id"])
+                        failed.pop(row["id"], None)
+                    if row.get("manifest"):
+                        published_manifests.add(row["manifest"])
+                elif kind == "historical-artifact-retained":
+                    if row.get("occurrence"):
+                        published_ids.add(row["occurrence"])
+                        failed.pop(row["occurrence"], None)
+                    if row.get("manifest"):
+                        published_manifests.add(row["manifest"])
                 elif kind == "snapshot-failed" and row.get("id"):
                     if row.get("selection_published"):
                         published_ids.add(row["id"])
                         failed.pop(row["id"], None)
+                        if row.get("manifest"):
+                            published_manifests.add(row["manifest"])
                     elif row.get("occurrence_retained"):
                         failed[row["id"]] = {
                             "id": row["id"],
                             "manifest": row.get("manifest"),
                             "selection": row.get("selection"),
                             "error": row.get("error"),
+                            "reason": "snapshot-failed-before-current-publish",
                         }
-        return [info for ident, info in sorted(failed.items())
-                if ident not in published_ids and (store.root / "occurrences" / (ident + ".json")).is_file()]
+                elif kind == "historical-artifact-retention-failed" and row.get("occurrence"):
+                    if row.get("selection_published"):
+                        published_ids.add(row["occurrence"])
+                        failed.pop(row["occurrence"], None)
+                        if row.get("manifest"):
+                            published_manifests.add(row["manifest"])
+                    elif row.get("occurrence_retained"):
+                        failed[row["occurrence"]] = {
+                            "id": row["occurrence"],
+                            "manifest": row.get("manifest"),
+                            "selection": row.get("selection"),
+                            "error": row.get("error"),
+                            "reason": "historical-artifact-retention-failed-before-current-publish",
+                        }
+        selection_by_manifest = {}
+        selections_dir = store.root / "selections"
+        if selections_dir.is_dir():
+            for spath in sorted(selections_dir.rglob("*.json")):
+                if spath.is_symlink():
+                    continue
+                sraw = spath.read_bytes()
+                skey = sha(sraw)
+                if spath.stem != skey:
+                    continue
+                sel = loads_json(sraw)
+                if sel.get("format") != "managed-material-current-selection/1":
+                    continue
+                if sel.get("manifest"):
+                    selection_by_manifest.setdefault(sel["manifest"], skey)
+                for extra_manifest in sel.get("additional_manifests", []):
+                    selection_by_manifest.setdefault(extra_manifest, skey)
+        results = []
+        occurrences_dir = store.root / "occurrences"
+        if occurrences_dir.is_dir():
+            for opath in sorted(occurrences_dir.rglob("*.json")):
+                require(not opath.is_symlink(), "Immutable record must not be a symlink")
+                pointer = loads_json(opath.read_bytes())
+                ident = pointer.get("id", opath.stem)
+                manifest_key = pointer.get("manifest")
+                if ident in published_ids or (manifest_key and manifest_key in published_manifests):
+                    continue
+                info = failed.get(ident)
+                if info is not None:
+                    entry = dict(info)
+                    if not entry.get("manifest"):
+                        entry["manifest"] = manifest_key
+                    if not entry.get("selection") and manifest_key:
+                        entry["selection"] = selection_by_manifest.get(manifest_key)
+                else:
+                    entry = {
+                        "id": ident,
+                        "manifest": manifest_key,
+                        "selection": selection_by_manifest.get(manifest_key) if manifest_key else None,
+                        "error": None,
+                        "reason": "unconfirmed-occurrence-not-published",
+                    }
+                results.append(entry)
+        return sorted(results, key=lambda r: r["id"])
 
 
 def read_manifest(store, occurrence=None):
@@ -1029,7 +1127,7 @@ def materialization_state(store, selections):
         if manifest_key not in seen_manifests:
             raw = (store.root / "manifests" / (manifest_key + ".json")).read_bytes()
             require(sha(raw) == manifest_key, "Materialization basis differs")
-            states = observed_materialization_state(states, json.loads(raw), manifest_key)
+            states = observed_materialization_state(states, loads_json(raw), manifest_key)
             seen_manifests.add(manifest_key)
         by_identity = {(r["prefix"], r["source_path"]): r for r in states}
         for materialization in selected.get("materializations", []):
@@ -1065,6 +1163,7 @@ def selected_for_manifest(store, manifest_key, manifest):
 
 def verify(store, occurrence=None):
     with store_lock(store.root, shared=True):
+        store.reload(create=False)
         key, manifest, _ = read_manifest(store, occurrence)
         selection_key, selected = selected_for_manifest(store, key, manifest)
         selections, receipts, manifests, keys = selection_closure(store, selection_key, selected)
@@ -1084,6 +1183,7 @@ def verify(store, occurrence=None):
 def export(store, output, occurrence=None):
     output = Path(output)
     with store_lock(store.root, shared=True):
+        store.reload(create=False)
         key, manifest, manifest_raw = read_manifest(store, occurrence)
         require(not output.exists(), "Preserve prior export; select a new output identity")
         selection_key, selection = selected_for_manifest(store, key, manifest)
@@ -1149,6 +1249,7 @@ def export(store, output, occurrence=None):
 
 def restore(store, output, occurrence=None, prefix=None):
     with store_lock(store.root, shared=True):
+        store.reload(create=False)
         key, manifest, _ = read_manifest(store, occurrence)
         output = Path(output)
         require(not output.exists(), "Restore target must not exist")
@@ -1190,6 +1291,7 @@ def restore(store, output, occurrence=None, prefix=None):
 def retirement_plan(store, spec_path, occurrence=None):
     """Verify selected copies without removing them or deciding their applicability."""
     with store_lock(store.root, shared=True):
+        store.reload(create=False)
         key, manifest, _ = read_manifest(store, occurrence)
         proposal = spec_path if isinstance(spec_path, dict) else loads_json(Path(spec_path).read_bytes())
         require(proposal.get("format") == "managed-material-retirement-proposal/1", "Unknown retirement proposal")

@@ -346,6 +346,72 @@ class ContinuingWorkHardening(unittest.TestCase):
         self.assertTrue(again['partial'])
         self.assertEqual(again['unpublished_targets'], ['outputs/multi/second.md'])
 
+        # overlap_rows distinguishes partially-received scopes from fully returned ones (C4-5 minor).
+        rows = continuing_work.overlap_rows(
+            [scope_after], [], ['src'], [],
+        )
+        self.assertEqual(rows[0]['scope_state'], 'partially-received')
+
+    # --- C4-4: Pre-commit capture refusal must not leave stale .pending that wedges resume ---
+    def test_precommit_capture_failure_does_not_wedge_revised_retry_or_resume(self):
+        self.prepare('cap-retry')
+        bad_receipt = self.base / 'bad-account.json'
+        # Empty account is rejected pre-commit by Attention.record and mapped to the generic fallback error.
+        bad_receipt.write_text(json.dumps({
+            'id': 'rec-revised',
+            'assessments': [{'item': 'continuing-commission', 'disposition': 'considered', 'account': '   '}],
+        }))
+        with self.assertRaisesRegex(ValueError, 'Candidate capture could not be confirmed'):
+            self.host.capture('cap-retry', {'receipt': str(bad_receipt), 'producer': 'auditor'})
+        # Uncommitted pre-commit refusal cleans up pending marker immediately.
+        self.assertFalse((self.host.root / 'captures/cap-retry/.pending-rec-revised.json').exists())
+
+        # Also test the harder case: a stale uncommitted .pending exists (e.g. from OwnerBusy/crash pre-commit),
+        # then a revised receipt under the same rid commits and crashes before writing captures/<sid>/<rid>.json!
+        stale_obj, stale_sha = self.host._put_object_bytes(bad_receipt.read_bytes())
+        occurrence_files.write(
+            self.host.root / 'captures/cap-retry/.pending-rec-revised.json',
+            {'id': 'cap-retry', 'receipt': 'rec-revised', 'producer': 'auditor',
+             'receipt_object': stale_obj, 'receipt_sha256': stale_sha,
+             'started_at_utc': occurrence_files.now()},
+        )
+        fixed_receipt = self.base / 'fixed-account.json'
+        fixed_receipt.write_text(json.dumps({
+            'id': 'rec-revised',
+            'assessments': [{'item': 'continuing-commission', 'disposition': 'considered', 'account': 'Fixed account.'}],
+        }))
+        real_write = continuing_work.write
+        def crash_on_final(path, value):
+            if Path(path).name == 'rec-revised.json' and Path(path).parent.name == 'cap-retry':
+                raise OSError('crash after revised commit')
+            return real_write(path, value)
+        with patch.object(continuing_work, 'write', side_effect=crash_on_final):
+            with self.assertRaisesRegex(OSError, 'crash after revised commit'):
+                self.host.capture('cap-retry', {'receipt': str(fixed_receipt), 'producer': 'auditor'})
+
+        # resume() must reconcile the revised committed receipt cleanly rather than wedging on the stale pre-commit marker!
+        resumed = self.host.resume('cap-retry', {'account': 'Reconcile revised capture.'})
+        self.assertEqual(resumed['state'], 'open-with-reconciled-captures')
+        self.assertEqual(resumed['reconciled_captures'][0]['attention']['receipt'], 'rec-revised')
+        self.assertTrue((self.host.root / 'captures/cap-retry/rec-revised.json').is_file())
+        self.assertFalse((self.host.root / 'captures/cap-retry/.pending-rec-revised.json').exists())
+
+    # --- C4-5: Host.upgrade() succeeds even when account exceeds MAX_EVENT_LINE_BYTES ---
+    def test_host_upgrade_succeeds_with_oversized_account_event(self):
+        res = self.host.upgrade({
+            'engine': str(ENGINE),
+            'account': 'A' * (MAX_EVENT_LINE_BYTES + 2048),
+        })
+        self.assertTrue(res['native_programs_unchanged'])
+        self.assertIn('sha256', res['host_producer'])
+        self.assertIn('sha256', res['host_method'])
+        self.assertEqual(len(res['host_dependencies']), 2)
+        last_line = (self.host.root / 'EVENTS.jsonl').read_bytes().splitlines()[-1]
+        self.assertLessEqual(len(last_line), MAX_EVENT_LINE_BYTES)
+        parsed = json.loads(last_line)
+        self.assertTrue(parsed['truncated'])
+        self.assertEqual(parsed['action'], 'producing-release-selected')
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

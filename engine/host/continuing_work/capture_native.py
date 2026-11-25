@@ -122,14 +122,17 @@ def _reconcile_assessment(native, system, turn: str, receipt: Path, producer: st
     supplied = native.read(receipt)
     if not isinstance(supplied, dict) or set(supplied) != {'id', 'assessments'}:
         raise ValueError('receipt must contain id and assessments')
-    rid = native.packet_id(supplied['id'])
+    raw_id = supplied['id']
+    if not isinstance(raw_id, str):
+        raise ValueError('receipt identity not recorded in native Attention')
     expected_source_sha = native.sha(native.encode(supplied))
     expected_feedback = native.feedback_id(turn)
     state = system.attention._load()
     current = system.attention._current(state)
-    position = current['receipt_ids'].get(rid)
+    position = current['receipt_ids'].get(raw_id)
     if position is None:
         raise ValueError('receipt identity not recorded in native Attention')
+    rid = native.packet_id(raw_id)
     obj_key = state['receipts'][position]
     record = system.attention._get(obj_key)
     if (record.get('id') != rid

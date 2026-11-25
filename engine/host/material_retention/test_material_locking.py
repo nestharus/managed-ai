@@ -217,6 +217,98 @@ class MaterialRetentionHardening(unittest.TestCase):
         self.assertEqual(unpublished[0]["manifest"], last["manifest"])
         self.assertEqual(unpublished[0]["selection"], last["selection"])
 
+    # --- C4-1(a): Read ops reload Store under shared lock when another writer updated the store ---
+    def test_reused_store_handle_reloads_on_read_operations(self):
+        first_spec = self.make_spec("first", b"first body")
+        material.snapshot(self.store, first_spec)
+        reused = material.Store(self.store_dir)
+
+        # Another Store handle commits a new snapshot with new objects.
+        writer = material.Store(self.store_dir)
+        second_spec = self.make_spec("second", b"brand new body from writer")
+        material.snapshot(writer, second_spec)
+
+        # Reused handle had stale objects before reload; verify/restore/export must reload cleanly!
+        verified = material.verify(reused)
+        self.assertGreater(verified["objects_verified"], 0)
+        restored_dir = self.root / "restored-from-reused"
+        material.restore(reused, restored_dir)
+        self.assertEqual((restored_dir / "selected").read_bytes(), b"brand new body from writer")
+        archive = self.root / "exported-from-reused.zip"
+        material.export(reused, archive)
+        self.assertTrue(archive.is_file())
+
+    # --- C4-1(b)+(c): Pre-lock store creates .store.lock on shared read & thread nonblocking raises ---
+    def test_shared_lock_creates_lockfile_and_thread_nonblocking_raises(self):
+        # Remove .store.lock to simulate a pre-lock or extracted-export store.
+        lock_file = self.store_dir / ".store.lock"
+        if lock_file.exists():
+            lock_file.unlink()
+        with material.store_lock(self.store_dir, shared=True):
+            self.assertTrue(lock_file.exists())
+
+        # Cross-thread nonblocking=True must immediately raise BlockingIOError without blocking on rlock.
+        import threading
+        entered = threading.Event()
+        release = threading.Event()
+        def hold():
+            with material.store_lock(self.store_dir):
+                entered.set()
+                release.wait(timeout=10)
+        t = threading.Thread(target=hold)
+        t.start()
+        try:
+            self.assertTrue(entered.wait(timeout=5))
+            with self.assertRaises(BlockingIOError):
+                with material.store_lock(self.store_dir, nonblocking=True):
+                    pass
+        finally:
+            release.set()
+            t.join(timeout=5)
+
+    # --- C4-2: Hard-crash orphan (no snapshot-failed event) & retain_artifact failure detected ---
+    def test_unpublished_occurrences_detects_hard_crash_and_failed_retain_artifact(self):
+        first_spec = self.make_spec("first", b"first published")
+        material.snapshot(self.store, first_spec)
+
+        # 1. Simulate abrupt SIGKILL between occurrence pointer write and CURRENT.json replacement:
+        # snapshot-started is written, occurrence/manifest/selection exist, NO snapshot-failed event!
+        crash_spec = self.make_spec("hard-crash", b"hard crash payload")
+        def simulate_sigkill(path, value):
+            if Path(path).name == "CURRENT.json":
+                raise BaseException("simulated SIGKILL")
+            return real_replace(path, value)
+        real_replace = material.replace_json
+        with patch.object(material, "replace_json", side_effect=simulate_sigkill):
+            with self.assertRaises(BaseException):
+                material.snapshot(self.store, crash_spec)
+        # Confirm no snapshot-failed was logged for hard-crash.
+        events = [material.loads_json(line) for line in (self.store_dir / "events.jsonl").read_bytes().splitlines()]
+        self.assertFalse(any(e.get("kind") == "snapshot-failed" and e.get("id") == "hard-crash" for e in events))
+
+        # 2. Simulate failed retain_artifact() at CURRENT.json replacement.
+        extra = self.root / "extra-evidence.bin"
+        extra.write_bytes(b"historical artifact bytes")
+        def fail_current_os(path, value):
+            if Path(path).name == "CURRENT.json":
+                raise OSError("current pointer busy")
+            return real_replace(path, value)
+        with patch.object(material, "replace_json", side_effect=fail_current_os):
+            with self.assertRaisesRegex(OSError, "current pointer busy"):
+                material.retain_artifact(self.store, extra, "evidence", "Retain failed test.")
+
+        unpublished = {row["id"]: row for row in material.unpublished_occurrences(self.store)}
+        self.assertIn("hard-crash", unpublished)
+        self.assertEqual(unpublished["hard-crash"]["reason"], "unconfirmed-occurrence-not-published")
+        self.assertIsNotNone(unpublished["hard-crash"]["manifest"])
+        self.assertIsNotNone(unpublished["hard-crash"]["selection"])
+
+        retained_id = "retained-evidence-" + material.sha(b"historical artifact bytes")[:16]
+        self.assertIn(retained_id, unpublished)
+        self.assertEqual(unpublished[retained_id]["reason"], "historical-artifact-retention-failed-before-current-publish")
+        self.assertEqual(unpublished[retained_id]["error"], "current pointer busy")
+        self.assertNotIn("first", unpublished)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

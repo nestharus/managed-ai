@@ -382,7 +382,8 @@ class Field:
         require(isinstance(packet, dict) and isinstance(packet.get('job'), str) and packet['job']
                 and isinstance(packet.get('token'), str) and packet['token'],
                 'packet must be a captured job attempt')
-        require(isinstance(result, dict) and result.get('state') in {'complete', 'blocked'},
+        require(isinstance(result, dict) and isinstance(result.get('state'), str)
+                and result['state'] in {'complete', 'blocked'},
                 'worker must return complete or blocked with its actual result')
         require('account' in result and isinstance(result['account'], str) and result['account'].strip(),
                 'worker must supply an account; service is not semantic acceptance')
@@ -545,6 +546,7 @@ class Field:
                                               error='worker exited without a valid return')
                     self._record_worker_outcome(packet, outcome)
                     return {'status': 'worker-unresolved', 'invocations': invoked, 'packet_bytes': packet_bytes,
+                            'returns': received,
                             'reason': 'worker exited without a valid return', 'in_flight_job': packet['job'],
                             'worker': outcome,
                             'recovery': 'Inspect the retained attempt and actual worker/native outcome before explicitly retrying.',
@@ -557,6 +559,7 @@ class Field:
                                           error=str(exc), timeout=timeout)
                 self._record_worker_outcome(packet, outcome)
                 return {'status': 'worker-unresolved', 'invocations': invoked, 'packet_bytes': packet_bytes,
+                        'returns': received,
                         'reason': str(exc), 'in_flight_job': packet['job'], 'worker': outcome,
                         'recovery': 'Inspect the retained attempt and actual worker/native outcome before explicitly retrying.',
                         'remaining': self.status()}
@@ -565,10 +568,11 @@ class Field:
                                           error=str(exc), errno_value=exc.errno)
                 self._record_worker_outcome(packet, outcome)
                 return {'status': 'worker-unresolved', 'invocations': invoked, 'packet_bytes': packet_bytes,
+                        'returns': received,
                         'reason': str(exc), 'in_flight_job': packet['job'], 'worker': outcome,
                         'recovery': 'Inspect the retained attempt and actual worker/native outcome before explicitly retrying.',
                         'remaining': self.status()}
-            except ValueError as exc:
+            except (ValueError, TypeError) as exc:
                 outcome = _worker_outcome('invalid-return',
                                           returncode=worker.returncode if worker is not None else None,
                                           stdout=worker.stdout if worker is not None else b'',
@@ -576,6 +580,7 @@ class Field:
                                           error=str(exc))
                 self._record_worker_outcome(packet, outcome)
                 return {'status': 'worker-unresolved', 'invocations': invoked, 'packet_bytes': packet_bytes,
+                        'returns': received,
                         'reason': str(exc), 'in_flight_job': packet['job'], 'worker': outcome,
                         'recovery': 'Inspect the retained attempt and actual worker/native outcome before explicitly retrying.',
                         'remaining': self.status()}
