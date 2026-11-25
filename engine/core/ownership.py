@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 from typing import Protocol
 
@@ -20,8 +20,13 @@ def packet_id(value: str) -> str:
 
 
 def relative_path(value: str) -> str:
+    if not isinstance(value, str) or not value or '\0' in value or '\\' in value:
+        raise ValueError('a nonempty relative workspace path without traversal is required')
     p = Path(value)
-    if not value or p.is_absolute() or '..' in p.parts or '\\' in value or str(p) in {'.', ''}:
+    if (p.is_absolute() or p.anchor or PureWindowsPath(value).drive or '..' in p.parts
+            or str(p) in {'.', ''}
+            or any(len(part) >= 2 and part[1] == ':' for part in value.split('/'))
+            or any(len(part) >= 2 and part[1] == ':' for part in p.parts)):
         raise ValueError('a nonempty relative workspace path without traversal is required')
     return p.as_posix()
 

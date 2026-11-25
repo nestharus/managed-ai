@@ -1,6 +1,6 @@
-> Current native entry. In the selected deployment use `system catalogue LOGICAL_ID --text`. From the package root use `python3 -B engine/knowledge.py --store STORE show LOGICAL_ID --text` for that store's domain and core sources. Omitting `--store` selects only the core catalogue. [Current construction](../../host/CONSTRUCTION.md), [conditional peer communication](../../host/continuing_work/PEER-COMMUNICATION.md), and [material maintenance](../../host/material_retention/MATERIAL-MAINTENANCE.md) describe optional operations. Choose the operation for the actual contribution.
+> Current native entry. In the selected deployment use `system catalogue LOGICAL_ID --text`. From the package root use `python3 -B engine/library/cli.py --store STORE show LOGICAL_ID --text` for that store's domain and core sources. Omitting `--store` selects only the core catalogue. [Current construction](../host/CONSTRUCTION.md), [conditional peer communication](../host/continuing_work/PEER-COMMUNICATION.md), and [material maintenance](../host/material_retention/MATERIAL-MAINTENANCE.md) describe optional operations. Choose the operation for the actual contribution.
 
-Read the [current instance and domain contract](../../INSTANCES.md) when selecting stores, schemas, domain sources or retention.
+Read the [current instance and domain contract](../INSTANCES.md) when selecting stores, schemas, domain sources or retention.
 
 # Work from the receiving contribution
 
@@ -8,7 +8,7 @@ Name the person or program that needs the result and the action, artifact or und
 
 ## Choose the owner and retain the basis
 
-Use the runtime that already owns an existing native turn. The [capability map](../../CAPABILITIES.md) identifies installed entries, what each supplies and the participation its host must provide. An unfamiliar finite operation also has a declared offer. Open its full contract and supply the actual observation model, prices, rights or receiving interface it requires.
+Use the runtime that already owns an existing native turn. The [capability map](../CAPABILITIES.md) identifies installed entries, what each supplies and the participation its host must provide. An unfamiliar finite operation also has a declared offer. Open its full contract and supply the actual observation model, prices, rights or receiving interface it requires.
 
 The native runtime retains goals, source-bound context, returned material, proposals and explicit adoption. A capable participant supplies semantic fit, source selection and whole-goal judgment. Select the exact current project sources or historical bodies the duty needs. An available catalogue entry records availability. Acquire its complete body when its argument or implementation matters.
 
@@ -19,8 +19,8 @@ Domain sources listed below by logical ID are optional and selected per store (`
 | Understand an unfamiliar artifact or ask a consequential question | Acquire `research/patterns/developing-probes.md` when the research domain is selected. |
 | Construct across interacting responsibilities | [Composition guide](COMPOSITION.md) and logical source `research/patterns/constructing-across-dimensions.md`. |
 | Reuse a method, observation or installed capability under changed terms | Acquire `research/patterns/qualifying-reuse.md` when the research domain is selected. |
-| Bind original JSON inputs or all candidates through a cutoff | [Source-admission contract](../patterns/source-admission/README.md). |
-| Receive independent contributions or retain an unplaced finding | Logical source `research/patterns/collective-knowledge.md` and [collective contract](../collective/README.md). |
+| Bind original JSON inputs or all candidates through a cutoff | [Source-admission contract](../../patterns/source-admission/README.md). |
+| Receive independent contributions or retain an unplaced finding | Logical source `research/patterns/collective-knowledge.md` and [collective contract](../../optional/collective/README.md). |
 | Return an actual discrepancy to another turn | `feedback open`, `feedback observe` and a fresh `context` under the [runtime contract](README.md). |
 | Inspect an authored dependency after a repository change | `compose --record ID --changed-since BASE --repo CHECKOUT`, followed by the affected receiving use. |
 

@@ -296,7 +296,10 @@ class Discovery:
             for row in sorted(self.projects.current['project_files'], key=lambda r: r['path']):
                 name = row['path']
                 parts = PurePosixPath(name)
-                if not isinstance(name, str) or not name or parts.is_absolute() or '..' in parts.parts or '\\' in name:
+                from pathlib import PureWindowsPath
+                if (not isinstance(name, str) or not name or '\0' in name or '\\' in name
+                        or parts.is_absolute() or '..' in parts.parts or PureWindowsPath(name).drive
+                        or any(len(part) >= 2 and part[1] == ':' for part in name.split('/'))):
                     raise ValueError('invalid accepted-project member path')
                 ref = 'project:' + name
                 if ref in self.entries:

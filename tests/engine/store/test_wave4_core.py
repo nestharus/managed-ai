@@ -248,6 +248,82 @@ class Wave4CoreTests(unittest.TestCase):
         self.assertNotIn('read_text', emit_src)
         self.assertNotIn('read_bytes', emit_src)
 
+    def test_c29_2_drive_relative_paths_and_materialize_escape_rejected(self):
+        """C29-2 / C29-1: reject Windows drive-relative paths across ownership/store/library and emit Wave 4 exchange CLI path."""
+        import zipfile
+        from core.ownership import relative_path
+        from core.exchange.publication import _publication_basis
+        from store.protocol.inputs import artifact_target
+        from store.selection.domain_selection import source_path
+        from store.selection.installed_catalogue import InstalledCatalogue
+        from library.reader.library_format import relative as lib_relative
+
+        bad_paths = (
+            'C:escape.txt',
+            'a/C:escape.txt',
+            'c:nested/file.txt',
+            'Z:alias.txt',
+            'foo\x00bar.txt',
+            'a\\b.txt',
+        )
+        for bad in bad_paths:
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    relative_path(bad)
+                with self.assertRaises(ValueError):
+                    artifact_target(bad)
+                with self.assertRaises(ValueError):
+                    source_path(self.base, bad)
+                with self.assertRaises(ValueError):
+                    lib_relative(bad)
+
+        sys_obj = System(self.store)
+        with self.assertRaises(ValueError):
+            sys_obj.ex.path('C:alias.txt')
+
+        # InstalledCatalogue.materialize must reject zip member slug/C:escape.txt without writing outside staging
+        cat_dir = self.base / 'crafted-cat'
+        (cat_dir / 'operations').mkdir(parents=True)
+        payload = b'escape-attempt'
+        archive = cat_dir / 'operations/demo.zip'
+        with zipfile.ZipFile(archive, 'w') as zf:
+            zf.writestr('demo/C:escape.txt', payload)
+        archive_bytes = archive.read_bytes()
+        cat_doc = {
+            'format': 'agent-system-catalogue/1',
+            'entries': [],
+            'assets': [{
+                'kind': 'operation-archive',
+                'operation_id': 'operation:demo',
+                'path': 'operations/demo.zip',
+                'sha256': sha(archive_bytes),
+                'bytes': len(archive_bytes),
+                'members': [{
+                    'path': 'demo/C:escape.txt',
+                    'sha256': sha(payload),
+                    'bytes': len(payload),
+                }],
+            }],
+        }
+        (cat_dir / 'catalogue.json').write_text(json.dumps(cat_doc), encoding='utf-8')
+        cat = InstalledCatalogue(cat_dir)
+        with self.assertRaises(ValueError):
+            cat.materialize('operation:demo', sys_obj.ex)
+        self.assertFalse((self.base / 'escape.txt').exists())
+        self.assertFalse((sys_obj.work / 'operations/demo').exists())
+
+        # C29-1: _publication_basis emits canonical Wave 4 core/cli/exchange_packets.py entry
+        basis = _publication_basis(
+            'p1',
+            'out.txt',
+            {'packet': 'p1', 'targets': [{'path': 'out.txt', 'sha256': 'd' * 64}]},
+            {'packet': 'p1', 'request_sha256': 'a' * 64, 'return_sha256': 'b' * 64},
+            {'sha256': 'c' * 64, 'base_sha256': 'd' * 64},
+            [],
+        )
+        self.assertIsNotNone(basis)
+        self.assertEqual(basis['inspect']['entry'], 'core/cli/exchange_packets.py')
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

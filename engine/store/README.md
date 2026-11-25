@@ -2,13 +2,13 @@
 
 This application joins persistent goals and extensible JSON records to captured context, actual returns, guarded artifact adoption, attention feedback and a source-bound research catalogue. It is a small work environment for an existing capable agent. It does not provide a model, infer every relevant relationship or make alignment judgments automatically.
 
-Domain and catalogue loading live under [selection](native_runtime/selection/).
-[Turn context](native_runtime/turn_context/) holds the input capture, record scope, preparation journal and frozen delivery explanation.
+Domain and catalogue loading live under [selection](selection/).
+[Turns](turns/) holds the input capture, record scope, preparation journal and frozen delivery explanation.
 [The installed catalogue](catalogue.json) binds the core source IDs and their bodies.
 
 ## Start with one useful context
 
-Use Python 3.10 or later on Linux, macOS or another POSIX system. From `engine/runtime`:
+Use Python 3.10 or later on Linux, macOS or native Windows. From `engine/store`:
 
 ```bash
 python3 -B manage_store.py --root ../../../my-ai-work init --goal-text "Review the current design and deliver a useful next version."
@@ -19,17 +19,17 @@ The first command creates a goal and a frozen `start` context. Its JSON return i
 
 For a richer initial goal, use `init --goal goal.json`. The file is an object with a nonempty `contribution`; ordinary extra content can describe the recipient, use, authority, requirements and alternatives. Only the host interprets those descriptions. Keep credentials out of working sources and choose effect authority through the actual host boundary.
 
-Use a new or empty runtime root outside the engine code tree. The app creates `work/` for current artifacts and `exchange/` for immutable captured material and receipts. It assumes one cooperative owner. The supplied core uses POSIX process and filesystem facilities; native Windows support is not claimed.
+Use a new or empty runtime root outside the engine code tree. The app creates `work/` for current artifacts and `exchange/` for immutable captured material and receipts. It assumes one cooperative owner. The supplied core uses cross-platform cooperative file locking on POSIX and native Windows.
 
 ## Continue through one shared engine and a selected store
 
-The deployment entrance points to the central engine and one independent native store. It does not copy a project, engine, controller or earlier deployment. The complete [instance/domain contract](../../INSTANCES.md) defines portable descriptors, schema compatibility, source selection and current-use retention.
+The deployment entrance points to the central engine and one independent native store. It does not copy a project, engine, controller or earlier deployment. The complete [instance/domain contract](../INSTANCES.md) defines portable descriptors, schema compatibility, source selection and current-use retention.
 
 From the package root:
 
 ```bash
-python3 -B engine/runtime/select_deployment.py --deployment deployments/research system status
-python3 -B engine/runtime/select_deployment.py --deployment deployments/novel system status
+python3 -B engine/deployment/select_deployment.py --deployment deployments/research system status
+python3 -B engine/deployment/select_deployment.py --deployment deployments/novel system status
 ```
 
 Each store owns its selected domains, payload schemas and reference catalogues. Acquire a complete selected source with `system catalogue SOURCE_ID --text`, then nominate its logical ID in a context's `techniques`. Local workspace material still uses the context's `sources` paths. A source catalogue or an available tool description does not establish participant acquisition or authorize execution.
@@ -98,7 +98,7 @@ python3 -B manage_store.py --root ../../../my-ai-work put --record question.json
 python3 -B manage_store.py --root ../../../my-ai-work show review-question
 ```
 
-Use expected revision `0` for creation; use the actual current revision when changing the record. The app refuses a conflicting revision. With the default `current-use` policy, ordinary replacement does not automatically retain the previous body or a complete predecessor chain. Explicit pins, captured contexts, Information conversions and required feedback retain their selected exact evidence; select `append-history` only when that continuing history is actually needed. The [instance contract](../../INSTANCES.md) owns this policy distinction. `basis` names workspace-relative sources and captures their byte identities. Selected records bring their declared available basis into later contexts. Relation labels remain public host-authored claims; the runtime does not infer a dependency graph from arbitrary labels.
+Use expected revision `0` for creation; use the actual current revision when changing the record. The app refuses a conflicting revision. With the default `current-use` policy, ordinary replacement does not automatically retain the previous body or a complete predecessor chain. Explicit pins, captured contexts, Information conversions and required feedback retain their selected exact evidence; select `append-history` only when that continuing history is actually needed. The [instance contract](../INSTANCES.md) owns this policy distinction. `basis` names workspace-relative sources and captures their byte identities. Selected records bring their declared available basis into later contexts. Relation labels remain public host-authored claims; the runtime does not infer a dependency graph from arbitrary labels.
 
 An artifact can represent a hypothesis, observer, process, criterion, capability, result, question or another useful thing. Add one when it carries an actual relationship or duty. There is no mandatory inventory or fixed workflow. `active` is navigation metadata, not proof of fulfillment.
 
@@ -323,7 +323,7 @@ The retained observer-model entry supplies its complete operation description an
 
 The historical LC-L07 locator is retained here only as a qualified identity note; its former all-history catalogue is not installed. The original body declared by that locator has SHA-256 `6361c33f8aaa3541197423d5e4cfc5a32300d3cf32c9507b2143e771954ff399`, member `cybernetics-research/theory/constructive_repair.md` in `G35-inside-G59`; its LC-L07 argument occupies original lines 55–82. Returning the locator does not return that original body.
 
-The paired research archive retains a [primary constructive-repair source — additional source](../../SOURCES.md#source-239de2d9a237e33efdf5) under its own current file identity, and a [current construction account — additional source](../../SOURCES.md#source-b527d5ad052a1f0c1aea). These are useful current routes, not a claim that the locator's exact historical body or all of its dependencies are installed. The maintained primary file and the locator's declared original have different byte identities.
+The paired research archive retains a [primary constructive-repair source — additional source](../SOURCES.md#source-239de2d9a237e33efdf5) under its own current file identity, and a [current construction account — additional source](../SOURCES.md#source-b527d5ad052a1f0c1aea). These are useful current routes, not a claim that the locator's exact historical body or all of its dependencies are installed. The maintained primary file and the locator's declared original have different byte identities.
 
 No predecessor archive or historical recovery command is required for ordinary current system use. A historical recipe retained in catalogue metadata describes an earlier environment and is not an installed recovery service. If a contribution specifically needs an omitted original, acquire that exact body, verify its declared identity and qualify its original premises before relying on it. A present account can support current use without being passed off as a byte-identical historical source.
 

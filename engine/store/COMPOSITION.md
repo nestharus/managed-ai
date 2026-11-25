@@ -44,7 +44,7 @@ python3 -B system.py --root ../my-ai-work compose --record explanation-system \
   --focus relation:claim-to-explanation --limit 6 --pair-limit 100
 ```
 
-For a selected deployment, use its stable `engine/runtime/select_deployment.py --deployment ... system` prefix. A view can also enter a normal context request:
+For a selected deployment, use its stable `engine/deployment/select_deployment.py --deployment ... system` prefix. A view can also enter a normal context request:
 
 ```json
 {
@@ -91,7 +91,7 @@ The same inspection can reveal a gap in the source research. A prose instruction
 
 A bounded reviewing system can reuse this app around a capable participant. Select the useful effect first: for example, determine whether an existing executable example supplies its promised source ownership, personal work and explicit publication relationships, then carry warranted corrections into the responsible producers. An adequate result is also useful; a defect is not required. Direct capable-agent work over ordinary files remains an adequate alternative.
 
-A separate native store is useful when the reviewing duty needs its own goal and retained work. Initialize it from the actual selected goal and select the domains and source catalogues that provide the accepted project sources. Create a deployment that points to the common engine and this store through the [shared-engine and store contract](../../INSTANCES.md). Source access belongs to the store's selected catalogues; each request selects the complete bodies needed for its use. When changing the selected engine, stage a compatible engine reference and activate it with the required candidate identity and expected descriptor guards. Staging retains selection metadata while the code and store keep their existing owners. Preserve any partial construction or uncertain effect instead of automatically repeating it. These existing operations can be composed for the reviewing duty.
+A separate native store is useful when the reviewing duty needs its own goal and retained work. Initialize it from the actual selected goal and select the domains and source catalogues that provide the accepted project sources. Create a deployment that points to the common engine and this store through the [shared-engine and store contract](../INSTANCES.md). Source access belongs to the store's selected catalogues; each request selects the complete bodies needed for its use. When changing the selected engine, stage a compatible engine reference and activate it with the required candidate identity and expected descriptor guards. Staging retains selection metadata while the code and store keep their existing owners. Preserve any partial construction or uncertain effect instead of automatically repeating it. These existing operations can be composed for the reviewing duty.
 
 For a review intended to develop missing questions, first select the target's stated effects, contracts and relevant source argument. Ask the participant to retain a short public prediction before acquiring implementation bodies: which productive relationships matter to the recipient, what would distinguish a failure from adequate behavior, and which sources could answer that question. Then acquire the needed complete bodies through an actual source selection. Known paths can be used directly; omitted inventories do not establish reading. The ordering makes the question's origin inspectable without making it compulsory for every review.
 

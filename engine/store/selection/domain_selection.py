@@ -38,12 +38,26 @@ def ordinary(path):
     return check_ordinary_ancestors(Path(path), expect_dir=False, error_prefix='ordinary selected source required')
 
 
+def _is_safe_member_relpath(name: str) -> bool:
+    if not isinstance(name, str) or not name or '\0' in name or '\\' in name:
+        return False
+    rel = Path(name)
+    if rel.is_absolute() or rel.anchor or '..' in rel.parts:
+        return False
+    from pathlib import PureWindowsPath
+    if PureWindowsPath(name).drive:
+        return False
+    if any(len(part) >= 2 and part[1] == ':' for part in name.split('/')):
+        return False
+    return True
+
+
 def _read_ordinary_under(root: Path, name: str, *, byte_limit: int | None = None,
                          validated_root: bool = False, root_fd: int | None = None) -> bytes:
     """Read an ordinary non-symlink file relative to root using O_NOFOLLOW dir-FD traversal."""
-    rel = Path(name)
-    if not name or rel.is_absolute() or '..' in rel.parts or '\\' in name:
+    if not _is_safe_member_relpath(name):
         raise ValueError('invalid selected member path: ' + str(name))
+    rel = Path(name)
     parts = [part for part in rel.parts if part not in ('', '.')]
     if not parts:
         raise ValueError('invalid selected member path: ' + str(name))
@@ -105,10 +119,9 @@ def _read_ordinary_under(root: Path, name: str, *, byte_limit: int | None = None
 
 
 def source_path(root, name):
-    path = Path(name)
-    if not name or path.is_absolute() or '..' in path.parts or '\\' in name:
+    if not _is_safe_member_relpath(name):
         raise ValueError('invalid selected member path: ' + str(name))
-    return ordinary(root / path)
+    return ordinary(root / Path(name))
 
 
 def load_json(path, expected=None):
@@ -492,7 +505,7 @@ class DomainSelection:
             self._validated_roots.add(str(root))
         for row in catalogue['sources']:
             name = row['path']
-            if not name or Path(name).is_absolute() or '..' in Path(name).parts or '\\' in name:
+            if not _is_safe_member_relpath(name):
                 raise ValueError('unsafe source catalogue path')
             exposure = row.get('exposure', 'available')
             if exposure not in {'available', 'sealed'}:

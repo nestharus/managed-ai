@@ -1,10 +1,10 @@
 # Library migration and current source maintenance
 
-For a Managed AI store, [the instance contract](../../INSTANCES.md) identifies its ordered catalogues and domain descriptors. Read the selected ID with `engine/knowledge.py --store STORE show SOURCE_ID`. For a change, update the registered owner, qualify the affected descriptor and use reviewed configure at each intended receiver. The library migration below records the earlier authoring arrangement.
+For a Managed AI store, [the instance contract](../../INSTANCES.md) identifies its ordered catalogues and domain descriptors. Read the selected ID with `engine/library/cli.py --store STORE show SOURCE_ID`. For a change, update the registered owner, qualify the affected descriptor and use reviewed configure at each intended receiver. The library migration below records the earlier authoring arrangement.
 
 ## Earlier library entrance
 
-For that edition the general entrance was the short [overview](README.md) and the callable knowledge adapter. Agent understanding and research continuation use the same expandable complete-body library. The former `agent/` folder and research startup files become compatibility routes. They are no longer separately maintained general manuals or independent products. The independently usable products remain the human explanation and the prototype, which includes this complete standalone knowledge folder.
+For that edition the general entrance was the short [overview](../README.md) and the callable knowledge adapter. Agent understanding and research continuation use the same expandable complete-body library. The former `agent/` folder and research startup files become compatibility routes. They are no longer separately maintained general manuals or independent products. The independently usable products remain the human explanation and the prototype, which includes this complete standalone knowledge folder.
 
 This changes the distribution arrangement, not the canonical research method or earlier evidence. Original accepted releases, historical source identities, published human bodies, exact occurrence archives and recovery maps retain their bytes and scope. The research tree remains current authoring, instrument and history custody. Storage at a research path does not create a separate general agent/research entrance.
 
@@ -21,9 +21,9 @@ The source map collects complete current, evidence and pattern Markdown bodies, 
 `publish.py` is an explicit authoring operation. It reads a nominated current project tree, constructs full objects and a catalogue in a fresh directory, and activates nothing. From the complete project's root:
 
 ```bash
-python3 -B engine/runtime/source_library/publish.py --root . publish --edition next-accepted --output /tmp/next-knowledge
-python3 -B engine/runtime/source_library/knowledge.py --library /tmp/next-knowledge verify
-python3 -B engine/runtime/source_library/publish.py --root . audit --library /tmp/next-knowledge
+python3 -B engine/library/bundles/publish.py --root . publish --edition next-accepted --output /tmp/next-knowledge
+python3 -B engine/library/reader/knowledge.py --library /tmp/next-knowledge verify
+python3 -B engine/library/bundles/publish.py --root . audit --library /tmp/next-knowledge
 ```
 
 Use a fresh output directory. A retry with the identical complete catalogue and object membership verifies the existing result and returns `already-present-verified`; a different or incomplete publication is refused without overwrite. `--overlay PATH` can nominate a reviewable proposal tree over the base during construction; the audit must use the same basis or the adopted complete project afterward. The publisher does not claim an atomic concurrent source snapshot. Quiesce accepted publication or retain the selected source edition when that boundary matters.

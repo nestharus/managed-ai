@@ -1,7 +1,8 @@
 """Accepted project membership and verified reads shared by capture and discovery."""
 from pathlib import Path
 
-from core.storage import sha
+from core.ownership import relative_path
+from core.storage import is_reparse_or_symlink, sha
 from store.protocol.inputs import bounded_source_bytes
 
 
@@ -15,16 +16,16 @@ class ProjectSelection:
         return {k: v for k, v in self.current.items() if k != 'project_files'}
 
     def body(self, row):
-        name = row['path']
+        name = relative_path(row['path'])
         root = Path(self.current['project_root'])
-        if root.is_symlink():
+        if is_reparse_or_symlink(root.lstat()):
             raise ValueError('accepted project root is a symbolic link')
         path = root
         for part in Path(name).parts:
             if part == '..' or Path(part).is_absolute():
                 raise ValueError('invalid accepted-project member path')
             path = path / part
-            if path.is_symlink():
+            if is_reparse_or_symlink(path.lstat()):
                 raise ValueError('accepted project source contains a symbolic link: ' + name)
         if not path.is_file():
             raise ValueError('ordinary accepted project source required: ' + name)

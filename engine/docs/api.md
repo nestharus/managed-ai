@@ -1,6 +1,6 @@
 # Interfaces and embedding
 
-Install the wheel built from this checkout as described in [Install or build](../CORE.md#install-or-build) or add `engine/runtime/continuation/` to Python's import path. The standalone launchers perform that setup locally. Installed command names are `g60-collect`, `g60-work` and `g60-attend`. With either import setup, `python3 -B -m continuation_support.exchange` runs the exchange CLI.
+Install the wheel built from `engine/core/` as described in [Install or build](../core/CORE.md#install-or-build) or add `engine/` to Python's import path. The standalone launchers under `engine/core/cli/` perform that setup locally. Installed command names are `g60-collect`, `g60-work` and `g60-attend`. With either import setup, `python3 -B -m core.exchange` runs the exchange CLI.
 
 The [architecture guide](architecture.md) explains the component relationships and the passage from a prepared context to a returned contribution, reuse and an explicit file effect.
 
@@ -8,25 +8,25 @@ The [architecture guide](architecture.md) explains the component relationships a
 
 | Code | Implemented contribution | Supplied by the surrounding application |
 |---|---|---|
-| [collector.py](../continuation/continuation_support/collector.py) | Admitted local command, actual byte streams, collected exit or visible uncertainty | Choice and permission to run the command; bounded foreground behavior; interpretation of the outcome |
-| [Packet exchange operations](../continuation/continuation_support/exchange/) | Captured inputs, attributed returns, reusable proposed bodies, guarded single-file replacement | Source selection, actual recipient delivery, interpretation, current effect authority and any larger transaction |
-| [attention.py](../continuation/continuation_support/attention.py) | Nominated questions, source/use-bound public accounts, selected feedback and historical access | Useful questions and alternatives, actual consideration, semantic adequacy and the next constructive choice |
+| [collector.py](../core/exchange/transport/collector.py) | Admitted local command, actual byte streams, collected exit or visible uncertainty | Choice and permission to run the command; bounded foreground behavior; interpretation of the outcome |
+| [Packet exchange operations](../core/exchange/) | Captured inputs, attributed returns, reusable proposed bodies, guarded single-file replacement | Source selection, actual recipient delivery, interpretation, current effect authority and any larger transaction |
+| [attention.py](../core/attention.py) | Nominated questions, source/use-bound public accounts, selected feedback and historical access | Useful questions and alternatives, actual consideration, semantic adequacy and the next constructive choice |
 
 Use only the relationship a current task needs. Existing files or a capable host may already supply it. The package does not need to become the controller of all application work, and research mechanisms described elsewhere are not installed by importing these modules.
 
 ## Collector
 
-`continuation_support.collector.Collector(root)` supplies `admit`, `resume` and `views`. Use an external writable runtime root. Direct callers must hold `exclusive(collector.root / "owner.lock")` around public operations, as the CLI does. Import `exclusive` from `continuation_support.collector`. The internal worker expects its recorded attempt token and is not another admission path.
+`core.exchange.transport.collector.Collector(root)` supplies `admit`, `resume` and `views`. Use an external writable runtime root. Direct callers must hold `exclusive(collector.root / "owner.lock")` around public operations, as the CLI does. Import `exclusive` from `core.storage`. The internal worker expects its recorded attempt token and is not another admission path.
 
 `views(job_id="known-job")` inspects only that identity's directory. Missing or malformed targeted state returns `record-unresolved` with `requested_job_id`; it does not invent a stored origin identity. Without this keyword, `views` retains its all-job or named-consumer view. This selection does not dispatch or retry work.
 
-`resume` dispatches all never-attempted admitted jobs in that root. It does not resume a killed process or replay an uncertain attempt. `run.py` checks that its root is outside the extracted prototype. The installed `g60-collect` command and direct `Collector` API do not perform that source-tree placement check; their caller must choose an external root. This is a storage-placement obligation, not a filesystem isolation boundary.
+`resume` dispatches all never-attempted admitted jobs in that root. It does not resume a killed process or replay an uncertain attempt. `engine/core/cli/collect_returns.py` checks that its root is outside the distributed package. The installed `g60-collect` command and direct `Collector` API do not perform that source-tree placement check; their caller must choose an external root. This is a storage-placement obligation, not a filesystem isolation boundary.
 
 `completed` means an exit was collected; inspect the return code and actual output. See the [collector contract](contract.md).
 
 ## Continuation exchange
 
-`continuation_support.exchange.Exchange(root)` supplies `initialize`, `prepare`, `context`, `dispatch`, `receive`, `recover_transport`, `close_transport`, `list`, `inspect`, `publish` and `reconcile_publication`. The CLI is the simplest supported integration surface. `initialize` takes its own owner lock. After initialization, direct callers serialize public operations with `exclusive(exchange.root / "owner.lock")`. Exchange initialization rejects roots or workspaces inside the distributed package and requires the two locations to be disjoint.
+`core.exchange.Exchange(root)` supplies `initialize`, `prepare`, `context`, `dispatch`, `receive`, `recover_transport`, `close_transport`, `list`, `inspect`, `publish` and `reconcile_publication`. The CLI is the simplest supported integration surface. `initialize` takes its own owner lock. After initialization, direct callers serialize public operations with `exclusive(exchange.root / "owner.lock")` (or `shared` for read-only inspection). Exchange initialization rejects roots or workspaces inside the distributed package and requires the two locations to be disjoint.
 
 `close_transport(packet, account)` records a verified launch failure or oversized completed reply as a terminal observation without a received contribution. `reconcile_publication(packet, target, expected_sha256, account)` acknowledges current base- or proposal-matching bytes while preserving the original publication intent. `expected_sha256` accepts a lower-case hexadecimal digest or `None` for an absent target. The CLI accepts the literal `absent`. Both operations preserve original evidence and return the original record on an exact repeat. The [exchange contract](exchange.md) gives their receiving and authority conditions.
 
@@ -49,13 +49,13 @@ preserves the original delivery's effect-authority scope.
 
 ## Attention companion
 
-`continuation_support.attention.Attention(Exchange(root))` supplies `track`, `feedback`, `record`, `inspect` and `object`. Initialize the exchange first, and serialize direct calls with the same owner lock used by the CLI. The [attention contract](attention.md) defines specification, receipt, selected-view, object and delivery limits.
+`core.attention.Attention(Exchange(root))` supplies `track`, `feedback`, `record`, `inspect`, `inspect_receipt` and `object`. Initialize the exchange first, and serialize direct calls with the same owner lock used by the CLI. The [attention contract](attention.md) defines specification, receipt, selected-view, object and delivery limits.
 
 The returned structures describe captured public work. They do not expose private thought, infer all missing relationships, decide an item's importance, or prove that a bound artifact performs its claimed contribution. A host may deliver the returned context to its actual model loop; this package does not install that loop.
 
 ## Selected project-source reader
 
-The optional standalone [selected-source reader](../patterns/selected-source/README.md) supplies source observation without importing the deployment or engine, creating a context, or mutating owner state. It is separate from the installed core commands. Choose the existing knowledge library's `show` when a known logical body and catalogue pin suffice; choose this reader when the active owner-selection relationship is needed as well.
+The optional standalone [selected-source reader](../../patterns/selected-source/README.md) supplies source observation without importing the deployment or engine, creating a context, or mutating owner state. It is separate from the installed core commands. Choose the existing knowledge library's `show` when a known logical body and catalogue pin suffice; choose this reader when the active owner-selection relationship is needed as well.
 
 Its Python interface is `acquire(deployment, expected_selection, manifest_sha256, sources, *, max_bytes=8388608, max_metadata_bytes=8388608)`. Pass a deployment `Path` and a list of declared project paths. Both expected selection ID and manifest digest are required. `render(value, max_output_bytes=12582912)` returns the complete bounded JSON rendering; preserve that rendering check before emission to obtain the CLI's no-partial-output behavior. The guide gives the matching CLI, supported formats and all limits.
 
@@ -71,10 +71,10 @@ The discovery source-byte budget does not include metadata enumeration, the encl
 
 ## Common boundary
 
-All interfaces use standard-library Python on POSIX. No model provider, credential acquisition, network service, agent runtime or native session-compaction adapter is implemented. Process boundaries and separate packets do not create independent semantic evidence. Current authority and source adequacy remain caller responsibilities.
+All interfaces use standard-library Python on POSIX and native Windows. No model provider, credential acquisition, network service, agent runtime or native session-compaction adapter is implemented. Process boundaries and separate packets do not create independent semantic evidence. Current authority and source adequacy remain caller responsibilities.
 
 Retention and recovery are also host work. An intact old return may support a new use without repeating its original command or publication. Preserve the request, bound objects and records needed by that use; deleting a content object can break several references. There is no object garbage collector or automatic reconstruction service. Choose retention against the actual recovery routes and occurrence-specific duties, not just the age of a packet.
 
-The [tests](../tests) exercise source capture, actual subprocess outcomes, return reuse, publication uncertainty, attention scope and standalone entry points. They establish behavior under the stated local contract. They do not compare model quality, full-use cost or autonomous discovery.
+The [tests](../../tests/engine/core/) exercise source capture, actual subprocess outcomes, return reuse, publication uncertainty, attention scope and standalone entry points. They establish behavior under the stated local contract. They do not compare model quality, full-use cost or autonomous discovery.
 
 The [quickstart](quickstart.md) is a complete caller-authored local example. It demonstrates transport and record behavior, not a model invocation.

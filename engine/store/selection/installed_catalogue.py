@@ -152,16 +152,20 @@ class InstalledCatalogue:
                 relative = relative_path(info.filename)
                 if not relative.startswith(slug + '/') or info.is_dir() or (info.external_attr >> 16) & 0o170000 == 0o120000:
                     raise ValueError('operation member must be an ordinary file under its declared root')
+                member_rel = relative_path(relative[len(slug) + 1:])
                 body = zipped.read(info)
                 binding = expected[relative]
                 if len(body) != binding['bytes'] or sha(body) != binding['sha256']:
                     raise ValueError('operation member binding changed')
-                bodies.append((relative[len(slug) + 1:], body, binding.get('mode', 0o644) & 0o777))
+                bodies.append((member_rel, body, binding.get('mode', 0o644) & 0o777))
         staging = exchange.workspace / '.system' / ('materialize-' + uuid.uuid4().hex)
         staging.mkdir()
+        staging_resolved = staging.resolve()
         try:
             for relative, body, mode in bodies:
                 path = staging / relative
+                if not path.resolve().is_relative_to(staging_resolved):
+                    raise ValueError('operation member path escapes staging directory')
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(body)
                 path.chmod(mode)

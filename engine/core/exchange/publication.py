@@ -67,7 +67,7 @@ def _publication_basis(packet, target, request, record, proposal, changed):
             'request_sha256': record['request_sha256'], 'return_sha256': record['return_sha256'],
             'proposal_sha256': proposal['sha256'], 'base_sha256': declared['sha256'],
             'changed': rows, 'omitted': len(changed) - len(rows),
-            'inspect': {'entry': 'runtime/exchange_packets.py', 'root': 'store exchange',
+            'inspect': {'entry': 'core/cli/exchange_packets.py', 'root': 'store exchange',
                         'arguments': ['inspect', packet]}}
 
 

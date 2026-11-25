@@ -71,8 +71,14 @@ def read_bytes(path, limit):
 
 
 def relative(value):
+    from pathlib import PureWindowsPath
     need(isinstance(value, str) and IDENT.fullmatch(value), 'invalid relative identity')
-    need(not PurePosixPath(value).is_absolute() and all(x not in {'', '.', '..'} for x in value.split('/')), 'unsafe relative identity')
+    need(
+        not PurePosixPath(value).is_absolute()
+        and not PureWindowsPath(value).drive
+        and all(x not in {'', '.', '..'} and not (len(x) >= 2 and x[1] == ':') for x in value.split('/')),
+        'unsafe relative identity',
+    )
     return value
 
 

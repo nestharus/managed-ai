@@ -2,7 +2,7 @@
 
 What stronger contribution does the accumulated evidence make conceivable? Reconstruct the containing hypothesis and the consequences already observed in its several uses. Work back from a consequential unrealized possibility to whatever understanding or construction could advance it. What happens in that work can change both the hypothesis and the means of investigating it.
 
-The research is an expandable body of understanding within this system. Begin with the current receiving question and source edition. With the research domain selected, read `research/current/method.md` from the package root with `engine/knowledge.py --store STORE show research/current/method.md`. Acquire `research/current/overview.md`, `research/current/agenda.md`, `research/current/frontier.md` or a narrower useful body according to what the next contribution needs. The earlier published library’s `conduct-inquiry` view is another authored starting selection when that library is available.
+The research is an expandable body of understanding within this system. Begin with the current receiving question and source edition. With the research domain selected, read `research/current/method.md` from the package root with `engine/library/cli.py --store STORE show research/current/method.md`. Acquire `research/current/overview.md`, `research/current/agenda.md`, `research/current/frontier.md` or a narrower useful body according to what the next contribution needs. The earlier published library’s `conduct-inquiry` view is another authored starting selection when that library is available.
 
 The canonical method develops a hypothesis, projects its implications, retains a consequential gap, constructs the needed participation and reopens the hypothesis after a return. Compare known adequate direct routes with a substantial new build. Project both forward effects and backward requirements; compare broader or recomposed arrangements when a local branch becomes blocked. A finding may change another participant's duty or the meaning of an integrated composition even while that participant's source bytes remain unchanged.
 
@@ -40,7 +40,7 @@ To inspect code as an artifact, acquire `prototype/agent-system/COMPOSITION.md` 
 
 ## Observe a composition while it can still change
 
-For a multi-dimensional artifact, acquire logical domain source `research/patterns/constructing-across-dimensions.md` when the research domain is selected. Apply source-grounded distinctions to actual partial artifacts and their overlapping uses. Carry an observation made in one view into the responsible producer and the affected whole. When evaluating a method, preserve the prospective choice, the encountered artifact and the consumed return separately from the finished-product audit. The [attention companion](../docs/attention.md) can retain scoped questions, current source basis and genuinely outstanding work across these exchanges.
+For a multi-dimensional artifact, acquire logical domain source `research/patterns/constructing-across-dimensions.md` when the research domain is selected. Apply source-grounded distinctions to actual partial artifacts and their overlapping uses. Carry an observation made in one view into the responsible producer and the affected whole. When evaluating a method, preserve the prospective choice, the encountered artifact and the consumed return separately from the finished-product audit. The [attention companion](../../docs/attention.md) can retain scoped questions, current source basis and genuinely outstanding work across these exchanges.
 
 ## Scale observation and align representations
 
@@ -60,7 +60,7 @@ A fresh recipient can use an exported selection for one purpose and request anot
 
 ## Match the enclosing acquisition to its receiving promise
 
-Acquire `research/patterns/scoping-source-acquisition.md` when a selected read pays for a much larger containing verification. Known logical-body acquisition, active owner-qualified source reading, current record observation and whole-deployment audit supply different relationships. Use this library directly where its identity suffices. The optional `engine/runtime/patterns/selected-source` reader supplies complete requested project sources under explicitly expected selection/manifest pins; it leaves unselected files, engine behavior and later working corrections unverified. Metadata and retained update work remain part of its cost.
+Acquire `research/patterns/scoping-source-acquisition.md` when a selected read pays for a much larger containing verification. Known logical-body acquisition, active owner-qualified source reading, current record observation and whole-deployment audit supply different relationships. Use this library directly where its identity suffices. The optional `patterns/selected-source` reader supplies complete requested project sources under explicitly expected selection/manifest pins; it leaves unselected files, engine behavior and later working corrections unverified. Metadata and retained update work remain part of its cost.
 
 Bound the actual provider read, including delegated reads, before accepting or refusing the source. The current Discovery repair preserves complete valid results while sharing parsed and raw record acquisition and enforcing selected source bounds. When propagating a finding, follow each logical body to its real source owner: current agent compatibility entrances do not contain the operative complete bodies. Publish and audit those owners, then let actual later use establish the correction's receiving effect.
 
@@ -75,6 +75,6 @@ A source-record byte bound is useful input to a resource argument; it supplies n
 
 ## Specialized investigations
 
-When a large inventory bears on a live construction choice, the [discovery companion](../patterns/prospective-reception/discovery/OPERATE.md) can help investigate the relationships that matter to that choice.
+When a large inventory bears on a live construction choice, the [discovery companion](../../../patterns/prospective-reception/discovery/OPERATE.md) can help investigate the relationships that matter to that choice.
 
-For a comparative claim about whether G60 changed a decision, the [prospective reception study](../patterns/prospective-reception/README.md) distinguishes unaided product use from informed source comparison. Its independent receiving opportunities, exposure records and matched comparisons support judgments within the scope actually exercised. A changed product or interpretation can reopen a judgment.
+For a comparative claim about whether G60 changed a decision, the [prospective reception study](../../../patterns/prospective-reception/README.md) distinguishes unaided product use from informed source comparison. Its independent receiving opportunities, exposure records and matched comparisons support judgments within the scope actually exercised. A changed product or interpretation can reopen a judgment.
