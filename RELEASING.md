@@ -23,11 +23,11 @@ Export ordinary tracked files from the verified commits into a clean package dir
 For a working archive, select one store and its deployment. To start fresh, initialize a store with an appropriate goal and domain selection. The AI-system-building domain requires research. A focused operating release may use a derived research catalogue containing the reusable tools, method and theory needed for the work.
 
 ```sh
-python3 -B engine/runtime/manage_store.py --root stores/work init \
+python3 -B engine/store/manage_store.py --root stores/work init \
   --instance-id work --goal-text 'The purpose of this store' \
   --domain domains/research/domain.json \
   --domain domains/ai-system-building/domain.json
-python3 -B engine/runtime/select_deployment.py --deployment deployments/work init \
+python3 -B engine/deployment/select_deployment.py --deployment deployments/work init \
   --store stores/work --engine engine
 ```
 
@@ -46,8 +46,8 @@ python3 -B engine/release/package.py --root . --output "$archive"
 Review the member count and archive digest. Extract into a fresh directory and check the deployment and native store. Repeat for every included deployment.
 
 ```sh
-python3 -B engine/runtime/select_deployment.py --deployment deployments/work status
-python3 -B engine/runtime/select_deployment.py --deployment deployments/work system status
+python3 -B engine/deployment/select_deployment.py --deployment deployments/work status
+python3 -B engine/deployment/select_deployment.py --deployment deployments/work system status
 ```
 
 Record the archive digest, Git commits, selected engine digest, and store and domain identities in the release record. Refer to the [package producer](engine/release/README.md) for maintenance of the canonical registrations.
@@ -91,7 +91,7 @@ Publish the receiving result alongside the digest of the archive it qualifies.
   research and AI-system-building selections. From the extracted package root
   run `python3 -B start_operation.py`, inspect `system view start` through its
   deployment, and exercise the reading guides, source verifier and companion.
-  Check the companion with `--engine engine/runtime`.
+  Check the companion with `--engine engine`.
 - For a domain release, qualify the actual export in the disposable compatible
   receiver described below. Exercise its entry sources and tools at the declared
   domain mount with its exact dependency commits.

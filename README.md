@@ -16,9 +16,9 @@ On Windows, run `python -B research.py` from the research workspace. Use `python
 `engine` at the qualified shared engine and run:
 
 ```sh
-python3 -B "$engine/runtime/select_deployment.py" --deployment . status
-python3 -B "$engine/runtime/select_deployment.py" --deployment . system show research-current
-python3 -B "$engine/runtime/select_deployment.py" --deployment . system catalogue --query method --limit 5
+python3 -B "$engine/deployment/select_deployment.py" --deployment . status
+python3 -B "$engine/deployment/select_deployment.py" --deployment . system show research-current
+python3 -B "$engine/deployment/select_deployment.py" --deployment . system catalogue --query method --limit 5
 ```
 
 ### Extracted full release
@@ -26,17 +26,17 @@ python3 -B "$engine/runtime/select_deployment.py" --deployment . system catalogu
 The following paths are relative to the extracted package root. Inspect its three deployments:
 
 ```sh
-python -B engine/runtime/select_deployment.py --deployment deployments/research status
-python -B engine/runtime/select_deployment.py --deployment deployments/novel status
-python -B engine/runtime/select_deployment.py --deployment deployments/discovery status
+python -B engine/deployment/select_deployment.py --deployment deployments/research status
+python -B engine/deployment/select_deployment.py --deployment deployments/novel status
+python -B engine/deployment/select_deployment.py --deployment deployments/discovery status
 ```
 
 Then enter the required store through the same command:
 
 ```sh
-python -B engine/runtime/select_deployment.py --deployment deployments/research system status
-python -B engine/runtime/select_deployment.py --deployment deployments/novel system status
-python -B engine/runtime/select_deployment.py --deployment deployments/discovery system status
+python -B engine/deployment/select_deployment.py --deployment deployments/research system status
+python -B engine/deployment/select_deployment.py --deployment deployments/novel system status
+python -B engine/deployment/select_deployment.py --deployment deployments/discovery system status
 ```
 
 The store guides explain source selection, current work and receiving. A deployment points to its engine and storage; it does not create an engine copy. Keep the package's relative directory structure when moving it.

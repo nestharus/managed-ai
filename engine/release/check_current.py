@@ -12,15 +12,16 @@ parser.add_argument('--product', type=Path, default=Path(__file__).resolve().par
 parser.add_argument('--records', type=Path)
 parser.add_argument('--work', type=Path, help='Compatibility argument; tests own isolated temporary stores')
 args = parser.parse_args()
-runtime = args.product.resolve() / 'runtime'
-program = runtime / 'tests/native_store/test_shared_instances.py'
+product = args.product.resolve()
+program = product.parent / 'tests/engine/store/test_shared_instances.py'
 run = subprocess.run([sys.executable, '-B', str(program)], capture_output=True, text=True,
-                     env=dict(os.environ, G60_TEST_PRODUCT=str(runtime)))
-report = {'status': 'passed' if run.returncode == 0 else 'failed', 'program': str(program), 'runtime': str(runtime),
+                     env=dict(os.environ, G60_TEST_PRODUCT=str(product)))
+report = {'status': 'passed' if run.returncode == 0 else 'failed', 'program': str(program),
+          'product': str(product), 'runtime': str(product),
           'returncode': run.returncode, 'stdout': run.stdout, 'stderr': run.stderr,
           'scope': 'Bounded shared-code, store/schema/domain, portability, receiving and retention cases; no broad scientific-efficacy claim.'}
 if args.records:
     args.records.mkdir(parents=True, exist_ok=True)
-    (args.records / 'ACCEPTANCE.json').write_text(json.dumps(report, indent=2) + '\n')
+    (args.records / 'ACCEPTANCE.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
 print(json.dumps({k: v for k, v in report.items() if k not in {'stdout', 'stderr'}}, indent=2))
 raise SystemExit(run.returncode)

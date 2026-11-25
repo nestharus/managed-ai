@@ -20,7 +20,7 @@ flowchart TD
 | Owner | Responsibility |
 | --- | --- |
 | `engine/` | Native records, goals, source selection, context construction, receiving, feedback, guarded publication, storage compatibility and deployment. |
-| `engine/companion_representation/` and `engine/host/` | Shared optional representation, material-maintenance, peer and continuing-work adapters. These use the common engine and their declared interfaces. |
+| `companions/` and `engine/host/` | Shared optional representation, publication-review, material-maintenance, peer, workbench and continuing-work adapters. These use the common engine and their declared interfaces. |
 | `domains/research/` | Complete general theory, research method, reusable patterns, meaningful positive and adverse evidence, and research record schemas. |
 | `domains/writing/` | Writing sources, qualified corrections, reusable operations and tools. It does not own a particular novel's acquisition or fulfillment claims. |
 | `domains/ai-system-building/` | Guidance and declared tools for understanding, constructing, inspecting and repairing AI systems. The actual current implementation remains in `engine/`. |
