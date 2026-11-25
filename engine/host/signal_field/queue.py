@@ -66,7 +66,7 @@ def inside_product(path: Path, product: Path | None = None) -> bool:
     resolved = Path(path).expanduser().resolve()
     if resolved == product or resolved.is_relative_to(product):
         return True
-    if product.name == 'runtime' and (product.parent / 'CURRENT-RELEASE.json').is_file():
+    if (product.parent / 'CURRENT-RELEASE.json').is_file():
         if resolved == product.parent or resolved.is_relative_to(product.parent):
             return True
     return False

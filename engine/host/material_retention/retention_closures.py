@@ -8,6 +8,9 @@ import sys
 
 
 def _load_store_io():
+    if __package__:
+        from . import store_io as module
+        return module
     path = Path(__file__).resolve().with_name("store_io.py")
     key = "_managed_material_store_io_" + hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
     module = sys.modules.get(key)

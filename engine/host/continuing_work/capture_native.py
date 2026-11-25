@@ -31,29 +31,71 @@ WAVE1_NATIVE_PROFILE = '2eb453170ca260aa32575b628480ec529d71f78d80dcbe052ebe5f80
 WAVE2_NATIVE_PROFILE = 'a61df8f59eadde2f1631f7002e062770ae68c577de973717e9f4997748fee1d4'
 PRE_WAVE3_NATIVE_PROFILE = 'dbfaee1c623984cbd60833413de6c4aab1033214d4ddf6300c415b04bfbeefce'
 WAVE3_NATIVE_PROFILE = '23c5c06540959fe6cbdd0e9e58e3bb69c328616f879caa6fd4604b22d790cf82'
-CURRENT_NATIVE_PROFILE = '82f1d0421b9cb9c134e5d0fb97c14e530407c409ac3716730a7f758e16ddd609'
+WAVE3_5_NATIVE_PROFILE = '82f1d0421b9cb9c134e5d0fb97c14e530407c409ac3716730a7f758e16ddd609'
+CURRENT_NATIVE_PROFILE = WAVE3_5_NATIVE_PROFILE
+
+ADMITTED_NATIVE_PROFILES = frozenset({
+    REVIEWED_NATIVE_PROFILE,
+    REORGANIZED_NATIVE_PROFILE,
+    REPAIRED_NATIVE_PROFILE,
+    COMMAND_ROUTES_NATIVE_PROFILE,
+    BODY_REPAIRS_NATIVE_PROFILE,
+    SCHEMA_REPAIRS_NATIVE_PROFILE,
+    LIFECYCLE_NATIVE_PROFILE,
+    OUTLIER_REPAIRS_NATIVE_PROFILE,
+    SCOPED_COMPOSITION_NATIVE_PROFILE,
+    JOINED_NATIVE_PROFILE,
+    PACKET_LIFECYCLE_NATIVE_PROFILE,
+    BOUNDED_ADMISSION_NATIVE_PROFILE,
+    EXPONENTIAL_ADMISSION_NATIVE_PROFILE,
+    WAVE1_NATIVE_PROFILE,
+    WAVE2_NATIVE_PROFILE,
+    PRE_WAVE3_NATIVE_PROFILE,
+    WAVE3_NATIVE_PROFILE,
+    WAVE3_5_NATIVE_PROFILE,
+    CURRENT_NATIVE_PROFILE,
+})
+
 PROFILE_ERROR = ('Selected native engine does not match the reviewed capture adapter; '
                  'requalify this adapter before capture')
 RETURN_ERROR = 'Native return already exists; use its retained body or a new current occurrence'
 
 
+def _is_test_module(name: str) -> bool:
+    lower = name.lower()
+    return lower.endswith('.py') and (lower.startswith('test_') or lower.endswith('_test.py'))
+
+
 def native_sources(entry: Path):
+    """Collect the exact executable native engine source map for profile qualification.
+
+    Wave 4 canonical engines hash only engine/{deployment,core,store} non-test modules.
+    Pre-Wave-4 historical engines hash engine/runtime/ to preserve historical profile pins.
+    """
     entry = entry.resolve(strict=True)
-    root = entry.parent
-    runtime = root.parent / 'runtime'
-    if (entry in (runtime / 'manage_store.py', runtime / 'system.py')
-            and (runtime / 'native/system.py').is_file()):
-        roots = (runtime,)
-        base = root.parent
-        native = runtime / 'native/system.py'
+    engine = entry.parents[1]
+    if entry == engine / 'store/manage_store.py' and (engine / 'store/system.py').is_file():
+        roots = (engine / 'deployment', engine / 'core', engine / 'store')
+        base = engine
+        native = engine / 'store/system.py'
+        exclude_tests = True
+    elif entry == engine / 'runtime/manage_store.py' and (engine / 'runtime/native/system.py').is_file():
+        roots = (engine / 'runtime',)
+        base = engine
+        native = engine / 'runtime/native/system.py'
+        exclude_tests = False
     else:
-        if entry.name != 'system.py':
-            raise ValueError(PROFILE_ERROR)
-        roots = (root,)
-        base = root
-        native = root / 'agent-system/system.py'
-    programs = {p.relative_to(base).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
-                for folder in roots for p in folder.rglob('*.py') if '__pycache__' not in p.parts}
+        raise ValueError(PROFILE_ERROR)
+    programs = {}
+    for folder in roots:
+        if not folder.is_dir():
+            continue
+        for p in folder.rglob('*.py'):
+            if '__pycache__' in p.parts:
+                continue
+            if exclude_tests and ('tests' in p.relative_to(base).parts or _is_test_module(p.name)):
+                continue
+            programs[p.relative_to(base).as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()
     return native, programs
 
 
@@ -62,15 +104,11 @@ def reviewed_engine(engine: Path):
     path, programs = native_sources(engine)
     profile = hashlib.sha256(json.dumps(programs, sort_keys=True,
                                        separators=(',', ':')).encode()).hexdigest()
-    if profile not in (REVIEWED_NATIVE_PROFILE, REORGANIZED_NATIVE_PROFILE, REPAIRED_NATIVE_PROFILE,
-                       COMMAND_ROUTES_NATIVE_PROFILE, BODY_REPAIRS_NATIVE_PROFILE,
-                       SCHEMA_REPAIRS_NATIVE_PROFILE,
-                       LIFECYCLE_NATIVE_PROFILE, OUTLIER_REPAIRS_NATIVE_PROFILE,
-                       SCOPED_COMPOSITION_NATIVE_PROFILE, JOINED_NATIVE_PROFILE,
-                       PACKET_LIFECYCLE_NATIVE_PROFILE, BOUNDED_ADMISSION_NATIVE_PROFILE,
-                       EXPONENTIAL_ADMISSION_NATIVE_PROFILE, WAVE1_NATIVE_PROFILE,
-                       WAVE2_NATIVE_PROFILE, PRE_WAVE3_NATIVE_PROFILE, WAVE3_NATIVE_PROFILE, CURRENT_NATIVE_PROFILE):
+    if profile not in ADMITTED_NATIVE_PROFILES:
         raise ValueError(PROFILE_ERROR)
+    engine_root = str(path.parents[1])
+    if path.parent.name == 'store' and engine_root not in sys.path:
+        sys.path.insert(0, engine_root)
     spec = importlib.util.spec_from_file_location('reviewed_capture_engine', path)
     if spec is None or spec.loader is None:
         raise ValueError(PROFILE_ERROR)
@@ -122,6 +160,24 @@ def _exchange_root(native, root: Path) -> tuple[Path, Path]:
     return resolved_root, exchange_root
 
 
+def _lookup_attention_receipt(system, raw_id: str) -> tuple[str, dict, str | None]:
+    """Inspect a recorded Attention receipt via public API (with pre-Wave-4 historical fallback)."""
+    if hasattr(system.attention, 'inspect_receipt'):
+        inspected = system.attention.inspect_receipt(raw_id)
+        if inspected is None:
+            raise ValueError('receipt identity not recorded in native Attention')
+        return inspected['object'], inspected['record'], inspected.get('feedback_object')
+    # Historical pre-Wave-4 engines predate Attention.inspect_receipt.
+    state = system.attention._load()
+    current = system.attention._current(state)
+    position = current['receipt_ids'].get(raw_id)
+    if position is None:
+        raise ValueError('receipt identity not recorded in native Attention')
+    obj_key = state['receipts'][position]
+    record = system.attention._get(obj_key)
+    return obj_key, record, state['feedbacks'].get(record.get('feedback'))
+
+
 def _reconcile_assessment(native, system, turn: str, receipt: Path, producer: str, observed: dict) -> dict:
     """Verify an already-committed native Attention receipt matches this exact capture request."""
     supplied = native.read(receipt)
@@ -132,17 +188,11 @@ def _reconcile_assessment(native, system, turn: str, receipt: Path, producer: st
         raise ValueError('receipt identity not recorded in native Attention')
     expected_source_sha = native.sha(native.encode(supplied))
     expected_feedback = native.feedback_id(turn)
-    state = system.attention._load()
-    current = system.attention._current(state)
-    position = current['receipt_ids'].get(raw_id)
-    if position is None:
-        raise ValueError('receipt identity not recorded in native Attention')
+    obj_key, record, current_feedback_obj = _lookup_attention_receipt(system, raw_id)
     rid = native.packet_id(raw_id)
-    obj_key = state['receipts'][position]
-    record = system.attention._get(obj_key)
     if (record.get('id') != rid
             or record.get('feedback') != expected_feedback
-            or record.get('feedback_object') != state['feedbacks'].get(expected_feedback)
+            or record.get('feedback_object') != current_feedback_obj
             or record.get('producer') != producer
             or record.get('source', {}).get('sha256') != expected_source_sha):
         raise ValueError('receipt identity already used')

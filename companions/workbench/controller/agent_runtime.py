@@ -7,12 +7,20 @@ Evidence snapshots are implemented by the companion ``evidence_support`` module.
 
 from collections.abc import Mapping
 
-from evidence_support import (
-    capture_return,
-    detached_json,
-    interaction_history,
-    source_snapshots,
-)
+try:
+    from .evidence_support import (
+        capture_return,
+        detached_json,
+        interaction_history,
+        source_snapshots,
+    )
+except ImportError:
+    from evidence_support import (
+        capture_return,
+        detached_json,
+        interaction_history,
+        source_snapshots,
+    )
 
 __all__ = ["run_agent"]
 
