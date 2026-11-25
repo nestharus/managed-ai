@@ -13,6 +13,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 import runpy
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -21,8 +22,35 @@ HERE = Path(__file__).resolve().parent
 
 # This entry also supports loading by an explicit filename from a deployment.
 sys.path.insert(0, str(HERE))
-from occurrence_files import digest, ident, nonempty, now, read, write
+from occurrence_files import atomic_bytes, digest, ident, loads_strict, nonempty, now, read, sync_dir, write
 from repair_custody import RepairCustody
+
+MAX_EVENT_STREAM_BYTES = 16 * 1024
+MAX_EVENT_LINE_BYTES = 64 * 1024
+_EVENT_LOCKS_GUARD = threading.Lock()
+_EVENT_LOCKS: dict[Path, threading.Lock] = {}
+
+
+def _event_thread_lock(path: Path) -> threading.Lock:
+    key = path.resolve()
+    with _EVENT_LOCKS_GUARD:
+        lock = _EVENT_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _EVENT_LOCKS[key] = lock
+        return lock
+
+
+def _safe_jsonl(row) -> bytes:
+    encoded = json.dumps(row, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
+    # Escape Unicode line separators that str.splitlines() splits on.
+    encoded = (encoded.replace('\u2028', '\\u2028')
+                      .replace('\u2029', '\\u2029')
+                      .replace('\u0085', '\\u0085'))
+    if '\n' in encoded or '\r' in encoded:
+        raise ValueError('event line framing contains unescaped newline')
+    return (encoded + '\n').encode('utf-8')
+
 
 def capture_error(raw):
     """Preserve known selected-capture errors, not arbitrary owner history."""
@@ -30,7 +58,8 @@ def capture_error(raw):
     except (ValueError,AttributeError): detail=None
     safe={'disposition must be considered or deferred',
           'each assessment must name a distinct actually delivered item',
-          'receipt identity already used','receipt must contain id and assessments',
+          'receipt identity already used','receipt identity not recorded in native Attention',
+          'receipt must contain id and assessments',
           'invalid assessment fields','nonempty bounded assessments required',
           'Native return already exists; use its retained body or a new current occurrence',
           'Selected native engine does not match the reviewed capture adapter; requalify this adapter before capture'}
@@ -120,12 +149,69 @@ class Host(RepairCustody):
     def engine(self):
         return str((self.root/self.config['engine']).resolve())
 
+    def _put_object_bytes(self, raw: bytes) -> tuple[str, str]:
+        sha = digest(raw)
+        obj = self.root / 'objects' / sha
+        if obj.is_symlink() or obj.exists():
+            if obj.is_symlink() or not obj.is_file():
+                raise ValueError(f'Retained object must be an ordinary file: {obj}')
+            existing = obj.read_bytes()
+            if existing != raw or digest(existing) != sha:
+                raise ValueError(f'Retained object integrity mismatch for {sha}')
+        else:
+            atomic_bytes(obj, raw)
+        return str(obj.relative_to(self.root)), sha
+
+    def _bound_event_value(self, value: dict) -> dict:
+        bounded = dict(value)
+        for field in ('stdout', 'stderr'):
+            text = bounded.get(field)
+            if isinstance(text, str):
+                raw = text.encode('utf-8', errors='replace')
+                if len(raw) > MAX_EVENT_STREAM_BYTES:
+                    obj_rel, sha = self._put_object_bytes(raw)
+                    bounded[field] = raw[:MAX_EVENT_STREAM_BYTES].decode('utf-8', errors='replace')
+                    bounded[field + '_truncated'] = True
+                    bounded[field + '_bytes'] = len(raw)
+                    bounded[field + '_sha256'] = sha
+                    bounded[field + '_object'] = obj_rel
+        return bounded
+
     def event(self, action, value):
-        row = {'at_utc':now(), 'action':action, **value}
         self.root.mkdir(parents=True, exist_ok=True)
-        with (self.root/'EVENTS.jsonl').open('a') as f:
-            f.write(json.dumps(row, ensure_ascii=False)+'\n')
-        return row
+        bounded = self._bound_event_value(value)
+        row = {'at_utc': now(), 'action': action, **bounded}
+        line = _safe_jsonl(row)
+        written_row = row
+        if len(line) > MAX_EVENT_LINE_BYTES:
+            obj_rel, sha = self._put_object_bytes(line)
+            summary = {'at_utc': row['at_utc'], 'action': action, 'truncated': True,
+                       'event_bytes': len(line), 'event_sha256': sha, 'event_object': obj_rel}
+            for key in ('id', 'receipt', 'exit'):
+                if key in row and len(_safe_jsonl(row[key])) <= 1024:
+                    summary[key] = row[key]
+            if isinstance(row.get('argv'), list) and len(_safe_jsonl(row['argv'])) <= 4096:
+                summary['argv'] = row['argv']
+            line = _safe_jsonl(summary)
+            written_row = summary
+        events_path = self.root / 'EVENTS.jsonl'
+        with _event_thread_lock(events_path):
+            if events_path.is_symlink():
+                raise ValueError('EVENTS.jsonl must be an ordinary file')
+            created = not events_path.exists()
+            with events_path.open('ab') as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                try:
+                    if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                        raise ValueError('EVENTS.jsonl must be an ordinary file')
+                    f.write(line)
+                    f.flush()
+                    os.fsync(f.fileno())
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            if created:
+                sync_dir(self.root)
+        return written_row
 
     def call(self, *args, scoped_errors=False):
         if self.config.get('attached_instance_id') and read(self.native/'system.json').get('instance_id') != self.config['attached_instance_id']:
@@ -156,17 +242,27 @@ class Host(RepairCustody):
         if p.returncode: raise ValueError(capture_error(p.stderr or p.stdout))
         return json.loads(p.stdout)
 
+    def reconcile_capture_native(self,sid,receipt,producer):
+        """Verify an already-committed native Attention receipt for crash recovery."""
+        adapter=HERE/'capture_native.py'
+        argv=[sys.executable,'-B',str(adapter),'--engine',self.engine,
+              '--root',str(self.native),'reconcile-assess',sid,'--receipt',str(receipt),'--producer',producer]
+        p=subprocess.run(argv,capture_output=True,text=True)
+        self.event('native-capture-reconciliation',{'argv':argv,'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr,
+                                                    'capture_adapter':self.pin(adapter)})
+        if p.returncode: raise ValueError(capture_error(p.stderr or p.stdout))
+        return json.loads(p.stdout)
+
     def temp(self, name, value):
         p=self.root/'requests'/name
         write(p,value)
         return p
 
     def pin(self, path):
-        p=Path(path).resolve(); raw=p.read_bytes(); sha=digest(raw)
-        obj=self.root/'objects'/sha
-        if not obj.exists():
-            obj.parent.mkdir(parents=True,exist_ok=True); obj.write_bytes(raw)
-        return {'path':str(p),'sha256':sha,'bytes':len(raw),'object':str(obj.relative_to(self.root))}
+        p=Path(path).resolve()
+        raw=p.read_bytes()
+        obj_rel, sha=self._put_object_bytes(raw)
+        return {'path':str(p),'sha256':sha,'bytes':len(raw),'object':obj_rel}
 
     def producer_dependencies(self):
         return [self.pin(HERE / name) for name in ('occurrence_files.py', 'repair_custody.py')]
@@ -293,7 +389,7 @@ class Host(RepairCustody):
                 raise ValueError('Do not silently replace an earlier duty; add a new identity or reopen/account for it')
             if rid not in duties: duties[rid]=dict(row,disposition='open')
         target=self.work/'sources/host/COMMISSION.md'
-        pending=target.with_name('COMMISSION.pending'); pending.write_bytes((self.root/new['object']).read_bytes()); pending.replace(target)
+        atomic_bytes(target,(self.root/new['object']).read_bytes())
         content={'contribution':target.read_text(),'obligations':list(duties.values()),
                  'continuation_account':nonempty(spec['account'],'commission continuation account')}
         record={'id':'goal','kind':'goal','content':content,'basis':['sources/host/COMMISSION.md']}
@@ -339,8 +435,7 @@ class Host(RepairCustody):
             raise ValueError('A resource retains its file type/path; use a new identity for another interpretation')
         target=self.work/path; target.parent.mkdir(parents=True,exist_ok=True)
         if not target.exists() or digest(target.read_bytes())!=pin['sha256']:
-            pending=target.with_name(target.name+'.pending')
-            pending.write_bytes((self.root/pin['object']).read_bytes()); pending.replace(target)
+            atomic_bytes(target,(self.root/pin['object']).read_bytes())
         row={'id':rid, **pin,'work_path':path}
         write(old_path,row)
         return row, previous if previous and previous['sha256']!=row['sha256'] else None
@@ -454,14 +549,14 @@ class Host(RepairCustody):
         method_path='sources/host/method-'+method_sha+'.md'; method_file=self.work/method_path
         if method_file.exists() and method_file.read_bytes()!=method_raw:
             raise ValueError('Retained host method identity differs')
-        if not method_file.exists(): method_file.write_bytes(method_raw)
+        if not method_file.exists(): atomic_bytes(method_file,method_raw)
         request['sources']=['sources/host/COMMISSION.md',method_path,note,*[r['work_path']for r in sources]]
         for key in ('techniques','discovery','compositions'):
             if key in spec: request[key]=spec[key]
         result=self.call('context',sid,'--request',self.temp(sid+'-request.json',request))
         recover=self.call('recover',sid)
-        context_file=self.root/'contexts'/f'{sid}.md'; context_file.parent.mkdir(parents=True,exist_ok=True)
-        context_file.write_text(recover['context'])
+        context_file=self.root/'contexts'/f'{sid}.md'
+        atomic_bytes(context_file,recover['context'].encode('utf-8'))
         scope={'format':'g60-continuing-work-scope/1','id':sid,'prepared_at_utc':now(),
                'host_producer':self.pin(Path(__file__).resolve()),
                'host_dependencies':self.producer_dependencies(),
@@ -476,30 +571,8 @@ class Host(RepairCustody):
                 'changed_sources':len(changed),'overlap_nominations':len(overlaps),'targets':targets,
                 'parent_owed':[r['id'] for r in known.values() if r['disposition'] not in ('fulfilled','released')]}
 
-    def capture(self,sid,spec):
-        """Retain products through native Attention without exposing global status."""
-        sid=ident(sid); scope=read(self.root/'scopes'/f'{sid}.json')
-        if set(spec)!={'receipt','producer'}:
-            raise ValueError('Candidate capture requires receipt and producer only')
-        if 'result' in scope or 'superseded' in scope:
-            raise ValueError('Candidate capture uses an open producing scope, not a completed or superseded one')
-        receipt=Path(spec['receipt']).resolve()
-        with receipt.open('rb') as submitted:
-            if not stat.S_ISREG(os.fstat(submitted.fileno()).st_mode):
-                raise ValueError('An ordinary assessment receipt file is required')
-            body=submitted.read()
-        rid=ident(json.loads(body.decode())['id'])
-        target=self.root/'captures'/sid/f'{rid}.json'
-        if target.exists():
-            raise ValueError('Retain the existing candidate capture; use a fresh receipt for a new occurrence')
-        # The adapter checks the selected native return under the same native
-        # owner lock as assessment, without constructing global status.
-        # The host lock does not protect the caller's path. Give native strict
-        # JSON validation and Attention exactly the bytes used to name this capture.
-        with NamedTemporaryFile(dir=self.root/'requests', suffix='.json') as selected:
-            selected.write(body)
-            selected.flush()
-            result=self.capture_native(sid,Path(selected.name),nonempty(spec['producer'],'producer'))
+    @staticmethod
+    def _capture_record(sid, result):
         attention=result['attention']; status=result['status']
         matching=[r for r in status.get('turns',[]) if r.get('packet')==sid]
         turn=({'id':sid,'transport':matching[0]['transport'],
@@ -507,12 +580,139 @@ class Host(RepairCustody):
               if len(matching)==1 else {'id':sid,'transport':'unavailable','publication_count':None})
         # Use an explicit outward allowlist. The selected adapter result remains
         # in owner evidence; it is never this constructor's unfiltered response.
-        capture={'id':sid,'attention':{k:attention[k] for k in ('receipt','object','recorded','boundary')},
-                 'turn':turn,'parent_duties_closed':False,
-                 'scope':'Candidate custody and requested-turn status only; no unrelated history or parent-duty inventory. This is not a completed return, semantic verdict or access-control boundary.'}
+        return {'id':sid,'attention':{k:attention[k] for k in ('receipt','object','recorded','boundary')},
+                'turn':turn,'parent_duties_closed':False,
+                'scope':'Candidate custody and requested-turn status only; no unrelated history or parent-duty inventory. This is not a completed return, semantic verdict or access-control boundary.'}
+
+    def _pending_capture_paths(self, sid):
+        folder = self.root / 'captures' / sid
+        if not folder.is_dir():
+            return []
+        return sorted(folder.glob('.pending-*.json'))
+
+    def _reconcile_pending_captures(self, sid):
+        reconciled = []
+        (self.root / 'requests').mkdir(parents=True, exist_ok=True)
+        for pending_path in self._pending_capture_paths(sid):
+            pending = read(pending_path)
+            rid = ident(pending['receipt'])
+            producer = nonempty(pending['producer'], 'producer')
+            target = self.root / 'captures' / sid / f'{rid}.json'
+            if target.exists():
+                pending_path.unlink(missing_ok=True)
+                continue
+            obj_path = self.root / pending['receipt_object']
+            if obj_path.is_symlink() or not obj_path.is_file():
+                raise ValueError(f'Retained pending receipt object is unavailable: {rid}')
+            body = obj_path.read_bytes()
+            if digest(body) != pending['receipt_sha256']:
+                raise ValueError(f'Retained pending receipt object integrity mismatch: {rid}')
+            with NamedTemporaryFile(dir=self.root / 'requests', suffix='.json') as selected:
+                selected.write(body)
+                selected.flush()
+                try:
+                    result = self.reconcile_capture_native(sid, Path(selected.name), producer)
+                except ValueError as exc:
+                    if str(exc) == 'receipt identity not recorded in native Attention':
+                        pending_path.unlink(missing_ok=True)
+                        self.event('pending-capture-uncommitted', {'id': sid, 'receipt': rid})
+                        continue
+                    raise
+            capture = self._capture_record(sid, result)
+            write(target, capture)
+            pending_path.unlink(missing_ok=True)
+            self.event('candidate-captured', {'id': sid, 'receipt': rid, 'capture': self.pin(target),
+                                              'reconciled_from_native': True})
+            reconciled.append(capture)
+        return reconciled
+
+    def capture(self,sid,spec):
+        """Retain products through native Attention without exposing global status."""
+        sid=ident(sid); scope=read(self.root/'scopes'/f'{sid}.json')
+        if set(spec)!={'receipt','producer'}:
+            raise ValueError('Candidate capture requires receipt and producer only')
+        if 'result' in scope or 'superseded' in scope:
+            raise ValueError('Candidate capture uses an open producing scope, not a completed or superseded one')
+        producer=nonempty(spec['producer'],'producer')
+        receipt=Path(spec['receipt']).resolve()
+        with receipt.open('rb') as submitted:
+            if not stat.S_ISREG(os.fstat(submitted.fileno()).st_mode):
+                raise ValueError('An ordinary assessment receipt file is required')
+            body=submitted.read()
+        rid=ident(loads_strict(body)['id'])
+        target=self.root/'captures'/sid/f'{rid}.json'
+        if target.exists():
+            raise ValueError('Retain the existing candidate capture; use a fresh receipt for a new occurrence')
+        receipt_obj, receipt_sha = self._put_object_bytes(body)
+        pending_path=self.root/'captures'/sid/f'.pending-{rid}.json'
+        created_pending = not pending_path.exists()
+        if created_pending:
+            write(pending_path, {'id': sid, 'receipt': rid, 'producer': producer,
+                                 'receipt_object': receipt_obj, 'receipt_sha256': receipt_sha,
+                                 'started_at_utc': now()})
+        # The adapter checks the selected native return under the same native
+        # owner lock as assessment, without constructing global status.
+        # The host lock does not protect the caller's path. Give native strict
+        # JSON validation and Attention exactly the bytes used to name this capture.
+        reconciled=False
+        (self.root/'requests').mkdir(parents=True,exist_ok=True)
+        with NamedTemporaryFile(dir=self.root/'requests', suffix='.json') as selected:
+            selected.write(body)
+            selected.flush()
+            try:
+                result=self.capture_native(sid,Path(selected.name),producer)
+            except ValueError as exc:
+                if str(exc) != 'receipt identity already used':
+                    if created_pending and str(exc) in {
+                        'disposition must be considered or deferred',
+                        'each assessment must name a distinct actually delivered item',
+                        'receipt must contain id and assessments',
+                        'invalid assessment fields',
+                        'nonempty bounded assessments required',
+                        'Native return already exists; use its retained body or a new current occurrence',
+                        'Selected native engine does not match the reviewed capture adapter; requalify this adapter before capture',
+                    }:
+                        pending_path.unlink(missing_ok=True)
+                    raise
+                try:
+                    result=self.reconcile_capture_native(sid,Path(selected.name),producer)
+                except ValueError as reconcile_exc:
+                    if created_pending and str(reconcile_exc) in {
+                        'receipt identity already used',
+                        'receipt must contain id and assessments',
+                    }:
+                        pending_path.unlink(missing_ok=True)
+                    raise
+                reconciled=True
+        capture=self._capture_record(sid,result)
         write(target,capture)
-        self.event('candidate-captured',{'id':sid,'receipt':rid,'capture':self.pin(target)})
+        pending_path.unlink(missing_ok=True)
+        event_data={'id':sid,'receipt':rid,'capture':self.pin(target)}
+        if reconciled:
+            event_data['reconciled_from_native']=True
+        self.event('candidate-captured',event_data)
         return capture
+
+    def _record_partial_publication(self, path, scope, *, producer, account, returned, publications,
+                                    published_outputs, pending_targets, state, failed_target=None, error=None):
+        entry={'at_utc':now(),'producer':producer,'account':account,'return':returned,
+               'publications':list(publications),'outputs':list(published_outputs),
+               'pending_targets':list(pending_targets),'state':state}
+        if failed_target is not None:
+            entry['failed_target']=failed_target
+        if error is not None:
+            entry['error']=error
+        scope['partial_publication']=entry
+        write(path,scope)
+        if state!='publishing':
+            event_payload={'id':scope['id'],'scope':self.pin(path),
+                           'published_targets':[p['path'] for p in publications],
+                           'pending_targets':list(pending_targets)}
+            if failed_target is not None:
+                event_payload['failed_target']=failed_target
+            if error is not None:
+                event_payload['error']=error
+            self.event('partial-publication',event_payload)
 
     def receive(self,sid,spec):
         sid=ident(sid); path=self.root/'scopes'/f'{sid}.json'; scope=read(path)
@@ -529,19 +729,40 @@ class Host(RepairCustody):
             self.current(source,'Selected current source '+source['id'])
         proposals=spec['proposals']; expected={Path(t).name:t for t in scope['targets']}
         if set(proposals)!=set(expected): raise ValueError('Receive exactly the selected output names')
-        args=['receive',sid,'--reply',spec['reply'],'--producer',nonempty(spec['producer'],'producer')]
+        account=nonempty(spec['account'],'receiving account')
+        producer=nonempty(spec['producer'],'producer')
+        args=['receive',sid,'--reply',spec['reply'],'--producer',producer]
         for name,source in proposals.items(): args+=['--proposal',expected[name]+'='+str(Path(source).resolve())]
         if spec.get('assessment'): args+=['--assessment',spec['assessment']]
         result=self.call(*args)
-        scope['transport']={'at_utc':now(),'return':result['return'],'account':spec['account']}
+        scope['transport']={'at_utc':now(),'return':result['return'],'account':account}
         write(path,scope)
         self.event('native-return-retained',{'id':sid,'scope':self.pin(path)})
         publications=[]
-        for target in scope['targets']:
-            publications.append(self.call('adopt',sid,'--target',target,'--reason',nonempty(spec['account'],'receiving account'))['publication'])
-        scope['result']={'at_utc':now(),'producer':spec['producer'],'return':result['return'],
-                         'publications':publications,'outputs':[self.pin(self.work/t) for t in scope['targets']],
-                         'account':spec['account']}
+        published_outputs=[]
+        for idx,target in enumerate(scope['targets']):
+            try:
+                publication=self.call('adopt',sid,'--target',target,'--reason',account)['publication']
+            except Exception as exc:
+                if publications:
+                    self._record_partial_publication(
+                        path, scope, producer=producer, account=account, returned=result['return'],
+                        publications=publications, published_outputs=published_outputs,
+                        pending_targets=scope['targets'][idx:],
+                        state='partial-publication-needs-reconciliation',
+                        failed_target=target, error=str(exc).strip())
+                raise
+            publications.append(publication)
+            published_outputs.append(self.pin(self.work/target))
+            if idx + 1 < len(scope['targets']):
+                self._record_partial_publication(
+                    path, scope, producer=producer, account=account, returned=result['return'],
+                    publications=publications, published_outputs=published_outputs,
+                    pending_targets=scope['targets'][idx + 1:], state='publishing')
+        scope.pop('partial_publication', None)
+        scope['result']={'at_utc':now(),'producer':producer,'return':result['return'],
+                         'publications':publications,'outputs':published_outputs,
+                         'account':account}
         write(path,scope)
         self.event('received',{'id':sid,'return_sha256':result['return']['return_sha256'],
                               'scope':self.pin(path),'parent_duties_closed':False})
@@ -550,12 +771,23 @@ class Host(RepairCustody):
     def resume(self,sid,spec):
         """Recover an actual retained return; never repeat receive or attempted publication."""
         sid=ident(sid); path=self.root/'scopes'/f'{sid}.json'; scope=read(path)
+        unknown=set(spec)-{'account','settle_partial'}
+        if unknown:
+            raise ValueError('resume has unsupported fields: '+', '.join(sorted(unknown)))
         account=nonempty(spec['account'],'recovery account')
+        settle_partial=spec.get('settle_partial',False)
+        if type(settle_partial) is not bool:
+            raise ValueError('settle_partial must be a boolean')
         if 'superseded' in scope:
             return {'id':sid,'state':'superseded-without-output','successor':scope['superseded']['successor']}
         if 'result' in scope:
             self.received_outputs(scope)
-            return {'id':sid,'already_received':True,'outputs':scope['result']['outputs']}
+            out={'id':sid,'already_received':True,'outputs':scope['result']['outputs']}
+            if scope['result'].get('partial'):
+                out['partial']=True
+                out['unpublished_targets']=scope['result'].get('unpublished_targets',[])
+            return out
+        reconciled_captures=self._reconcile_pending_captures(sid)
         goal=self.goal()
         observed = self.inspect_native(sid)
         returned = observed.get('return')
@@ -564,6 +796,9 @@ class Host(RepairCustody):
             raise ValueError(f"{sid}: no return confirms the handoff to {handoff['successor']}; "
                              "inspect the original packet before retrying supersede")
         if returned is None:
+            if reconciled_captures:
+                return {'id':sid,'state':'open-with-reconciled-captures',
+                        'reconciled_captures':reconciled_captures,'parent_duties_closed':False}
             raise ValueError('No native return exists; ordinary receive is still the appropriate operation')
         if handoff is not None:
             # A bound carrier excludes caller-import at Exchange. Its actual
@@ -575,32 +810,111 @@ class Host(RepairCustody):
         if not returned['proposals']:
             raise ValueError(f'{sid}: no-output return has no recorded successor binding; '
                              'retain the original return and reconcile the handoff at its host')
-        if goal['sha256']!=scope['parent_goal']['sha256']:
-            raise ValueError('Parent duty changed; preserve old return and prepare a new current receiving scope')
-        self.current(self.config['commission'],'Current commission')
-        for source in scope['sources']: self.current(source,'Selected current source '+source['id'])
         proposals={r['path']:r for r in returned['proposals']}
         if set(proposals)!=set(scope['targets']): raise ValueError('Observed native return differs from selected host targets')
         known={p['record']['path']:p for p in observed['publications'] if isinstance(p.get('record'),dict)}
-        publications=[]
+        completed_pubs=[]
+        completed_outputs=[]
+        remaining_targets=[]
         for target in scope['targets']:
             if target in known:
                 row=known[target]
                 if row.get('observation_error') or row['record'].get('phase')!='complete' or not row.get('current_target',{}).get('matches_proposal'):
                     raise ValueError(f'{sid}: publication of {target} has an unresolved outcome; '
                                      'inspect and reconcile the original native publication before continuing')
-                publications.append(row['record'])
+                completed_pubs.append(row['record'])
+                completed_outputs.append(self.pin(self.work/target))
             else:
-                # Only an unattempted target may be published, through current native guards.
-                (self.work/target).parent.mkdir(parents=True,exist_ok=True)
-                publications.append(self.call('adopt',sid,'--target',target,'--reason',account)['publication'])
+                remaining_targets.append(target)
+        if settle_partial:
+            if not completed_pubs:
+                raise ValueError(f'{sid}: no published targets to settle partially')
+            if remaining_targets:
+                scope.pop('partial_publication', None)
+                scope['result']={'at_utc':now(),'producer':returned['producer'],'return':returned,
+                                 'publications':completed_pubs,'outputs':completed_outputs,
+                                 'unpublished_targets':remaining_targets,'partial':True,
+                                 'account':account,'recovered_from_native':True}
+                write(path,scope)
+                self.event('resumed-partial-return',{'id':sid,'scope':self.pin(path),
+                                                     'published_targets':[p['path'] for p in completed_pubs],
+                                                     'unpublished_targets':remaining_targets,
+                                                     'new_receive_performed':False,
+                                                     'previous_publications_replayed':False})
+                res={'id':sid,'outputs':scope['result']['outputs'],
+                     'published_targets':[p['path'] for p in completed_pubs],
+                     'unpublished_targets':remaining_targets,'partial':True,
+                     'recovered':True,'parent_duties_closed':False}
+                if reconciled_captures:
+                    res['reconciled_captures']=reconciled_captures
+                return res
+        if remaining_targets or not settle_partial:
+            try:
+                if goal['sha256']!=scope['parent_goal']['sha256']:
+                    raise ValueError('Parent duty changed; preserve old return and prepare a new current receiving scope')
+                self.current(self.config['commission'],'Current commission')
+                for source in scope['sources']: self.current(source,'Selected current source '+source['id'])
+            except ValueError as exc:
+                if completed_pubs and remaining_targets:
+                    detail = str(exc).strip()
+                    self._record_partial_publication(
+                        path, scope, producer=returned['producer'], account=account, returned=returned,
+                        publications=completed_pubs, published_outputs=completed_outputs,
+                        pending_targets=remaining_targets,
+                        state='partial-publication-needs-reconciliation', error=detail)
+                    raise ValueError(
+                        f'{sid}: partial publication recorded ({len(completed_pubs)} published, '
+                        f'{len(remaining_targets)} pending); {detail}. '
+                        'Inspect and settle with settle_partial=true or prepare a fresh receiving scope'
+                    ) from exc
+                raise
+        pubs_by_target={p['path']:p for p in completed_pubs}
+        outs_by_target={p['path']:o for p,o in zip(completed_pubs,completed_outputs)}
+        for idx,target in enumerate(remaining_targets):
+            # Only an unattempted target may be published, through current native guards.
+            (self.work/target).parent.mkdir(parents=True,exist_ok=True)
+            try:
+                pub=self.call('adopt',sid,'--target',target,'--reason',account)['publication']
+            except Exception as exc:
+                if pubs_by_target:
+                    detail = str(exc).strip()
+                    ordered_pubs=[pubs_by_target[t] for t in scope['targets'] if t in pubs_by_target]
+                    ordered_outs=[outs_by_target[t] for t in scope['targets'] if t in outs_by_target]
+                    pending_targets=list(remaining_targets[idx:])
+                    self._record_partial_publication(
+                        path, scope, producer=returned['producer'], account=account, returned=returned,
+                        publications=ordered_pubs, published_outputs=ordered_outs,
+                        pending_targets=pending_targets,
+                        state='partial-publication-needs-reconciliation',
+                        failed_target=target, error=detail)
+                    raise ValueError(
+                        f'{sid}: partial publication recorded ({len(ordered_pubs)} published, '
+                        f'{len(pending_targets)} pending) after {target} failed: {detail}; '
+                        'inspect and settle with settle_partial=true or prepare a fresh receiving scope'
+                    ) from exc
+                raise
+            pubs_by_target[target]=pub
+            outs_by_target[target]=self.pin(self.work/target)
+            if idx + 1 < len(remaining_targets):
+                ordered_pubs=[pubs_by_target[t] for t in scope['targets'] if t in pubs_by_target]
+                ordered_outs=[outs_by_target[t] for t in scope['targets'] if t in outs_by_target]
+                self._record_partial_publication(
+                    path, scope, producer=returned['producer'], account=account, returned=returned,
+                    publications=ordered_pubs, published_outputs=ordered_outs,
+                    pending_targets=remaining_targets[idx + 1:], state='publishing')
+        publications=[pubs_by_target[t] for t in scope['targets']]
+        outputs=[outs_by_target[t] for t in scope['targets']]
+        scope.pop('partial_publication', None)
         scope['result']={'at_utc':now(),'producer':returned['producer'],'return':returned,
-                         'publications':publications,'outputs':[self.pin(self.work/t) for t in scope['targets']],
+                         'publications':publications,'outputs':outputs,
                          'account':account,'recovered_from_native':True}
         write(path,scope)
         self.event('resumed-return',{'id':sid,'scope':self.pin(path),'new_receive_performed':False,
                                     'previous_publications_replayed':False})
-        return {'id':sid,'outputs':scope['result']['outputs'],'recovered':True,'parent_duties_closed':False}
+        res={'id':sid,'outputs':scope['result']['outputs'],'recovered':True,'parent_duties_closed':False}
+        if reconciled_captures:
+            res['reconciled_captures']=reconciled_captures
+        return res
 
     def _finish_supersession(self, path, scope, returned):
         sid = scope['id']
@@ -650,7 +964,7 @@ class Host(RepairCustody):
         if 'supersession_request' in scope and scope['supersession_request'] != request:
             raise ValueError(f"{sid}: the outstanding handoff to {scope['supersession_request']['successor']} differs; "
                              "inspect the original request")
-        reply.write_bytes(body)
+        atomic_bytes(reply, body)
         scope['supersession_request'] = request
         write(path, scope)
         returned=self.call('receive',sid,'--reply',reply,'--producer',producer)['return']
@@ -661,11 +975,35 @@ class Host(RepairCustody):
         scopes=[]
         for scope in self.scopes():
             current=transport.get(scope['id'],{})
-            label='received' if 'result' in scope else 'superseded-without-output' if 'superseded'in scope else 'native-return-needs-host-reconciliation' if current.get('transport')=='returned' else 'prepared'
+            if 'result' in scope:
+                label='partially-received' if scope['result'].get('partial') else 'received'
+            elif 'superseded' in scope:
+                label='superseded-without-output'
+            elif 'partial_publication' in scope:
+                label='partial-publication-needs-reconciliation'
+            elif current.get('transport')=='returned':
+                label='native-return-needs-host-reconciliation'
+            else:
+                label='prepared'
             row={'id':scope['id'],'host_state':label,'native':current}
+            if 'result' in scope and scope['result'].get('partial'):
+                row['published_targets']=[p['path'] for p in scope['result']['publications']]
+                row['unpublished_targets']=scope['result'].get('unpublished_targets',[])
+            if 'partial_publication' in scope and 'result' not in scope:
+                partial=scope['partial_publication']
+                row['published_targets']=[p['path'] for p in partial['publications']]
+                row['pending_targets']=partial['pending_targets']
+                if 'failed_target' in partial:
+                    row['failed_target']=partial['failed_target']
+                if 'error' in partial:
+                    row['error']=partial['error']
             if 'supersession_request' in scope and 'result' not in scope:
                 row.update(host_state='supersession-needs-reconciliation',
                            successor=scope['supersession_request']['successor'])
+            pending_caps=[p.name.removeprefix('.pending-').removesuffix('.json')
+                          for p in self._pending_capture_paths(scope['id'])]
+            if pending_caps:
+                row['pending_captures']=pending_caps
             scopes.append(row)
         return {'native':native,'scopes':scopes,
                 'repairs':[read(x) for x in sorted((self.root/'repairs').glob('*.json'))]}
@@ -678,10 +1016,11 @@ class Host(RepairCustody):
         evidence=spec.get('evidence',[])
         if spec['disposition']=='fulfilled':
             if not evidence: raise ValueError('Fulfillment requires actual received evidence')
-            published={t for s in self.scopes() if 'result' in s for t in s['targets']}
+            published={p['path'] for s in self.scopes() if 'result' in s for p in s['result']['publications']}
             if set(evidence)-published: raise ValueError('Use actual current returned outputs as evidence')
             for scope in self.scopes():
-                if set(scope['targets']) & set(evidence): self.received_outputs(scope)
+                if 'result' in scope and {p['path'] for p in scope['result']['publications']} & set(evidence):
+                    self.received_outputs(scope)
             selected.update(disposition='fulfilled',account=nonempty(spec['account'],'duty account'),evidence=evidence)
         else: selected.update(disposition='open',account=nonempty(spec['account'],'reopened duty account'))
         record={'id':'goal','kind':'goal','content':goal['content'],'basis':['sources/host/COMMISSION.md']}
@@ -693,21 +1032,21 @@ class Host(RepairCustody):
         self.current(self.config['commission'],'Current commission')
         goal=self.goal(); owed=[r['id'] for r in goal['content']['obligations'] if r['disposition'] not in ('fulfilled','released')]
         if owed: raise ValueError('Containing commission remains owed: '+', '.join(owed))
-        account=self.root/'requests/whole-goal-account.md'; account.write_text(nonempty(spec['account'],'whole goal account'))
+        account=self.root/'requests/whole-goal-account.md'; atomic_bytes(account,nonempty(spec['account'],'whole goal account').encode('utf-8'))
         args=['interpret','--goal-revision',goal['revision'],'--disposition','met','--account',account]
         for p in spec.get('evidence',[]): args+=['--evidence',p]
         return self.call(*args)
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument('--root',required=True,type=Path)
+    p=argparse.ArgumentParser(description=__doc__, allow_abbrev=False); p.add_argument('--root',required=True,type=Path)
     sub=p.add_subparsers(dest='action',required=True)
     for name in ('init','commission','upgrade','prepare','repair-open','repair-accept','duty','finish','bind-continuation'):
-        sub.add_parser(name).add_argument('--spec',required=True,type=Path)
-    receiver=sub.add_parser('receive'); receiver.add_argument('id'); receiver.add_argument('--spec',required=True,type=Path)
-    capture=sub.add_parser('capture'); capture.add_argument('id'); capture.add_argument('--spec',required=True,type=Path)
-    resume=sub.add_parser('resume'); resume.add_argument('id'); resume.add_argument('--spec',required=True,type=Path)
-    supersede=sub.add_parser('supersede'); supersede.add_argument('id'); supersede.add_argument('--spec',required=True,type=Path)
-    sub.add_parser('status')
+        sub.add_parser(name, allow_abbrev=False).add_argument('--spec',required=True,type=Path)
+    receiver=sub.add_parser('receive', allow_abbrev=False); receiver.add_argument('id'); receiver.add_argument('--spec',required=True,type=Path)
+    capture=sub.add_parser('capture', allow_abbrev=False); capture.add_argument('id'); capture.add_argument('--spec',required=True,type=Path)
+    resume=sub.add_parser('resume', allow_abbrev=False); resume.add_argument('id'); resume.add_argument('--spec',required=True,type=Path)
+    supersede=sub.add_parser('supersede', allow_abbrev=False); supersede.add_argument('id'); supersede.add_argument('--spec',required=True,type=Path)
+    sub.add_parser('status', allow_abbrev=False)
     args=p.parse_args(); root=args.root.resolve(); root.parent.mkdir(parents=True,exist_ok=True)
     # One host operation owns resource refresh plus native capture/admission.
     # This is custody serialization, not a permanent semantic integrator.
@@ -719,7 +1058,7 @@ def main():
             result=host.status()
         elif args.action in ('capture','receive','resume','supersede'): result=getattr(host,args.action)(args.id,read(args.spec))
         else: result=getattr(host,args.action.replace('-','_'))(read(args.spec))
-    print(json.dumps(result,indent=2,ensure_ascii=False))
+    print(json.dumps(result,indent=2,ensure_ascii=False,allow_nan=False))
 
 if __name__=='__main__':
     try: main()
