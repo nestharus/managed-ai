@@ -1,0 +1,1 @@
+"""Continuing-work host adapter."""

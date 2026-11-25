@@ -83,15 +83,25 @@ def _temp_receipt_file(directory: Path, body: bytes) -> Path:
         return Path(selected.name)
 
 
-class NativeBridge:
-    """Mixin for durable object/event custody, native subprocess execution, and capture reconciliation."""
+def resolve_sibling_cli(engine_entry: Path, canonical_rel: str, legacy_name: str) -> Path:
+    """Resolve an engine CLI script relative to store/manage_store.py (or historical runtime/manage_store.py)."""
+    entry = Path(engine_entry).resolve()
+    if entry.parent.name == 'store':
+        candidate = entry.parents[1] / canonical_rel
+        if candidate.is_file():
+            return candidate
+    return entry.with_name(legacy_name)
 
-    def _write(self, path, value):
-        write(path, value)
+
+class NativeBridge:
+    """Composed collaborator for durable object/event custody, native subprocess calls, and capture reconciliation."""
+
+    def __init__(self, host):
+        self._host = host
 
     def _put_object_bytes(self, raw: bytes) -> tuple[str, str]:
         sha = digest(raw)
-        obj = self.root / 'objects' / sha
+        obj = self._host.root / 'objects' / sha
         if obj.is_symlink() or obj.exists():
             if obj.is_symlink() or not obj.is_file():
                 raise ValueError(f'Retained object must be an ordinary file: {obj}')
@@ -100,7 +110,7 @@ class NativeBridge:
                 raise ValueError(f'Retained object integrity mismatch for {sha}')
         else:
             atomic_bytes(obj, raw)
-        return obj.relative_to(self.root).as_posix(), sha
+        return obj.relative_to(self._host.root).as_posix(), sha
 
     def _bound_event_value(self, value: dict) -> dict:
         bounded = dict(value)
@@ -118,7 +128,7 @@ class NativeBridge:
         return bounded
 
     def event(self, action, value):
-        self.root.mkdir(parents=True, exist_ok=True)
+        self._host.root.mkdir(parents=True, exist_ok=True)
         bounded = self._bound_event_value(value)
         row = {'at_utc': now(), 'action': action, **bounded}
         line = _safe_jsonl(row)
@@ -134,8 +144,8 @@ class NativeBridge:
                 summary['argv'] = row['argv']
             line = _safe_jsonl(summary)
             written_row = summary
-        events_path = self.root / 'EVENTS.jsonl'
-        events_lock = self.root / '.events.lock'
+        events_path = self._host.root / 'EVENTS.jsonl'
+        events_lock = self._host.root / '.events.lock'
         with file_lock(events_lock):
             if events_path.is_symlink():
                 raise ValueError('EVENTS.jsonl must be an ordinary file')
@@ -147,24 +157,25 @@ class NativeBridge:
                 f.flush()
                 os.fsync(f.fileno())
             if created:
-                sync_dir(self.root)
+                sync_dir(self._host.root)
         return written_row
 
     def call(self, *args, scoped_errors=False):
-        if self.config.get('attached_instance_id') and read(self.native / 'system.json').get('instance_id') != self.config['attached_instance_id']:
+        if (self._host.config.get('attached_instance_id')
+                and read(self._host.native / 'system.json').get('instance_id') != self._host.config['attached_instance_id']):
             raise ValueError('attached native store identity changed')
-        argv = [sys.executable, '-B', self.engine, '--root', str(self.native), *map(str, args)]
-        p = subprocess.run(argv, capture_output=True, text=True)
-        self.event('native-call', {'argv': argv, 'exit': p.returncode, 'stdout': p.stdout, 'stderr': p.stderr})
+        argv = [sys.executable, '-B', self._host.engine, '--root', str(self._host.native), *map(str, args)]
+        p = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8')
+        self._host.event('native-call', {'argv': argv, 'exit': p.returncode, 'stdout': p.stdout, 'stderr': p.stderr})
         if p.returncode:
             raise ValueError(capture_error(p.stderr or p.stdout) if scoped_errors else p.stderr or p.stdout)
         return loads_strict(p.stdout)
 
     def inspect_native(self, sid, scoped_errors=False):
-        engine = Path(self.engine).with_name('exchange_packets.py' if Path(self.engine).name == 'manage_store.py' else 'work.py')
-        argv = [sys.executable, '-B', str(engine), '--root', str(self.native / 'exchange'), 'inspect', ident(sid)]
-        p = subprocess.run(argv, capture_output=True, text=True)
-        self.event('native-inspection', {'argv': argv, 'exit': p.returncode, 'stdout': p.stdout, 'stderr': p.stderr})
+        cli = resolve_sibling_cli(Path(self._host.engine), 'core/cli/exchange_packets.py', 'exchange_packets.py')
+        argv = [sys.executable, '-B', str(cli), '--root', str(self._host.native / 'exchange'), 'inspect', ident(sid)]
+        p = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8')
+        self._host.event('native-inspection', {'argv': argv, 'exit': p.returncode, 'stdout': p.stdout, 'stderr': p.stderr})
         if p.returncode:
             raise ValueError(capture_error(p.stderr or p.stdout) if scoped_errors else p.stderr or p.stdout)
         return loads_strict(p.stdout)
@@ -172,11 +183,11 @@ class NativeBridge:
     def capture_native(self, sid, receipt, producer):
         """Use the qualified host adapter over the unchanged selected engine."""
         adapter = HERE / 'capture_native.py'
-        argv = [sys.executable, '-B', str(adapter), '--engine', self.engine,
-                '--root', str(self.native), 'assess', sid, '--receipt', str(receipt), '--producer', producer]
-        p = subprocess.run(argv, capture_output=True, text=True)
-        self.event('native-call', {'argv': argv, 'exit': p.returncode, 'stdout': p.stdout, 'stderr': p.stderr,
-                                   'capture_adapter': self.pin(adapter)})
+        argv = [sys.executable, '-B', str(adapter), '--engine', self._host.engine,
+                '--root', str(self._host.native), 'assess', sid, '--receipt', str(receipt), '--producer', producer]
+        p = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8')
+        self._host.event('native-call', {'argv': argv, 'exit': p.returncode, 'stdout': p.stdout, 'stderr': p.stderr,
+                                         'capture_adapter': self._host.pin(adapter)})
         if p.returncode:
             raise ValueError(capture_error(p.stderr or p.stdout))
         return loads_strict(p.stdout)
@@ -184,18 +195,18 @@ class NativeBridge:
     def reconcile_capture_native(self, sid, receipt, producer):
         """Verify an already-committed native Attention receipt for crash recovery."""
         adapter = HERE / 'capture_native.py'
-        argv = [sys.executable, '-B', str(adapter), '--engine', self.engine,
-                '--root', str(self.native), 'reconcile-assess', sid, '--receipt', str(receipt), '--producer', producer]
-        p = subprocess.run(argv, capture_output=True, text=True)
-        self.event('native-capture-reconciliation', {'argv': argv, 'exit': p.returncode, 'stdout': p.stdout, 'stderr': p.stderr,
-                                                     'capture_adapter': self.pin(adapter)})
+        argv = [sys.executable, '-B', str(adapter), '--engine', self._host.engine,
+                '--root', str(self._host.native), 'reconcile-assess', sid, '--receipt', str(receipt), '--producer', producer]
+        p = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8')
+        self._host.event('native-capture-reconciliation', {'argv': argv, 'exit': p.returncode, 'stdout': p.stdout,
+                                                           'stderr': p.stderr, 'capture_adapter': self._host.pin(adapter)})
         if p.returncode:
             raise ValueError(capture_error(p.stderr or p.stdout))
         return loads_strict(p.stdout)
 
     def temp(self, name, value):
-        p = self.root / 'requests' / name
-        self._write(p, value)
+        p = self._host.root / 'requests' / name
+        self._host._write(p, value)
         return p
 
     def pin(self, path):
@@ -219,24 +230,24 @@ class NativeBridge:
                 'scope': 'Candidate custody and requested-turn status only; no unrelated history or parent-duty inventory. This is not a completed return, semantic verdict or access-control boundary.'}
 
     def _pending_capture_paths(self, sid):
-        folder = self.root / 'captures' / sid
+        folder = self._host.root / 'captures' / sid
         if not folder.is_dir():
             return []
         return sorted(folder.glob('.pending-*.json'))
 
     def _reconcile_pending_captures(self, sid):
         reconciled = []
-        requests_dir = self.root / 'requests'
+        requests_dir = self._host.root / 'requests'
         requests_dir.mkdir(parents=True, exist_ok=True)
         for pending_path in self._pending_capture_paths(sid):
             pending = read(pending_path)
             rid = ident(pending['receipt'])
             producer = nonempty(pending['producer'], 'producer')
-            target = self.root / 'captures' / sid / f'{rid}.json'
+            target = self._host.root / 'captures' / sid / f'{rid}.json'
             if target.exists():
                 pending_path.unlink(missing_ok=True)
                 continue
-            obj_path = self.root / pending['receipt_object']
+            obj_path = self._host.root / pending['receipt_object']
             if obj_path.is_symlink() or not obj_path.is_file():
                 raise ValueError(f'Retained pending receipt object is unavailable: {rid}')
             body = obj_path.read_bytes()
@@ -245,27 +256,27 @@ class NativeBridge:
             selected_path = _temp_receipt_file(requests_dir, body)
             try:
                 try:
-                    result = self.reconcile_capture_native(sid, selected_path, producer)
+                    result = self._host.reconcile_capture_native(sid, selected_path, producer)
                 except ValueError as exc:
                     if str(exc) == 'receipt identity not recorded in native Attention':
                         pending_path.unlink(missing_ok=True)
-                        self.event('pending-capture-uncommitted', {'id': sid, 'receipt': rid})
+                        self._host.event('pending-capture-uncommitted', {'id': sid, 'receipt': rid})
                         continue
                     raise
             finally:
                 selected_path.unlink(missing_ok=True)
             capture = self._capture_record(sid, result)
-            self._write(target, capture)
+            self._host._write(target, capture)
             pending_path.unlink(missing_ok=True)
-            self.event('candidate-captured', {'id': sid, 'receipt': rid, 'capture': self.pin(target),
-                                              'reconciled_from_native': True})
+            self._host.event('candidate-captured', {'id': sid, 'receipt': rid, 'capture': self._host.pin(target),
+                                                    'reconciled_from_native': True})
             reconciled.append(capture)
         return reconciled
 
     def capture(self, sid, spec):
         """Retain products through native Attention without exposing global status."""
         sid = ident(sid)
-        scope = read(self.root / 'scopes' / f'{sid}.json')
+        scope = read(self._host.root / 'scopes' / f'{sid}.json')
         if set(spec) != {'receipt', 'producer'}:
             raise ValueError('Candidate capture requires receipt and producer only')
         if 'result' in scope or 'superseded' in scope:
@@ -277,26 +288,25 @@ class NativeBridge:
                 raise ValueError('An ordinary assessment receipt file is required')
             body = submitted.read()
         rid = ident(loads_strict(body)['id'])
-        target = self.root / 'captures' / sid / f'{rid}.json'
+        target = self._host.root / 'captures' / sid / f'{rid}.json'
         if target.exists():
             raise ValueError('Retain the existing candidate capture; use a fresh receipt for a new occurrence')
         receipt_obj, receipt_sha = self._put_object_bytes(body)
-        pending_path = self.root / 'captures' / sid / f'.pending-{rid}.json'
-        requests_dir = self.root / 'requests'
+        pending_path = self._host.root / 'captures' / sid / f'.pending-{rid}.json'
+        requests_dir = self._host.root / 'requests'
         requests_dir.mkdir(parents=True, exist_ok=True)
         created_pending = not pending_path.exists()
         if not created_pending:
             existing_pending = read(pending_path)
             if (existing_pending.get('receipt_sha256') != receipt_sha
                     or existing_pending.get('producer') != producer):
-                # Distinguish a genuinely committed crashed capture from an uncommitted stale pre-commit failure.
-                old_obj = self.root / existing_pending['receipt_object']
+                old_obj = self._host.root / existing_pending['receipt_object']
                 old_body = old_obj.read_bytes() if old_obj.is_file() and not old_obj.is_symlink() else None
                 if old_body is not None and digest(old_body) == existing_pending.get('receipt_sha256'):
                     prior_path = _temp_receipt_file(requests_dir, old_body)
                     try:
                         try:
-                            self.reconcile_capture_native(sid, prior_path, existing_pending['producer'])
+                            self._host.reconcile_capture_native(sid, prior_path, existing_pending['producer'])
                         except ValueError as prior_exc:
                             if str(prior_exc) == 'receipt identity not recorded in native Attention':
                                 created_pending = True
@@ -305,18 +315,14 @@ class NativeBridge:
                     finally:
                         prior_path.unlink(missing_ok=True)
         if created_pending:
-            self._write(pending_path, {'id': sid, 'receipt': rid, 'producer': producer,
-                                       'receipt_object': receipt_obj, 'receipt_sha256': receipt_sha,
-                                       'started_at_utc': now()})
-        # The adapter checks the selected native return under the same native
-        # owner lock as assessment, without constructing global status.
-        # The host lock does not protect the caller's path. Give native strict
-        # JSON validation and Attention exactly the bytes used to name this capture.
+            self._host._write(pending_path, {'id': sid, 'receipt': rid, 'producer': producer,
+                                             'receipt_object': receipt_obj, 'receipt_sha256': receipt_sha,
+                                             'started_at_utc': now()})
         reconciled = False
         selected_path = _temp_receipt_file(requests_dir, body)
         try:
             try:
-                result = self.capture_native(sid, selected_path, producer)
+                result = self._host.capture_native(sid, selected_path, producer)
             except ValueError as exc:
                 if str(exc) != 'receipt identity already used':
                     if created_pending:
@@ -324,13 +330,13 @@ class NativeBridge:
                             pending_path.unlink(missing_ok=True)
                         else:
                             try:
-                                self.reconcile_capture_native(sid, selected_path, producer)
+                                self._host.reconcile_capture_native(sid, selected_path, producer)
                             except ValueError as probe_exc:
                                 if str(probe_exc) == 'receipt identity not recorded in native Attention':
                                     pending_path.unlink(missing_ok=True)
                     raise
                 try:
-                    result = self.reconcile_capture_native(sid, selected_path, producer)
+                    result = self._host.reconcile_capture_native(sid, selected_path, producer)
                 except ValueError as reconcile_exc:
                     if created_pending and str(reconcile_exc) in {
                         'receipt identity already used',
@@ -342,10 +348,10 @@ class NativeBridge:
         finally:
             selected_path.unlink(missing_ok=True)
         capture = self._capture_record(sid, result)
-        self._write(target, capture)
+        self._host._write(target, capture)
         pending_path.unlink(missing_ok=True)
-        event_data = {'id': sid, 'receipt': rid, 'capture': self.pin(target)}
+        event_data = {'id': sid, 'receipt': rid, 'capture': self._host.pin(target)}
         if reconciled:
             event_data['reconciled_from_native'] = True
-        self.event('candidate-captured', event_data)
+        self._host.event('candidate-captured', event_data)
         return capture

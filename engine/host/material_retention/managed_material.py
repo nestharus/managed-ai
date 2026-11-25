@@ -918,97 +918,98 @@ def rebuild(source_path, output, expected_index, expected_selection, account):
     require(not output.exists(), "Representation target must not exist")
     require(source_path not in output.parents and output not in source_path.parents,
             "Representation target and source must be separate roots")
-    index_raw = (source_path / "index.json").read_bytes()
-    current_raw = (source_path / "CURRENT.json").read_bytes()
-    require(sha(index_raw) == expected_index, "Source index differs from received identity")
-    require(loads_json(current_raw)["selection"] == expected_selection, "Source selection differs from received identity")
     require(account, "Representation transition needs an owner account")
-    source = Store(source_path)
-    source_selected_key, source_selected = current_selection(source)
-    selection_closure(source, source_selected_key)
-    events_raw = (source_path / "events.jsonl").read_bytes() if (source_path / "events.jsonl").exists() else b""
-    started = utc(); output.mkdir(parents=True)
-    copied_records = []
-    for directory in IMMUTABLE_RECORD_DIRS:
-        for path in sorted((source_path / directory).rglob("*.json")):
-            require(not path.is_symlink(), "Cannot migrate a linked immutable record")
-            raw = path.read_bytes(); relative = path.relative_to(source_path)
-            immutable(output / relative, raw)
-            copied_records.append({"path": relative.as_posix(), "sha256": sha(raw), "bytes": len(raw)})
-    target = Store(output, create=True)
-    target.event("representation-rebuild-started", {"source": str(source_path), "source_index": expected_index,
-                                                    "source_selection": expected_selection, "account": account})
-    try:
-        # Materialize underlying archive frames before managed exports which
-        # contain their encoded views. This preserves the same raw identities
-        # without reinstating one physical file for each legacy header.
-        archive_order = []
-        for key, row in source.objects.items():
-            if row["kind"] == "zip-recipe":
-                recipe = source.recipe(key)
-                names = {m["name"] for m in recipe["members"]}
-                managed = "index.json" in names and "EXPORT-MANIFEST.json" in names
-                archive_order.append((managed, row["bytes"], key))
-        for number, (_, _, key) in enumerate(sorted(archive_order), 1):
-            raw = source.materialize(key)
-            require(target.ingest(raw, "retained.zip") == key, "Regenerated transport identity differs")
-            print(json.dumps({"phase": "rebuild-transports", "completed": number, "total": len(archive_order)}, allow_nan=False), file=sys.stderr, flush=True)
-        for number, key in enumerate(sorted(source.objects), 1):
-            if key not in target.objects:
+    with store_lock(source_path, shared=True):
+        index_raw = (source_path / "index.json").read_bytes()
+        current_raw = (source_path / "CURRENT.json").read_bytes()
+        require(sha(index_raw) == expected_index, "Source index differs from received identity")
+        require(loads_json(current_raw)["selection"] == expected_selection, "Source selection differs from received identity")
+        source = Store(source_path)
+        source_selected_key, source_selected = current_selection(source)
+        selection_closure(source, source_selected_key)
+        events_raw = (source_path / "events.jsonl").read_bytes() if (source_path / "events.jsonl").exists() else b""
+        started = utc(); output.mkdir(parents=True)
+        copied_records = []
+        for directory in IMMUTABLE_RECORD_DIRS:
+            for path in sorted((source_path / directory).rglob("*.json")):
+                require(not path.is_symlink(), "Cannot migrate a linked immutable record")
+                raw = path.read_bytes(); relative = path.relative_to(source_path)
+                immutable(output / relative, raw)
+                copied_records.append({"path": relative.as_posix(), "sha256": sha(raw), "bytes": len(raw)})
+        target = Store(output, create=True)
+        target.event("representation-rebuild-started", {"source": str(source_path), "source_index": expected_index,
+                                                        "source_selection": expected_selection, "account": account})
+        try:
+            # Materialize underlying archive frames before managed exports which
+            # contain their encoded views. This preserves the same raw identities
+            # without reinstating one physical file for each legacy header.
+            archive_order = []
+            for key, row in source.objects.items():
+                if row["kind"] == "zip-recipe":
+                    recipe = source.recipe(key)
+                    names = {m["name"] for m in recipe["members"]}
+                    managed = "index.json" in names and "EXPORT-MANIFEST.json" in names
+                    archive_order.append((managed, row["bytes"], key))
+            for number, (_, _, key) in enumerate(sorted(archive_order), 1):
                 raw = source.materialize(key)
-                require(target.ingest(raw) == key, "Regenerated retained body differs")
-            if number % 20000 == 0:
-                print(json.dumps({"phase": "rebuild-content", "completed": number, "total": len(source.objects)}, allow_nan=False), file=sys.stderr, flush=True)
-        # Full raw-identity readback covers old internal frame/encoding identities
-        # too; they remain addressable even when represented as verified views.
-        target.cache.clear(); target.cache_bytes = 0
-        for number, key in enumerate(sorted(source.objects), 1):
-            raw = target.materialize(key)
-            require(len(raw) == source.objects[key]["bytes"], "Rebuilt original byte count differs")
-            if number % 20000 == 0:
-                print(json.dumps({"phase": "rebuild-readback", "completed": number, "total": len(source.objects)}, allow_nan=False), file=sys.stderr, flush=True)
-        require((source_path / "index.json").read_bytes() == index_raw and
-                (source_path / "CURRENT.json").read_bytes() == current_raw,
-                "Source store changed during representation regeneration")
-        if (source_path / "events.jsonl").exists():
-            require((source_path / "events.jsonl").read_bytes() == events_raw, "Source operation history changed")
-        producer = target.blob(LOADED_PRODUCER_BYTES)
-        producer_deps = _producer_dependencies(target)
-        source_events = target.blob(events_raw)
-        record = {"format": "managed-material-representation-transition/1", "started_at": started,
-                  "completed_at": utc(), "source_store": str(source_path), "source_index_sha256": expected_index,
-                  "source_index_bytes": len(index_raw), "source_selection": expected_selection,
-                  "source_current_sha256": sha(current_raw), "source_object_count": len(source.objects),
-                  "source_object_id_set_sha256": sha(js(sorted(source.objects))),
-                  "source_objects_exactly_read_back": len(source.objects), "immutable_records": copied_records,
-                  "evidence_objects": [producer, *producer_deps.values(), source_events],
-                  "producer_sha256": producer, "producer_dependencies": producer_deps,
-                  "before_payload": source.stats(), "after_payload": target.stats(), "account": account,
-                  "physical_change": "Raw content and transport identities retained; ZIP frame bytes packed with exact slice views; recipe JSON physically compressed; immutable metadata bodies reused by verified views.",
-                  "source_untouched": True, "source_representation_retired": False,
-                  "source_index_evidence": "Exact old index is pinned here, not treated as an immutable view of a mutable index. Retaining its full historical transport is a separate explicit input and measured cost.",
-                  "limits": "New store is a received candidate until owner acceptance. No source-store cleanup, native migration, semantic reacceptance or concurrent-editor transaction."}
-        record_raw = js(record); transition_key = sha(record_raw)
-        immutable(output / "transitions" / (transition_key + ".json"), record_raw)
-        successor = {**source_selected, "previous_selection": expected_selection,
-                     "representation_transitions": [*source_selected.get("representation_transitions", []), transition_key]}
-        selected_raw = js(successor); selected_key = sha(selected_raw)
-        immutable(output / "selections" / (selected_key + ".json"), selected_raw)
-        target.commit_index()
-        replace_json(output / "CURRENT.json", {"selection": selected_key, "path": "selections/" + selected_key + ".json"})
-        checked = verify(target)
-        result = {"format": "managed-material-rebuild-result/1", "output": str(output),
-                  "transition": transition_key, "selection": selected_key, "source_index_sha256": expected_index,
-                  "all_original_identities_preserved": len(source.objects), "source_untouched": True,
-                  "source_physical_retirement": "pending-owner-receiving", "verified": checked,
-                  "before_store_payload": source.stats(), "after_store_payload": target.stats()}
-        target.event("representation-rebuild-completed", result)
-        return result
-    except Exception as exc:
-        target.commit_index()
-        target.event("representation-rebuild-failed", {"error_type": type(exc).__name__, "error": str(exc),
-                                                       "source_untouched": True})
-        raise
+                require(target.ingest(raw, "retained.zip") == key, "Regenerated transport identity differs")
+                print(json.dumps({"phase": "rebuild-transports", "completed": number, "total": len(archive_order)}, allow_nan=False), file=sys.stderr, flush=True)
+            for number, key in enumerate(sorted(source.objects), 1):
+                if key not in target.objects:
+                    raw = source.materialize(key)
+                    require(target.ingest(raw) == key, "Regenerated retained body differs")
+                if number % 20000 == 0:
+                    print(json.dumps({"phase": "rebuild-content", "completed": number, "total": len(source.objects)}, allow_nan=False), file=sys.stderr, flush=True)
+            # Full raw-identity readback covers old internal frame/encoding identities
+            # too; they remain addressable even when represented as verified views.
+            target.cache.clear(); target.cache_bytes = 0
+            for number, key in enumerate(sorted(source.objects), 1):
+                raw = target.materialize(key)
+                require(len(raw) == source.objects[key]["bytes"], "Rebuilt original byte count differs")
+                if number % 20000 == 0:
+                    print(json.dumps({"phase": "rebuild-readback", "completed": number, "total": len(source.objects)}, allow_nan=False), file=sys.stderr, flush=True)
+            require((source_path / "index.json").read_bytes() == index_raw and
+                    (source_path / "CURRENT.json").read_bytes() == current_raw,
+                    "Source store changed during representation regeneration")
+            if (source_path / "events.jsonl").exists():
+                require((source_path / "events.jsonl").read_bytes() == events_raw, "Source operation history changed")
+            producer = target.blob(LOADED_PRODUCER_BYTES)
+            producer_deps = _producer_dependencies(target)
+            source_events = target.blob(events_raw)
+            record = {"format": "managed-material-representation-transition/1", "started_at": started,
+                      "completed_at": utc(), "source_store": str(source_path), "source_index_sha256": expected_index,
+                      "source_index_bytes": len(index_raw), "source_selection": expected_selection,
+                      "source_current_sha256": sha(current_raw), "source_object_count": len(source.objects),
+                      "source_object_id_set_sha256": sha(js(sorted(source.objects))),
+                      "source_objects_exactly_read_back": len(source.objects), "immutable_records": copied_records,
+                      "evidence_objects": [producer, *producer_deps.values(), source_events],
+                      "producer_sha256": producer, "producer_dependencies": producer_deps,
+                      "before_payload": source.stats(), "after_payload": target.stats(), "account": account,
+                      "physical_change": "Raw content and transport identities retained; ZIP frame bytes packed with exact slice views; recipe JSON physically compressed; immutable metadata bodies reused by verified views.",
+                      "source_untouched": True, "source_representation_retired": False,
+                      "source_index_evidence": "Exact old index is pinned here, not treated as an immutable view of a mutable index. Retaining its full historical transport is a separate explicit input and measured cost.",
+                      "limits": "New store is a received candidate until owner acceptance. No source-store cleanup, native migration, semantic reacceptance or concurrent-editor transaction."}
+            record_raw = js(record); transition_key = sha(record_raw)
+            immutable(output / "transitions" / (transition_key + ".json"), record_raw)
+            successor = {**source_selected, "previous_selection": expected_selection,
+                         "representation_transitions": [*source_selected.get("representation_transitions", []), transition_key]}
+            selected_raw = js(successor); selected_key = sha(selected_raw)
+            immutable(output / "selections" / (selected_key + ".json"), selected_raw)
+            target.commit_index()
+            replace_json(output / "CURRENT.json", {"selection": selected_key, "path": "selections/" + selected_key + ".json"})
+            checked = verify(target)
+            result = {"format": "managed-material-rebuild-result/1", "output": str(output),
+                      "transition": transition_key, "selection": selected_key, "source_index_sha256": expected_index,
+                      "all_original_identities_preserved": len(source.objects), "source_untouched": True,
+                      "source_physical_retirement": "pending-owner-receiving", "verified": checked,
+                      "before_store_payload": source.stats(), "after_store_payload": target.stats()}
+            target.event("representation-rebuild-completed", result)
+            return result
+        except Exception as exc:
+            target.commit_index()
+            target.event("representation-rebuild-failed", {"error_type": type(exc).__name__, "error": str(exc),
+                                                           "source_untouched": True})
+            raise
 
 
 def retain_artifact(store, path, label, account):

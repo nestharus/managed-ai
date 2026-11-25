@@ -11,19 +11,21 @@ import os
 import shutil
 import subprocess
 import sys
-import runpy
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
 # This entry also supports loading by an explicit filename from a deployment.
-sys.path.insert(0, str(HERE))
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+from capture_native import native_sources
 from native_bridge import (
     MAX_EVENT_LINE_BYTES,
     MAX_EVENT_STREAM_BYTES,
     NativeBridge,
     _safe_jsonl,
     capture_error,
+    resolve_sibling_cli,
 )
 from occurrence_files import atomic_bytes, digest, file_lock, ident, loads_strict, nonempty, now, read, sync_dir, write
 from repair_custody import RepairCustody
@@ -106,16 +108,63 @@ def overlap_rows(previous_scopes, sources, reads, writes):
                             r['scope_state']=='prepared-or-unreconciled',r['prepared_at_utc'],r['scope']),reverse=True)
     return rows
 
-class Host(NativeBridge, RepairCustody):
+class Host:
     def __init__(self, root):
         self.root = Path(root).resolve()
-        self.config_path = self.root/'host.json'
+        self.config_path = self.root / 'host.json'
         self.config = read(self.config_path) if self.config_path.exists() else None
-        self.native = (self.root/(self.config or {}).get('native_root','native')).resolve()
-        self.work = self.native/'work'
+        self.native = (self.root / (self.config or {}).get('native_root', 'native')).resolve()
+        self.work = self.native / 'work'
+        self.bridge = NativeBridge(self)
+        self.repairs = RepairCustody(self)
 
     def _write(self, path, value):
         write(path, value)
+
+    def _put_object_bytes(self, raw: bytes) -> tuple[str, str]:
+        return self.bridge._put_object_bytes(raw)
+
+    def _bound_event_value(self, value: dict) -> dict:
+        return self.bridge._bound_event_value(value)
+
+    def event(self, action, value):
+        return self.bridge.event(action, value)
+
+    def call(self, *args, scoped_errors=False):
+        return self.bridge.call(*args, scoped_errors=scoped_errors)
+
+    def inspect_native(self, sid, scoped_errors=False):
+        return self.bridge.inspect_native(sid, scoped_errors=scoped_errors)
+
+    def capture_native(self, sid, receipt, producer):
+        return self.bridge.capture_native(sid, receipt, producer)
+
+    def reconcile_capture_native(self, sid, receipt, producer):
+        return self.bridge.reconcile_capture_native(sid, receipt, producer)
+
+    def temp(self, name, value):
+        return self.bridge.temp(name, value)
+
+    def pin(self, path):
+        return self.bridge.pin(path)
+
+    def _pending_capture_paths(self, sid):
+        return self.bridge._pending_capture_paths(sid)
+
+    def _reconcile_pending_captures(self, sid):
+        return self.bridge._reconcile_pending_captures(sid)
+
+    def capture(self, sid, spec):
+        return self.bridge.capture(sid, spec)
+
+    def _generation_repairs(self, repair_ids, sources):
+        return self.repairs.generation_repairs(repair_ids, sources)
+
+    def repair_open(self, spec):
+        return self.repairs.repair_open(spec)
+
+    def repair_accept(self, spec):
+        return self.repairs.repair_accept(spec)
 
     @property
     def engine(self):
@@ -172,7 +221,7 @@ class Host(NativeBridge, RepairCustody):
                     'instance_id':descriptor['instance_id'],'goal':status['current_goal'],
                     'boundary':'The existing native store retains goals and duty ownership. Attachment creates no new runtime or artificial participant return.'}
         write(self.config_path,self.config)
-        initial={'id':'goal','kind':'goal','content':{'contribution':commission.read_text(),
+        initial={'id':'goal','kind':'goal','content':{'contribution':commission.read_text(encoding='utf-8'),
                  'obligations':[dict(r,disposition='open') for r in duties]}}
         result=self.call('init','--goal',self.temp('init-goal.json',initial))
         (self.work/'sources/host').mkdir(parents=True,exist_ok=True)
@@ -183,14 +232,14 @@ class Host(NativeBridge, RepairCustody):
                'basis':['sources/host/COMMISSION.md']}
         self.call('put','--record',self.temp('bind-commission.json',bound),'--expected',current['revision'])
         field=self.work/'sources/host/FIELD.md'
-        field.write_text('The full commission remains active. A local contribution may finish while other duties remain owed. Reopen broader alternatives when evidence changes the useful contribution. Discover unrepresented relationships; the host only routes nominated ones.\n')
+        field.write_text('The full commission remains active. A local contribution may finish while other duties remain owed. Reopen broader alternatives when evidence changes the useful contribution. Discover unrepresented relationships; the host only routes nominated ones.\n', encoding='utf-8')
         question={'field':'sources/host/FIELD.md','items':[{'id':'continuing-commission',
             'question':'Which commissioned effects remain owed beyond this local contribution?',
             'use':'Keep current work aligned with the containing commission.',
             'basis':['sources/host/COMMISSION.md','records/goal.json'],'groups':['continuation']}]}
         self.call('track','--spec',self.temp('initial-attention.json',question))
         reply=self.root/'requests/start-receipt.md'
-        reply.write_text('Host initialized exact commission, explicit duties and the continuing commission Attention item. This is enrollment, not a model reading or semantic completion claim.\n')
+        reply.write_text('Host initialized exact commission, explicit duties and the continuing commission Attention item. This is enrollment, not a model reading or semantic completion claim.\n', encoding='utf-8')
         self.call('receive','start','--reply',reply,'--producer','continuing-work enrollment adapter')
         return {'root':str(self.root),'native':str(self.native),'goal':self.goal(),
                 'boundary':'Subsequent actual capable participant must read the prepared context.'}
@@ -209,10 +258,11 @@ class Host(NativeBridge, RepairCustody):
             raise ValueError('Current native goal material is absent')
         # Public, item-filtered feedback obtains the actual current specification.
         # Its administrative observation is not a semantic consideration receipt.
-        command=[sys.executable,'-B',str(Path(self.engine).with_name('track_attention.py' if Path(self.engine).name == 'manage_store.py' else 'attend.py')),
+        attention_cli = resolve_sibling_cli(Path(self.engine), 'core/cli/track_attention.py', 'track_attention.py')
+        command=[sys.executable,'-B',str(attention_cli),
                  '--root',str(self.native/'exchange'),'feedback',operation,
                  '--item','continuing-commission','--limit','1']
-        result=subprocess.run(command,capture_output=True,text=True)
+        result=subprocess.run(command,capture_output=True,text=True,encoding='utf-8')
         self.event('continuation-binding-observation',{'argv':command,'exit':result.returncode,
                                                      'stdout':result.stdout,'stderr':result.stderr})
         if result.returncode:
@@ -247,7 +297,7 @@ class Host(NativeBridge, RepairCustody):
             if rid not in duties: duties[rid]=dict(row,disposition='open')
         target=self.work/'sources/host/COMMISSION.md'
         atomic_bytes(target,(self.root/new['object']).read_bytes())
-        content={'contribution':target.read_text(),'obligations':list(duties.values()),
+        content={'contribution':target.read_text(encoding='utf-8'),'obligations':list(duties.values()),
                  'continuation_account':nonempty(spec['account'],'commission continuation account')}
         record={'id':'goal','kind':'goal','content':content,'basis':['sources/host/COMMISSION.md']}
         result=self.call('put','--record',self.temp('commission-'+str(goal['revision'])+'.json',record),'--expected',goal['revision'])
@@ -260,7 +310,6 @@ class Host(NativeBridge, RepairCustody):
         """Select a regenerated host/guidance release with byte-identical native programs."""
         new=Path(spec['engine']).resolve(); old=Path(self.engine)
         if not new.is_file(): raise ValueError('New installed engine is absent')
-        native_sources = runpy.run_path(str(HERE / 'capture_native.py'))['native_sources']
         if native_sources(old)[1] != native_sources(new)[1]:
             raise ValueError('This upgrade route requires identical native programs; a native-code change needs its own compatibility receiving')
         account=nonempty(spec['account'],'upgrade account')
@@ -347,7 +396,7 @@ class Host(NativeBridge, RepairCustody):
         attention = prepare_attention_selection(spec)
         overlap_limit=spec.get('overlap_limit',8)
         if type(overlap_limit) is not int or not 1<=overlap_limit<=200:
-            raise ValueError('overlap_limit must be an integer from1through200')
+            raise ValueError('overlap_limit must be an integer from 1 through 200')
         outnames=[ident(n) for n in spec['outputs']]
         if not outnames or len(set(outnames))!=len(outnames): raise ValueError('Select distinct new output names')
         targets=['outputs/'+sid+'/'+n for n in outnames]

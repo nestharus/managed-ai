@@ -1,0 +1,55 @@
+{
+  "schema": "peer-workbench-acquired-components/1",
+  "scope": "Current shared implementations after Wave 4 consolidation; one canonical body per component under companions/. Shared import routing, bundled engine/library search routing, and preservation of the study exposure boundary are explicit parts of this release.",
+  "files": {
+    "workbench/core/io_utils.py": {
+      "source": "workbench/core/io_utils.py",
+      "identity": {
+        "bytes": 7364,
+        "sha256": "4b84c4fbdae50fd23a20756d88c0756c5eea1662358981fb95b52a60acf505c7"
+      }
+    },
+    "workbench/core/config.py": {
+      "source": "workbench/core/config.py",
+      "identity": {
+        "bytes": 9452,
+        "sha256": "c39fb19dbbb453015d1092671df3b2575293180a9cfde0ce85bdbd61ac74ce76"
+      }
+    },
+    "workbench/core/model_bridges.py": {
+      "source": "workbench/core/model_bridges.py",
+      "identity": {
+        "bytes": 6800,
+        "sha256": "2f57ca0643998ab46e564927e0888e2d3d4ebcddcb882fdc627bdfd7fc79ce89"
+      }
+    },
+    "workbench/core/source_tools.py": {
+      "source": "workbench/core/source_tools.py",
+      "identity": {
+        "bytes": 28160,
+        "sha256": "aaa77dc51222275955c45a56ed934db6bc08e7a933873f37c28dcaf74acf0556"
+      }
+    },
+    "workbench/core/workbench_agent.py": {
+      "source": "workbench/core/workbench_agent.py",
+      "identity": {
+        "bytes": 26162,
+        "sha256": "4a74aec4c25c288a4c75c4f11753dcf5998e7f8271b8f3fcd0951bc644bd3cd9"
+      }
+    },
+    "workbench/controller/agent_runtime.py": {
+      "source": "workbench/controller/agent_runtime.py",
+      "identity": {
+        "bytes": 6941,
+        "sha256": "fc7436fa3fa53d42384f8bb97c7bbc922771c85290a37feacc36eda5669d3a98"
+      }
+    },
+    "workbench/controller/evidence_support.py": {
+      "source": "workbench/controller/evidence_support.py",
+      "identity": {
+        "bytes": 3699,
+        "sha256": "66562f88424f04c1bb98026c10f5beab8769b98fe6d78a65dca1e8511fb52547"
+      }
+    }
+  }
+}
