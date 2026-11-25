@@ -246,13 +246,13 @@ class DeploymentSelection:
 class Deployment(DeploymentSelection):
     """Open the selected engine and store after verifying their declared identities."""
 
-    def __init__(self, root, *, descriptor=None, _skip_code_identity=False):
+    def __init__(self, root, *, descriptor=None):
         super().__init__(root, descriptor=descriptor)
         self.engine = _engine_directory(self.root / self.config['engine']['path'])
         self.runtime = (self.root / self.config['store']['path']).resolve()
         if any(p.is_symlink() for p in (self.root, self.engine, self.runtime)):
             raise ValueError('ordinary deployment, engine and store directories required')
-        self._verify_binding(skip_code_identity=_skip_code_identity)
+        self._verify_binding()
 
     @classmethod
     def initialize(cls, root, runtime, engine=None):
@@ -272,17 +272,17 @@ class Deployment(DeploymentSelection):
         atomic_bytes(root / 'deployment.json', encode(value))
         return cls.current_status(root)
 
-    def _verify_engine(self, *, skip_code_identity=False):
+    def _verify_engine(self):
         if self.config['engine'].get('engine_api') != ENGINE_API:
             raise ValueError('incompatible engine API')
-        if not skip_code_identity and code_identity(self.engine) != self.config['engine']['code_sha256']:
+        if code_identity(self.engine) != self.config['engine']['code_sha256']:
             raise ValueError('shared engine code changed; qualify and activate its current identity')
 
-    def _verify_binding(self, *, skip_code_identity=False):
+    def _verify_binding(self):
         binding = runtime_binding(self.runtime)
         if any(self.config['store'].get(k) != v for k, v in binding.items()):
             raise ValueError('deployment selected a different store identity/schema')
-        self._verify_engine(skip_code_identity=skip_code_identity)
+        self._verify_engine()
         return binding
 
     def verify(self):
@@ -291,8 +291,7 @@ class Deployment(DeploymentSelection):
 
     @classmethod
     @contextmanager
-    def admitted(cls, root, *, engine, instance, deployment_sha, read_only, store_sha=None, deadline=None,
-                 _verified_engine_sha=None):
+    def admitted(cls, root, *, engine, instance, deployment_sha, read_only, store_sha=None, deadline=None):
         """Enter a pinned domain operation under the deployment, then its selected store."""
         root = Path(root).resolve()
         guard = shared if read_only else exclusive
@@ -314,11 +313,7 @@ class Deployment(DeploymentSelection):
         with owner_admission(acquire, deadline=admission_deadline(deadline)) as (descriptor, runtime):
             if store_sha is not None and sha(_descriptor_bytes(runtime / 'system.json')) != store_sha:
                 raise ValueError('store descriptor differs')
-            skip_hash = (
-                _verified_engine_sha is not None
-                and DeploymentSelection(root, descriptor=descriptor).config['engine'].get('code_sha256') == _verified_engine_sha
-            )
-            selected = cls(root, descriptor=descriptor, _skip_code_identity=skip_hash)
+            selected = cls(root, descriptor=descriptor)
             if selected.runtime != runtime:
                 raise ValueError('selected store path differs')
             yield selected
@@ -342,21 +337,21 @@ class Deployment(DeploymentSelection):
         return cls(root)._dispatch(arguments)
 
     def system(self, arguments):
-        self.verify()
+        self._require_current()
         return self._dispatch(arguments)
 
-    def _dispatch(self, arguments, *, deadline=None, cli_admitted=False):
+    def _dispatch(self, arguments, *, deadline=None, already_admitted=False):
         if not arguments or any(v == '--root' or v.startswith('--root=') for v in arguments):
             raise ValueError('supply a native command; deployment owns its selected store')
         if self.engine != HERE.parents[1] or arguments[0] in {'adopt', 'reconcile-publication', 'recompose'}:
-            return self._selected_system(arguments, deadline, cli_admitted=cli_admitted)
-        return self._system_action(arguments, deadline, cli_admitted=cli_admitted)
+            return self._selected_system(arguments, deadline, already_admitted=already_admitted)
+        return self._system_action(arguments, deadline, already_admitted=already_admitted)
 
     def _native_entry(self):
         entry = self.engine / NATIVE_ENTRY
         return entry if entry.is_file() else self.engine / PORTABLE_ENTRY
 
-    def _selected_system(self, arguments, deadline=None, *, cli_admitted=False):
+    def _selected_system(self, arguments, deadline=None, *, already_admitted=False):
         # The controller imported its own core before it verified the selected
         # engine. A cached package would otherwise mask the selected engine.
         app = self._native_entry().parent
@@ -371,7 +366,7 @@ class Deployment(DeploymentSelection):
         search = sys.path[:]
         try:
             sys.path[:] = [p for p in search if Path(p).resolve() not in (HERE, HERE.parent / 'continuation')]
-            return self._system_action(arguments, deadline, cli_admitted=cli_admitted)
+            return self._system_action(arguments, deadline, already_admitted=already_admitted)
         finally:
             for name in tuple(sys.modules):
                 if selected_name(name):
@@ -379,7 +374,7 @@ class Deployment(DeploymentSelection):
             sys.modules.update(previous)
             sys.path[:] = search
 
-    def _system_action(self, arguments, deadline=None, *, cli_admitted=False):
+    def _system_action(self, arguments, deadline=None, *, already_admitted=False):
         api = runpy.run_path(str(self._native_entry()))
         if api.get('DEPLOYMENT_API') != FORMAT or api.get('ENGINE_API') != ENGINE_API:
             raise ValueError('selected engine does not implement the declared deployment API')
@@ -389,7 +384,7 @@ class Deployment(DeploymentSelection):
         if args.action == 'init':
             raise ValueError('initialize a store through the central system entrance before deployment')
         try:
-            with self._guarded_system(api, args, deadline, cli_admitted=cli_admitted) as system:
+            with self._guarded_system(api, args, deadline, already_admitted=already_admitted) as system:
                 return api['act'](system, args), args, api
         except ValueError as exc:
             if args.action == 'adopt':
@@ -412,13 +407,17 @@ class Deployment(DeploymentSelection):
         return None
 
     @contextmanager
-    def _guarded_system(self, api, args, deadline=None, *, cli_admitted=False):
+    def _guarded_system(self, api, args, deadline=None, *, already_admitted=False):
+        if already_admitted:
+            yield self._open_selected_store(api, args)
+            return
         if args.action == 'explain-context':
+            self.verify()
             yield self._open_selected_store(api, args)
             return
         readonly_fn = api.get('is_readonly_action')
         read_only = bool(readonly_fn(args)) if readonly_fn is not None else (args.action == 'catalogue')
-        if cli_admitted or args.action in {'show', 'catalogue'}:
+        if args.action in {'show', 'catalogue'}:
             with type(self).admitted(
                     self.root,
                     engine=self.engine,
@@ -426,17 +425,16 @@ class Deployment(DeploymentSelection):
                     deployment_sha=self.descriptor_sha256,
                     read_only=read_only,
                     deadline=deadline,
-                    _verified_engine_sha=self.config['engine']['code_sha256'],
             ) as selected:
                 yield selected._open_selected_store(api, args)
             return
-        # Direct Python API (Deployment.system): resolve owner and construct System INSIDE the store lock.
+        # Direct Python API (Deployment.system): acquire owner.lock BEFORE verifying/opening store.
+        from continuation_support.ownership import external_root as external_exchange
         layout = api['NativeLayout'](api['external'](self.runtime))
-        owner = api['Exchange'](layout.exchange)
-        if owner.workspace != layout.workspace.resolve():
-            raise ValueError('system workspace binding changed')
+        exchange_root = external_exchange(layout.exchange)
         guard = shared if read_only else exclusive
-        with observation_guard(guard, owner.root / 'owner.lock', deadline=deadline):
+        with observation_guard(guard, exchange_root / 'owner.lock', deadline=deadline):
+            self.verify()
             yield self._open_selected_store(api, args)
 
     def _open_selected_store(self, api, args):
@@ -499,6 +497,29 @@ def parser():
     return p
 
 
+def _precheck_local_system_args(engine, runtime, arguments):
+    """Parse arguments with this controller's own parser before locks (zero store reads, zero code_identity)."""
+    if not arguments or any(v == '--root' or v.startswith('--root=') for v in arguments):
+        raise ValueError('supply a native command; deployment owns its selected store')
+    if engine != HERE.parents[1]:
+        return arguments[:1] in (['show'], ['catalogue'])
+    native_root = str(HERE.parent / 'native')
+    added = native_root not in sys.path
+    if added:
+        sys.path.insert(0, native_root)
+    try:
+        from native_runtime.command_parser import is_readonly_action, parser as native_parser
+        parsed = native_parser().parse_args(['--root', str(runtime), *arguments])
+        if parsed.action in ('show', 'catalogue') and arguments[0] != parsed.action:
+            raise ValueError('supply the native store observation as the command')
+        if parsed.action == 'init':
+            raise ValueError('initialize a store through the central system entrance before deployment')
+        return is_readonly_action(parsed)
+    finally:
+        if added and native_root in sys.path:
+            sys.path.remove(native_root)
+
+
 def main():
     args = parser().parse_args()
     root = args.deployment.resolve()
@@ -513,11 +534,18 @@ def main():
             return
         if args.action == 'system':
             descriptor = _descriptor_bytes(root / 'deployment.json')
-            if args.expected_descriptor is not None and sha(descriptor) != args.expected_descriptor:
+            selection = DeploymentSelection(root, descriptor=descriptor)
+            if args.expected_descriptor is not None and selection.descriptor_sha256 != args.expected_descriptor:
                 raise ValueError('deployment descriptor differs')
-            with report_admission(args.action):
-                result, app_args, api = Deployment(root, descriptor=descriptor)._dispatch(
-                    args.arguments, deadline=args.admission_deadline, cli_admitted=True)
+            engine = _engine_directory(root / selection.config['engine']['path'])
+            runtime = (root / selection.config['store']['path']).resolve()
+            instance = selection.config['store']['instance_id']
+            read_only = _precheck_local_system_args(engine, runtime, args.arguments)
+            with report_admission(args.action), Deployment.admitted(
+                    root, engine=engine, instance=instance, deployment_sha=selection.descriptor_sha256,
+                    read_only=read_only, deadline=args.admission_deadline) as selected:
+                result, app_args, api = selected._dispatch(
+                    args.arguments, deadline=args.admission_deadline, already_admitted=True)
             api['emit'](result, app_args)
             return
         if args.action == 'init':

@@ -110,26 +110,75 @@ class Wave1RuntimeTests(unittest.TestCase):
 
     def test_single_code_identity_per_cli_invocation(self):
         probe = (
-            "import runpy, sys\n"
+            "import fcntl, sys\n"
+            "from pathlib import Path\n"
             "from unittest.mock import patch\n"
             "import controller\n"
             "calls = 0\n"
+            "locked_during_hash = []\n"
+            "owner_lock = Path(sys.argv[1])\n"
             "orig = controller.code_identity\n"
             "def counted(engine):\n"
             "    global calls\n"
             "    calls += 1\n"
+            "    with owner_lock.open('rb') as fh:\n"
+            "        try:\n"
+            "            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+            "            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)\n"
+            "            locked_during_hash.append(False)\n"
+            "        except BlockingIOError:\n"
+            "            locked_during_hash.append(True)\n"
             "    return orig(engine)\n"
             "with patch.object(controller, 'code_identity', side_effect=counted):\n"
-            "    sys.argv = ['controller.py', *sys.argv[1:]]\n"
+            "    sys.argv = ['controller.py', *sys.argv[2:]]\n"
             "    controller.main()\n"
-            "print(f'CODE_IDENTITY_CALLS={calls}', file=sys.stderr)\n"
+            "print(f'CODE_IDENTITY_CALLS={calls} LOCKED={locked_during_hash}', file=sys.stderr)\n"
         )
+        owner_lock = self.store / 'exchange/owner.lock'
+        owner_lock.touch()
         env = os.environ.copy()
         env['PYTHONPATH'] = str(ENGINE / 'runtime/deployment')
         for subcmd in (['status'], ['verify'], ['system', 'show', 'goal'], ['system', 'status']):
             with self.subTest(subcmd=subcmd):
-                proc = self.run_cli([sys.executable, '-B', '-c', probe, '--deployment', str(self.dep), *subcmd], env=env)
+                proc = self.run_cli([sys.executable, '-B', '-c', probe, str(owner_lock),
+                                     '--deployment', str(self.dep), *subcmd], env=env)
                 self.assertIn('CODE_IDENTITY_CALLS=1', proc.stderr)
+                if subcmd[0] == 'system':
+                    self.assertIn('LOCKED=[True]', proc.stderr)
+
+    def test_cli_system_and_direct_api_do_not_read_store_before_lock(self):
+        from continuation_support.storage import AdmissionContended
+        owner_lock = self.store / 'exchange/owner.lock'
+        system_json = self.store / 'system.json'
+        workspace_json = self.store / 'exchange/workspace.json'
+        orig_system = system_json.read_bytes()
+        orig_workspace = workspace_json.read_bytes()
+
+        # C6-3(a): CLI `system` waits on owner.lock BEFORE reading system.json (returns exit 75, not JSON parse error)
+        with exclusive(owner_lock):
+            try:
+                system_json.write_bytes(b'{transient-write-in-progress')
+                for args in (['system', 'status'], ['system', 'show', 'goal']):
+                    with self.subTest(cli_args=args):
+                        proc = self.run_cli([*self.select_cli, *args],
+                                            env={'MANAGED_AI_DOMAIN_ADMISSION_SECONDS': '0.1'}, expected_rc=75)
+                        self.assertEqual(proc.stdout, '')
+                        err = json.loads(proc.stderr)
+                        self.assertEqual(err['status'], 'contended')
+                        self.assertEqual(err['lock'], str(owner_lock))
+            finally:
+                system_json.write_bytes(orig_system)
+
+        # C6-3(b): Direct Deployment.system() acquires owner.lock BEFORE constructing Exchange / reading workspace.json
+        deployment = Deployment(self.dep)
+        with exclusive(owner_lock):
+            try:
+                workspace_json.write_bytes(b'{transient-write-in-progress')
+                with patch.dict(os.environ, {'MANAGED_AI_DOMAIN_ADMISSION_SECONDS': '0.05'}):
+                    with self.assertRaises(AdmissionContended):
+                        deployment.system(['status'])
+            finally:
+                workspace_json.write_bytes(orig_workspace)
 
     def test_command_parser_rejects_abbreviated_options(self):
         proc = self.run_cli([sys.executable, '-B', str(ENGINE / 'runtime/manage_store.py'),
@@ -420,20 +469,184 @@ class Wave1RuntimeTests(unittest.TestCase):
             self.assertEqual([r['id'] for r in completed['records']], ['res-a', 'res-b'])
             self.assertEqual(system.show('res-b')['content'], {'v': 2})
 
-    def test_canonical_raw_slice_sha_and_noncanonical_fallback(self):
+    def test_put_batch_reconciles_crash_after_replace_before_receipt_for_patch_and_replace(self):
+        from native_runtime import record_batch
+        system = System(self.store)
+        with exclusive(system.ex.root / 'owner.lock'):
+            p1 = system.put({'id': 'wal-patch', 'kind': 'note', 'content': {'v': 1}}, 0)
+            r1 = system.put({'id': 'wal-rep1', 'kind': 'note', 'content': {'v': 10}}, 0)
+            spec = {
+                'format': 'managed-ai-batch-update/1',
+                'id': 'wal-crash-batch',
+                'instance_id': 'wave1-store',
+                'pin_predecessors': True,
+                'operations': [
+                    {'id': 'wal-patch', 'expected_revision': 1, 'expected_sha256': p1['sha256'],
+                     'mode': 'patch', 'replace_content_fields': {'v': 2}},
+                    {'id': 'wal-rep1', 'expected_revision': 1, 'expected_sha256': r1['sha256'],
+                     'mode': 'replace', 'record': {'kind': 'note', 'content': {'v': 20}}},
+                    {'id': 'wal-rep0', 'expected_revision': 0,
+                     'mode': 'replace', 'record': {'kind': 'note', 'content': {'v': 100}}},
+                ],
+            }
+            orig_write = record_batch.write_json
+            receipt_path = system.work / '.system/batches/wal-crash-batch.json'
+
+            # Crash immediately after _replace() commits and before the clearing write_json for EVERY op mode
+            for expected_id in ('wal-patch', 'wal-rep1', 'wal-rep0'):
+                saw_pending = {'flag': False}
+
+                def crash_after_commit(path, value):
+                    if path == receipt_path and value.get('pending', {}).get('id') == expected_id:
+                        saw_pending['flag'] = True
+                        return orig_write(path, value)
+                    if path == receipt_path and saw_pending['flag'] and 'pending' not in value:
+                        raise OSError(f'simulated crash after commit of {expected_id}')
+                    return orig_write(path, value)
+
+                with patch.object(record_batch, 'write_json', side_effect=crash_after_commit):
+                    with self.assertRaisesRegex(OSError, f'after commit of {expected_id}'):
+                        record_batch.put_batch(system, spec)
+                partial = json.loads(receipt_path.read_bytes())
+                self.assertEqual(partial['pending']['id'], expected_id)
+
+            completed = record_batch.put_batch(system, spec)
+            self.assertTrue(completed['complete'])
+            self.assertNotIn('pending', completed)
+            self.assertEqual([r['id'] for r in completed['records']], ['wal-patch', 'wal-rep1', 'wal-rep0'])
+            self.assertEqual(system.show('wal-patch')['content'], {'v': 2})
+            self.assertEqual(system.show('wal-rep1')['content'], {'v': 20})
+            self.assertEqual(system.show('wal-rep0')['content'], {'v': 100})
+            # Verify rev-1 predecessors are pinned and intact
+            self.assertEqual(json.loads(system.ex.objects.read(completed['records'][0]['pinned_object']))['sha256'],
+                             p1['sha256'])
+            self.assertEqual(json.loads(system.ex.objects.read(completed['records'][1]['pinned_object']))['sha256'],
+                             r1['sha256'])
+
+    def test_put_batch_refreshes_head_index_on_partial_failure_and_resume(self):
+        from native_runtime.record_batch import put_batch
+        system = System(self.store)
+        with exclusive(system.ex.root / 'owner.lock'):
+            r1 = system.put({'id': 'idx-a', 'kind': 'note', 'content': {'v': 1}}, 0)
+            r2 = system.put({'id': 'idx-b', 'kind': 'note', 'content': {'v': 1}}, 0)
+            system.reindex()
+            stale_index_bytes = system.record_store.index.path.read_bytes()
+            spec = {
+                'format': 'managed-ai-batch-update/1',
+                'id': 'idx-resume-batch',
+                'instance_id': 'wave1-store',
+                'pin_predecessors': False,
+                'operations': [
+                    {'id': 'idx-a', 'expected_revision': 1, 'expected_sha256': r1['sha256'],
+                     'mode': 'patch', 'replace_content_fields': {'v': 2}},
+                    {'id': 'idx-b', 'expected_revision': 1, 'expected_sha256': r2['sha256'],
+                     'mode': 'patch', 'replace_content_fields': {'v': 2}},
+                ],
+            }
+            orig_replace = system.record_store._replace
+
+            def fail_on_b(record, expected, **kwargs):
+                if record['id'] == 'idx-b':
+                    raise OSError('simulated failure on second op')
+                return orig_replace(record, expected, **kwargs)
+
+            with patch.object(system.record_store, '_replace', side_effect=fail_on_b):
+                with self.assertRaisesRegex(OSError, 'simulated failure'):
+                    put_batch(system, spec)
+
+            # Even immediately after partial failure, try/finally refreshed idx-a in HeadIndex
+            mid = system.record_store.indexed_summaries()
+            self.assertIsNotNone(mid)
+            self.assertEqual(mid['idx-a']['revision'], 2)
+            self.assertEqual(mid['idx-b']['revision'], 1)
+
+            # Simulate hard kill where HeadIndex was never flushed before process death, then resume
+            system.record_store.index.path.write_bytes(stale_index_bytes)
+            completed = put_batch(system, spec)
+            self.assertTrue(completed['complete'])
+            after = system.record_store.indexed_summaries()
+            self.assertIsNotNone(after)
+            self.assertEqual(after['idx-a']['revision'], 2)
+            self.assertEqual(after['idx-b']['revision'], 2)
+
+    def test_put_batch_pin_predecessors_supports_legacy_over_2mib_head(self):
+        from continuation_support.storage import MAX_BYTES
+        from native_runtime.record_batch import put_batch
+        system = System(self.store)
+        with exclusive(system.ex.root / 'owner.lock'):
+            big_payload = 'L' * (MAX_BYTES + 4096)
+            body = {
+                'format': system.record_store.format,
+                'id': 'legacy-big',
+                'kind': 'note',
+                'revision': 1,
+                'content': {'blob': big_payload},
+                'relations': [],
+                'basis': [],
+                'active': True,
+            }
+            legacy_sha = sha(encode(body))
+            raw = encode(dict(body, sha256=legacy_sha))
+            self.assertGreater(len(raw), MAX_BYTES)
+            system.record_path('legacy-big').write_bytes(raw)
+
+            spec = {
+                'format': 'managed-ai-batch-update/1',
+                'id': 'legacy-pin-batch',
+                'instance_id': 'wave1-store',
+                'pin_predecessors': True,
+                'operations': [{
+                    'id': 'legacy-big',
+                    'expected_revision': 1,
+                    'expected_sha256': legacy_sha,
+                    'mode': 'patch',
+                    'replace_content_fields': {'blob': 'compacted'},
+                }],
+            }
+            res = put_batch(system, spec)
+            self.assertTrue(res['complete'])
+            self.assertEqual(system.show('legacy-big')['revision'], 2)
+            pinned_key = res['records'][0]['pinned_object']
+            restored = json.loads(system.ex.objects.read(pinned_key, retained=True))
+            self.assertEqual(restored['sha256'], legacy_sha)
+            self.assertEqual(len(restored['content']['blob']), len(big_payload))
+
+    def test_canonical_digest_rejects_noncanonical_raw_slice_forgery(self):
         system = System(self.store)
         with exclusive(system.ex.root / 'owner.lock'):
             system.put({'id': 'canon', 'kind': 'note', 'content': {'k': 'value'}}, 0)
             rec = system.show('canon')
-            # Write valid non-canonical compact JSON (misses raw-slice fast path, must pass via encode fallback)
             path = system.record_path('canon')
+            # Valid compact JSON with exact canonical sha256 must pass
             compact = json.dumps(rec, separators=(',', ':')).encode('utf-8')
             path.write_bytes(compact)
             self.assertEqual(system.show('canon')['sha256'], rec['sha256'])
-            # Tamper compact JSON -> must fail digest verification
+            # Tampered content must fail
             path.write_bytes(compact.replace(b'value', b'WRONG'))
             with self.assertRaisesRegex(ValueError, 'record digest changed'):
                 system.show('canon')
+            # C6-5: Non-canonical pretty JSON with sha256 computed over non-canonical raw slice MUST be rejected
+            canonical_without_sha = encode({k: v for k, v in rec.items() if k != 'sha256'})
+            noncanonical_without_sha = canonical_without_sha.replace(b'"revision": 1', b'"revision":  1')
+            self.assertNotEqual(noncanonical_without_sha, canonical_without_sha)
+            forged_digest = sha(noncanonical_without_sha)
+            idx = noncanonical_without_sha.rfind(b'\n}\n')
+            forged_raw = (
+                noncanonical_without_sha[:idx]
+                + f',\n  "sha256": "{forged_digest}"\n}}\n'.encode('ascii')
+            )
+            # Also test with sha256 placed alphabetically right before "relations" (matching old slice layout)
+            marker = b'\n  "relations": '
+            pos = noncanonical_without_sha.find(marker)
+            forged_alpha = (
+                noncanonical_without_sha[:pos]
+                + f'\n  "sha256": "{forged_digest}",'.encode('ascii')
+                + noncanonical_without_sha[pos:]
+            )
+            for payload in (forged_raw, forged_alpha):
+                path.write_bytes(payload)
+                with self.assertRaisesRegex(ValueError, 'record digest changed'):
+                    system.show('canon')
 
 
 if __name__ == '__main__':

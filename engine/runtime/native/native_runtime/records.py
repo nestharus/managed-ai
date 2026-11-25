@@ -88,19 +88,7 @@ class RecordStore:
     def _verify_record(self, ident, record, raw: bytes | None = None):
         if record.get('id') != ident or record.get('format') != self.format:
             raise ValueError('record identity or format changed')
-        expected = record.get('sha256')
-        if not isinstance(expected, str):
-            raise ValueError('record digest changed')
-        if raw is not None and len(expected) == 64 and raw.startswith(b'{\n  "active": ') and raw.endswith(b'\n}\n'):
-            try:
-                needle = b'\n  "sha256": "' + expected.encode('ascii') + b'",\n'
-            except UnicodeEncodeError:
-                needle = None
-            if needle is not None and raw.count(needle) == 1:
-                idx = raw.find(needle)
-                if sha(raw[:idx + 1] + raw[idx + len(needle):]) == expected:
-                    return
-        if expected != sha(encode({k: v for k, v in record.items() if k != 'sha256'})):
+        if record.get('sha256') != sha(encode({k: v for k, v in record.items() if k != 'sha256'})):
             raise ValueError('record digest changed')
 
     def captured_record(self, ident, basis):
@@ -521,7 +509,11 @@ class RecordStore:
         data = self.path(record['id']).read_bytes()
         parsed = strict_json(data)
         require(parsed == record, 'information record changed during pinning')
-        return dict(record_identity(record), object=self.objects.put(data))
+        if len(data) <= MAX_BYTES:
+            obj = self.objects.put(data)
+        else:
+            obj = self.objects.put_retained(data, max_bytes=len(data))
+        return dict(record_identity(record), object=obj)
 
     def _historical_object(self, ident, revision, key):
         # Older releases could retain larger heads than today's transport maximum.

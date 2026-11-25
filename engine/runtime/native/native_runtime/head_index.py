@@ -21,27 +21,49 @@ def _compact_json(value: dict) -> bytes:
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
 
 
-def _extract_search_hints(record: dict) -> tuple[list[str], list[str], bool]:
+def _extract_search_hints(record: dict) -> tuple[list[str], list[str], bool, bool]:
     """Extract domain-neutral exact references and lexical word tokens from one verified record."""
     exact_refs: set[str] = set()
     tokens: set[str] = set()
-    truncated = False
+    tokens_truncated = False
+    exact_refs_truncated = False
+
+    def add_exact(text: str) -> None:
+        nonlocal exact_refs_truncated
+        cf = text.casefold()
+        if len(cf) <= _MAX_EXACT_REF_LEN:
+            exact_refs.add(cf)
+        else:
+            exact_refs_truncated = True
+
+    def add_tokens(text: str) -> None:
+        nonlocal tokens_truncated
+        if tokens_truncated:
+            return
+        for word in _WORD_RE.findall(text.casefold()):
+            tokens.add(word)
+            if len(tokens) > _MAX_TOKENS_PER_RECORD:
+                tokens_truncated = True
+                tokens.clear()
+                return
+
+    # Always index record identity as fallback title/exact reference.
+    rec_id = record.get('id')
+    if isinstance(rec_id, str) and rec_id:
+        add_exact(rec_id)
+        add_tokens(rec_id)
 
     content = record.get('content')
     if isinstance(content, dict):
         for key, value in content.items():
-            if not isinstance(value, str):
-                continue
-            cf = value.casefold()
-            if key in ('title', 'question', 'origin') and len(cf) <= _MAX_EXACT_REF_LEN:
-                exact_refs.add(cf)
-            if not truncated:
-                for word in _WORD_RE.findall(cf):
-                    tokens.add(word)
-                    if len(tokens) > _MAX_TOKENS_PER_RECORD:
-                        truncated = True
-                        tokens.clear()
-                        break
+            if isinstance(value, str):
+                if key in ('title', 'question', 'origin'):
+                    add_exact(value)
+                add_tokens(value)
+            elif key in ('title', 'question') and value:
+                rendered = str(value)
+                add_exact(rendered)
+                add_tokens(rendered)
 
     relations = record.get('relations')
     if isinstance(relations, list):
@@ -49,23 +71,23 @@ def _extract_search_hints(record: dict) -> tuple[list[str], list[str], bool]:
             if not isinstance(rel, dict):
                 continue
             target = rel.get('target')
-            if isinstance(target, str) and len(target) <= _MAX_EXACT_REF_LEN:
-                exact_refs.add(target.casefold())
+            if isinstance(target, str):
+                add_exact(target)
             origin = rel.get('origin')
-            if isinstance(origin, str) and len(origin) <= _MAX_EXACT_REF_LEN:
-                exact_refs.add(origin.casefold())
+            if isinstance(origin, str):
+                add_exact(origin)
             aliases = rel.get('aliases')
             if isinstance(aliases, list):
                 for alias in aliases:
-                    if isinstance(alias, str) and len(alias) <= _MAX_EXACT_REF_LEN:
-                        exact_refs.add(alias.casefold())
+                    if isinstance(alias, str):
+                        add_exact(alias)
 
-    return sorted(exact_refs), sorted(tokens), truncated
+    return sorted(exact_refs), sorted(tokens), tokens_truncated, exact_refs_truncated
 
 
 def build_entry(record: dict, raw: bytes, info: os.stat_result) -> dict:
     """Build one compact domain-neutral index entry for an already verified record head."""
-    exact_refs, tokens, truncated = _extract_search_hints(record)
+    exact_refs, tokens, tokens_truncated, exact_refs_truncated = _extract_search_hints(record)
     entry = {
         'format': record['format'],
         'id': record['id'],
@@ -81,8 +103,10 @@ def build_entry(record: dict, raw: bytes, info: os.stat_result) -> dict:
         'exact_refs': exact_refs,
         'tokens': tokens,
     }
-    if truncated:
+    if tokens_truncated:
         entry['tokens_truncated'] = True
+    if exact_refs_truncated:
+        entry['exact_refs_truncated'] = True
     return entry
 
 

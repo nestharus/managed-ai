@@ -13,7 +13,10 @@ from native_runtime.inputs import integer, strings
 BATCH_FORMAT = 'managed-ai-batch-update/1'
 RECEIPT_DIRECTORY = '.system/batches'
 RECEIPT_FORMAT = 'managed-ai-batch-receipt/1'
-RECEIPT_FIELDS = {'format', 'id', 'instance_id', 'spec_sha256', 'pin_predecessors', 'complete', 'records'}
+RECEIPT_REQUIRED = {'format', 'id', 'instance_id', 'spec_sha256', 'pin_predecessors', 'complete', 'records'}
+RECEIPT_OPTIONAL = {'pending'}
+PENDING_FIELDS = {'id', 'before_revision', 'before_sha256', 'pinned_object',
+                  'expected_after_revision', 'expected_fields_sha256'}
 TOP_REQUIRED = {'format', 'id', 'operations'}
 TOP_OPTIONAL = {'instance_id', 'pin_predecessors', 'account'}
 REPLACE_REQUIRED = {'id', 'expected_revision', 'mode', 'record'}
@@ -21,6 +24,10 @@ REPLACE_OPTIONAL = {'expected_sha256'}
 PATCH_REQUIRED = {'id', 'expected_revision', 'expected_sha256', 'mode'}
 PATCH_OPTIONAL = {'add_relations', 'remove_relations', 'set_active',
                   'replace_content_fields', 'remove_content_fields', 'basis'}
+
+
+def _fields_digest(record: dict) -> str:
+    return sha(encode({k: record[k] for k in ('id', 'kind', 'content', 'relations', 'basis', 'active')}))
 
 
 def _spec_identity(system, spec):
@@ -57,8 +64,25 @@ def _load_receipt(path):
     return strict_json(path.read_bytes())
 
 
+def _validate_pending(pending, expected_id):
+    exact_fields(pending, PENDING_FIELDS, set(), 'batch pending entry')
+    require(packet_id(pending['id']) == expected_id, 'batch pending entry does not match next operation')
+    integer(pending['before_revision'], 'before_revision')
+    if pending['before_revision'] == 0:
+        require(pending['before_sha256'] is None and pending['pinned_object'] is None,
+                'invalid revision-0 pending predecessor pin')
+    else:
+        digest(pending['before_sha256'], 'before_sha256')
+        if pending['pinned_object'] is not None:
+            digest(pending['pinned_object'], 'pinned_object')
+    integer(pending['expected_after_revision'], 'expected_after_revision', 1)
+    require(pending['expected_after_revision'] == pending['before_revision'] + 1,
+            'invalid pending revision increment')
+    digest(pending['expected_fields_sha256'], 'expected_fields_sha256')
+
+
 def _validate_receipt(receipt, ident, instance_id):
-    exact_fields(receipt, RECEIPT_FIELDS, set(), 'batch update receipt')
+    exact_fields(receipt, RECEIPT_REQUIRED, RECEIPT_OPTIONAL, 'batch update receipt')
     require(receipt['format'] == RECEIPT_FORMAT, 'unsupported batch update receipt format')
     require(receipt['instance_id'] == instance_id and receipt['id'] == ident,
             'batch receipt belongs to another store or batch identity')
@@ -66,6 +90,8 @@ def _validate_receipt(receipt, ident, instance_id):
     require(type(receipt['pin_predecessors']) is bool, 'batch receipt pin_predecessors must be Boolean')
     require(type(receipt['complete']) is bool, 'batch receipt completion state must be Boolean')
     require(isinstance(receipt['records'], list), 'batch receipt records must be a list')
+    if receipt['complete']:
+        require(receipt.get('pending') is None, 'completed batch receipt may not retain a pending entry')
     ids = []
     for row in receipt['records']:
         exact_fields(row, {'id', 'before_revision', 'before_sha256', 'pinned_object',
@@ -96,6 +122,9 @@ def _bound_receipt(path, instance_id, ident, ids, spec_sha, pin_predecessors):
     require(accepted == ids[:len(accepted)], 'batch receipt progress differs from specification')
     require(not receipt['complete'] or len(accepted) == len(ids),
             'completed batch receipt does not cover specification')
+    if receipt.get('pending') is not None:
+        require(len(accepted) < len(ids), 'batch pending entry exceeds remaining operations')
+        _validate_pending(receipt['pending'], ids[len(accepted)])
     return receipt
 
 
@@ -186,6 +215,35 @@ def _build_candidate(op, previous):
     return candidate, copy.deepcopy(previous['basis'])
 
 
+def _reconcile_pending(store, op, pending, previous, pin_predecessors):
+    """If a crash occurred right after _replace() wrote rev N+1, verify and recover the committed row."""
+    if pending is None or previous is None or previous['revision'] != pending['expected_after_revision']:
+        return None
+    require(pending['before_revision'] == op.get('expected_revision'),
+            'batch pending revision differs from specification')
+    require(pending['before_sha256'] == op.get('expected_sha256'),
+            'batch pending predecessor digest differs from specification')
+    require(_fields_digest(previous) == pending['expected_fields_sha256'],
+            f"record {op['id']} at rev {previous['revision']} differs from pending batch operation")
+    pinned = pending['pinned_object']
+    if pin_predecessors and pending['before_revision'] > 0:
+        require(pinned is not None, 'missing predecessor pin on pending batch operation')
+        prior_raw = store.objects.read(pinned, retained=True)
+        prior_rec = strict_json(prior_raw)
+        require(prior_rec.get('id') == op['id']
+                and prior_rec.get('revision') == pending['before_revision']
+                and prior_rec.get('sha256') == pending['before_sha256'],
+                'pinned predecessor differs from pending batch operation')
+    return {
+        'id': op['id'],
+        'before_revision': pending['before_revision'],
+        'before_sha256': pending['before_sha256'],
+        'pinned_object': pinned,
+        'after_revision': previous['revision'],
+        'after_sha256': previous['sha256'],
+    }
+
+
 def put_batch(system, spec):
     """Pre-validate all operations, then commit them with optional predecessor pinning and durable receipt."""
     ident, ids, pin_predecessors, spec_sha = _spec_identity(system, spec)
@@ -198,35 +256,27 @@ def put_batch(system, spec):
         if old['complete']:
             return old
 
+    pending_entry = old.get('pending') if old is not None else None
     operations = spec['operations'][len(prefix):]
     store = system.record_store
 
     # Phase 1: Full pre-validation of EVERY remaining operation before ANY mutation or pin.
     prepared = []
-    for op in operations:
+    for index, op in enumerate(operations):
         path = store.path(op['id'])
         previous, previous_raw = store.read(op['id']) if path.exists() else (None, None)
-        # Support crash resumption if the head committed right before receipt persistence.
         already_committed = None
-        if (old is not None and previous is not None
-                and previous['revision'] == op.get('expected_revision', -1) + 1
-                and op.get('expected_revision', 0) == 0 and op.get('mode') == 'replace'):
-            candidate, preserve_basis = _build_candidate(dict(op, expected_revision=0), None)
-            expected_body, _ = store._prepare_write(candidate, None, None, retain_basis=False)
-            if all(previous[k] == expected_body[k] for k in ('id', 'kind', 'content', 'relations', 'basis', 'active')):
-                already_committed = {
-                    'id': op['id'], 'before_revision': 0, 'before_sha256': None,
-                    'pinned_object': None, 'after_revision': previous['revision'], 'after_sha256': previous['sha256'],
-                }
+        if index == 0 and pending_entry is not None:
+            already_committed = _reconcile_pending(store, op, pending_entry, previous, pin_predecessors)
         if already_committed is not None:
-            prepared.append((op, None, None, None, already_committed))
+            prepared.append((op, None, None, None, None, already_committed))
             continue
         candidate, preserve_basis = _build_candidate(op, previous)
-        store._prepare_write(candidate, previous, previous_raw, retain_basis=False,
-                             preserve_basis=preserve_basis)
-        prepared.append((op, candidate, previous, preserve_basis, None))
+        preview_body, _ = store._prepare_write(candidate, previous, previous_raw, retain_basis=False,
+                                               preserve_basis=preserve_basis)
+        prepared.append((op, candidate, previous, preserve_basis, _fields_digest(preview_body), None))
 
-    # Phase 2: Commit durable incomplete receipt, then apply operations sequentially.
+    # Phase 2: Commit durable incomplete receipt, then apply operations sequentially with WAL pending entry.
     result = {
         'format': RECEIPT_FORMAT,
         'id': ident,
@@ -240,34 +290,46 @@ def put_batch(system, spec):
     if old is None:
         write_json(receipt, dict(result, complete=False))
 
-    committed_ids = []
-    for op, candidate, previous, preserve_basis, already_committed in prepared:
-        if already_committed is not None:
-            result['records'].append(already_committed)
+    with store.batch_index_updates():
+        if old is not None:
+            # Ensure earlier committed prefix entries are also fresh in HeadIndex even if resume fails again.
+            for row in result['records']:
+                store._deferred_index_ids.append(row['id'])
+        for op, candidate, previous, preserve_basis, fields_sha, already_committed in prepared:
+            if already_committed is not None:
+                result['records'].append(already_committed)
+                store._deferred_index_ids.append(already_committed['id'])
+                write_json(receipt, dict(result, complete=False))
+                continue
+            pinned_object = None
+            if pin_predecessors and previous is not None:
+                pinned_object = store.pin(previous)['object']
+            before_rev = previous['revision'] if previous is not None else 0
+            before_sha = previous['sha256'] if previous is not None else None
+            pending = {
+                'id': op['id'],
+                'before_revision': before_rev,
+                'before_sha256': before_sha,
+                'pinned_object': pinned_object,
+                'expected_after_revision': before_rev + 1,
+                'expected_fields_sha256': fields_sha,
+            }
+            write_json(receipt, dict(result, complete=False, pending=pending))
+            written = store._replace(
+                candidate,
+                op['expected_revision'],
+                preserve_basis=preserve_basis,
+            )
+            result['records'].append({
+                'id': op['id'],
+                'before_revision': before_rev,
+                'before_sha256': before_sha,
+                'pinned_object': pinned_object,
+                'after_revision': written['revision'],
+                'after_sha256': written['sha256'],
+            })
             write_json(receipt, dict(result, complete=False))
-            continue
-        pinned_object = None
-        if pin_predecessors and previous is not None:
-            pinned_object = store.pin(previous)['object']
-        written = store._replace(
-            candidate,
-            op['expected_revision'],
-            preserve_basis=preserve_basis,
-            _defer_index_update=True,
-        )
-        committed_ids.append(op['id'])
-        result['records'].append({
-            'id': op['id'],
-            'before_revision': previous['revision'] if previous is not None else 0,
-            'before_sha256': previous['sha256'] if previous is not None else None,
-            'pinned_object': pinned_object,
-            'after_revision': written['revision'],
-            'after_sha256': written['sha256'],
-        })
-        write_json(receipt, dict(result, complete=False))
 
     result['complete'] = True
     write_json(receipt, result)
-    if committed_ids:
-        store.refresh_index_entries(committed_ids)
     return result
