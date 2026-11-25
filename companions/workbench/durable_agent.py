@@ -7,7 +7,7 @@ are never blindly retried. A pending intent remains an unresolved outcome.
 from collections.abc import Mapping
 from contextlib import contextmanager
 import argparse
-import fcntl
+import errno
 import hashlib
 import importlib.util
 import json
@@ -16,6 +16,44 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
+if os.name == "nt":
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class _OVERLAPPED(ctypes.Structure):
+        _fields_ = [
+            ("Internal", ctypes.c_void_p),
+            ("InternalHigh", ctypes.c_void_p),
+            ("Offset", wintypes.DWORD),
+            ("OffsetHigh", wintypes.DWORD),
+            ("hEvent", wintypes.HANDLE),
+        ]
+
+    _LockFileEx = _kernel32.LockFileEx
+    _LockFileEx.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+        wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(_OVERLAPPED),
+    ]
+    _LockFileEx.restype = wintypes.BOOL
+    _UnlockFileEx = _kernel32.UnlockFileEx
+    _UnlockFileEx.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+        wintypes.DWORD, ctypes.POINTER(_OVERLAPPED),
+    ]
+    _UnlockFileEx.restype = wintypes.BOOL
+    _LOCKFILE_FAIL_IMMEDIATELY = 0x00000001
+    _LOCKFILE_EXCLUSIVE_LOCK = 0x00000002
+    _ERROR_LOCK_VIOLATION = 33
+    _ERROR_IO_PENDING = 997
 
 __all__ = ["run_durable_agent", "inspect_durable_state",
            "resolve_durable_operation"]
@@ -77,9 +115,32 @@ def _file_digest(path):
 
 
 def _read(path):
+    def unique_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON key: " + key)
+            result[key] = value
+        return result
+
     def reject(value):
         raise ValueError("nonfinite JSON constant: " + value)
-    return _snapshot(json.loads(Path(path).read_bytes(), parse_constant=reject))
+
+    return _snapshot(json.loads(Path(path).read_bytes(), object_pairs_hook=unique_pairs,
+                                parse_constant=reject))
+
+
+def _sync_dir(path):
+    if not hasattr(os, "O_DIRECTORY"):
+        return
+    directory = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    except OSError as exc:
+        if exc.errno not in (errno.EINVAL, errno.EBADF, errno.EROFS):
+            raise
+    finally:
+        os.close(directory)
 
 
 def _write_new(path, value):
@@ -95,11 +156,7 @@ def _write_new(path, value):
             os.fsync(output.fileno())
         os.link(temporary, path)
         os.unlink(temporary)
-        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        _sync_dir(path.parent)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -107,15 +164,40 @@ def _write_new(path, value):
 
 @contextmanager
 def _lock(root):
-    with (root / ".owner.lock").open("a+b") as handle:
+    lock_path = root / ".owner.lock"
+    if lock_path.is_symlink():
+        raise _StateError("owner lock must not be a symlink")
+    with lock_path.open("a+b") as handle:
+        locked = False
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise _StateError("another local owner holds this occurrence") from exc
-        try:
+            if fcntl is not None:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise _StateError("another local owner holds this occurrence") from exc
+                locked = True
+            elif os.name == "nt":
+                overlapped = _OVERLAPPED()
+                ok = _LockFileEx(
+                    msvcrt.get_osfhandle(handle.fileno()),
+                    _LOCKFILE_EXCLUSIVE_LOCK | _LOCKFILE_FAIL_IMMEDIATELY,
+                    0, 1, 0, ctypes.byref(overlapped),
+                )
+                if not ok:
+                    err = ctypes.get_last_error()
+                    if err in (_ERROR_LOCK_VIOLATION, _ERROR_IO_PENDING):
+                        raise _StateError("another local owner holds this occurrence")
+                    raise ctypes.WinError(err)
+                locked = True
             yield
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            if locked:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                elif os.name == "nt":
+                    overlapped = _OVERLAPPED()
+                    _UnlockFileEx(msvcrt.get_osfhandle(handle.fileno()),
+                                  0, 1, 0, ctypes.byref(overlapped))
 
 
 def _load_controller(controller_dir):

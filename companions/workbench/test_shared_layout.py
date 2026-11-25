@@ -16,21 +16,20 @@ from workbench_fixtures import change_query_parser, search_layout
 
 
 class SharedLayout(unittest.TestCase):
-    def test_forwarding_and_direct_layouts_bind_the_same_effective_snapshot(self):
+    def test_runtime_layout_binds_exact_effective_snapshot_and_detects_drift(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            runtime, legacy = search_layout(root)
+            runtime, entry = search_layout(root)
             corpus = root / 'corpus'
             corpus.mkdir()
-            (corpus / 'example.md').write_text('# Example lexical fixture\n')
+            (corpus / 'example.md').write_text('# Example lexical fixture\n', encoding='utf-8', newline='\n')
             tools = root / 'companions/workbench/source_tools.py'
             tools.parent.mkdir(parents=True)
             tools.write_bytes(Path(source_tools.__file__).read_bytes())
 
             with patch.object(source_tools, '__file__', str(tools)):
-                with SourceService(corpus, root / 'forwarded') as forwarded:
-                    inventory = forwarded.inventory()
-                legacy.unlink()
+                with SourceService(corpus, root / 'explicit', search_module_path=entry) as explicit:
+                    inventory = explicit.inventory()
                 with SourceService(corpus, root / 'direct') as direct:
                     self.assertEqual(direct.inventory(), inventory)
                     recorded = inventory['selector']['search_code']
@@ -50,13 +49,15 @@ class SharedLayout(unittest.TestCase):
 
     def test_unknown_delegation_and_oversized_dependency_are_refused(self):
         with tempfile.TemporaryDirectory() as directory:
-            runtime, legacy = search_layout(Path(directory))
-            legacy.write_bytes(legacy.read_bytes() + b'\n# Unrecognized delegation.\n')
+            root = Path(directory)
+            runtime, entry = search_layout(root)
+            delegator = root / 'unrecognized_delegator.py'
+            delegator.write_text('import runpy\nrunpy.run_path("knowledge.py")\n', encoding='utf-8', newline='\n')
             with self.assertRaisesRegex(ValueError, 'supported entrance'):
-                SearchImplementation(legacy)
+                SearchImplementation(delegator)
             (runtime / 'lexical_search.py').write_bytes(b'#' * (256 * 1024 + 1))
             with self.assertRaisesRegex(ValueError, 'exceeds byte bound'):
-                SearchImplementation(runtime / 'knowledge.py')
+                SearchImplementation(entry)
 
     def test_relocated_exposure_boundary_blocks_read_and_discovery(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -68,8 +69,8 @@ class SharedLayout(unittest.TestCase):
             for name in protected:
                 path = corpus / name
                 path.parent.mkdir(parents=True)
-                path.write_text('# Synthetic protected fixture\n')
-            (corpus / 'public.md').write_text('# Public fixture\n')
+                path.write_text('# Synthetic protected fixture\n', encoding='utf-8', newline='\n')
+            (corpus / 'public.md').write_text('# Public fixture\n', encoding='utf-8', newline='\n')
             service = SourceService(corpus, root / 'state')
             with patch.object(service, '_body', wraps=service._body) as reads:
                 for name in protected:
@@ -127,7 +128,7 @@ class SharedLayout(unittest.TestCase):
             corpus = root / "corpus"
             corpus.mkdir()
             body = "# Capacity\n\nAn available resource and a planned resource are different.\n"
-            (corpus / "capacity.md").write_text(body)
+            (corpus / "capacity.md").write_text(body, encoding="utf-8", newline="\n")
             service = SourceService(corpus, root / "source-state")
             observed = service.read("capacity.md")
             self.assertEqual(observed["text"], body)

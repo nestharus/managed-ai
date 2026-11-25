@@ -309,6 +309,52 @@ class MaterialRetentionHardening(unittest.TestCase):
         self.assertEqual(unpublished[retained_id]["error"], "current pointer busy")
         self.assertNotIn("first", unpublished)
 
+    def test_decomposed_exports_and_shared_lock_coexistence(self):
+        # Verify all key public symbols remain re-exported on managed_material after decomposition.
+        for name in (
+            "sha", "loads_json", "js", "utc", "require", "sync_dir", "store_lock",
+            "immutable", "replace_json", "deflate", "safe_relative", "path_state",
+            "read_manifest", "manifest_closure", "current_selection", "selection_closure",
+            "representation_closure", "observed_materialization_state", "materialization_state",
+            "selected_for_manifest", "unpublished_occurrences", "Store",
+        ):
+            self.assertTrue(hasattr(material, name), f"Missing re-export: {name}")
+
+        # Cross-process shared locks coexist while blocking nonblocking exclusive acquisition.
+        ready = self.root / "shared.ready"
+        release = self.root / "shared.release"
+        holder_code = "\n".join([
+            "import importlib.util, sys, time",
+            "from pathlib import Path",
+            "spec = importlib.util.spec_from_file_location('mm_sh', sys.argv[1])",
+            "mm = importlib.util.module_from_spec(spec)",
+            "spec.loader.exec_module(mm)",
+            "with mm.store_lock(Path(sys.argv[2]), shared=True):",
+            "    Path(sys.argv[3]).write_text('ready', encoding='utf-8')",
+            "    deadline = time.monotonic() + 15",
+            "    while not Path(sys.argv[4]).exists() and time.monotonic() < deadline:",
+            "        time.sleep(0.05)",
+        ])
+        proc = subprocess.Popen(
+            [sys.executable, "-B", "-c", holder_code, str(IMPL),
+             str(self.store_dir), str(ready), str(release)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            deadline = time.monotonic() + 15
+            while not ready.exists() and proc.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(ready.exists())
+            with material.store_lock(self.store_dir, shared=True, nonblocking=True):
+                pass
+            with self.assertRaises(BlockingIOError):
+                with material.store_lock(self.store_dir, shared=False, nonblocking=True):
+                    pass
+        finally:
+            release.write_text("go", encoding="utf-8")
+            proc.communicate(timeout=15)
+        self.assertEqual(proc.returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

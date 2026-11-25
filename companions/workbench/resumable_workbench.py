@@ -65,7 +65,7 @@ def _command_code(command, cwd=None):
         return {}
     base = Path(cwd or Path.cwd())
     first = command[0]
-    executable = str((base / first).resolve()) if "/" in first else shutil.which(first)
+    executable = str((base / first).resolve()) if ("/" in first or "\\" in first) else shutil.which(first)
     if executable is None:
         raise ValueError("Configured command executable is unavailable: " + first)
     paths = [executable]
@@ -137,9 +137,8 @@ def _compatible_predecessor_binding(state, binding, search):
 
     previous = dict(binding)
     del previous["source_search_analyzer"]
-    # The issued journal named the predecessor's standalone entrance. That
-    # file can now be reached at the runtime path through the known forwarder.
-    previous["source_search_code"] = {str(search.legacy_entry): search.entry_pin}
+    # The issued journal named the predecessor's standalone entrance.
+    previous["source_search_code"] = {str(search.runtime_entry): search.entry_pin}
     previous["adapter_code"] = {
         path: _PREDECESSOR_ADAPTER.get(Path(path).name, pin)
         for path, pin in binding["adapter_code"].items()

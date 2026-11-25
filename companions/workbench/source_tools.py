@@ -29,12 +29,8 @@ DEFAULT_EXCLUDED = {
 }
 PROTECTED_PREFIXES = ('evidence/fleet/D12/', 'instruments/incident-corpus/D12/')
 
-# The issued compatibility entrance delegates to the runtime reader. Its bytes
-# authenticate the route only; effective identity comes from the selected code.
-_FORWARDER_SHA256 = '69bdf7733049a04a2dc7a19230c1d8f095bef7f5dc016f61fe4f2a61aee55174'
 PREDECESSOR_SEARCH_SHA256 = 'fac79f192b0029667300400f659564591a2c996abf1e450b70cdb76a67874725'
 PREDECESSOR_SOURCE_TOOLS_SHA256 = 'd8036644bee5a11ce7f5a4f0fa6ff0dbced1b23099801f2f58231aef5fb52016'
-_LEGACY_ENTRY = Path('prototype/knowledge-system/knowledge.py')
 _RUNTIME_ENTRY = Path('runtime/source_library/knowledge.py')
 _MAX_SEARCH_FILES = 8
 _MAX_SEARCH_FILE_BYTES = 256 * 1024
@@ -86,18 +82,11 @@ class SearchImplementation:
     """Select and execute one bounded snapshot of the trusted lexical code."""
 
     def __init__(self, module_path=None):
-        self.legacy_entry = Path(__file__).resolve().parents[2] / 'engine' / _LEGACY_ENTRY
+        self.runtime_entry = Path(__file__).resolve().parents[2] / 'engine' / _RUNTIME_ENTRY
         if module_path is None:
-            module_path = self.legacy_entry
-            if not module_path.exists() and not module_path.is_symlink():
-                module_path = module_path.parents[2] / _RUNTIME_ENTRY
+            module_path = self.runtime_entry
         entry = Path(os.path.abspath(module_path))
         data = _search_bytes(entry)
-        if digest(data.replace(b'\r\n', b'\n')) == _FORWARDER_SHA256:
-            need(entry.parts[-len(_LEGACY_ENTRY.parts):] == _LEGACY_ENTRY.parts,
-                 'The retained search entrance requires the prototype layout.')
-            entry = entry.parents[2] / _RUNTIME_ENTRY
-            data = _search_bytes(entry)
         self.modules = {}
         self.pins = {}
         self.entry = entry
@@ -149,8 +138,7 @@ class SearchImplementation:
 
     @property
     def is_predecessor(self):
-        runtime_entry = self.legacy_entry.parents[2] / _RUNTIME_ENTRY
-        return (self.entry in (self.legacy_entry, runtime_entry) and len(self.pins) == 1
+        return (self.entry == self.runtime_entry and len(self.pins) == 1
                 and self.entry_pin['sha256'] == PREDECESSOR_SEARCH_SHA256)
 
 
