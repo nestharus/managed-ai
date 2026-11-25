@@ -7,10 +7,10 @@ For applying these methods to an external or existing system, acquire [current a
 The package has one shared engine, reusable domains and independent research, novel and discovery stores. From the package root, inspect an initialized instance with:
 
 ```bash
-python3 -B engine/runtime/select_deployment.py --deployment deployments/research system status
-python3 -B engine/runtime/select_deployment.py --deployment deployments/research system show C1
-python3 -B engine/runtime/select_deployment.py --deployment deployments/novel system status
-python3 -B engine/runtime/select_deployment.py --deployment deployments/discovery system status
+python3 -B engine/deployment/select_deployment.py --deployment deployments/research system status
+python3 -B engine/deployment/select_deployment.py --deployment deployments/research system show C1
+python3 -B engine/deployment/select_deployment.py --deployment deployments/novel system status
+python3 -B engine/deployment/select_deployment.py --deployment deployments/discovery system status
 ```
 
 The [research store](../../stores/research/README.md) owns the general field and received findings. The [novel store](../../stores/novel/README.md) owns its artifact, current source account and three commission duties. The [discovery store](../../stores/discovery/README.md) owns developing signals, inquiry artifacts and the actual construction of its discovery arrangement; the original research and novel duties stay with their owners. The [AI-system-building domain](../../domains/ai-system-building/README.md) supplies system development. Select complete catalogue bodies according to the task. Availability, delivery, acquisition, interpretation and useful effect remain different claims.

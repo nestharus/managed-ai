@@ -1,4 +1,4 @@
-"""Working releases without companions/workbench verify cleanly; present workbench manifests remain strictly gated."""
+"""Working releases without companions/peer verify cleanly; present peer manifests remain strictly gated."""
 import gzip
 import hashlib
 import json
@@ -6,16 +6,21 @@ import os
 from pathlib import Path
 import runpy
 import shutil
+import stat
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 import zipfile
 
 
-RELEASE = Path(__file__).resolve().parent
-ENGINE = RELEASE.parent
+REPO = Path(__file__).resolve().parents[3]
+ENGINE = REPO / "engine"
+RELEASE = ENGINE / "release"
 PACKAGE = runpy.run_path(str(RELEASE / "package.py"))
+REFRESH = runpy.run_path(str(RELEASE / "refresh_guidance.py"))
 
 
 def _sha256(raw):
@@ -29,19 +34,29 @@ def _write_json(path, value):
     return raw
 
 
-def _build_minimal_bundle(root):
+def _build_minimal_bundle(root, *, include_siblings=False):
     core = root / "engine"
     (core / "release").mkdir(parents=True)
-    (core / "runtime/native").mkdir(parents=True)
+    (core / "store").mkdir(parents=True)
     rows = [{"id": "guide", "source": "guide.md"}]
+    (core / "guide.md").write_bytes(b"# Guide\n\nWorking release body.\n")
+    if include_siblings:
+        (root / "optional/collective").mkdir(parents=True)
+        (root / "optional/collective/README.md").write_bytes(b"# Collective\n\nOptional body.\n")
+        (root / "patterns/continuous-consolidation").mkdir(parents=True)
+        (root / "patterns/continuous-consolidation/README.md").write_bytes(b"# Patterns\n\nPattern body.\n")
+        rows.extend([
+            {"id": "prototype/collective-work/README.md", "source": "../optional/collective/README.md"},
+            {"id": "prototype/patterns/continuous-consolidation/README.md",
+             "source": "../patterns/continuous-consolidation/README.md"},
+        ])
     (core / "release/current_sources.json").write_text(
         json.dumps({"edition": "working-test", "bodies": rows}), encoding="utf-8"
     )
-    (core / "runtime/native/catalogue.json").write_text(
+    (core / "store/catalogue.json").write_text(
         json.dumps({"entries": rows}), encoding="utf-8"
     )
     (core / "release/navigation.json").write_text("{}", encoding="utf-8")
-    (core / "guide.md").write_bytes(b"# Guide\n\nWorking release body.\n")
     subprocess.run(
         [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(core)],
         check=True,
@@ -51,12 +66,13 @@ def _build_minimal_bundle(root):
     return core
 
 
-def _write_workbench(root, files):
-    workbench = root / "companions/workbench"
-    workbench.mkdir(parents=True, exist_ok=True)
+def _write_peer_components(root, files):
+    companions = root / "companions"
+    peer = companions / "peer"
+    peer.mkdir(parents=True, exist_ok=True)
     manifest_files = {}
     for rel, content in files.items():
-        target = workbench / rel
+        target = companions / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
         manifest_files[rel] = {
@@ -64,10 +80,10 @@ def _write_workbench(root, files):
             "identity": {"bytes": len(content), "sha256": _sha256(content)},
         }
     _write_json(
-        workbench / "COMPONENTS.json",
+        peer / "COMPONENTS.json",
         {"schema": "peer-workbench-acquired-components/1", "files": manifest_files},
     )
-    return workbench
+    return peer
 
 
 def _write_sample_domain(bundle):
@@ -112,7 +128,7 @@ def _write_sample_domain(bundle):
 
 
 class WorkingReleaseVerificationTest(unittest.TestCase):
-    def test_working_release_without_workbench_verifies_packages_and_extracts(self):
+    def test_working_release_without_peer_verifies_packages_and_extracts(self):
         with TemporaryDirectory() as temporary:
             tmp = Path(temporary)
             bundle = tmp / "working-release"
@@ -121,6 +137,13 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 bundle / "engine",
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
             )
+            for sibling in ("optional", "patterns"):
+                if (REPO / sibling).is_dir():
+                    shutil.copytree(
+                        REPO / sibling,
+                        bundle / sibling,
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+                    )
             domain_json = _write_sample_domain(bundle)
             store = bundle / "stores/work"
             deployment = bundle / "deployments/work"
@@ -128,14 +151,14 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 [
                     sys.executable,
                     "-B",
-                    str(bundle / "engine/runtime/manage_store.py"),
+                    str(bundle / "engine/store/manage_store.py"),
                     "--root",
                     str(store),
                     "init",
                     "--instance-id",
                     "working-release-test",
                     "--goal-text",
-                    "Verify a working release without companions/workbench.",
+                    "Verify a working release without companions/peer.",
                     "--domain",
                     str(domain_json),
                 ],
@@ -148,7 +171,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 [
                     sys.executable,
                     "-B",
-                    str(bundle / "engine/runtime/select_deployment.py"),
+                    str(bundle / "engine/deployment/select_deployment.py"),
                     "--deployment",
                     str(deployment),
                     "init",
@@ -164,7 +187,6 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             )
             self.assertFalse((bundle / "companions").exists())
 
-            # Direct verify_bundle() call on the real working release
             core = (bundle / "engine").resolve(strict=True)
             tree = PACKAGE["members"](bundle, core)
             native = {
@@ -172,9 +194,8 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 for name, row in tree.items()
                 if name.startswith("engine/") and name != "engine/MANIFEST.json"
             }
-            PACKAGE["verify_bundle"](bundle, core, native)
+            PACKAGE["verify_bundle"](bundle, core, native, tree=tree)
 
-            # End-to-end packaging without companions/workbench
             archive = tmp / "working-release.zip"
             packed = subprocess.run(
                 [
@@ -204,7 +225,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 [
                     sys.executable,
                     "-B",
-                    str(extracted / "engine/runtime/select_deployment.py"),
+                    str(extracted / "engine/deployment/select_deployment.py"),
                     "--deployment",
                     str(extracted / "deployments/work"),
                     "status",
@@ -220,7 +241,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 [
                     sys.executable,
                     "-B",
-                    str(extracted / "engine/runtime/select_deployment.py"),
+                    str(extracted / "engine/deployment/select_deployment.py"),
                     "--deployment",
                     str(extracted / "deployments/work"),
                     "system",
@@ -233,10 +254,10 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             )
             self.assertEqual(json.loads(sys_status.stdout)["instance_id"], "working-release-test")
 
-            # Also succeeds when companions/ exists without companions/workbench/
-            harness = bundle / "companions/harness"
-            harness.mkdir(parents=True)
-            (harness / "PROTOCOL.md").write_text("# Harness\n", encoding="utf-8")
+            # Also succeeds when companions/ exists without companions/peer/
+            pub = bundle / "companions/publication_review"
+            pub.mkdir(parents=True)
+            (pub / "PUBLICATION.md").write_text("# Publication\n", encoding="utf-8")
             refreshed = subprocess.run(
                 [
                     sys.executable,
@@ -252,11 +273,20 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             )
             self.assertEqual(json.loads(refreshed.stdout)["status"], "verified")
 
-    def test_minimal_working_bundle_without_workbench_verifies_and_packages(self):
+    def test_minimal_working_bundle_and_sibling_optional_patterns_package(self):
         with TemporaryDirectory() as temporary:
             tmp = Path(temporary)
             bundle = tmp / "bundle"
-            _build_minimal_bundle(bundle)
+            core = _build_minimal_bundle(bundle, include_siblings=True)
+            cat = json.loads((core / "store/catalogue.json").read_text(encoding="utf-8"))
+            by_id = {e["id"]: e for e in cat["entries"]}
+            self.assertEqual(by_id["guide"]["source_root_relative"], "../..")
+            self.assertEqual(by_id["guide"]["body_path"], "engine/guide.md")
+            self.assertEqual(by_id["prototype/collective-work/README.md"]["body_path"], "optional/collective/README.md")
+            self.assertEqual(
+                by_id["prototype/patterns/continuous-consolidation/README.md"]["body_path"],
+                "patterns/continuous-consolidation/README.md",
+            )
             archive = tmp / "minimal-working.zip"
             result = subprocess.run(
                 [
@@ -275,15 +305,15 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             self.assertEqual(json.loads(result.stdout)["status"], "packaged")
             self.assertTrue(archive.is_file())
 
-    def test_workbench_present_enforces_manifest_identity_and_safety(self):
+    def test_peer_present_enforces_manifest_identity_and_safety(self):
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
-            workbench = _write_workbench(
+            peer = _write_peer_components(
                 bundle,
                 {
-                    "workbench_agent.py": b"AGENT = 1\n",
-                    "controller/agent_runtime.py": b"RUNTIME = 1\n",
+                    "workbench/core/workbench_agent.py": b"AGENT = 1\n",
+                    "workbench/controller/agent_runtime.py": b"RUNTIME = 1\n",
                 },
             )
             ok = subprocess.run(
@@ -296,35 +326,34 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
 
             # Tampered component file fails before rewriting MANIFEST.json
             prior_manifest = (bundle / "MANIFEST.json").read_bytes()
-            (workbench / "workbench_agent.py").write_bytes(b"AGENT = 2\n")
+            (bundle / "companions/workbench/core/workbench_agent.py").write_bytes(b"AGENT = 2\n")
             tampered = subprocess.run(
                 [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle), "--refresh-only"],
                 capture_output=True,
                 text=True,
             )
             self.assertNotEqual(tampered.returncode, 0)
-            self.assertIn("Shared component identity changed: workbench_agent.py", tampered.stderr)
+            self.assertIn("Shared component identity changed: workbench/core/workbench_agent.py", tampered.stderr)
             self.assertEqual((bundle / "MANIFEST.json").read_bytes(), prior_manifest)
 
-            # Present companions/workbench without COMPONENTS.json must still fail
-            (workbench / "COMPONENTS.json").unlink()
+            # Present companions/peer without COMPONENTS.json must still fail
+            (peer / "COMPONENTS.json").unlink()
             missing_manifest = subprocess.run(
                 [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle), "--refresh-only"],
                 capture_output=True,
                 text=True,
             )
             self.assertNotEqual(missing_manifest.returncode, 0)
-            self.assertIn("Missing shared workbench component manifest", missing_manifest.stderr)
+            self.assertIn("Missing shared peer component manifest", missing_manifest.stderr)
 
-    def test_workbench_manifest_rejects_traversal_missing_and_malformed(self):
+    def test_peer_manifest_rejects_traversal_missing_and_malformed(self):
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
-            workbench = _write_workbench(bundle, {"workbench_agent.py": b"AGENT = 1\n"})
+            peer = _write_peer_components(bundle, {"workbench/core/workbench_agent.py": b"AGENT = 1\n"})
 
-            # Path traversal
             _write_json(
-                workbench / "COMPONENTS.json",
+                peer / "COMPONENTS.json",
                 {
                     "schema": "peer-workbench-acquired-components/1",
                     "files": {
@@ -337,28 +366,26 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Unsafe shared component path"):
                 PACKAGE["verify_workbench_components"](bundle)
 
-            # Missing declared component
             _write_json(
-                workbench / "COMPONENTS.json",
+                peer / "COMPONENTS.json",
                 {
                     "schema": "peer-workbench-acquired-components/1",
                     "files": {
-                        "missing.py": {
+                        "workbench/core/missing.py": {
                             "identity": {"bytes": 1, "sha256": _sha256(b"x")}
                         }
                     },
                 },
             )
-            with self.assertRaisesRegex(ValueError, "Missing shared component: missing.py"):
+            with self.assertRaisesRegex(ValueError, "Missing shared component: workbench/core/missing.py"):
                 PACKAGE["verify_workbench_components"](bundle)
 
-            # Boolean bytes in identity entry
             _write_json(
-                workbench / "COMPONENTS.json",
+                peer / "COMPONENTS.json",
                 {
                     "schema": "peer-workbench-acquired-components/1",
                     "files": {
-                        "workbench_agent.py": {
+                        "workbench/core/workbench_agent.py": {
                             "identity": {"bytes": True, "sha256": _sha256(b"AGENT = 1\n")}
                         }
                     },
@@ -367,121 +394,107 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Invalid shared component identity entry"):
                 PACKAGE["verify_workbench_components"](bundle)
 
-            # Duplicate JSON key
-            (workbench / "COMPONENTS.json").write_text(
-                '{"files": {"workbench_agent.py": {}}, "files": {}}',
+            (peer / "COMPONENTS.json").write_text(
+                '{"files": {"workbench/core/workbench_agent.py": {}}, "files": {}}',
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
                 PACKAGE["verify_workbench_components"](bundle)
 
-    def test_workbench_rejects_all_case_variants_even_when_populated(self):
+    def test_peer_rejects_all_case_variants_even_when_populated(self):
         def rename_exact(path, new_name):
-            # Two-step rename works on case-insensitive filesystems (e.g., NTFS, APFS).
             staging = path.with_name(new_name + ".tmpcase")
             path.rename(staging)
             staging.rename(path.with_name(new_name))
 
-        # 1. Wrong-case Companions/harness (without workbench)
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
-            harness = bundle / "Companions/harness"
-            harness.mkdir(parents=True)
-            (harness / "PROTOCOL.md").write_text("# Harness\n", encoding="utf-8")
+            pub = bundle / "Companions/publication_review"
+            pub.mkdir(parents=True)
+            (pub / "PUBLICATION.md").write_text("# Publication\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "expected companions, observed Companions"):
                 PACKAGE["verify_workbench_components"](bundle)
 
-        # 2. Populated Companions/workbench (wrong case on companions)
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
-            _write_workbench(bundle, {"workbench_agent.py": b"AGENT = 1\n"})
+            _write_peer_components(bundle, {"workbench/core/workbench_agent.py": b"AGENT = 1\n"})
             rename_exact(bundle / "companions", "Companions")
             with self.assertRaisesRegex(ValueError, "expected companions, observed Companions"):
                 PACKAGE["verify_workbench_components"](bundle)
 
-        # 3. Populated companions/Workbench (wrong case on workbench, valid COMPONENTS.json inside)
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
-            workbench = _write_workbench(bundle, {"workbench_agent.py": b"AGENT = 1\n"})
-            rename_exact(workbench, "Workbench")
+            peer = _write_peer_components(bundle, {"workbench/core/workbench_agent.py": b"AGENT = 1\n"})
+            rename_exact(peer, "Peer")
+            with self.assertRaisesRegex(ValueError, "expected peer, observed Peer"):
+                PACKAGE["verify_workbench_components"](bundle)
+
+        with TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "bundle"
+            _build_minimal_bundle(bundle)
+            peer = _write_peer_components(bundle, {"workbench/core/workbench_agent.py": b"AGENT = 1\n"})
+            rename_exact(peer / "COMPONENTS.json", "components.json")
+            with self.assertRaisesRegex(ValueError, "expected COMPONENTS.json, observed components.json"):
+                PACKAGE["verify_workbench_components"](bundle)
+
+        with TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "bundle"
+            _build_minimal_bundle(bundle)
+            _write_peer_components(bundle, {"workbench/core/workbench_agent.py": b"AGENT = 1\n"})
+            rename_exact(bundle / "companions/workbench/core/workbench_agent.py", "Workbench_Agent.py")
             with self.assertRaisesRegex(
-                ValueError, "expected companions/workbench, observed companions/Workbench"
+                ValueError, "expected workbench/core/workbench_agent.py, observed workbench/core/Workbench_Agent.py"
             ):
                 PACKAGE["verify_workbench_components"](bundle)
 
-        # 4. Wrong-case components.json inside companions/workbench
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
-            workbench = _write_workbench(bundle, {"workbench_agent.py": b"AGENT = 1\n"})
-            rename_exact(workbench / "COMPONENTS.json", "components.json")
+            _write_peer_components(bundle, {"workbench/controller/agent_runtime.py": b"RT = 1\n"})
+            rename_exact(bundle / "companions/workbench/controller", "Controller")
             with self.assertRaisesRegex(
-                ValueError, "expected COMPONENTS.json, observed components.json"
-            ):
-                PACKAGE["verify_workbench_components"](bundle)
-
-        # 5. Wrong-case component leaf filename (Workbench_Agent.py)
-        with TemporaryDirectory() as temporary:
-            bundle = Path(temporary) / "bundle"
-            _build_minimal_bundle(bundle)
-            workbench = _write_workbench(bundle, {"workbench_agent.py": b"AGENT = 1\n"})
-            rename_exact(workbench / "workbench_agent.py", "Workbench_Agent.py")
-            with self.assertRaisesRegex(
-                ValueError, "expected workbench_agent.py, observed Workbench_Agent.py"
-            ):
-                PACKAGE["verify_workbench_components"](bundle)
-
-        # 6. Wrong-case component subdirectory (Controller/agent_runtime.py)
-        with TemporaryDirectory() as temporary:
-            bundle = Path(temporary) / "bundle"
-            _build_minimal_bundle(bundle)
-            workbench = _write_workbench(bundle, {"controller/agent_runtime.py": b"RT = 1\n"})
-            rename_exact(workbench / "controller", "Controller")
-            with self.assertRaisesRegex(
-                ValueError, "expected controller, observed Controller"
+                ValueError, "expected workbench/controller, observed workbench/Controller"
             ):
                 PACKAGE["verify_workbench_components"](bundle)
 
     @unittest.skipIf(os.name == "nt", "POSIX symlink test")
-    def test_workbench_rejects_symlink_directory_or_component(self):
+    def test_peer_rejects_symlink_directory_or_component(self):
         with TemporaryDirectory() as temporary:
             tmp = Path(temporary)
             bundle = tmp / "bundle"
             _build_minimal_bundle(bundle)
-            outside = tmp / "outside_wb"
+            outside = tmp / "outside_peer"
             outside.mkdir()
             (bundle / "companions").mkdir()
-            (bundle / "companions/workbench").symlink_to(outside)
+            (bundle / "companions/peer").symlink_to(outside)
             with self.assertRaisesRegex(ValueError, "ordinary files and directories"):
                 PACKAGE["verify_workbench_components"](bundle)
 
-            (bundle / "companions/workbench").unlink()
-            workbench = _write_workbench(bundle, {"workbench_agent.py": b"AGENT = 1\n"})
+            (bundle / "companions/peer").unlink()
+            _write_peer_components(bundle, {"workbench/core/workbench_agent.py": b"AGENT = 1\n"})
             ext_file = tmp / "ext.py"
             ext_file.write_bytes(b"AGENT = 1\n")
-            (workbench / "workbench_agent.py").unlink()
-            (workbench / "workbench_agent.py").symlink_to(ext_file)
+            target = bundle / "companions/workbench/core/workbench_agent.py"
+            target.unlink()
+            target.symlink_to(ext_file)
             with self.assertRaisesRegex(ValueError, "ordinary files and directories"):
                 PACKAGE["verify_workbench_components"](bundle)
 
     def test_compressed_text_rejects_decompression_bomb(self):
         with TemporaryDirectory() as temporary:
             bomb = Path(temporary) / "bomb.gz"
-            # 1 MiB of ASCII spaces compresses to ~1 KiB; enforce bound strictly below it.
             bomb.write_bytes(gzip.compress(b" " * (1024 * 1024)))
             self.assertLess(bomb.stat().st_size, 4096)
             with self.assertRaisesRegex(ValueError, "Compressed text exceeds byte bound"):
                 PACKAGE["check_compressed_text"](bomb, max_bytes=4096)
-            # Exact-boundary payload still passes.
             exact = Path(temporary) / "exact.gz"
             exact.write_bytes(gzip.compress(b"a" * 4096))
             PACKAGE["check_compressed_text"](exact, max_bytes=4096)
 
     def test_release_readers_reject_duplicate_keys_and_nonfinite_json(self):
-        refresh = runpy.run_path(str(RELEASE / "refresh_guidance.py"))
         with TemporaryDirectory() as temporary:
             tmp = Path(temporary)
             dup = tmp / "dup.json"
@@ -498,22 +511,20 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             core = _build_minimal_bundle(bundle)
             (core / "release/navigation.json").write_text('{"a": 1, "a": 2}\n', encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
-                refresh["render"](core)
+                REFRESH["render"](core)
 
             (core / "release/navigation.json").write_text('{"score": Infinity}\n', encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "nonfinite JSON"):
-                refresh["render"](core)
+                REFRESH["render"](core)
 
             (core / "release/navigation.json").write_text("{}\n", encoding="utf-8")
             (core / "release/current_sources.json").write_text(
                 '{"edition": "x", "edition": "y", "bodies": []}\n', encoding="utf-8"
             )
             with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
-                refresh["render"](core)
+                REFRESH["render"](core)
 
-    def test_compressed_prefixes_normalize_trailing_slash(self):
-        from types import SimpleNamespace
-
+    def test_compressed_prefixes_fallback_enforces_domain_sha256_pin(self):
         store_declared = SimpleNamespace(
             root=Path("."),
             domain_selection=SimpleNamespace(
@@ -527,14 +538,187 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             tmp = Path(temporary)
             dom = tmp / "domain.json"
-            _write_json(dom, {"content_addressed_basis_prefixes": ["evidence/a", "evidence/b/"]})
+            dom_raw = _write_json(dom, {"content_addressed_basis_prefixes": ["evidence/a", "evidence/b/"]})
             store_dir = tmp / "store"
-            _write_json(store_dir / "system.json", {"domains": [{"path": "../domain.json"}]})
+            _write_json(
+                store_dir / "system.json",
+                {"domains": [{"path": "../domain.json", "sha256": _sha256(dom_raw)}]},
+            )
             store_manifest = SimpleNamespace(root=store_dir, domain_selection=None)
             self.assertEqual(
                 PACKAGE["_store_compressed_prefixes"](store_manifest),
                 ("evidence/a/", "evidence/b/"),
             )
+
+            # W4-O7: Missing sha256 pin must be rejected
+            _write_json(store_dir / "system.json", {"domains": [{"path": "../domain.json"}]})
+            with self.assertRaisesRegex(ValueError, "exact SHA-256 pin"):
+                PACKAGE["_store_compressed_prefixes"](store_manifest)
+
+            # W4-O7: Mismatched sha256 pin must be rejected
+            _write_json(
+                store_dir / "system.json",
+                {"domains": [{"path": "../domain.json", "sha256": "0" * 64}]},
+            )
+            with self.assertRaisesRegex(ValueError, "Domain descriptor pin mismatch"):
+                PACKAGE["_store_compressed_prefixes"](store_manifest)
+
+    def test_refresh_guidance_rejects_reparse_point_and_escape(self):
+        # W4-CB8: Reparse-point stat must be rejected even on Windows where is_symlink() may be False
+        fake_reparse = SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o644,
+            st_reparse_tag=0xA0000003,
+            st_file_attributes=getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400),
+        )
+        self.assertTrue(REFRESH["_is_reparse_or_symlink"](fake_reparse))
+        with TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "bundle"
+            core = _build_minimal_bundle(bundle)
+            guide = core / "guide.md"
+            orig_lstat = Path.lstat
+
+            def patched_lstat(path_self):
+                if path_self.resolve() == guide.resolve():
+                    return fake_reparse
+                return orig_lstat(path_self)
+
+            with mock.patch.object(Path, "lstat", patched_lstat):
+                with self.assertRaisesRegex(ValueError, "ordinary canonical source required"):
+                    REFRESH["render"](core)
+
+            # Traversal escaping above bundle root must be rejected
+            (core / "release/current_sources.json").write_text(
+                json.dumps({"edition": "working-test", "bodies": [{"id": "guide", "source": "../../escape.md"}]}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "escapes allowed package root"):
+                REFRESH["render"](core)
+
+    def test_c26_1_and_c26_2_refuse_symlink_and_junction_clobber_targets(self):
+        with TemporaryDirectory() as temporary:
+            tmp = Path(temporary)
+            bundle = tmp / "bundle"
+            core = _build_minimal_bundle(bundle)
+            ext = tmp / "external_secret.txt"
+            ext.write_bytes(b"KEEP-ME-UNTOUCHED\n")
+
+            if os.name == "nt":
+                # Windows real NTFS junction tests for --root on both refresh_guidance.py and package.py
+                junc_core = tmp / "junc_core"
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(junc_core), str(core)], check=True, capture_output=True)
+                ref_junc = subprocess.run(
+                    [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(junc_core)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(ref_junc.returncode, 0)
+                self.assertIn("ordinary engine directory required", ref_junc.stderr)
+
+                junc_bundle = tmp / "junc_bundle"
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(junc_bundle), str(bundle)], check=True, capture_output=True)
+                pkg_junc = subprocess.run(
+                    [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(junc_bundle), "--refresh-only"],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(pkg_junc.returncode, 0)
+                self.assertIn("ordinary files and directories", pkg_junc.stderr)
+
+                # Junction parent for --output must be rejected before writing
+                real_out_dir = tmp / "real_out_dir"
+                real_out_dir.mkdir()
+                junc_out_dir = tmp / "junc_out_dir"
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(junc_out_dir), str(real_out_dir)], check=True, capture_output=True)
+                pkg_out_junc = subprocess.run(
+                    [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle),
+                     "--output", str(junc_out_dir / "out.zip")],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(pkg_out_junc.returncode, 0)
+                self.assertIn("ordinary files and directories", pkg_out_junc.stderr)
+                self.assertFalse((real_out_dir / "out.zip").exists())
+
+                # Mocked reparse point on SOURCES.md must be refused by refresh() before staging/replace
+                fake_reparse = SimpleNamespace(
+                    st_mode=stat.S_IFREG | 0o644,
+                    st_reparse_tag=0xA0000003,
+                    st_file_attributes=getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400),
+                )
+                sources_md = core / "SOURCES.md"
+                orig_lstat = Path.lstat
+
+                def patched_lstat(path_self):
+                    if os.path.normcase(os.path.abspath(path_self)) == os.path.normcase(os.path.abspath(sources_md)):
+                        return fake_reparse
+                    return orig_lstat(path_self)
+
+                with mock.patch.object(Path, "lstat", patched_lstat):
+                    with self.assertRaisesRegex(ValueError, "ordinary projection target required"):
+                        REFRESH["refresh"](core)
+            else:
+                # POSIX real symlink clobber tests for C26-1 (SOURCES.md, CURRENT-RELEASE.json, --root)
+                for target_name in ("SOURCES.md", "CURRENT-RELEASE.json"):
+                    target = core / target_name
+                    backup = target.read_bytes()
+                    target.unlink()
+                    target.symlink_to(ext)
+                    res = subprocess.run(
+                        [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(core)],
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertNotEqual(res.returncode, 0, target_name)
+                    self.assertIn("ordinary projection target required", res.stderr)
+                    self.assertEqual(ext.read_bytes(), b"KEEP-ME-UNTOUCHED\n")
+                    target.unlink()
+                    target.write_bytes(backup)
+
+                link_core = tmp / "link_core"
+                link_core.symlink_to(core)
+                res_root = subprocess.run(
+                    [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(link_core)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(res_root.returncode, 0)
+                self.assertIn("ordinary engine directory required", res_root.stderr)
+
+                # C26-2: package.py refuses symlink --output (--replace and dangling) and symlink --root
+                out_link = tmp / "out.zip"
+                out_link.symlink_to(ext)
+                res_rep = subprocess.run(
+                    [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle),
+                     "--output", str(out_link), "--replace"],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(res_rep.returncode, 0)
+                self.assertIn("ordinary files and directories", res_rep.stderr)
+                self.assertEqual(ext.read_bytes(), b"KEEP-ME-UNTOUCHED\n")
+
+                missing_ext = tmp / "never_create.zip"
+                dangling = tmp / "dangling.zip"
+                dangling.symlink_to(missing_ext)
+                res_dang = subprocess.run(
+                    [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle),
+                     "--output", str(dangling)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(res_dang.returncode, 0)
+                self.assertIn("ordinary files and directories", res_dang.stderr)
+                self.assertFalse(missing_ext.exists())
+
+                link_bundle = tmp / "link_bundle"
+                link_bundle.symlink_to(bundle)
+                res_pkg_root = subprocess.run(
+                    [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(link_bundle), "--refresh-only"],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(res_pkg_root.returncode, 0)
+                self.assertIn("ordinary files and directories", res_pkg_root.stderr)
 
 
 if __name__ == "__main__":

@@ -7,8 +7,8 @@ Start with a decision or contribution someone needs. A source can settle part of
 In the full release, research, novel and discovery are initialized stores on the same shared engine. The commands below use the research and novel stores from the full package root. The focused operating package has its own deployment and source selection:
 
 ```bash
-python3 -B engine/runtime/manage_store.py --root stores/research status
-python3 -B engine/runtime/manage_store.py --root stores/novel status
+python3 -B engine/store/manage_store.py --root stores/research status
+python3 -B engine/store/manage_store.py --root stores/novel status
 python3 -B domains/research/operations/current_work.py --root stores/research --source-store stores/novel --section duties
 ```
 
@@ -19,9 +19,9 @@ Read the selected native question and relevant current records before continuing
 ## Acquire a complete source for a meaningful use
 
 ```bash
-python3 -B engine/runtime/manage_store.py --root stores/research catalogue --query "receiving conditions"
-python3 -B engine/runtime/manage_store.py --root stores/research catalogue research/current/method.md --text
-python3 -B engine/runtime/manage_store.py --root stores/novel catalogue writing/M025 --text
+python3 -B engine/store/manage_store.py --root stores/research catalogue --query "receiving conditions"
+python3 -B engine/store/manage_store.py --root stores/research catalogue research/current/method.md --text
+python3 -B engine/store/manage_store.py --root stores/novel catalogue writing/M025 --text
 ```
 
 Discovery nominates candidates. A complete selected body supplies its actual argument and scope. Catalogues bind path, digest and size, and refuse a changed body under an old pin. A catalogue query, stored receipt or hash does not establish semantic acquisition. The writing account separately retains 35 acquired identities and 75 unacquired; loading its 110 available source bodies changes no participant's reading credit. Sealed instrument entries expose metadata only.
@@ -34,7 +34,7 @@ The engine's `context TURN --request FILE` prepares the declared task with selec
 
 Initialization also prepared `start` before the data import. That earlier input remains an accurate record of preparation, but it is superseded as the continuation entrance by `current-continuation`. It has no provider return or carrier failure to close. A pending prepared packet is not an additional research obligation, and its presence does not authorize dispatching the obsolete task.
 
-Select only sources and records that the task consumes. Complete governing duties remain represented. Retained context, current source and received observation have distinct roles. For the complete request fields, use the [native guide](../engine/runtime/native/GUIDE.md) and actual CLI help. Workspace source paths are relative to the instance's `work/`; domain catalogue IDs point to their canonical bodies elsewhere in the package.
+Select only sources and records that the task consumes. Complete governing duties remain represented. Retained context, current source and received observation have distinct roles. For the complete request fields, use the [native guide](../engine/store/GUIDE.md) and actual CLI help. Workspace source paths are relative to the instance's `work/`; domain catalogue IDs point to their canonical bodies elsewhere in the package.
 
 A real participant can return through `receive TURN --reply FILE --producer NAME`. A justified proposed change can then be admitted by its actual owner through `adopt`. Receipt, adoption and useful downstream effect remain separate observations. An unknown external effect must be recovered or reconciled through its original owner, not repeated because a new context exists.
 
@@ -43,8 +43,8 @@ A real participant can return through `receive TURN --reply FILE --producer NAME
 Use the existing native transfer operations to export an actual record and receive its exact observation:
 
 ```bash
-python3 -B engine/runtime/manage_store.py --root stores/novel transfer export --record novel-field-coverage --output /tmp/novel-field-transfer.json
-python3 -B engine/runtime/manage_store.py --root stores/research transfer inspect received-novel-field-coverage
+python3 -B engine/store/manage_store.py --root stores/novel transfer export --record novel-field-coverage --output /tmp/novel-field-transfer.json
+python3 -B engine/store/manage_store.py --root stores/research transfer inspect received-novel-field-coverage
 ```
 
 A new receive names a local observation ID, the transfer bundle, expected revision and a substantive receiving account. The native receipt binds source instance, record ID, revision and digest. The source owner keeps authority. A received record is not automatically adopted as a current judgment and cannot close another owner's duty. When the source advances, receive and interpret the changed contribution deliberately.
@@ -58,7 +58,7 @@ A domain manifest declares reusable source selection, storage schemas, dependenc
 For a genuinely new research instance, select the existing domain data through the same engine:
 
 ```bash
-python3 -B engine/runtime/manage_store.py --root stores/new-research init --goal-text "The actual new research contribution" --domain domains/research/domain.json --domain domains/ai-system-building/domain.json
+python3 -B engine/store/manage_store.py --root stores/new-research init --goal-text "The actual new research contribution" --domain domains/research/domain.json --domain domains/ai-system-building/domain.json
 ```
 
 The engine assigns a distinct instance identity. New work belongs in that store. A deployment descriptor references the engine and store; it contains no second executable installation. Use `configure` with the expected current descriptor hash and a receiving account to select changed domain/catalogue pins. The [AI-system-building domain](../domains/ai-system-building/README.md) supplies the responsible construction relationships.

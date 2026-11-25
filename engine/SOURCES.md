@@ -5,47 +5,47 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-7876ad26fe587946f43e"></a>
 ## prototype/agent-system/GUIDE.md
 
-[runtime/native/GUIDE.md](runtime/native/GUIDE.md) — 8361 bytes; SHA-256 `13b4a443f67a91d5ec94bb93f7be9a4a5e17dbcc90dbe9c4c8a398706a048acd`.
+[store/GUIDE.md](store/GUIDE.md) — 8361 bytes; SHA-256 `13b4a443f67a91d5ec94bb93f7be9a4a5e17dbcc90dbe9c4c8a398706a048acd`.
 
 <a id="source-a5cc137786c3ed585692"></a>
 ## prototype/agent-system/COMPOSITION.md
 
-[runtime/native/COMPOSITION.md](runtime/native/COMPOSITION.md) — 19087 bytes; SHA-256 `74688e3237dd8839253e53034f5c5e28ff818984fbca5f5fb166c6eea8265304`.
+[store/COMPOSITION.md](store/COMPOSITION.md) — 19087 bytes; SHA-256 `74688e3237dd8839253e53034f5c5e28ff818984fbca5f5fb166c6eea8265304`.
 
 <a id="source-db4e51fc8172437a2216"></a>
 ## prototype/agent-system/README.md
 
-[runtime/native/README.md](runtime/native/README.md) — 50298 bytes; SHA-256 `54de19a53d5a1245918095ea88590bf01293ba8c556d4293d06cc88c2b891f28`.
+[store/README.md](store/README.md) — 50298 bytes; SHA-256 `54de19a53d5a1245918095ea88590bf01293ba8c556d4293d06cc88c2b891f28`.
 
 <a id="source-3b80c2b35af864f33824"></a>
 ## prototype/docs/attention.md
 
-[runtime/docs/attention.md](runtime/docs/attention.md) — 14298 bytes; SHA-256 `fe1e46987a5997a91fe4e254096cc296676168b3b35c6f84ebf58079084010ed`.
+[docs/attention.md](docs/attention.md) — 14298 bytes; SHA-256 `fe1e46987a5997a91fe4e254096cc296676168b3b35c6f84ebf58079084010ed`.
 
 <a id="source-3755126b56e96cca2595"></a>
 ## prototype/collective-work/README.md
 
-[runtime/collective/README.md](runtime/collective/README.md) — 34305 bytes; SHA-256 `48832dd8500678ff00b39dc2d3424c96c7d124b8e503cd3ec17503aeb06825da`.
+[../optional/collective/README.md](../optional/collective/README.md) — 34305 bytes; SHA-256 `48832dd8500678ff00b39dc2d3424c96c7d124b8e503cd3ec17503aeb06825da`.
 
 <a id="source-53cca3885001b6f38c30"></a>
 ## prototype/knowledge-system/README.md
 
-[runtime/source_library/README.md](runtime/source_library/README.md) — 8672 bytes; SHA-256 `cd77044504add86c951fe70a8250a1d9823529e44a4381056b68a4f6515b0cfa`.
+[library/README.md](library/README.md) — 8672 bytes; SHA-256 `cd77044504add86c951fe70a8250a1d9823529e44a4381056b68a4f6515b0cfa`.
 
 <a id="source-fee751dc881d0860bdb7"></a>
 ## prototype/knowledge-system/CONTRACT.md
 
-[runtime/source_library/CONTRACT.md](runtime/source_library/CONTRACT.md) — 24130 bytes; SHA-256 `a6d484a383f285e21246b3384733c8cd4cb7ac59122a039544ef44193ba2732b`.
+[library/docs/CONTRACT.md](library/docs/CONTRACT.md) — 24130 bytes; SHA-256 `a6d484a383f285e21246b3384733c8cd4cb7ac59122a039544ef44193ba2732b`.
 
 <a id="source-abb12435fcf333967237"></a>
 ## prototype/knowledge-system/MIGRATION.md
 
-[runtime/source_library/MIGRATION.md](runtime/source_library/MIGRATION.md) — 6377 bytes; SHA-256 `fba65b08fff19a823290688d6ce6641f76752c6fc7978aaf0bee53c61e8c9129`.
+[library/docs/MIGRATION.md](library/docs/MIGRATION.md) — 6377 bytes; SHA-256 `fba65b08fff19a823290688d6ce6641f76752c6fc7978aaf0bee53c61e8c9129`.
 
 <a id="source-973adf08e936e3795b8f"></a>
 ## prototype/knowledge-system/RESEARCH.md
 
-[runtime/source_library/RESEARCH.md](runtime/source_library/RESEARCH.md) — 15314 bytes; SHA-256 `a011241beee1560494697ffcd1f4fa4b621bbce0914b1e68cf0fec96e1363886`.
+[library/docs/RESEARCH.md](library/docs/RESEARCH.md) — 15314 bytes; SHA-256 `a011241beee1560494697ffcd1f4fa4b621bbce0914b1e68cf0fec96e1363886`.
 
 <a id="source-ebb2cb11e60bb0995683"></a>
 ## MODEL-BOUND-COMPOSITION.md
@@ -55,7 +55,7 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-158a5fd9fcbc684322e8"></a>
 ## CLI-FIELD-REFERENCE.md
 
-[CLI-FIELD-REFERENCE.md](CLI-FIELD-REFERENCE.md) — 22868 bytes; SHA-256 `df26241b16c102ca9a4b6edfaaead25043f6adaa2421fc1e06618a852dd185c2`.
+[CLI-FIELD-REFERENCE.md](CLI-FIELD-REFERENCE.md) — 22910 bytes; SHA-256 `8cd9c2fd401b65f6192b3f498b614ee3a277deaafad1b71c39386d8d52691089`.
 
 <a id="source-f2707b3e30027aeb2192"></a>
 ## host/OPERATION.md
@@ -65,47 +65,47 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-7981028e38133c8d3527"></a>
 ## prototype/patterns/continuous-consolidation/README.md
 
-[runtime/patterns/continuous-consolidation/README.md](runtime/patterns/continuous-consolidation/README.md) — 7132 bytes; SHA-256 `9418cd013feed4c144390ef433fa544d59d7987ac252aba3ad7b841d5f47c3c2`.
+[../patterns/continuous-consolidation/README.md](../patterns/continuous-consolidation/README.md) — 7132 bytes; SHA-256 `9418cd013feed4c144390ef433fa544d59d7987ac252aba3ad7b841d5f47c3c2`.
 
 <a id="source-56f2bb62da90c0d52645"></a>
 ## prototype/patterns/continuous-consolidation/inventory.md
 
-[runtime/patterns/continuous-consolidation/inventory.md](runtime/patterns/continuous-consolidation/inventory.md) — 10629 bytes; SHA-256 `94c9670b79ba7566caecb466d99c8fb92f4e01d13050882d2272ffc28410c470`.
+[../patterns/continuous-consolidation/inventory.md](../patterns/continuous-consolidation/inventory.md) — 10629 bytes; SHA-256 `94c9670b79ba7566caecb466d99c8fb92f4e01d13050882d2272ffc28410c470`.
 
 <a id="source-8568a957f1221fb981c3"></a>
 ## prototype/patterns/continuous-consolidation/prompts/branch.md
 
-[runtime/patterns/continuous-consolidation/prompts/branch.md](runtime/patterns/continuous-consolidation/prompts/branch.md) — 2041 bytes; SHA-256 `948ef150b4b9fd23eb69271d137f2b0b392a5d5ea1a0944f934e25a03e1b8afb`.
+[../patterns/continuous-consolidation/prompts/branch.md](../patterns/continuous-consolidation/prompts/branch.md) — 2041 bytes; SHA-256 `948ef150b4b9fd23eb69271d137f2b0b392a5d5ea1a0944f934e25a03e1b8afb`.
 
 <a id="source-25a998e7d16aba8d1fea"></a>
 ## prototype/patterns/continuous-consolidation/prompts/coordinator.md
 
-[runtime/patterns/continuous-consolidation/prompts/coordinator.md](runtime/patterns/continuous-consolidation/prompts/coordinator.md) — 4034 bytes; SHA-256 `3ab5e4d378b8fcadbda581bcc1d1e28c757c059b70aca68f95d3ac65875a64bb`.
+[../patterns/continuous-consolidation/prompts/coordinator.md](../patterns/continuous-consolidation/prompts/coordinator.md) — 4034 bytes; SHA-256 `3ab5e4d378b8fcadbda581bcc1d1e28c757c059b70aca68f95d3ac65875a64bb`.
 
 <a id="source-69984c3889da9414c5ba"></a>
 ## prototype/patterns/continuous-consolidation/prompts/integrator.md
 
-[runtime/patterns/continuous-consolidation/prompts/integrator.md](runtime/patterns/continuous-consolidation/prompts/integrator.md) — 2598 bytes; SHA-256 `6ac829ef43189ecffd8ae7882268bc121dc99ff697820c10037c79eb4022f48b`.
+[../patterns/continuous-consolidation/prompts/integrator.md](../patterns/continuous-consolidation/prompts/integrator.md) — 2598 bytes; SHA-256 `6ac829ef43189ecffd8ae7882268bc121dc99ff697820c10037c79eb4022f48b`.
 
 <a id="source-4a6ce7173c8620f11f21"></a>
 ## prototype/patterns/continuous-consolidation/prompts/proposer.md
 
-[runtime/patterns/continuous-consolidation/prompts/proposer.md](runtime/patterns/continuous-consolidation/prompts/proposer.md) — 2072 bytes; SHA-256 `857cdf11a1d5b2f3cf81caf41b8faa4eef459f2c242fc9ce2b39d8c5ca84bc76`.
+[../patterns/continuous-consolidation/prompts/proposer.md](../patterns/continuous-consolidation/prompts/proposer.md) — 2072 bytes; SHA-256 `857cdf11a1d5b2f3cf81caf41b8faa4eef459f2c242fc9ce2b39d8c5ca84bc76`.
 
 <a id="source-55d21bf3d6fd20522634"></a>
 ## prototype/patterns/continuous-consolidation/prompts/qa.md
 
-[runtime/patterns/continuous-consolidation/prompts/qa.md](runtime/patterns/continuous-consolidation/prompts/qa.md) — 1576 bytes; SHA-256 `2317943324c8c3b6e6aa5330911274eec6345683feb7d70d37b587d884629a12`.
+[../patterns/continuous-consolidation/prompts/qa.md](../patterns/continuous-consolidation/prompts/qa.md) — 1576 bytes; SHA-256 `2317943324c8c3b6e6aa5330911274eec6345683feb7d70d37b587d884629a12`.
 
 <a id="source-8fd045ee520f3bd7b3e7"></a>
 ## prototype/patterns/continuous-consolidation/prompts/review.md
 
-[runtime/patterns/continuous-consolidation/prompts/review.md](runtime/patterns/continuous-consolidation/prompts/review.md) — 1814 bytes; SHA-256 `1e4f9b9d3adf964705caf8f39b7b9994fd8a888e663889ca03ff15f37bf0027d`.
+[../patterns/continuous-consolidation/prompts/review.md](../patterns/continuous-consolidation/prompts/review.md) — 1814 bytes; SHA-256 `1e4f9b9d3adf964705caf8f39b7b9994fd8a888e663889ca03ff15f37bf0027d`.
 
 <a id="source-3acf30ac888d9b451b07"></a>
 ## prototype/patterns/continuous-consolidation/prompts/root-build.md
 
-[runtime/patterns/continuous-consolidation/prompts/root-build.md](runtime/patterns/continuous-consolidation/prompts/root-build.md) — 1918 bytes; SHA-256 `1a4b58f465787cf33aeeebfcf99ad74910bca717df46f165023aba5be3b33c33`.
+[../patterns/continuous-consolidation/prompts/root-build.md](../patterns/continuous-consolidation/prompts/root-build.md) — 1918 bytes; SHA-256 `1a4b58f465787cf33aeeebfcf99ad74910bca717df46f165023aba5be3b33c33`.
 
 <a id="source-32d4df76e6b1b8e42764"></a>
 ## host/README.md
@@ -135,7 +135,7 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-0d8fd7e7ed54be901b4f"></a>
 ## INSTANCES.md
 
-[INSTANCES.md](INSTANCES.md) — 14624 bytes; SHA-256 `e8df34c3b48044db75c4844b1e0b89d089309c4f7d2ea5fdf4940a58cad70470`.
+[INSTANCES.md](INSTANCES.md) — 14639 bytes; SHA-256 `956bf407ef3cf0d40b27452899e3034d3d39eadbf73ac03b85cbe4c80e92fe2b`.
 
 <a id="source-73692ee93d0b96260539"></a>
 ## host/SIGNAL-FIELD.md
