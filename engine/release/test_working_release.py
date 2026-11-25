@@ -512,6 +512,31 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
                 refresh["render"](core)
 
+    def test_compressed_prefixes_normalize_trailing_slash(self):
+        from types import SimpleNamespace
+
+        store_declared = SimpleNamespace(
+            root=Path("."),
+            domain_selection=SimpleNamespace(
+                content_addressed_basis_prefixes=["evidence/custom-blobs", "evidence/custom-blobs/"]
+            ),
+        )
+        self.assertEqual(
+            PACKAGE["_store_compressed_prefixes"](store_declared),
+            ("evidence/custom-blobs/",),
+        )
+        with TemporaryDirectory() as temporary:
+            tmp = Path(temporary)
+            dom = tmp / "domain.json"
+            _write_json(dom, {"content_addressed_basis_prefixes": ["evidence/a", "evidence/b/"]})
+            store_dir = tmp / "store"
+            _write_json(store_dir / "system.json", {"domains": [{"path": "../domain.json"}]})
+            store_manifest = SimpleNamespace(root=store_dir, domain_selection=None)
+            self.assertEqual(
+                PACKAGE["_store_compressed_prefixes"](store_manifest),
+                ("evidence/a/", "evidence/b/"),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

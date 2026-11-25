@@ -169,13 +169,25 @@ def check_compressed_text(path, *, max_bytes=MAX_COMPRESSED_TEXT_BYTES):
         decode.decode(b"", final=True)
 
 
+def _normalize_prefixes(items):
+    prefixes = []
+    for prefix in items:
+        if isinstance(prefix, str) and prefix:
+            normalized = prefix if prefix.endswith("/") else prefix + "/"
+            if normalized not in prefixes:
+                prefixes.append(normalized)
+    return tuple(prefixes)
+
+
 def _store_compressed_prefixes(store):
     """Return allowed content-addressed basis prefixes declared by the store's domains."""
     selection = getattr(store, "domain_selection", None)
     declared = getattr(selection, "content_addressed_basis_prefixes", None) if selection is not None else None
     if declared:
-        return tuple(declared)
-    prefixes = []
+        normalized = _normalize_prefixes(declared)
+        if normalized:
+            return normalized
+    raw = []
     descriptor_path = Path(store.root) / "system.json"
     if descriptor_path.is_file():
         descriptor = _read_strict_object(descriptor_path)
@@ -183,10 +195,9 @@ def _store_compressed_prefixes(store):
             domain_path = (Path(store.root) / binding["path"]).resolve()
             if domain_path.is_file():
                 domain = _read_strict_object(domain_path)
-                for prefix in domain.get("content_addressed_basis_prefixes", []):
-                    if isinstance(prefix, str) and prefix and prefix not in prefixes:
-                        prefixes.append(prefix)
-    return tuple(prefixes) if prefixes else LEGACY_COMPRESSED_BASIS_PREFIXES
+                raw.extend(domain.get("content_addressed_basis_prefixes", []))
+    normalized = _normalize_prefixes(raw)
+    return normalized if normalized else LEGACY_COMPRESSED_BASIS_PREFIXES
 
 
 def members(root, engine=...):
