@@ -64,32 +64,41 @@ def _compose(system, args):
     return system.compose(args.record, args.focus, args.limit, args.pair_limit)
 
 
+def _with_status(system, args, payload):
+    if getattr(args, 'no_status', False):
+        return payload
+    return dict(payload, status=system.status())
+
+
 def act(system, args):
     action = args.action
-    if action in {'import', 'configure', 'transfer'}:
-        from native_runtime import record_import, record_transfer, store_configuration
+    if action in {'import', 'configure', 'transfer', 'put-batch'}:
+        from native_runtime import record_batch, record_import, record_transfer, store_configuration
         if action == 'import': return record_import.import_records(system, read(args.spec))
+        if action == 'put-batch': return record_batch.put_batch(system, read(args.spec))
         if action == 'configure': return store_configuration.configure(system, read(args.spec))
         if args.transfer_action == 'inspect': return record_transfer.inspect(system, args.id)
         if args.transfer_action == 'export': return record_transfer.export(system, args.record, args.output)
         return record_transfer.receive(system, args.bundle, args.id, args.account, args.expected)
     if action == 'put':
-        return {'record': system.put(read(args.record), args.expected), 'status': system.status()}
+        return _with_status(system, args, {'record': system.put(read(args.record), args.expected)})
     if action == 'show': return system.show(args.id)
     if action == 'pin': return system.record_store.pin(system.show(args.id))
     if action == 'history':
         return next(system.record_store.history_pages(args.id, limit=args.limit,
                                                      cursor=read(args.cursor) if args.cursor else None))
     if action == 'index-head': return system.record_store.index_scope(args.id)
-    if action == 'status': return system.status()
+    if action == 'reindex': return system.reindex()
+    if action == 'status':
+        return system.status(verify_all_basis=getattr(args, 'verify_all_basis', False))
     if action == 'abandon-context': return system.abandon_context(args.turn, args.account)
     if action == 'recover': return system.recover(args.turn)
     if action == 'recover-transport': return system.recover_transport(args.turn)
     if action == 'close-transport':
-        return {'transport_outcome': system.close_transport(args.turn, args.account), 'status': system.status()}
+        return _with_status(system, args, {'transport_outcome': system.close_transport(args.turn, args.account)})
     if action == 'reconcile-publication':
         result = system.reconcile_publication(args.turn, args.target, args.expected_sha256, args.account)
-        return {'reconciliation': result, 'status': system.status()}
+        return _with_status(system, args, {'reconciliation': result})
     if action == 'resume-context': return system.resume_context(args.turn)
     if action == 'view': return system.view(args.turn)
     if action == 'explain-context': return system.explain_context(args.turn)
@@ -98,15 +107,15 @@ def act(system, args):
     if action == 'receive':
         result = system.receive(args.turn, args.reply, args.producer, args.proposal, args.assessment, args.wait,
                                 run_nominations=args.run_nominations)
-        return {'return': result, 'status': system.status()}
-    if action == 'track': return {'attention': system.track(args.spec), 'status': system.status()}
+        return _with_status(system, args, {'return': result})
+    if action == 'track': return _with_status(system, args, {'attention': system.track(args.spec)})
     if action == 'assess':
-        return {'attention': system.assess(args.turn, args.receipt, args.producer), 'status': system.status()}
+        return _with_status(system, args, {'attention': system.assess(args.turn, args.receipt, args.producer)})
     if action == 'adopt':
-        return {'publication': system.adopt(args.turn, args.target, args.reason), 'status': system.status()}
+        return _with_status(system, args, {'publication': system.adopt(args.turn, args.target, args.reason)})
     if action == 'interpret':
         result = system.interpret(args.goal_revision, args.disposition, args.account, args.evidence, args.condition)
-        return {'interpretation': result, 'status': system.status()}
+        return _with_status(system, args, {'interpretation': result})
     if action == 'run':
         if not math.isfinite(args.wait) or args.wait < 0:
             raise ValueError('run --wait must be finite and nonnegative')
@@ -118,7 +127,7 @@ def act(system, args):
             result = system.run(args.turn, argv, proposals=args.proposal, producer=producer, wait=args.wait)
         else:
             result = {'dispatch': system.run(args.turn, argv)}
-        return dict(result, status=system.status())
+        return _with_status(system, args, result)
     if action == 'catalogue':
         return system.catalogue(args.id, args.query, args.kind, args.limit, args.offset, args.content)
     if action == 'materialize': return system.materialize(args.operation)

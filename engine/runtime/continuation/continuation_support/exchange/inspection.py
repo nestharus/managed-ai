@@ -1,9 +1,10 @@
 """Inspect packet, transport and publication state through read-only observations."""
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from ..storage import read_json
+from ..storage import open_directory, read_json
 from .carrier_receipts import transport_outcome
 from .publication import observe_basis, observe_target
 from .publication_receipts import (
@@ -87,22 +88,41 @@ class PacketInspection:
     def list(self, consumer: str | None = None) -> list[dict[str, Any]]:
         """Expose retained occasions without inventing a semantic completion flag."""
         rows = []
-        for directory in sorted((self.root / 'packets').iterdir()):
-            if directory.name.startswith('.') or not directory.is_dir():
-                continue
+        verified_objects: set[str] = set()
+        validated_returns: dict[str, dict[str, Any]] = {}
+        objects_fd = None
+        if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
             try:
-                _, request = self.load(directory.name)
-                if consumer is not None and request['consumer'] != consumer:
+                objects_fd = open_directory(self.root / 'objects')
+            except OSError:
+                objects_fd = None
+        try:
+            for directory in sorted((self.root / 'packets').iterdir()):
+                if directory.name.startswith('.') or not directory.is_dir():
                     continue
-                has_return = (directory / 'return.json').exists()
-                if has_return:
-                    self.validate_return(directory, read_json(directory / 'return.json'))
-                outcome = transport_outcome(self, directory, request)
-                publications = [read_json(p) for p in directory.glob('publish-*.json')]
-                rows.append(self.packet_summary(directory, request['consumer'], publications,
-                                                returned=has_return, outcome=outcome))
-            except (ValueError, KeyError, OSError, TypeError) as exc:
-                rows.append({'packet': directory.name, 'transport': 'record-unresolved', 'error': str(exc)})
+                try:
+                    _, request = self._load_directory(
+                        directory,
+                        _verified_objects=verified_objects,
+                        _validated_returns=validated_returns,
+                        _objects_fd=objects_fd,
+                    )
+                    if consumer is not None and request['consumer'] != consumer:
+                        continue
+                    has_return = (directory / 'return.json').exists()
+                    if has_return and directory.name not in validated_returns:
+                        record = read_json(directory / 'return.json')
+                        self.validate_return(directory, record)
+                        validated_returns[directory.name] = record
+                    outcome = transport_outcome(self, directory, request)
+                    publications = [read_json(p) for p in directory.glob('publish-*.json')]
+                    rows.append(self.packet_summary(directory, request['consumer'], publications,
+                                                    returned=has_return, outcome=outcome))
+                except (ValueError, KeyError, OSError, TypeError) as exc:
+                    rows.append({'packet': directory.name, 'transport': 'record-unresolved', 'error': str(exc)})
+        finally:
+            if objects_fd is not None:
+                os.close(objects_fd)
         return rows
 
     def inspect(self, packet: str) -> dict[str, Any]:

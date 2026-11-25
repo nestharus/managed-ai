@@ -1,4 +1,5 @@
 """Optional record-owner attestations for verified scope scans of large mutable heads."""
+import errno
 import hashlib
 import hmac
 import json
@@ -16,6 +17,7 @@ class HeadReceipts:
 
     def __init__(self, owner):
         self.key_path = owner / 'head-scope.key'
+        self._xattr_unsupported = not hasattr(os, 'getxattr')
 
     def _key(self, create=False):
         try:
@@ -37,7 +39,7 @@ class HeadReceipts:
             return None
 
     def issue(self, path, record, raw):
-        if len(raw) < MIN_BYTES or not hasattr(os, 'setxattr'):
+        if len(raw) < MIN_BYTES or not hasattr(os, 'setxattr') or self._xattr_unsupported:
             return False
         # Very long user-defined kinds still work through the standard strict reader.
         keys = ('format', 'id', 'kind', 'sha256', 'revision', 'basis', 'active')
@@ -53,15 +55,21 @@ class HeadReceipts:
         try:
             os.setxattr(path, ATTRIBUTE, hmac.digest(key, DOMAIN + payload, 'sha256') + payload, follow_symlinks=False)
             return True
-        except OSError:
+        except OSError as exc:
+            if exc.errno in (errno.EOPNOTSUPP, errno.ENOTSUP, errno.ENOSYS):
+                self._xattr_unsupported = True
             return False
 
-    def projection(self, path, ident, record_format):
-        if not hasattr(os, 'getxattr'):
+    def projection(self, path, ident, record_format, *, size=None):
+        if self._xattr_unsupported:
+            return None
+        if size is not None and size < MIN_BYTES:
             return None
         try:
             raw = os.getxattr(path, ATTRIBUTE, follow_symlinks=False)
-        except OSError:
+        except OSError as exc:
+            if exc.errno in (errno.EOPNOTSUPP, errno.ENOTSUP, errno.ENOSYS):
+                self._xattr_unsupported = True
             return None
         key = self._key()
         if key is None or len(raw) > 2080:

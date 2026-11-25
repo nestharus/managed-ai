@@ -7,14 +7,37 @@ import os
 from pathlib import Path
 
 
+READONLY_ACTIONS = frozenset({
+    'show', 'catalogue', 'status', 'discover', 'compose',
+    'history', 'view', 'recover', 'recover-transport',
+})
+
+
+def is_readonly_action(args) -> bool:
+    """Return True when the parsed native action does not mutate store state."""
+    action = args.action
+    if action in READONLY_ACTIONS:
+        return True
+    if action == 'transfer':
+        return getattr(args, 'transfer_action', None) in {'inspect', 'export'}
+    if action == 'feedback':
+        return getattr(args, 'feedback_action', None) == 'inspect'
+    if action == 'info':
+        return getattr(args, 'information_action', None) == 'inspect'
+    if action == 'inquiry':
+        return getattr(args, 'inquiry_action', None) == 'stages'
+    return False
+
+
 def _file_argument(value):
     """Decode the exact TARGET=FILE argv bytes in an emitted recovery command."""
     return os.fsdecode(bytes.fromhex(value))
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__)
+    p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     p.add_argument('--root', required=True, type=Path)
+    p.add_argument('--admission-deadline', type=float, help=argparse.SUPPRESS)
     sub = p.add_subparsers(dest='action', required=True)
     _store_commands(sub)
     _turn_commands(sub)
@@ -26,7 +49,7 @@ def parser() -> argparse.ArgumentParser:
 def _store_commands(sub):
     from native_runtime.store_configuration import REVIEWED_CONFIGURE
 
-    init = sub.add_parser('init')
+    init = sub.add_parser('init', allow_abbrev=False)
     goal = init.add_mutually_exclusive_group(required=True)
     goal.add_argument('--goal', type=Path)
     goal.add_argument('--goal-text')
@@ -35,41 +58,52 @@ def _store_commands(sub):
     init.add_argument('--catalogue', action='append', default=[], type=Path)
     init.add_argument('--prepared', action='store_true', help='Preserve prepared data in an uninitialized store')
     init.add_argument('--record-retention', choices=['current-use', 'append-history'], default='current-use')
-    ingest = sub.add_parser('import')
+    ingest = sub.add_parser('import', allow_abbrev=False)
     ingest.add_argument('--spec', required=True, type=Path)
-    configure = sub.add_parser('configure', description=f'Configure a current selection or receive {REVIEWED_CONFIGURE}.')
+    configure = sub.add_parser('configure', allow_abbrev=False,
+                               description=f'Configure a current selection or receive {REVIEWED_CONFIGURE}.')
     configure.add_argument('--spec', required=True, type=Path)
-    transfer = sub.add_parser('transfer').add_subparsers(dest='transfer_action', required=True)
-    export = transfer.add_parser('export')
+    transfer = sub.add_parser('transfer', allow_abbrev=False).add_subparsers(dest='transfer_action', required=True)
+    export = transfer.add_parser('export', allow_abbrev=False)
     export.add_argument('--record', required=True)
     export.add_argument('--output', required=True, type=Path)
-    incoming = transfer.add_parser('receive')
+    incoming = transfer.add_parser('receive', allow_abbrev=False)
     incoming.add_argument('--bundle', required=True, type=Path)
     incoming.add_argument('--id', required=True)
     incoming.add_argument('--account', required=True)
     incoming.add_argument('--expected', required=True, type=int)
-    inspect_transfer = transfer.add_parser('inspect')
+    inspect_transfer = transfer.add_parser('inspect', allow_abbrev=False)
     inspect_transfer.add_argument('id')
-    put = sub.add_parser('put')
+    put = sub.add_parser('put', allow_abbrev=False)
     put.add_argument('--record', required=True, type=Path)
     put.add_argument('--expected', required=True, type=int)
-    show = sub.add_parser('show')
+    put.add_argument('--no-status', action='store_true', help='Skip full store status scan after commit')
+    put_batch = sub.add_parser('put-batch', allow_abbrev=False,
+                               help='Pre-validate and apply a guarded batch of record updates')
+    put_batch.add_argument('--spec', required=True, type=Path)
+    put_batch.add_argument('--no-status', action='store_true', help='Accepted for CLI symmetry; batch returns its receipt')
+    show = sub.add_parser('show', allow_abbrev=False)
     show.add_argument('id')
-    pin = sub.add_parser('pin')
+    pin = sub.add_parser('pin', allow_abbrev=False)
     pin.add_argument('id')
-    history = sub.add_parser('history')
+    history = sub.add_parser('history', allow_abbrev=False)
     history.add_argument('id')
     history.add_argument('--limit', type=int, default=8)
     history.add_argument('--cursor', type=Path, help='cursor JSON from the preceding page')
-    sub.add_parser('index-head', help='verify and register one large legacy head for scope scans').add_argument('id')
-    sub.add_parser('status')
+    sub.add_parser('index-head', allow_abbrev=False,
+                   help='verify and register one large legacy head for scope scans').add_argument('id')
+    sub.add_parser('reindex', allow_abbrev=False,
+                   help='rebuild the HMAC-verified store-local head index')
+    status = sub.add_parser('status', allow_abbrev=False)
+    status.add_argument('--verify-all-basis', action='store_true',
+                        help='Cryptographically verify basis files for inactive non-duty records too')
 
 
 def _turn_commands(sub):
-    abandon = sub.add_parser('abandon-context')
+    abandon = sub.add_parser('abandon-context', allow_abbrev=False)
     abandon.add_argument('turn')
     abandon.add_argument('--account', required=True)
-    context = sub.add_parser('context')
+    context = sub.add_parser('context', allow_abbrev=False)
     context.add_argument('turn')
     context.add_argument('--request', type=Path)
     context.add_argument('--task')
@@ -78,26 +112,32 @@ def _turn_commands(sub):
     scope = context.add_mutually_exclusive_group()
     scope.add_argument('--feedback', action='append', default=[])
     scope.add_argument('--without-feedback', action='store_true')
-    resume = sub.add_parser('resume-context')
+    resume = sub.add_parser('resume-context', allow_abbrev=False)
     resume.add_argument('turn')
-    recover = sub.add_parser('recover')
+    recover = sub.add_parser('recover', allow_abbrev=False)
     recover.add_argument('turn')
     recover.add_argument('--text', action='store_true')
-    transport = sub.add_parser('recover-transport', help='recover the captured carrier view from retained evidence')
+    transport = sub.add_parser('recover-transport', allow_abbrev=False,
+                               help='recover the captured carrier view from retained evidence')
     transport.add_argument('turn')
-    closure = sub.add_parser('close-transport', help='record a terminal command failure without a contribution')
+    closure = sub.add_parser('close-transport', allow_abbrev=False,
+                             help='record a terminal command failure without a contribution')
     closure.add_argument('turn')
     closure.add_argument('--account', required=True)
-    reconciliation = sub.add_parser('reconcile-publication', help='acknowledge current target bytes without replaying publication')
+    closure.add_argument('--no-status', action='store_true', help='Skip full store status scan after commit')
+    reconciliation = sub.add_parser('reconcile-publication', allow_abbrev=False,
+                                    help='acknowledge current target bytes without replaying publication')
     reconciliation.add_argument('turn')
     reconciliation.add_argument('--target', required=True)
     reconciliation.add_argument('--expected-sha256', required=True, metavar='SHA256_OR_absent')
     reconciliation.add_argument('--account', required=True)
-    view = sub.add_parser('view')
+    reconciliation.add_argument('--no-status', action='store_true', help='Skip full store status scan after commit')
+    view = sub.add_parser('view', allow_abbrev=False)
     view.add_argument('turn')
-    explain = sub.add_parser('explain-context', help='explain the frozen input selection without reading current sources')
+    explain = sub.add_parser('explain-context', allow_abbrev=False,
+                             help='explain the frozen input selection without reading current sources')
     explain.add_argument('turn')
-    receive = sub.add_parser('receive')
+    receive = sub.add_parser('receive', allow_abbrev=False)
     receive.add_argument('turn')
     receive.add_argument('--reply', type=Path)
     attribution = receive.add_mutually_exclusive_group(required=True)
@@ -109,17 +149,21 @@ def _turn_commands(sub):
                          metavar='HEX', help='Original TARGET=FILE argument bytes in a recovery command.')
     receive.add_argument('--assessment', type=Path)
     receive.add_argument('--wait', type=float, default=0)
-    track = sub.add_parser('track')
+    receive.add_argument('--no-status', action='store_true', help='Skip full store status scan after commit')
+    track = sub.add_parser('track', allow_abbrev=False)
     track.add_argument('--spec', required=True, type=Path)
-    assess = sub.add_parser('assess')
+    track.add_argument('--no-status', action='store_true', help='Skip full store status scan after commit')
+    assess = sub.add_parser('assess', allow_abbrev=False)
     assess.add_argument('turn')
     assess.add_argument('--receipt', required=True, type=Path)
     assess.add_argument('--producer', required=True)
-    adopt = sub.add_parser('adopt')
+    assess.add_argument('--no-status', action='store_true', help='Skip full store status scan after commit')
+    adopt = sub.add_parser('adopt', allow_abbrev=False)
     adopt.add_argument('turn')
     adopt.add_argument('--target', required=True)
     adopt.add_argument('--reason', required=True)
-    use = sub.add_parser('interpret')
+    adopt.add_argument('--no-status', action='store_true', help='Skip full store status scan after commit')
+    use = sub.add_parser('interpret', allow_abbrev=False)
     use.add_argument('--goal-revision', required=True, type=int)
     use.add_argument('--disposition', required=True, choices=('met', 'continue', 'wait'))
     use.add_argument('--account', required=True, type=Path, metavar='FILE',
@@ -127,17 +171,19 @@ def _turn_commands(sub):
     use.add_argument('--evidence', action='append', default=[], metavar='WORK_PATH',
                      help='File path relative to the runtime work/ directory. Repeat for each piece of evidence.')
     use.add_argument('--condition')
-    run = sub.add_parser('run')
+    use.add_argument('--no-status', action='store_true', help='Skip full store status scan after commit')
+    run = sub.add_parser('run', allow_abbrev=False)
     run.add_argument('turn')
     run.add_argument('--argv-json', type=Path, required=True)
     run.add_argument('--wait', type=float, default=0)
     run.add_argument('--producer')
     run.add_argument('--proposal', action='append', default=[], metavar='TARGET=FILE',
                      help='Nominate a proposal file for first receipt with a positive --wait. Repeat for each target.')
+    run.add_argument('--no-status', action='store_true', help='Skip full store status scan after commit')
 
 
 def _source_and_composition_commands(sub):
-    catalogue = sub.add_parser('catalogue')
+    catalogue = sub.add_parser('catalogue', allow_abbrev=False)
     catalogue.add_argument('id', nargs='?')
     catalogue.add_argument('--text', action='store_true')
     catalogue.add_argument('--query', default='')
@@ -145,11 +191,11 @@ def _source_and_composition_commands(sub):
     catalogue.add_argument('--limit', type=int, default=25)
     catalogue.add_argument('--offset', type=int, default=0)
     catalogue.add_argument('--content', action='store_true')
-    materialize = sub.add_parser('materialize')
+    materialize = sub.add_parser('materialize', allow_abbrev=False)
     materialize.add_argument('operation')
-    discovery = sub.add_parser('discover')
+    discovery = sub.add_parser('discover', allow_abbrev=False)
     discovery.add_argument('--request', required=True, type=Path)
-    composition = sub.add_parser('compose')
+    composition = sub.add_parser('compose', allow_abbrev=False)
     composition.add_argument('--record', required=True)
     composition.add_argument('--interaction-map', action='store_true', help='group declared interactions by resource and explicit conflict')
     composition.add_argument('--boundary')
@@ -158,7 +204,8 @@ def _source_and_composition_commands(sub):
     composition.add_argument('--focus')
     composition.add_argument('--limit', type=int, default=20)
     composition.add_argument('--pair-limit', type=int, default=200)
-    revision = sub.add_parser('recompose', help='Review one composition revision against current, selected evidence')
+    revision = sub.add_parser('recompose', allow_abbrev=False,
+                              help='Review one composition revision against current, selected evidence')
     revision.add_argument('--request', type=Path, required=True,
                           help='Proposal JSON. Optional consumer_scope lists local record IDs to inspect for bound uses.')
     revision.add_argument('--proof-store', type=Path, help='Current external owner bound by this composition')
@@ -169,21 +216,21 @@ def _source_and_composition_commands(sub):
 
 
 def _inquiry_feedback_information_commands(sub):
-    inquiry = sub.add_parser('inquiry').add_subparsers(dest='inquiry_action', required=True)
+    inquiry = sub.add_parser('inquiry', allow_abbrev=False).add_subparsers(dest='inquiry_action', required=True)
     for name in ('open', 'evidence'):
-        inquiry.add_parser(name).add_argument('--spec', required=True, type=Path)
-    inquiry.add_parser('stages').add_argument('id')
-    feedback = sub.add_parser('feedback')
+        inquiry.add_parser(name, allow_abbrev=False).add_argument('--spec', required=True, type=Path)
+    inquiry.add_parser('stages', allow_abbrev=False).add_argument('id')
+    feedback = sub.add_parser('feedback', allow_abbrev=False)
     actions = feedback.add_subparsers(dest='feedback_action', required=True)
-    inspect_feedback = actions.add_parser('inspect')
+    inspect_feedback = actions.add_parser('inspect', allow_abbrev=False)
     inspect_feedback.add_argument('id')
     inspect_feedback.add_argument('--revision', type=int)
     for name in ('open', 'revise', 'observe', 'accept'):
-        actions.add_parser(name).add_argument('--spec', required=True, type=Path)
-    info = sub.add_parser('info')
+        actions.add_parser(name, allow_abbrev=False).add_argument('--spec', required=True, type=Path)
+    info = sub.add_parser('info', allow_abbrev=False)
     info_actions = info.add_subparsers(dest='information_action', required=True)
-    inspect = info_actions.add_parser('inspect')
+    inspect = info_actions.add_parser('inspect', allow_abbrev=False)
     inspect.add_argument('id')
     for name in ('wrap', 'migrate'):
-        action = info_actions.add_parser(name)
+        action = info_actions.add_parser(name, allow_abbrev=False)
         action.add_argument('--spec', required=True, type=Path)

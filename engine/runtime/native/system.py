@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import shlex
 import sys
+import time
 import uuid
 
 if __name__ == '__main__':
@@ -30,14 +31,14 @@ from continuation_support.attention import Attention
 from continuation_support import exchange
 from continuation_support.exchange import Exchange
 from continuation_support.ownership import NativeLayout, packet_id
-from continuation_support.storage import encode, exclusive, shared, now, sha, write_json
+from continuation_support.storage import AdmissionContended, encode, exclusive, owner_admission, shared, now, sha, write_json
 from feedback import Feedback
 from information import InformationEnvelope
 from native_runtime.turn_context.capture_inputs import TurnCapture
 from native_runtime.projects import ProjectSelection
 from native_runtime.selection.installed_catalogue import InstalledCatalogue
 from native_runtime.command_dispatch import act, emit
-from native_runtime.command_parser import parser
+from native_runtime.command_parser import is_readonly_action, parser
 from native_runtime.goals import GoalUse
 from native_runtime.inputs import accounted_closure, read, strings, text, write_input
 from native_runtime.records import RecordStore
@@ -164,6 +165,13 @@ class System:
     def put(self, record: dict, expected: int) -> dict:
         return self.record_store.put(record, expected)
 
+    def put_batch(self, spec: dict) -> dict:
+        from native_runtime.record_batch import put_batch
+        return put_batch(self, spec)
+
+    def reindex(self) -> dict:
+        return self.record_store.reindex()
+
     def current_use(self) -> dict:
         return self.goal_use.current_use()
 
@@ -178,8 +186,19 @@ class System:
     def materialize(self, operation: str) -> dict:
         return self.techniques.materialize(operation, self.ex)
 
-    def status(self) -> dict:
-        records = list(self.record_store.scoped_heads(lambda ident, kind: ident == 'goal' or kind == 'obligation'))
+    def status(self, *, verify_all_basis: bool = False) -> dict:
+        if verify_all_basis:
+            records = list(self.record_store.scoped_heads(lambda ident, kind: ident == 'goal' or kind == 'obligation'))
+        else:
+            summaries = self.record_store.indexed_summaries()
+            if summaries is not None:
+                needed = [ident for ident, entry in summaries.items()
+                          if ident == 'goal' or entry['kind'] == 'obligation']
+                full_by_id = {rec['id']: rec for rec in self.record_store.scan_records(needed)}
+                records = [full_by_id[ident] if ident in full_by_id else summaries[ident]
+                           for ident in summaries]
+            else:
+                records = list(self.record_store.scoped_heads(lambda ident, kind: ident == 'goal' or kind == 'obligation'))
         goal = next(r for r in records if r['id'] == 'goal')
         owed = [r for r in goal['content'].get('obligations', [])
                 if r.get('disposition') not in {'fulfilled', 'released'}]
@@ -187,22 +206,52 @@ class System:
                     not accounted_closure(r['content'])]
         packets = self.ex.list()
         current_use = self.goal_use.current_use(records, goal=goal)
-        rows = [{'id': r['id'], 'kind': r['kind'], 'revision': r['revision'],
-                 'active': r['active'], 'changed_basis': self.record_store.basis_changes(r)} for r in records]
-        return {'app_version': VERSION, 'core_version': '0.4.2', 'root': str(self.root),
-                'instance_id': self.instance_id, 'engine_api': ENGINE_API,
-                'engine_entry': str(APP / 'system.py'), 'selection': self.domain_selection.view(),
-                'deployment': self.projects.view(),
-                'workspace': str(self.work), 'current_goal': goal,
-                'current_use': current_use, 'owed_goal_obligations': owed,
-                'owed_record_obligations': separate,
-                'records': rows,
-                'turns': packets, 'incomplete_turns': self._incomplete_turns(),
-                'gaps': {'whole_goal_requires_interpretation': current_use['needs_interpretation'],
-                         'pending_returns': [p['packet'] for p in packets
-                                             if p['transport'] not in {'returned', 'terminal-without-return'}],
-                         'changed_record_basis': [r['id'] for r in rows if r['changed_basis']]},
-                'scope': 'Declared public work and observed local custody; no inferred semantic completeness.'}
+        basis_paths: list[str] = []
+        checked_ids: set[str] = set()
+        deferred_inactive = 0
+        for r in records:
+            should_check = verify_all_basis or r['id'] == 'goal' or r['kind'] == 'obligation' or r.get('active', True)
+            if should_check:
+                checked_ids.add(r['id'])
+                for item in r['basis']:
+                    basis_paths.append(item['path'])
+            elif r['basis']:
+                deferred_inactive += 1
+        resolved_hashes = self.ex.hash_workspace_paths(basis_paths) if basis_paths else {}
+        rows = []
+        for r in records:
+            if r['id'] in checked_ids:
+                changed = self.record_store.basis_changes(r, resolved_hashes=resolved_hashes)
+            elif r['basis'] and all(item['path'] in resolved_hashes for item in r['basis']):
+                changed = self.record_store.basis_changes(r, resolved_hashes=resolved_hashes)
+                deferred_inactive -= 1
+            else:
+                changed = []
+            rows.append({'id': r['id'], 'kind': r['kind'], 'revision': r['revision'],
+                         'active': r['active'], 'changed_basis': changed})
+        full_basis = verify_all_basis or deferred_inactive == 0
+        scope_text = ('Declared public work and observed local custody; no inferred semantic completeness.'
+                      if full_basis else
+                      'Declared public work and observed local custody; inactive non-duty record basis hashes '
+                      'deferred (pass --verify-all-basis for full basis verification); no inferred semantic completeness.')
+        result = {'app_version': VERSION, 'core_version': '0.4.2', 'root': str(self.root),
+                  'instance_id': self.instance_id, 'engine_api': ENGINE_API,
+                  'engine_entry': str(APP / 'system.py'), 'selection': self.domain_selection.view(),
+                  'deployment': self.projects.view(),
+                  'workspace': str(self.work), 'current_goal': goal,
+                  'current_use': current_use, 'owed_goal_obligations': owed,
+                  'owed_record_obligations': separate,
+                  'records': rows,
+                  'turns': packets, 'incomplete_turns': self._incomplete_turns(),
+                  'gaps': {'whole_goal_requires_interpretation': current_use['needs_interpretation'],
+                           'pending_returns': [p['packet'] for p in packets
+                                               if p['transport'] not in {'returned', 'terminal-without-return'}],
+                           'changed_record_basis': [r['id'] for r in rows if r['changed_basis']]},
+                  'basis_verification_scope': 'full' if full_basis else 'active-and-governing',
+                  'scope': scope_text}
+        if not full_basis:
+            result['deferred_inactive_basis_records'] = deferred_inactive
+        return result
 
     def _write_input(self, directory: Path, name: str, data: bytes) -> str:
         return write_input(self.work, directory, name, data)
@@ -387,6 +436,19 @@ class System:
         return Composition(self).inspect(record, focus=focus, limit=limit, pair_limit=pair_limit)
 
 
+def _admission_deadline(forwarded=None):
+    if forwarded is not None and not math.isfinite(forwarded):
+        raise ValueError('invalid admission deadline')
+    value = os.environ.get('MANAGED_AI_DOMAIN_ADMISSION_SECONDS')
+    if value is None:
+        return forwarded
+    seconds = float(value)
+    if not 0 <= seconds <= 600:
+        raise ValueError('MANAGED_AI_DOMAIN_ADMISSION_SECONDS must be between 0 and 600')
+    end = time.monotonic() + seconds
+    return end if forwarded is None else min(forwarded, end)
+
+
 def main():
     args = parser().parse_args()
     try:
@@ -395,33 +457,27 @@ def main():
             result = System.initialize(args.root, goal, instance_id=args.instance_id,
                                        domains=args.domain, catalogues=args.catalogue, prepared=args.prepared,
                                        record_retention=args.record_retention)
-        elif args.action == 'catalogue':
-            # Select the descriptor and complete sources inside the same read guard.
-            with shared(external(args.root) / 'exchange' / 'owner.lock'):
-                result = act(System(args.root), args)
-        elif args.action in {'put', 'recompose'}:
-            from continuation_support.ownership import external_root as external_exchange
-            root = external(args.root)
-            exchange_root = external_exchange(NativeLayout(root).exchange)
-            with exclusive(exchange_root / 'owner.lock'):
-                result = act(System(root), args)
-        elif args.action == 'configure':
-            from continuation_support.ownership import external_root as external_exchange
-            from native_runtime.store_operations import StoreOperations
-            root = external(args.root)
-            exchange_root = external_exchange(NativeLayout(root).exchange)
-            with exclusive(exchange_root / 'owner.lock'):
-                override = StoreOperations.configuration_descriptor(root, read(args.spec))
-                result = act(System(root, _selection_override=override), args)
+        elif args.action == 'explain-context':
+            # Frozen packet/object validation needs no current-owner write lock.
+            result = act(System(args.root), args)
         else:
-            system = System(args.root)
-            if args.action == 'explain-context':
-                # Frozen packet/object validation needs no current-owner write lock.
-                result = act(system, args)
-            else:
-                with exclusive(system.ex.root / 'owner.lock'):
-                    result = act(system, args)
+            from continuation_support.ownership import external_root as external_exchange
+            root = external(args.root)
+            exchange_root = external_exchange(NativeLayout(root).exchange)
+            guard = shared if is_readonly_action(args) else exclusive
+            deadline = _admission_deadline(getattr(args, 'admission_deadline', None))
+            with owner_admission(lambda stack: stack.enter_context(guard(exchange_root / 'owner.lock')),
+                                 deadline=deadline):
+                if args.action == 'configure':
+                    from native_runtime.store_operations import StoreOperations
+                    override = StoreOperations.configuration_descriptor(root, read(args.spec))
+                    result = act(System(root, _selection_override=override), args)
+                else:
+                    result = act(System(root), args)
         emit(result, args)
+    except AdmissionContended as exc:
+        print(json.dumps(exc.result(args.action)), file=sys.stderr)
+        raise SystemExit(75)
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         failure = {'status': 'unresolved', 'operation': args.action, 'error': str(exc)}
         if args.action == 'adopt':

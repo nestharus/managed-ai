@@ -1,7 +1,12 @@
 """Bind a workspace, freeze packet inputs and commit prepared contexts."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+import errno
+import hashlib
 import os
+import stat
 import uuid
 from pathlib import Path
 from typing import Any
@@ -17,10 +22,12 @@ from ..ownership import (
 from ..packet_transport import PacketTransport
 from ..storage import (
     ObjectStore,
+    _OPEN_RO_NOFOLLOW,
     atomic_bytes as _atomic_bytes,
     encode,
     exclusive,
     now,
+    open_directory,
     read_bytes as _bytes,
     read_json,
     sha,
@@ -89,15 +96,124 @@ class PacketContext:
 
     def path(self, value: str) -> Path:
         rel = _relative(value)
-        path = self.workspace / rel
         cursor = self.workspace
-        for part in Path(rel).parts:
+        for part in rel.split('/'):
             cursor = cursor / part
-            if cursor.is_symlink():
+            try:
+                info = os.lstat(cursor)
+            except (FileNotFoundError, NotADirectoryError):
+                break
+            if stat.S_ISLNK(info.st_mode):
                 raise ValueError('workspace symlinks are not supported')
-        if not path.resolve().is_relative_to(self.workspace):
+        path = self.workspace / rel
+        if not path.is_relative_to(self.workspace):
             raise ValueError('path is outside the workspace')
         return path
+
+    @contextmanager
+    def open_workspace_dir(self, relative: str = ''):
+        """Open a validated workspace directory using O_NOFOLLOW at every step."""
+        parts = _relative(relative).split('/') if relative else []
+        opened = []
+        try:
+            try:
+                cur = open_directory(self.workspace)
+            except OSError as exc:
+                if exc.errno == errno.ELOOP:
+                    raise ValueError('workspace symlinks are not supported') from None
+                raise
+            opened.append(cur)
+            for part in parts:
+                try:
+                    nxt = open_directory(part, dir_fd=cur)
+                except OSError as exc:
+                    if exc.errno == errno.ELOOP:
+                        raise ValueError('workspace symlinks are not supported') from None
+                    raise
+                opened.append(nxt)
+                cur = nxt
+            yield cur
+        finally:
+            for fd in reversed(opened):
+                os.close(fd)
+
+    def hash_workspace_paths(self, paths: list[str], *, max_workers: int = 16) -> dict[str, str | None]:
+        """Deduplicate and cryptographically hash workspace files via O_NOFOLLOW dir-FD traversal."""
+        if not paths:
+            return {}
+        unique = list(dict.fromkeys(_relative(p) for p in paths))
+        if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
+            results = {}
+            for rel in unique:
+                path = self.path(rel)
+                results[rel] = sha(path.read_bytes()) if path.is_file() else None
+            return results
+        by_dir: dict[str, list[tuple[str, str]]] = {}
+        for rel in unique:
+            parent, _, name = rel.rpartition('/')
+            by_dir.setdefault(parent, []).append((rel, name))
+
+        results: dict[str, str | None] = {}
+        with self.open_workspace_dir() as work_fd:
+            def hash_group(item):
+                parent, members = item
+                opened = []
+                cur = work_fd
+                group_out = []
+                try:
+                    if parent:
+                        for part in parent.split('/'):
+                            try:
+                                nxt = open_directory(part, dir_fd=cur)
+                            except OSError as exc:
+                                if exc.errno == errno.ELOOP:
+                                    raise ValueError('workspace symlinks are not supported') from None
+                                if exc.errno in (errno.ENOENT, errno.ENOTDIR):
+                                    return [(rel, None) for rel, _ in members]
+                                raise
+                            opened.append(nxt)
+                            cur = nxt
+                    for rel, name in members:
+                        try:
+                            fd = os.open(name, _OPEN_RO_NOFOLLOW, dir_fd=cur)
+                        except OSError as exc:
+                            if exc.errno == errno.ELOOP:
+                                raise ValueError('workspace symlinks are not supported') from None
+                            if exc.errno in (errno.ENOENT, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
+                                group_out.append((rel, None))
+                                continue
+                            raise
+                        try:
+                            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                                os.close(fd)
+                                fd = -1
+                                group_out.append((rel, None))
+                                continue
+                            stream = os.fdopen(fd, 'rb')
+                            fd = -1
+                        except BaseException:
+                            if fd >= 0:
+                                os.close(fd)
+                            raise
+                        with stream:
+                            group_out.append((rel, hashlib.file_digest(stream, 'sha256').hexdigest()))
+                    return group_out
+                finally:
+                    for fd in reversed(opened):
+                        os.close(fd)
+
+            items = list(by_dir.items())
+            if len(unique) >= 16 and len(items) > 1:
+                workers = min(max_workers, len(items))
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    for group_out in pool.map(hash_group, items):
+                        for rel, digest_hex in group_out:
+                            results[rel] = digest_hex
+            else:
+                for item in items:
+                    for rel, digest_hex in hash_group(item):
+                        results[rel] = digest_hex
+        return results
 
     def put(self, data: bytes) -> str:
         return self.objects.put(data)
@@ -118,26 +234,45 @@ class PacketContext:
     def load(self, packet: str) -> tuple[Path, dict[str, Any]]:
         return self._load_directory(self.directory(packet))
 
-    def _load_directory(self, directory: Path) -> tuple[Path, dict[str, Any]]:
+    def _load_directory(self, directory: Path, *,
+                        _verified_objects: set[str] | None = None,
+                        _validated_returns: dict[str, dict[str, Any]] | None = None,
+                        _objects_fd: int | None = None) -> tuple[Path, dict[str, Any]]:
         binding = read_json(directory / 'binding.json')
         request = read_json(directory / 'request.json')
         if sha(encode(request)) != binding['request_sha256'] or sha(_bytes(directory / 'context.md', MAX_PACKET_BYTES)) != binding['context_sha256']:
             raise ValueError('frozen request/context changed')
+        direct_objects = (type(self).get is PacketContext.get and 'get' not in self.__dict__)
         for entry in [request['brief'], *request['methods'], *request['materials'], *request['targets'], *request['returns'], *request.get('artifacts', [])]:
-            if entry['sha256'] is not None:
-                self.get(entry['sha256'])
-        for entry in request['returns']:
-            origin = entry['origin']
-            prior_dir = self.directory(origin['packet'])
+            key = entry['sha256']
+            if key is not None:
+                if _verified_objects is not None and key in _verified_objects:
+                    continue
+                if direct_objects and _objects_fd is not None:
+                    self.objects.read(key, dir_fd=_objects_fd)
+                else:
+                    self.get(key)
+                if _verified_objects is not None:
+                    _verified_objects.add(key)
+
+        def load_validated_return(packet_name: str) -> dict[str, Any]:
+            if _validated_returns is not None and packet_name in _validated_returns:
+                return _validated_returns[packet_name]
+            prior_dir = self.directory(packet_name)
             prior = read_json(prior_dir / 'return.json')
             self.validate_return(prior_dir, prior)
+            if _validated_returns is not None:
+                _validated_returns[packet_name] = prior
+            return prior
+
+        for entry in request['returns']:
+            origin = entry['origin']
+            prior = load_validated_return(origin['packet'])
             if prior['return_sha256'] != origin['return_sha256'] or prior['reply_sha256'] != entry['sha256']:
                 raise ValueError('prior return correspondence changed')
         for entry in request.get('artifacts', []):
             origin = entry['origin']
-            prior_dir = self.directory(origin['packet'])
-            prior = read_json(prior_dir / 'return.json')
-            self.validate_return(prior_dir, prior)
+            prior = load_validated_return(origin['packet'])
             expected = next((p for p in prior['proposals'] if p['path'] == origin['proposal_path']), None)
             if (prior['return_sha256'] != origin['return_sha256'] or expected is None
                     or entry['sha256'] != expected['sha256'] or entry['bytes'] != expected['bytes']):

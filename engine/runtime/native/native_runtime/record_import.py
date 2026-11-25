@@ -113,12 +113,13 @@ def import_records(system, spec):
     sync_dir(receipt.parent.parent)
     if old is None:
         write_json(receipt, dict(result, complete=False))
-    for row in rows[len(prefix):]:
-        if not system.record_store.path(row['id']).exists():
-            system.put(row, 0)
-        current = system.record_store.show(row['id'])
-        result['records'].append(record_identity(current))
-        write_json(receipt, dict(result, complete=False))
+    with system.record_store.batch_index_updates():
+        for row in rows[len(prefix):]:
+            if not system.record_store.path(row['id']).exists():
+                system.put(row, 0)
+            current = system.record_store.show(row['id'])
+            result['records'].append(record_identity(current))
+            write_json(receipt, dict(result, complete=False))
     result['complete'] = True
     write_json(receipt, result)
     return result
