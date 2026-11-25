@@ -112,7 +112,6 @@ def _write_sample_domain(bundle):
 
 
 class WorkingReleaseVerificationTest(unittest.TestCase):
-    @unittest.skipIf(os.name == "nt", "store and deployment initialization require POSIX fcntl")
     def test_working_release_without_workbench_verifies_packages_and_extracts(self):
         with TemporaryDirectory() as temporary:
             tmp = Path(temporary)

@@ -28,6 +28,14 @@ from native_bridge import (
 from occurrence_files import atomic_bytes, digest, file_lock, ident, loads_strict, nonempty, now, read, sync_dir, write
 from repair_custody import RepairCustody
 
+def _safe_relpath(path: Path | str, start: Path | str) -> str:
+    """Return a relative path when possible, falling back to an absolute path across Windows drives."""
+    try:
+        return os.path.relpath(path, start)
+    except ValueError:
+        return str(Path(path).resolve())
+
+
 def prepare_questions(supplied_questions, selected_sources, task):
     # Resolve the question input contract before any host/native effects.
     # Omission deliberately leaves a question unbound; an unknown spelling
@@ -147,13 +155,13 @@ class Host(NativeBridge, RepairCustody):
             ident(row['id']); nonempty(row['text'],'duty text')
         if len({r['id'] for r in duties})!=len(duties): raise ValueError('Duplicate duty')
         self.root.mkdir(parents=True,exist_ok=True)
-        self.config={'format':'g60-continuing-work-host/1','engine':os.path.relpath(engine,self.root),'created_at_utc':now(),
+        self.config={'format':'g60-continuing-work-host/1','engine':_safe_relpath(engine,self.root),'created_at_utc':now(),
                      'commission':self.pin(commission), 'scope':'Caller-enrolled continuing work; semantic completeness is not inferred.'}
         if spec.get('native_root'):
             self.native=Path(spec['native_root']).resolve()
             self.work=self.native/'work'
             descriptor=read(self.native/'system.json')
-            self.config.update(native_root=os.path.relpath(self.native,self.root),
+            self.config.update(native_root=_safe_relpath(self.native,self.root),
                                attached_instance_id=descriptor['instance_id'])
             status=self.call('status')
             supplied=set(status['owed_record_obligations']) | {r['id'] for r in status['owed_goal_obligations']}
@@ -257,7 +265,7 @@ class Host(NativeBridge, RepairCustody):
             raise ValueError('This upgrade route requires identical native programs; a native-code change needs its own compatibility receiving')
         account=nonempty(spec['account'],'upgrade account')
         before=self.call('status'); previous=dict(self.config)
-        self.config=dict(self.config,engine=os.path.relpath(new,self.root))
+        self.config=dict(self.config,engine=_safe_relpath(new,self.root))
         try: after=self.call('status')
         except Exception:
             self.config=previous

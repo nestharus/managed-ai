@@ -5,12 +5,13 @@ Deployment metadata never copies an engine, project or store. Native captures
 retain the selected occurrence needed by their receiving work.
 """
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 import argparse
 import ast
 import errno
 import hashlib
+import io
 import json
 import math
 import os
@@ -586,9 +587,10 @@ def _precheck_local_system_args(engine, runtime, arguments):
         from native_runtime.command_parser import is_readonly_action, parser as native_parser
         if engine != HERE.parents[1]:
             # Never execute external engine code prior to code_identity(engine) verification.
-            # Classify read-only actions conservatively using this controller's trusted parser.
+            # Classify read-only actions conservatively without leaking argparse usage/help output.
             try:
-                parsed = native_parser().parse_args(['--root', str(runtime), *arguments])
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    parsed = native_parser().parse_args(['--root', str(runtime), *arguments])
             except SystemExit:
                 return False
             if parsed.action == 'init':

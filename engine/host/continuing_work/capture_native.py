@@ -29,7 +29,8 @@ BOUNDED_ADMISSION_NATIVE_PROFILE = 'cc7fb2cdb1c88b5ecff826bac7088e93d11f13a0317f
 EXPONENTIAL_ADMISSION_NATIVE_PROFILE = 'e772c4c3a51d8db2937a5cbcb991dc0a5c2433f70082a7b02d32cda5aabdd5e4'
 WAVE1_NATIVE_PROFILE = '2eb453170ca260aa32575b628480ec529d71f78d80dcbe052ebe5f807569945f'
 WAVE2_NATIVE_PROFILE = 'a61df8f59eadde2f1631f7002e062770ae68c577de973717e9f4997748fee1d4'
-CURRENT_NATIVE_PROFILE = 'dbfaee1c623984cbd60833413de6c4aab1033214d4ddf6300c415b04bfbeefce'
+PRE_WAVE3_NATIVE_PROFILE = 'dbfaee1c623984cbd60833413de6c4aab1033214d4ddf6300c415b04bfbeefce'
+CURRENT_NATIVE_PROFILE = '23c5c06540959fe6cbdd0e9e58e3bb69c328616f879caa6fd4604b22d790cf82'
 PROFILE_ERROR = ('Selected native engine does not match the reviewed capture adapter; '
                  'requalify this adapter before capture')
 RETURN_ERROR = 'Native return already exists; use its retained body or a new current occurrence'
@@ -67,7 +68,7 @@ def reviewed_engine(engine: Path):
                        SCOPED_COMPOSITION_NATIVE_PROFILE, JOINED_NATIVE_PROFILE,
                        PACKET_LIFECYCLE_NATIVE_PROFILE, BOUNDED_ADMISSION_NATIVE_PROFILE,
                        EXPONENTIAL_ADMISSION_NATIVE_PROFILE, WAVE1_NATIVE_PROFILE,
-                       WAVE2_NATIVE_PROFILE, CURRENT_NATIVE_PROFILE):
+                       WAVE2_NATIVE_PROFILE, PRE_WAVE3_NATIVE_PROFILE, CURRENT_NATIVE_PROFILE):
         raise ValueError(PROFILE_ERROR)
     spec = importlib.util.spec_from_file_location('reviewed_capture_engine', path)
     if spec is None or spec.loader is None:

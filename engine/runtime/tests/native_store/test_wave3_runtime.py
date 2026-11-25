@@ -488,6 +488,20 @@ class Wave3RuntimeTests(unittest.TestCase):
         proc_b = self.run_cli(cli, expected_rc=2)
         self.assertIn('ordinary selected domain required', proc_b.stderr)
 
+    def test_c21_o1_external_engine_precheck_suppresses_spurious_usage(self):
+        """C21-O1: External engine precheck does not leak bogus argparse usage/help onto stdout or stderr."""
+        ext_engine = self.root / 'ext-engine-c21'
+        shutil.copytree(ENGINE / 'runtime', ext_engine / 'runtime', ignore=shutil.ignore_patterns('tests', '__pycache__'))
+        ext_dep = self.root / 'ext-dep-c21'
+        Deployment.initialize(ext_dep, self.store, ext_engine)
+        # system status --help against a verified external engine must emit ONLY ONE usage block
+        proc = self.run_cli([
+            sys.executable, '-B', str(ENGINE / 'runtime/select_deployment.py'),
+            '--deployment', str(ext_dep), 'system', 'status', '--help',
+        ], expected_rc=0)
+        self.assertEqual(proc.stdout.count('usage:'), 1, proc.stdout)
+        self.assertEqual(proc.stderr, '')
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
