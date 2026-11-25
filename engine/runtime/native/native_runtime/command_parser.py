@@ -33,6 +33,8 @@ def is_readonly_action(args) -> bool:
         return getattr(args, 'compact_action', None) == 'plan'
     if action == 'archive-records':
         return getattr(args, 'archive_action', None) == 'plan'
+    if action == 'retire-turns':
+        return getattr(args, 'retire_turns_action', None) == 'plan'
     return False
 
 
@@ -247,6 +249,18 @@ def _turn_commands(sub):
     run.add_argument('--proposal', action='append', default=[], metavar='TARGET=FILE',
                      help='Nominate a proposal file for first receipt with a positive --wait. Repeat for each target.')
     run.add_argument('--no-status', action='store_true', help='Skip full store status scan after commit')
+    retire = sub.add_parser('retire-turns', allow_abbrev=False,
+                            help='plan or execute guarded retirement of completed turn working copies').add_subparsers(
+                                dest='retire_turns_action', required=True)
+    retire_plan = retire.add_parser('plan', allow_abbrev=False)
+    retire_plan.add_argument('--turn', action='append', default=[], dest='turns',
+                             help='Completed turn name to audit for working-copy retirement. Repeat for multiple turns.')
+    retire_plan.add_argument('--all-eligible', action='store_true',
+                             help='Audit every working copy directory under work/.system/turns/')
+    retire_exec = retire.add_parser('execute', allow_abbrev=False)
+    retire_exec.add_argument('--plan', required=True, type=Path)
+    retire_exec.add_argument('--expected-plan', required=True)
+    retire_exec.add_argument('--reason', required=True)
 
 
 def _source_and_composition_commands(sub):

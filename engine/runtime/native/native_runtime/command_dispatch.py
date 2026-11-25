@@ -141,6 +141,11 @@ def act(system, args):
     if action == 'resume-context': return system.resume_context(args.turn)
     if action == 'view': return system.view(args.turn)
     if action == 'explain-context': return system.explain_context(args.turn)
+    if action == 'retire-turns':
+        if args.retire_turns_action == 'plan':
+            return system.plan_turn_retirement(turns=args.turns or None, all_eligible=args.all_eligible)
+        return system.execute_turn_retirement(
+            plan=read(args.plan), expected_plan=args.expected_plan, reason=args.reason)
     if action == 'context':
         return system.context(args.turn, _context_request(args))
     if action == 'receive':

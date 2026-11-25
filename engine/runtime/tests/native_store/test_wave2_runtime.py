@@ -617,6 +617,65 @@ class Wave2RuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'ordinary selected source required'):
                 read_selected_body(dict(entry_ok, body_path=bad_path), validated_root=True)
 
+    def test_g2s05_retire_turns_cli_plan_shared_and_execute_exclusive(self):
+        system = System(self.store)
+        reply = self.root / 'cli-reply.md'
+        reply.write_text('CLI turn reply.\n', encoding='utf-8')
+        out = self.root / 'cli-out.md'
+        out.write_text('CLI adopted output.\n', encoding='utf-8')
+        with exclusive(system.ex.root / 'owner.lock'):
+            system.context('done-cli', {'task': 'Test CLI turn retirement.', 'targets': ['outputs/cli.md']})
+            system.receive('done-cli', reply, 'tester', [f'outputs/cli.md={out}'])
+            (system.work / 'outputs').mkdir(parents=True, exist_ok=True)
+            system.adopt('done-cli', 'outputs/cli.md', 'Adopt CLI turn output.')
+
+        turn_dir = self.store / 'work/.system/turns/done-cli'
+        self.assertTrue(turn_dir.is_dir())
+        view_before = json.loads(self.run_cli([*self.store_cli, 'view', 'done-cli']).stdout)
+
+        # plan runs read-only under LOCK_SH even while another reader holds shared(owner.lock)
+        with shared(self.store / 'exchange/owner.lock'):
+            plan_all = json.loads(self.run_cli([*self.store_cli, 'retire-turns', 'plan', '--all-eligible']).stdout)
+            plan_one = json.loads(self.run_cli([*self.store_cli, 'retire-turns', 'plan', '--turn', 'done-cli']).stdout)
+        self.assertEqual([r['turn'] for r in plan_all['eligible']], ['done-cli'])
+        self.assertEqual([r['turn'] for r in plan_one['eligible']], ['done-cli'])
+
+        plan_file = self.root / 'retire-plan.json'
+        plan_file.write_bytes(encode(plan_one))
+
+        # execute requires LOCK_EX (contends with exit 75 under shared lock)
+        env = dict(os.environ, MANAGED_AI_DOMAIN_ADMISSION_SECONDS='0')
+        with shared(self.store / 'exchange/owner.lock'):
+            contended = subprocess.run(
+                [*self.store_cli, 'retire-turns', 'execute', '--plan', str(plan_file),
+                 '--expected-plan', plan_one['plan_sha256'], '--reason', 'Should contend'],
+                capture_output=True, text=True, env=env, timeout=20,
+            )
+            self.assertEqual(contended.returncode, 75, contended.stderr)
+        self.assertTrue(turn_dir.is_dir())
+
+        # Wrong expected-plan hash fails closed (exit 2) without deleting working dir
+        self.run_cli([*self.store_cli, 'retire-turns', 'execute', '--plan', str(plan_file),
+                      '--expected-plan', '0' * 64, '--reason', 'Bad hash'], expected_rc=2)
+        self.assertTrue(turn_dir.is_dir())
+
+        # Valid execute removes working copy, writes receipt, preserves view/recover/explain-context & audit-objects
+        receipt = json.loads(self.run_cli([
+            *self.store_cli, 'retire-turns', 'execute', '--plan', str(plan_file),
+            '--expected-plan', plan_one['plan_sha256'], '--reason', 'CLI Wave 2 turn retirement',
+        ]).stdout)
+        self.assertTrue(receipt['complete'])
+        self.assertEqual(receipt['retired_turns'], ['done-cli'])
+        self.assertFalse(turn_dir.exists())
+        self.assertTrue((self.store / 'work/.system/retirements' / f"{plan_one['plan_sha256']}.json").is_file())
+        self.assertEqual(json.loads(self.run_cli([*self.store_cli, 'view', 'done-cli']).stdout), view_before)
+        self.assertEqual(json.loads(self.run_cli([*self.store_cli, 'recover', 'done-cli']).stdout)['request_sha256'],
+                         plan_one['eligible'][0]['request_sha256'])
+        self.assertEqual(json.loads(self.run_cli([*self.store_cli, 'explain-context', 'done-cli']).stdout)['context_sha256'],
+                         plan_one['eligible'][0]['context_sha256'])
+        audit = json.loads(self.run_cli([*self.store_cli, 'audit-objects']).stdout)
+        self.assertGreater(audit['reachable_count'], 0)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
