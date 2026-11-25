@@ -201,7 +201,7 @@ def read_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def read_catalogue(path):
+def _read_strict_object(path):
     # Match native_runtime.inputs.read_input without importing the runtime.
     def unique_keys(pairs):
         result = {}
@@ -214,15 +214,19 @@ def read_catalogue(path):
     def reject_constant(value):
         raise ValueError("nonfinite JSON: " + value)
 
+    data = json.loads(path.read_bytes().decode("utf-8"), object_pairs_hook=unique_keys,
+                      parse_constant=reject_constant)
+    if not isinstance(data, dict):
+        raise ValueError("JSON object required")
+    return data
+
+
+def read_catalogue(path):
     try:
-        catalogue = json.loads(path.read_bytes().decode("utf-8"), object_pairs_hook=unique_keys,
-                               parse_constant=reject_constant)
-        if not isinstance(catalogue, dict):
-            raise ValueError("JSON object required")
-    except ValueError as error:
+        return _read_strict_object(path)
+    except (UnicodeDecodeError, ValueError) as error:
         raise ValueError(f"Invalid current source catalogue {path.name}: {error}. "
                          "Repair the JSON or restore a valid catalogue, then run release guidance refresh.") from None
-    return catalogue
 
 
 def verify_core_selection(core, native, *, prefix=""):
@@ -314,26 +318,79 @@ def descriptors(root, directory, filename):
                 yield descriptor
 
 
+def exact_path(root, relative, kind):
+    """Find an ordinary member with exact on-disk spelling at every segment, or None if absent."""
+    ordinary(root, root.lstat(), stat.S_ISDIR)
+    path = root
+    for index, part in enumerate(relative.parts):
+        expected_kind = stat.S_ISDIR if index < len(relative.parts) - 1 else kind
+        names = [entry.name for entry in path.iterdir()]
+        if part not in names:
+            for existing in names:
+                if existing.casefold() == part.casefold():
+                    observed = Path(*relative.parts[:index], existing).as_posix()
+                    expected = Path(*relative.parts[:index + 1]).as_posix()
+                    raise ValueError(
+                        f"Exact member spelling required: expected {expected}, observed {observed}."
+                    )
+            return None
+        path = path / part
+        ordinary(path, path.lstat(), expected_kind)
+    return path
+
+
 def verify_workbench_components(root):
-    component_root = root / "companions/workbench"
-    components = read_json(component_root / "COMPONENTS.json")
-    for name, row in components["files"].items():
-        actual = identity(component_root / name)
-        if {k: actual[k] for k in ("sha256", "bytes")} != row["identity"]:
+    component_root = exact_path(root, Path("companions/workbench"), stat.S_ISDIR)
+    if component_root is None:
+        return
+    manifest_path = exact_path(component_root, Path("COMPONENTS.json"), stat.S_ISREG)
+    if manifest_path is None:
+        raise ValueError("Missing shared workbench component manifest: companions/workbench/COMPONENTS.json")
+    try:
+        components = _read_strict_object(manifest_path)
+    except (UnicodeDecodeError, ValueError) as error:
+        raise ValueError(f"Invalid workbench component manifest {manifest_path.name}: {error}") from None
+    files = components.get("files")
+    if not isinstance(files, dict) or not files:
+        raise ValueError("Invalid workbench component manifest COMPONENTS.json: non-empty 'files' object required")
+    resolved_workbench = component_root.resolve(strict=True)
+    for name, row in files.items():
+        if not isinstance(name, str) or not name or "\\" in name:
+            raise ValueError("Invalid shared component path: " + repr(name))
+        relative = Path(name)
+        if relative.anchor or ".." in relative.parts or not relative.parts or relative.as_posix() != name:
+            raise ValueError("Unsafe shared component path: " + name)
+        target = exact_path(component_root, relative, stat.S_ISREG)
+        if target is None:
+            raise ValueError("Missing shared component: " + name)
+        if not target.resolve(strict=True).is_relative_to(resolved_workbench):
+            raise ValueError("Unsafe shared component path: " + name)
+        expected = row.get("identity") if isinstance(row, dict) else None
+        if (not isinstance(expected, dict) or set(expected) != {"sha256", "bytes"}
+                or not isinstance(expected["sha256"], str) or type(expected["bytes"]) is not int):
+            raise ValueError("Invalid shared component identity entry: " + name)
+        actual = identity(target)
+        if {k: actual[k] for k in ("sha256", "bytes")} != expected:
             raise ValueError("Shared component identity changed: " + name)
 
 
 def verify_store_schemas(root, core):
+    stores = list(descriptors(root, 'stores', 'system.json'))
+    if not stores:
+        return
     api = runpy.run_path(str(core / 'prototype/agent-system/system.py'))
-    for descriptor in descriptors(root, 'stores', 'system.json'):
+    for descriptor in stores:
         system = api['System'](descriptor.parent)
         for record in system.records():
             system.domain_selection.validate_record(record)
 
 
 def verify_deployment_bindings(root, core):
+    deployments = list(descriptors(root, 'deployments', 'deployment.json'))
+    if not deployments:
+        return
     deployment_api = runpy.run_path(str(core / 'prototype/agent-system/deployment.py'))
-    for descriptor in descriptors(root, 'deployments', 'deployment.json'):
+    for descriptor in deployments:
         deployment_api['Deployment'](descriptor.parent).verify()
 
 
