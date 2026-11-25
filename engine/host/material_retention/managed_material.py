@@ -35,7 +35,11 @@ def _load_sibling(stem: str):
             raise ImportError(f"Unable to load managed_material sibling module: {path}")
         module = importlib.util.module_from_spec(spec)
         sys.modules[key] = module
-        spec.loader.exec_module(module)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(key, None)
+            raise
     return module, path.read_bytes()
 
 

@@ -188,3 +188,36 @@ class SourceReplay(unittest.TestCase):
             release.write_text("go", encoding="utf-8")
             proc.communicate(timeout=15)
         self.assertEqual(proc.returncode, 0)
+
+    def test_command_code_and_inspect_config_agree_on_backslash_paths(self):
+        import os
+        import inspect_config
+
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        runner = bin_dir / "runner.py"
+        runner.write_text("print('ok')\n", encoding="utf-8", newline="\n")
+        runner.chmod(0o755)
+        if os.name == "nt":
+            abs_cmd = str(runner).replace("/", "\\")
+            rel_cmd = "bin\\runner.py"
+        else:
+            abs_cmd = str(runner)
+            rel_cmd = "bin/runner.py"
+
+        insp = inspect_config.Inspection()
+        insp.command("model.argv", [abs_cmd])
+        self.assertEqual(insp.issues, [])
+
+        pinned_abs = resumable_workbench._command_code([abs_cmd])
+        self.assertIn(str(runner.resolve()), pinned_abs)
+        pinned_rel = resumable_workbench._command_code([rel_cmd], cwd=self.root)
+        self.assertIn(str(runner.resolve()), pinned_rel)
+
+        # Even on POSIX, a backslash in argv[0] takes the path branch rather than shutil.which.
+        bs_runner = self.root / "sub\\runner.py"
+        if os.name != "nt":
+            bs_runner.write_text("print('ok')\n", encoding="utf-8", newline="\n")
+            bs_runner.chmod(0o755)
+            pinned_bs = resumable_workbench._command_code(["sub\\runner.py"], cwd=self.root)
+            self.assertIn(str(bs_runner.resolve()), pinned_bs)

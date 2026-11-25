@@ -52,15 +52,50 @@ if os.name == 'nt':
     _ERROR_IO_PENDING = 997
 
 _LOCK_GUARD = threading.Lock()
-_THREAD_LOCKS: dict[Path, threading.Lock] = {}
+_THREAD_LOCKS: dict[Path, '_ThreadRWLock'] = {}
 
 
-def _thread_lock(path: Path) -> threading.Lock:
+class _ThreadRWLock:
+    """In-process readers-writer lock matching POSIX/Win32 shared+exclusive semantics."""
+
+    def __init__(self):
+        self._cond = threading.Condition(threading.Lock())
+        self._readers = 0
+        self._writer = False
+
+    def acquire(self, *, shared: bool, nonblocking: bool) -> bool:
+        with self._cond:
+            if shared:
+                while self._writer:
+                    if nonblocking:
+                        return False
+                    self._cond.wait()
+                self._readers += 1
+                return True
+            while self._writer or self._readers > 0:
+                if nonblocking:
+                    return False
+                self._cond.wait()
+            self._writer = True
+            return True
+
+    def release(self, *, shared: bool) -> None:
+        with self._cond:
+            if shared:
+                self._readers -= 1
+                if self._readers == 0:
+                    self._cond.notify_all()
+            else:
+                self._writer = False
+                self._cond.notify_all()
+
+
+def _thread_lock(path: Path) -> _ThreadRWLock:
     key = path.resolve()
     with _LOCK_GUARD:
         lock = _THREAD_LOCKS.get(key)
         if lock is None:
-            lock = threading.Lock()
+            lock = _ThreadRWLock()
             _THREAD_LOCKS[key] = lock
         return lock
 
@@ -97,7 +132,7 @@ def file_lock(path, *, shared: bool = False, nonblocking: bool = False, timeout:
     lock_path = Path(path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     tlock = _thread_lock(lock_path)
-    if not tlock.acquire(blocking=not nonblocking):
+    if not tlock.acquire(shared=shared, nonblocking=nonblocking):
         raise BlockingIOError('Host lock is busy: ' + str(lock_path))
     try:
         if lock_path.is_symlink():
@@ -123,7 +158,7 @@ def file_lock(path, *, shared: bool = False, nonblocking: bool = False, timeout:
                     elif os.name == 'nt':
                         _win32_unlock(stream.fileno())
     finally:
-        tlock.release()
+        tlock.release(shared=shared)
 
 
 def now():

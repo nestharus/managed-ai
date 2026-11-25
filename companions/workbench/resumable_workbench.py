@@ -65,7 +65,7 @@ def _command_code(command, cwd=None):
         return {}
     base = Path(cwd or Path.cwd())
     first = command[0]
-    executable = str((base / first).resolve()) if "/" in first else shutil.which(first)
+    executable = str((base / first).resolve()) if ("/" in first or "\\" in first) else shutil.which(first)
     if executable is None:
         raise ValueError("Configured command executable is unavailable: " + first)
     paths = [executable]

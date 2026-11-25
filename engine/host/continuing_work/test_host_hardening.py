@@ -77,9 +77,23 @@ class ContinuingWorkCrossPlatformTests(unittest.TestCase):
             proc.communicate(timeout=15)
         self.assertEqual(proc.returncode, 0)
 
-        # After release, shared lock succeeds cleanly without mutating lock file bytes.
+        # After release, shared locks coexist across threads and block nonblocking exclusive writes.
         with occurrence_files.file_lock(lock_file, shared=True, nonblocking=True):
             self.assertEqual(lock_file.stat().st_size, 0)
+            thread_results = []
+            def second_reader():
+                try:
+                    with occurrence_files.file_lock(lock_file, shared=True, nonblocking=True):
+                        thread_results.append('shared-ok')
+                except Exception as exc:
+                    thread_results.append(exc)
+            t = threading.Thread(target=second_reader)
+            t.start()
+            t.join(timeout=5)
+            self.assertEqual(thread_results, ['shared-ok'])
+            with self.assertRaises(BlockingIOError):
+                with occurrence_files.file_lock(lock_file, shared=False, nonblocking=True):
+                    pass
 
     def test_native_bridge_pin_event_and_strict_occurrence_io_cross_platform(self):
         sample = self.base / 'sample.txt'

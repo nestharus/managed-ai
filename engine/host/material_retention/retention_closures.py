@@ -17,7 +17,11 @@ def _load_store_io():
             raise ImportError("Unable to load store_io module: " + str(path))
         module = importlib.util.module_from_spec(spec)
         sys.modules[key] = module
-        spec.loader.exec_module(module)
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(key, None)
+            raise
     return module
 
 
