@@ -30,16 +30,37 @@ def source_identity_line(row):
             f"SHA-256 `{row['sha256']}`.")
 
 
+def _read_strict_object(path):
+    if path.is_symlink() or not path.is_file():
+        raise ValueError('ordinary JSON file required: ' + str(path))
+
+    def unique_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate JSON key: ' + key)
+            result[key] = value
+        return result
+
+    def reject_constant(value):
+        raise ValueError('nonfinite JSON: ' + value)
+
+    data = json.loads(
+        path.read_bytes().decode('utf-8'),
+        object_pairs_hook=unique_keys,
+        parse_constant=reject_constant,
+    )
+    if not isinstance(data, dict):
+        raise ValueError('JSON object required: ' + str(path))
+    return data
+
+
 def render(root):
     """Read canonical UTF-8 inputs and prepare each projection without writing."""
     selection_name = 'release/current_sources.json'
     catalogue_name = 'runtime/native/catalogue.json'
-    legacy = 'prototype/agent-system/catalogue.json'
-    if (not (root / 'runtime/native/native_runtime/selection').is_dir()
-            and not (root / catalogue_name).is_file() and (root / legacy).is_file()):
-        catalogue_name = legacy
-    selected = json.loads((root / selection_name).read_text(encoding='utf-8'))
-    catalogue = json.loads((root / catalogue_name).read_text(encoding='utf-8'))
+    selected = _read_strict_object(root / selection_name)
+    catalogue = _read_strict_object(root / catalogue_name)
     prior = {e['id']: e for e in catalogue['entries']}
     entries = []
     for row in selected['bodies']:
@@ -76,7 +97,7 @@ def render(root):
     selection_sha = digest(selection)
     catalogue['snapshot'] = {'edition': selected['edition'], 'selection_sha256': selection_sha,
                              'relationship': 'References to one canonical source body; domain sources are selected per store.'}
-    nav = json.loads((root / 'release/navigation.json').read_text(encoding='utf-8'))
+    nav = _read_strict_object(root / 'release/navigation.json')
     lines = ['# Current source owners', '',
              'The native catalogue verifies the same canonical files linked here. Domain sources are selected by each store. '
              'No second library of source copies or predecessor runtime is required.', '']

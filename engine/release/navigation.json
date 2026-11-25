@@ -1,18 +1,5 @@
 {
   "format": "current-source-navigation/1",
-  "relocations": {
-    "prototype/patterns/owned-data/contracts.md": "../domains/research/sources/knowledge/research/patterns/data-ownership.md",
-    "prototype/patterns/owned-data/README.md": "../domains/research/sources/knowledge/research/patterns/data-ownership.md",
-    "prototype/patterns/scoped-composition/README.md": "../domains/research/sources/knowledge/research/patterns/composed-understanding.md",
-    "prototype/patterns/library/contract.md": "../domains/research/sources/knowledge/research/patterns/finding-useful-knowledge.md",
-    "prototype/patterns/library/README.md": "../domains/research/sources/knowledge/research/patterns/finding-useful-knowledge.md",
-    "prototype/patterns/snippets/frontend/README.md": "../domains/research/sources/knowledge/research/patterns/workspace.md",
-    "prototype/patterns/system-examples/VALIDATION.md": "../domains/research/sources/knowledge/research/patterns/system-map.md",
-    "prototype/patterns/system-examples/README.md": "../domains/research/sources/knowledge/research/patterns/system-map.md",
-    "prototype/patterns/system-examples/docs/walkthrough.md": "../domains/research/sources/knowledge/research/patterns/system-map.md",
-    "prototype/patterns/system-examples/docs/contracts.md": "../domains/research/sources/knowledge/research/patterns/system-map.md",
-    "prototype/patterns/system-examples/dynamic/README.md": "../domains/research/sources/knowledge/research/patterns/system-map.md"
-  },
   "reference_routes": {
     "agent/shared-systems.md": {
       "path": "../guidance/agents/shared-systems.md",

@@ -19,8 +19,9 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 SELECTION = Path("release/current_sources.json")
 CATALOGUE = Path("runtime/native/catalogue.json")
-LEGACY_CATALOGUE = Path("prototype/agent-system/catalogue.json")
 MARKER = Path("CURRENT-RELEASE.json")
+MAX_COMPRESSED_TEXT_BYTES = 64 * 1024 * 1024
+LEGACY_COMPRESSED_BASIS_PREFIXES = ("evidence/research-originals/",)
 # refresh_guidance stages each projection in an adjacent TemporaryDirectory.
 STAGED_PROJECTIONS = (SELECTION, CATALOGUE, Path("SOURCES.md"), MARKER)
 
@@ -87,11 +88,7 @@ def reserved_stage(path, info, prefixes):
 
 
 def catalogue_path(core):
-    # The loaded source edition determines its catalogue root. Keep the
-    # new canonical member mandatory when its selection loader is present.
-    if (core / "runtime/native/native_runtime/selection").is_dir() or (core / CATALOGUE).is_file():
-        return CATALOGUE
-    return LEGACY_CATALOGUE if (core / LEGACY_CATALOGUE.parent).is_dir() else CATALOGUE
+    return CATALOGUE
 
 
 def source_paths(root, engine):
@@ -152,39 +149,92 @@ def received_compressed_text(system):
     return evidence
 
 
-def check_compressed_text(path):
-    """Read a complete gzip stream and reject binary payloads, including nested archives."""
+def check_compressed_text(path, *, max_bytes=MAX_COMPRESSED_TEXT_BYTES):
+    """Read a bounded gzip stream and reject binary payloads or decompression bombs."""
+    if type(max_bytes) is not int or max_bytes < 0:
+        raise ValueError("Compressed text byte bound must be a nonnegative integer")
     decode = codecs.getincrementaldecoder("utf-8-sig")()
+    total = 0
     with gzip.open(path, "rb") as source:
-        for chunk in iter(lambda: source.read(65536), b""):
+        while True:
+            chunk = source.read(min(65536, max_bytes - total + 1))
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError(f"Compressed text exceeds byte bound ({max_bytes} bytes): {path}")
             if re.search(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]", chunk):
                 raise ValueError("Binary content in compressed research data: " + str(path))
             decode.decode(chunk)
         decode.decode(b"", final=True)
 
 
+def _normalize_prefixes(items):
+    prefixes = []
+    for prefix in items:
+        if isinstance(prefix, str) and prefix:
+            normalized = prefix if prefix.endswith("/") else prefix + "/"
+            if normalized not in prefixes:
+                prefixes.append(normalized)
+    return tuple(prefixes)
+
+
+def _store_compressed_prefixes(store):
+    """Return allowed content-addressed basis prefixes declared by the store's domains."""
+    selection = getattr(store, "domain_selection", None)
+    declared = getattr(selection, "content_addressed_basis_prefixes", None) if selection is not None else None
+    if declared:
+        normalized = _normalize_prefixes(declared)
+        if normalized:
+            return normalized
+    raw = []
+    descriptor_path = Path(store.root) / "system.json"
+    if descriptor_path.is_file():
+        descriptor = _read_strict_object(descriptor_path)
+        for binding in descriptor.get("domains", []):
+            domain_path = (Path(store.root) / binding["path"]).resolve()
+            if domain_path.is_file():
+                domain = _read_strict_object(domain_path)
+                raw.extend(domain.get("content_addressed_basis_prefixes", []))
+    normalized = _normalize_prefixes(raw)
+    return normalized if normalized else LEGACY_COMPRESSED_BASIS_PREFIXES
+
+
 def members(root, engine=...):
     if engine is ...:
         engine = inventory_engine(root)
     result = {}
-    research = None
+    stores = {}
+    native_api = None
     for path in sorted(source_paths(root, engine), key=lambda path: (path, path.as_posix())):
         relative = path.relative_to(root).as_posix()
         if "\\" in relative or ".." in Path(relative).parts:
             raise ValueError("Unsafe archive member path: " + relative)
         if path.suffix.lower() in {".zip", ".tar", ".gz"}:
-            match = re.fullmatch(r"stores/research/work/(evidence/research-originals/([a-f0-9]{2})/([a-f0-9]{64})\.gz)", relative)
-            if not match or match[2] != match[3][:2] or engine is None or engine == root:
+            match = re.fullmatch(
+                r"stores/([^/]+)/work/((?:.+/)?([a-f0-9]{2})/([a-f0-9]{64})\.gz)",
+                relative,
+            )
+            if (not match or match[3] != match[4][:2] or engine is None or engine == root
+                    or not (root / "stores" / match[1] / "system.json").is_file()):
                 raise ValueError("Select extracted useful source instead of nested transport: " + str(path))
-            if research is None:
-                native = runpy.run_path(str(engine / "prototype/agent-system/system.py"))
-                store = native["System"](root / "stores/research")
-                research = (store, received_compressed_text(store))
-            store, allowed = research
+            store_name, work_rel, _, expected_sha = match.groups()
+            if store_name not in stores:
+                if native_api is None:
+                    native_api = runpy.run_path(str(engine / "runtime/native/system.py"))
+                store = native_api["System"](root / "stores" / store_name)
+                stores[store_name] = (
+                    store,
+                    received_compressed_text(store),
+                    _store_compressed_prefixes(store),
+                )
+            store, allowed, allowed_prefixes = stores[store_name]
+            if not any(work_rel.startswith(prefix) for prefix in allowed_prefixes):
+                raise ValueError("Select extracted useful source instead of nested transport: " + str(path))
             current = identity(path)
-            if current["sha256"] != match[3] or (match[1], match[3], current["bytes"]) not in allowed:
+            if current["sha256"] != expected_sha or (work_rel, expected_sha, current["bytes"]) not in allowed:
                 raise ValueError("Missing accepted research evidence for compressed source: " + relative)
-            store.ex.objects.read(match[3], expected_bytes=current["bytes"])
+            store.ex.objects.read(expected_sha, expected_bytes=current["bytes"])
             check_compressed_text(path)
             result[relative] = current
         else:
@@ -198,11 +248,13 @@ def write_json(path, value):
 
 
 def read_json(path):
-    return json.loads(path.read_text(encoding="utf-8"))
+    return _read_strict_object(path)
 
 
 def _read_strict_object(path):
     # Match native_runtime.inputs.read_input without importing the runtime.
+    ordinary(path, path.lstat(), stat.S_ISREG)
+
     def unique_keys(pairs):
         result = {}
         for key, value in pairs:
@@ -378,7 +430,7 @@ def verify_store_schemas(root, core):
     stores = list(descriptors(root, 'stores', 'system.json'))
     if not stores:
         return
-    api = runpy.run_path(str(core / 'prototype/agent-system/system.py'))
+    api = runpy.run_path(str(core / 'runtime/native/system.py'))
     for descriptor in stores:
         system = api['System'](descriptor.parent)
         for record in system.records():
@@ -389,7 +441,7 @@ def verify_deployment_bindings(root, core):
     deployments = list(descriptors(root, 'deployments', 'deployment.json'))
     if not deployments:
         return
-    deployment_api = runpy.run_path(str(core / 'prototype/agent-system/deployment.py'))
+    deployment_api = runpy.run_path(str(core / 'runtime/deployment/controller.py'))
     for descriptor in deployments:
         deployment_api['Deployment'](descriptor.parent).verify()
 

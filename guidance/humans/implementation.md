@@ -19,10 +19,10 @@ The full release includes three initialized stores sharing one engine: research,
 Run from a package root that includes the named stores, with the supported Python environment:
 
 ```bash
-python engine/prototype/system.py --root stores/research status
-python engine/prototype/system.py --root stores/research show C1
-python engine/prototype/system.py --root stores/novel status
-python engine/prototype/system.py --root stores/novel show novel-current
+python3 -B engine/runtime/manage_store.py --root stores/research status
+python3 -B engine/runtime/manage_store.py --root stores/research show C1
+python3 -B engine/runtime/manage_store.py --root stores/novel status
+python3 -B engine/runtime/manage_store.py --root stores/novel show novel-current
 ```
 
 Use `catalogue --query TEXT` to nominate a source and `catalogue ID --text` to read the selected complete body. The research catalogue includes full arguments and guidance, not merely an abstract. The novel catalogue includes its current manuscript and selected models alongside reusable writing knowledge. A catalogue entry or loaded file does not mean that a participant has read or understood it.
@@ -40,7 +40,7 @@ The received reader-encounter comparison illustrates useful retained work. Movin
 | Body | Canonical owner |
 | --- | --- |
 | Executable implementation and native APIs | `engine/` |
-| Optional shared adapters with distinct contracts | `engine/companion/`, `engine/host/` |
+| Optional shared adapters with distinct contracts | `engine/companion_representation/`, `engine/host/` |
 | Reusable theory, writing knowledge and system-development knowledge | `domains/` |
 | Human explanations and agent operating guidance | `guidance/` |
 | Current research decisions and received interpretations | `stores/research/` |

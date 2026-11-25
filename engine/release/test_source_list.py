@@ -41,9 +41,7 @@ class SourceListTest(unittest.TestCase):
                         path.unlink()
 
     def test_stale_second_identity_refuses_before_publication(self):
-        for catalogue_root in ("runtime/native", "prototype/agent-system"):
-            with self.subTest(catalogue_root=catalogue_root):
-                self.check_stale_identity(catalogue_root)
+        self.check_stale_identity("runtime/native")
 
     def check_stale_identity(self, catalogue_root):
         with TemporaryDirectory() as temporary:

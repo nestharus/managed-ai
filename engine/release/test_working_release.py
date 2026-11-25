@@ -1,4 +1,5 @@
 """Working releases without companions/workbench verify cleanly; present workbench manifests remain strictly gated."""
+import gzip
 import hashlib
 import json
 import os
@@ -377,7 +378,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
 
     def test_workbench_rejects_all_case_variants_even_when_populated(self):
         def rename_exact(path, new_name):
-            # Two-step rename works on case-insensitive filesystems (NTFS / WSL DrvFs).
+            # Two-step rename works on case-insensitive filesystems (e.g., NTFS, APFS).
             staging = path.with_name(new_name + ".tmpcase")
             path.rename(staging)
             staging.rename(path.with_name(new_name))
@@ -466,6 +467,75 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             (workbench / "workbench_agent.py").symlink_to(ext_file)
             with self.assertRaisesRegex(ValueError, "ordinary files and directories"):
                 PACKAGE["verify_workbench_components"](bundle)
+
+    def test_compressed_text_rejects_decompression_bomb(self):
+        with TemporaryDirectory() as temporary:
+            bomb = Path(temporary) / "bomb.gz"
+            # 1 MiB of ASCII spaces compresses to ~1 KiB; enforce bound strictly below it.
+            bomb.write_bytes(gzip.compress(b" " * (1024 * 1024)))
+            self.assertLess(bomb.stat().st_size, 4096)
+            with self.assertRaisesRegex(ValueError, "Compressed text exceeds byte bound"):
+                PACKAGE["check_compressed_text"](bomb, max_bytes=4096)
+            # Exact-boundary payload still passes.
+            exact = Path(temporary) / "exact.gz"
+            exact.write_bytes(gzip.compress(b"a" * 4096))
+            PACKAGE["check_compressed_text"](exact, max_bytes=4096)
+
+    def test_release_readers_reject_duplicate_keys_and_nonfinite_json(self):
+        refresh = runpy.run_path(str(RELEASE / "refresh_guidance.py"))
+        with TemporaryDirectory() as temporary:
+            tmp = Path(temporary)
+            dup = tmp / "dup.json"
+            dup.write_text('{"edition": "a", "edition": "b"}\n', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                PACKAGE["read_json"](dup)
+
+            nan_file = tmp / "nan.json"
+            nan_file.write_text('{"bytes": NaN}\n', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "nonfinite JSON"):
+                PACKAGE["read_json"](nan_file)
+
+            bundle = tmp / "bundle"
+            core = _build_minimal_bundle(bundle)
+            (core / "release/navigation.json").write_text('{"a": 1, "a": 2}\n', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                refresh["render"](core)
+
+            (core / "release/navigation.json").write_text('{"score": Infinity}\n', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "nonfinite JSON"):
+                refresh["render"](core)
+
+            (core / "release/navigation.json").write_text("{}\n", encoding="utf-8")
+            (core / "release/current_sources.json").write_text(
+                '{"edition": "x", "edition": "y", "bodies": []}\n', encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                refresh["render"](core)
+
+    def test_compressed_prefixes_normalize_trailing_slash(self):
+        from types import SimpleNamespace
+
+        store_declared = SimpleNamespace(
+            root=Path("."),
+            domain_selection=SimpleNamespace(
+                content_addressed_basis_prefixes=["evidence/custom-blobs", "evidence/custom-blobs/"]
+            ),
+        )
+        self.assertEqual(
+            PACKAGE["_store_compressed_prefixes"](store_declared),
+            ("evidence/custom-blobs/",),
+        )
+        with TemporaryDirectory() as temporary:
+            tmp = Path(temporary)
+            dom = tmp / "domain.json"
+            _write_json(dom, {"content_addressed_basis_prefixes": ["evidence/a", "evidence/b/"]})
+            store_dir = tmp / "store"
+            _write_json(store_dir / "system.json", {"domains": [{"path": "../domain.json"}]})
+            store_manifest = SimpleNamespace(root=store_dir, domain_selection=None)
+            self.assertEqual(
+                PACKAGE["_store_compressed_prefixes"](store_manifest),
+                ("evidence/a/", "evidence/b/"),
+            )
 
 
 if __name__ == "__main__":

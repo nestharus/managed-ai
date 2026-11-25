@@ -10,7 +10,7 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-a5cc137786c3ed585692"></a>
 ## prototype/agent-system/COMPOSITION.md
 
-[runtime/native/COMPOSITION.md](runtime/native/COMPOSITION.md) — 19061 bytes; SHA-256 `8c7d656be3fb7f6871fee1244b889c2d92dd7985361c4148769c5ebfaa61553f`.
+[runtime/native/COMPOSITION.md](runtime/native/COMPOSITION.md) — 19087 bytes; SHA-256 `74688e3237dd8839253e53034f5c5e28ff818984fbca5f5fb166c6eea8265304`.
 
 <a id="source-db4e51fc8172437a2216"></a>
 ## prototype/agent-system/README.md
@@ -30,7 +30,7 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-53cca3885001b6f38c30"></a>
 ## prototype/knowledge-system/README.md
 
-[runtime/source_library/README.md](runtime/source_library/README.md) — 8632 bytes; SHA-256 `d69f352757ecde799b17950a7a3b5acdc54a71ede6f07c1523d9a21a4bf6e8fa`.
+[runtime/source_library/README.md](runtime/source_library/README.md) — 8672 bytes; SHA-256 `cd77044504add86c951fe70a8250a1d9823529e44a4381056b68a4f6515b0cfa`.
 
 <a id="source-fee751dc881d0860bdb7"></a>
 ## prototype/knowledge-system/CONTRACT.md
@@ -40,12 +40,12 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-abb12435fcf333967237"></a>
 ## prototype/knowledge-system/MIGRATION.md
 
-[runtime/source_library/MIGRATION.md](runtime/source_library/MIGRATION.md) — 6368 bytes; SHA-256 `695cb0500a863ff287d5b674d4feb63a79def9ac6b5e7063b55b4047663b1e9a`.
+[runtime/source_library/MIGRATION.md](runtime/source_library/MIGRATION.md) — 6377 bytes; SHA-256 `fba65b08fff19a823290688d6ce6641f76752c6fc7978aaf0bee53c61e8c9129`.
 
 <a id="source-973adf08e936e3795b8f"></a>
 ## prototype/knowledge-system/RESEARCH.md
 
-[runtime/source_library/RESEARCH.md](runtime/source_library/RESEARCH.md) — 15366 bytes; SHA-256 `c8828ea963404a38b95290ac6b4766791746576353f1c8e6900c926f300a1d94`.
+[runtime/source_library/RESEARCH.md](runtime/source_library/RESEARCH.md) — 15314 bytes; SHA-256 `a011241beee1560494697ffcd1f4fa4b621bbce0914b1e68cf0fec96e1363886`.
 
 <a id="source-ebb2cb11e60bb0995683"></a>
 ## MODEL-BOUND-COMPOSITION.md
@@ -135,7 +135,7 @@ The native catalogue verifies the same canonical files linked here. Domain sourc
 <a id="source-0d8fd7e7ed54be901b4f"></a>
 ## INSTANCES.md
 
-[INSTANCES.md](INSTANCES.md) — 14598 bytes; SHA-256 `01a6c0dcd008b0171d8162ad5cad72a7f2585cba85f6a2b13ec1a89a34602a6a`.
+[INSTANCES.md](INSTANCES.md) — 14624 bytes; SHA-256 `e8df34c3b48044db75c4844b1e0b89d089309c4f7d2ea5fdf4940a58cad70470`.
 
 <a id="source-73692ee93d0b96260539"></a>
 ## host/SIGNAL-FIELD.md
