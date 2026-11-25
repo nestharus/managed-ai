@@ -1,5 +1,4 @@
 """Regression tests for continuing_work & capture_native hardening (L2, L6, L7, OE6, SO2(2), A5)."""
-import fcntl
 import json
 import math
 import os
@@ -8,18 +7,127 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
 import capture_native
 import continuing_work
 from continuing_work import Host, MAX_EVENT_LINE_BYTES, MAX_EVENT_STREAM_BYTES
+import native_bridge
 import occurrence_files
 
 HERE = Path(__file__).resolve().parent
 ENGINE = HERE.parents[1] / 'runtime/manage_store.py'
 
 
+def _native_engine_available() -> bool:
+    try:
+        capture_native.reviewed_engine(ENGINE)
+        return True
+    except (ImportError, ModuleNotFoundError):
+        return False
+
+
+class ContinuingWorkCrossPlatformTests(unittest.TestCase):
+    """Cross-platform host tests that run natively on both Windows and POSIX."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.host = Host(self.base / 'host')
+        self.host.root.mkdir(parents=True, exist_ok=True)
+
+    def test_cross_platform_file_lock_contention_and_shared_coexistence(self):
+        lock_file = self.base / 'host.lock'
+        ready = self.base / 'ready.flag'
+        release = self.base / 'release.flag'
+        holder = "\n".join([
+            "import sys, time",
+            "from pathlib import Path",
+            "sys.path.insert(0, sys.argv[1])",
+            "from occurrence_files import file_lock",
+            "with file_lock(Path(sys.argv[2])):",
+            "    Path(sys.argv[3]).write_text('ready', encoding='utf-8')",
+            "    deadline = time.monotonic() + 15",
+            "    while not Path(sys.argv[4]).exists() and time.monotonic() < deadline:",
+            "        time.sleep(0.05)",
+        ])
+        proc = subprocess.Popen(
+            [sys.executable, '-B', '-c', holder, str(HERE),
+             str(lock_file), str(ready), str(release)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            deadline = time.monotonic() + 15
+            while not ready.exists() and proc.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if not ready.exists():
+                out, err = proc.communicate(timeout=5)
+                self.fail(f'Lock holder subprocess failed (rc={proc.returncode}): {err or out}')
+            with self.assertRaises(BlockingIOError):
+                with occurrence_files.file_lock(lock_file, nonblocking=True):
+                    pass
+            with self.assertRaises(BlockingIOError):
+                with occurrence_files.file_lock(lock_file, shared=True, nonblocking=True):
+                    pass
+        finally:
+            release.write_text('go', encoding='utf-8')
+            proc.communicate(timeout=15)
+        self.assertEqual(proc.returncode, 0)
+
+        # After release, shared lock succeeds cleanly without mutating lock file bytes.
+        with occurrence_files.file_lock(lock_file, shared=True, nonblocking=True):
+            self.assertEqual(lock_file.stat().st_size, 0)
+
+    def test_native_bridge_pin_event_and_strict_occurrence_io_cross_platform(self):
+        sample = self.base / 'sample.txt'
+        sample.write_bytes(b'cross-platform payload\n')
+        pinned = self.host.pin(sample)
+        self.assertEqual((self.host.root / pinned['object']).read_bytes(), b'cross-platform payload\n')
+
+        # Concurrent multi-threaded and multi-process event writes via cross-platform file_lock.
+        errors = []
+        def worker(tid):
+            try:
+                for i in range(10):
+                    self.host.event('xplat-thread', {'tid': tid, 'seq': i, 'pad': 'q' * 120})
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(t,)) for t in range(3)]
+        child_code = (
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "from continuing_work import Host; h = Host(sys.argv[2]); "
+            "[h.event('xplat-proc', {'seq': i, 'pad': 'p' * 120}) for i in range(15)]"
+        )
+        proc = subprocess.Popen([sys.executable, '-B', '-c', child_code, str(HERE), str(self.host.root)])
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(proc.wait(), 0)
+        self.assertEqual(errors, [])
+
+        lines = (self.host.root / 'EVENTS.jsonl').read_text(encoding='utf-8').splitlines()
+        events = [occurrence_files.loads_strict(line) for line in lines]
+        self.assertEqual(sum(1 for e in events if e['action'] == 'xplat-thread'), 30)
+        self.assertEqual(sum(1 for e in events if e['action'] == 'xplat-proc'), 15)
+        self.assertIs(continuing_work.capture_error, native_bridge.capture_error)
+
+    def test_capture_native_uses_canonical_runtime_without_prototype(self):
+        native_path, programs = capture_native.native_sources(ENGINE)
+        self.assertEqual(native_path, ENGINE.parent / 'native/system.py')
+        self.assertTrue(all(key.startswith('runtime/') for key in programs))
+        self.assertFalse(any(key.startswith('prototype/') for key in programs))
+        legacy = ENGINE.parents[1] / 'prototype/system.py'
+        if legacy.is_file():
+            with self.assertRaisesRegex(ValueError, 'requalify this adapter'):
+                capture_native.reviewed_engine(legacy)
+
+
+@unittest.skipUnless(_native_engine_available(), 'native runtime store engine unavailable on this platform')
 class ContinuingWorkHardening(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -50,8 +158,7 @@ class ContinuingWorkHardening(unittest.TestCase):
         lock_path = self.host.native / 'exchange' / 'owner.lock'
         sys_json = self.host.native / 'system.json'
         original_sys = sys_json.read_bytes()
-        with lock_path.open('a+b') as held:
-            fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with occurrence_files.file_lock(lock_path, nonblocking=True):
             try:
                 # Temporarily corrupt system.json while the exclusive lock is held.
                 # If capture_native wrongly constructed System(root) before locking,
@@ -65,7 +172,6 @@ class ContinuingWorkHardening(unittest.TestCase):
                 )
             finally:
                 sys_json.write_bytes(original_sys)
-                fcntl.flock(held.fileno(), fcntl.LOCK_UN)
         self.assertEqual(proc.returncode, 2)
         payload = json.loads(proc.stderr)
         self.assertIn('another owner holds', payload['error'])
@@ -405,7 +511,9 @@ class ContinuingWorkHardening(unittest.TestCase):
         self.assertTrue(res['native_programs_unchanged'])
         self.assertIn('sha256', res['host_producer'])
         self.assertIn('sha256', res['host_method'])
-        self.assertEqual(len(res['host_dependencies']), 2)
+        self.assertEqual(len(res['host_dependencies']), 3)
+        self.assertEqual({Path(d['path']).name for d in res['host_dependencies']},
+                         {'occurrence_files.py', 'repair_custody.py', 'native_bridge.py'})
         last_line = (self.host.root / 'EVENTS.jsonl').read_bytes().splitlines()[-1]
         self.assertLessEqual(len(last_line), MAX_EVENT_LINE_BYTES)
         parsed = json.loads(last_line)

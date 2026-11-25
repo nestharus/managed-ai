@@ -137,9 +137,8 @@ def _compatible_predecessor_binding(state, binding, search):
 
     previous = dict(binding)
     del previous["source_search_analyzer"]
-    # The issued journal named the predecessor's standalone entrance. That
-    # file can now be reached at the runtime path through the known forwarder.
-    previous["source_search_code"] = {str(search.legacy_entry): search.entry_pin}
+    # The issued journal named the predecessor's standalone entrance.
+    previous["source_search_code"] = {str(search.runtime_entry): search.entry_pin}
     previous["adapter_code"] = {
         path: _PREDECESSOR_ADAPTER.get(Path(path).name, pin)
         for path, pin in binding["adapter_code"].items()

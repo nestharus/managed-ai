@@ -8,11 +8,7 @@ def search_layout(root):
     runtime.mkdir(parents=True)
     for name in ('knowledge.py', 'library_format.py', 'lexical_search.py', 'product_bundle.py'):
         (runtime / name).write_bytes((engine / 'runtime/source_library' / name).read_bytes())
-    relative = 'prototype/knowledge-system/knowledge.py'
-    legacy = root / 'engine' / relative
-    legacy.parent.mkdir(parents=True)
-    legacy.write_bytes((engine / relative).read_bytes())
-    return runtime, legacy
+    return runtime, runtime / 'knowledge.py'
 
 
 def change_query_parser(path):
