@@ -318,28 +318,34 @@ def descriptors(root, directory, filename):
                 yield descriptor
 
 
+def exact_path(root, relative, kind):
+    """Find an ordinary member with exact on-disk spelling at every segment, or None if absent."""
+    ordinary(root, root.lstat(), stat.S_ISDIR)
+    path = root
+    for index, part in enumerate(relative.parts):
+        expected_kind = stat.S_ISDIR if index < len(relative.parts) - 1 else kind
+        names = [entry.name for entry in path.iterdir()]
+        if part not in names:
+            for existing in names:
+                if existing.casefold() == part.casefold():
+                    observed = Path(*relative.parts[:index], existing).as_posix()
+                    expected = Path(*relative.parts[:index + 1]).as_posix()
+                    raise ValueError(
+                        f"Exact member spelling required: expected {expected}, observed {observed}."
+                    )
+            return None
+        path = path / part
+        ordinary(path, path.lstat(), expected_kind)
+    return path
+
+
 def verify_workbench_components(root):
-    companions_dir = observed_path(root, Path("companions"), stat.S_ISDIR)
-    if companions_dir is None:
-        for child in root.iterdir():
-            if child.name.casefold() == "companions":
-                raise ValueError("Package inventory requires the exact directory companions.")
-        return
-    component_root = observed_path(root, Path("companions/workbench"), stat.S_ISDIR)
+    component_root = exact_path(root, Path("companions/workbench"), stat.S_ISDIR)
     if component_root is None:
-        for child in companions_dir.iterdir():
-            if child.name.casefold() == "workbench":
-                raise ValueError("Package inventory requires the exact workbench directory companions/workbench.")
         return
-    resolved_root = root.resolve(strict=True)
-    resolved_workbench = component_root.resolve(strict=True)
-    if resolved_workbench.relative_to(resolved_root).as_posix() != "companions/workbench":
-        raise ValueError("Package inventory requires the exact workbench directory companions/workbench.")
-    manifest_path = observed_path(component_root, Path("COMPONENTS.json"), stat.S_ISREG)
+    manifest_path = exact_path(component_root, Path("COMPONENTS.json"), stat.S_ISREG)
     if manifest_path is None:
         raise ValueError("Missing shared workbench component manifest: companions/workbench/COMPONENTS.json")
-    if manifest_path.resolve(strict=True).relative_to(resolved_workbench).as_posix() != "COMPONENTS.json":
-        raise ValueError("Package inventory requires the exact workbench manifest companions/workbench/COMPONENTS.json.")
     try:
         components = _read_strict_object(manifest_path)
     except (UnicodeDecodeError, ValueError) as error:
@@ -347,19 +353,18 @@ def verify_workbench_components(root):
     files = components.get("files")
     if not isinstance(files, dict) or not files:
         raise ValueError("Invalid workbench component manifest COMPONENTS.json: non-empty 'files' object required")
+    resolved_workbench = component_root.resolve(strict=True)
     for name, row in files.items():
         if not isinstance(name, str) or not name or "\\" in name:
             raise ValueError("Invalid shared component path: " + repr(name))
         relative = Path(name)
         if relative.anchor or ".." in relative.parts or not relative.parts or relative.as_posix() != name:
             raise ValueError("Unsafe shared component path: " + name)
-        target = observed_path(component_root, relative, stat.S_ISREG)
+        target = exact_path(component_root, relative, stat.S_ISREG)
         if target is None:
             raise ValueError("Missing shared component: " + name)
-        resolved_target = target.resolve(strict=True)
-        if (not resolved_target.is_relative_to(resolved_workbench)
-                or resolved_target.relative_to(resolved_workbench).as_posix() != name):
-            raise ValueError("Shared component path differs from exact member spelling: " + name)
+        if not target.resolve(strict=True).is_relative_to(resolved_workbench):
+            raise ValueError("Unsafe shared component path: " + name)
         expected = row.get("identity") if isinstance(row, dict) else None
         if (not isinstance(expected, dict) or set(expected) != {"sha256", "bytes"}
                 or not isinstance(expected["sha256"], str) or type(expected["bytes"]) is not int):

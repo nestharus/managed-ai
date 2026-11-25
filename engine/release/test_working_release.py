@@ -316,7 +316,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             self.assertNotEqual(missing_manifest.returncode, 0)
             self.assertIn("Missing shared workbench component manifest", missing_manifest.stderr)
 
-    def test_workbench_manifest_rejects_traversal_missing_malformed_and_case_mismatch(self):
+    def test_workbench_manifest_rejects_traversal_missing_and_malformed(self):
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
@@ -375,11 +375,74 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
                 PACKAGE["verify_workbench_components"](bundle)
 
-            # Case-variant companions/Workbench must fail rather than bypass verification
-            shutil.rmtree(workbench)
-            wrong_case = bundle / "companions/Workbench"
-            wrong_case.mkdir(parents=True)
-            with self.assertRaisesRegex(ValueError, "exact workbench directory companions/workbench"):
+    def test_workbench_rejects_all_case_variants_even_when_populated(self):
+        def rename_exact(path, new_name):
+            # Two-step rename works on case-insensitive filesystems (NTFS / WSL DrvFs).
+            staging = path.with_name(new_name + ".tmpcase")
+            path.rename(staging)
+            staging.rename(path.with_name(new_name))
+
+        # 1. Wrong-case Companions/harness (without workbench)
+        with TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "bundle"
+            _build_minimal_bundle(bundle)
+            harness = bundle / "Companions/harness"
+            harness.mkdir(parents=True)
+            (harness / "PROTOCOL.md").write_text("# Harness\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "expected companions, observed Companions"):
+                PACKAGE["verify_workbench_components"](bundle)
+
+        # 2. Populated Companions/workbench (wrong case on companions)
+        with TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "bundle"
+            _build_minimal_bundle(bundle)
+            _write_workbench(bundle, {"workbench_agent.py": b"AGENT = 1\n"})
+            rename_exact(bundle / "companions", "Companions")
+            with self.assertRaisesRegex(ValueError, "expected companions, observed Companions"):
+                PACKAGE["verify_workbench_components"](bundle)
+
+        # 3. Populated companions/Workbench (wrong case on workbench, valid COMPONENTS.json inside)
+        with TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "bundle"
+            _build_minimal_bundle(bundle)
+            workbench = _write_workbench(bundle, {"workbench_agent.py": b"AGENT = 1\n"})
+            rename_exact(workbench, "Workbench")
+            with self.assertRaisesRegex(
+                ValueError, "expected companions/workbench, observed companions/Workbench"
+            ):
+                PACKAGE["verify_workbench_components"](bundle)
+
+        # 4. Wrong-case components.json inside companions/workbench
+        with TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "bundle"
+            _build_minimal_bundle(bundle)
+            workbench = _write_workbench(bundle, {"workbench_agent.py": b"AGENT = 1\n"})
+            rename_exact(workbench / "COMPONENTS.json", "components.json")
+            with self.assertRaisesRegex(
+                ValueError, "expected COMPONENTS.json, observed components.json"
+            ):
+                PACKAGE["verify_workbench_components"](bundle)
+
+        # 5. Wrong-case component leaf filename (Workbench_Agent.py)
+        with TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "bundle"
+            _build_minimal_bundle(bundle)
+            workbench = _write_workbench(bundle, {"workbench_agent.py": b"AGENT = 1\n"})
+            rename_exact(workbench / "workbench_agent.py", "Workbench_Agent.py")
+            with self.assertRaisesRegex(
+                ValueError, "expected workbench_agent.py, observed Workbench_Agent.py"
+            ):
+                PACKAGE["verify_workbench_components"](bundle)
+
+        # 6. Wrong-case component subdirectory (Controller/agent_runtime.py)
+        with TemporaryDirectory() as temporary:
+            bundle = Path(temporary) / "bundle"
+            _build_minimal_bundle(bundle)
+            workbench = _write_workbench(bundle, {"controller/agent_runtime.py": b"RT = 1\n"})
+            rename_exact(workbench / "controller", "Controller")
+            with self.assertRaisesRegex(
+                ValueError, "expected controller, observed Controller"
+            ):
                 PACKAGE["verify_workbench_components"](bundle)
 
     @unittest.skipIf(os.name == "nt", "POSIX symlink test")
