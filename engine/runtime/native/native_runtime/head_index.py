@@ -85,6 +85,46 @@ def _extract_search_hints(record: dict) -> tuple[list[str], list[str], bool, boo
     return sorted(exact_refs), sorted(tokens), tokens_truncated, exact_refs_truncated
 
 
+_NON_LOCAL_CONTENT_ID_KEYS = frozenset({
+    'id',
+    'instance_id',
+    'store_id',
+    'session_id',
+    'thread_id',
+    'native_session_id',
+})
+_FOREIGN_STORE_QUALIFIERS = ('instance_id', 'store_id', 'source_instance_id', 'source_instance')
+
+
+def extract_content_record_links(content: object) -> dict[str, list[str]]:
+    """Extract local record-ID reference fields from a record's content object.
+
+    Excludes non-record identifiers (id, instance_id, store_id, etc.) and excludes
+    foreign-store `record_id` when `content` carries a cross-instance qualifier.
+    """
+    if not isinstance(content, dict):
+        return {}
+    has_foreign_instance = any(
+        isinstance(content.get(k), str) and bool(content[k].strip())
+        for k in _FOREIGN_STORE_QUALIFIERS
+    )
+    links: dict[str, list[str]] = {}
+    for key, value in content.items():
+        if key in _NON_LOCAL_CONTENT_ID_KEYS:
+            continue
+        if key == 'record_id' and has_foreign_instance:
+            continue
+        if not (key.endswith(('_id', '_ids')) or key in ('directions', 'selected_question')):
+            continue
+        if isinstance(value, str):
+            links[key] = [value]
+        elif isinstance(value, list):
+            items = [v for v in value if isinstance(v, str)]
+            if items:
+                links[key] = items
+    return links
+
+
 def extract_graph_hints(record: dict) -> dict:
     """Extract compact domain-neutral adjacency, content-link and structural hints."""
     rel_pairs: list[list[str]] = []
@@ -124,17 +164,7 @@ def extract_graph_hints(record: dict) -> dict:
             selection_state = str(raw_state)[:80]
         if record.get('kind') == 'question' and isinstance(content.get('question'), str):
             question_norm = ' '.join(content['question'].casefold().split())
-        for key, value in content.items():
-            if key == 'id':
-                continue
-            if not (key.endswith(('_id', '_ids')) or key in ('directions', 'selected_question')):
-                continue
-            if isinstance(value, str):
-                content_links[key] = [value]
-            elif isinstance(value, list):
-                items = [v for v in value if isinstance(v, str)]
-                if items:
-                    content_links[key] = items
+        content_links = extract_content_record_links(content)
 
     hints: dict = {
         'relations': rel_pairs,

@@ -210,6 +210,21 @@ def shortest_path(system, src: str, dst: str, *, max_hops: int = 6,
     require(dst in nodes, 'destination record not found: ' + dst)
     outgoing, _ = _build_adjacency(nodes)
 
+    if active_only and (not nodes[src]['active'] or not nodes[dst]['active']):
+        return {
+            'format': GRAPH_PATH_FORMAT,
+            'instance_id': system.instance_id,
+            'source': src,
+            'target': dst,
+            'max_hops': max_hops,
+            'active_only': active_only,
+            'indexed': indexed,
+            'found': False,
+            'hops': None,
+            'nodes': [],
+            'edges': [],
+        }
+
     if src == dst:
         return {
             'format': GRAPH_PATH_FORMAT,

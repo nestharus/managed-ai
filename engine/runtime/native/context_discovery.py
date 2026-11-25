@@ -572,15 +572,11 @@ class Discovery:
                 self.edge_keys.add(key)
                 self.edges.append(edge)
         if self.req.get('include_content_links') and isinstance(record.get('content'), dict):
-            content = record['content']
+            from native_runtime.head_index import extract_content_record_links
+            content_links = extract_content_record_links(record['content'])
             syn_index = len(record.get('relations', []))
-            for field_name, field_val in sorted(content.items()):
-                if not (field_name.endswith(('_id', '_ids')) or field_name in ('directions', 'selected_question')):
-                    continue
-                if field_name == 'id':
-                    continue
-                vals = [field_val] if isinstance(field_val, str) else (
-                    [v for v in field_val if isinstance(v, str)] if isinstance(field_val, list) else [])
+            budget_hit = False
+            for field_name, vals in sorted(content_links.items()):
                 label = 'content:' + field_name
                 if label in excluded or (self.req['relation_labels'] and label not in self.req['relation_labels']):
                     continue
@@ -593,6 +589,9 @@ class Discovery:
                     if key not in self.relation_rows:
                         if len(self.relation_rows) >= self.req['scan_limit']:
                             self.saturated.add('relation-scan-budget')
+                            self.frontier.append({'ref': ref, 'reason': 'relation-scan-budget',
+                                                  'next_relation_index': syn_index - 1})
+                            budget_hit = True
                             break
                         self.relation_rows.add(key)
                     edge = {'from': ref, 'to': target, 'relation': label,
@@ -603,6 +602,8 @@ class Discovery:
                     if key not in self.edge_keys:
                         self.edge_keys.add(key)
                         self.edges.append(edge)
+                if budget_hit:
+                    break
         self.edge_cache[ref] = result
         return result
 

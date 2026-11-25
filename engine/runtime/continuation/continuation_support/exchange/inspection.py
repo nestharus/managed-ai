@@ -106,6 +106,7 @@ class PacketInspection:
                     _verified_objects=verified_objects,
                     _validated_returns=validated_returns,
                     _objects_fd=objects_fd,
+                    _memo_lock=memo_lock,
                 )
                 if consumer is not None and request['consumer'] != consumer:
                     return None

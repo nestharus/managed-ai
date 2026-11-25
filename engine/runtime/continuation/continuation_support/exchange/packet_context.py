@@ -237,7 +237,8 @@ class PacketContext:
     def _load_directory(self, directory: Path, *,
                         _verified_objects: set[str] | None = None,
                         _validated_returns: dict[str, dict[str, Any]] | None = None,
-                        _objects_fd: int | None = None) -> tuple[Path, dict[str, Any]]:
+                        _objects_fd: int | None = None,
+                        _memo_lock=None) -> tuple[Path, dict[str, Any]]:
         binding = read_json(directory / 'binding.json')
         request = read_json(directory / 'request.json')
         if sha(encode(request)) != binding['request_sha256'] or sha(_bytes(directory / 'context.md', MAX_PACKET_BYTES)) != binding['context_sha256']:
@@ -246,23 +247,43 @@ class PacketContext:
         for entry in [request['brief'], *request['methods'], *request['materials'], *request['targets'], *request['returns'], *request.get('artifacts', [])]:
             key = entry['sha256']
             if key is not None:
-                if _verified_objects is not None and key in _verified_objects:
-                    continue
+                if _verified_objects is not None:
+                    if _memo_lock is not None:
+                        with _memo_lock:
+                            seen = key in _verified_objects
+                    else:
+                        seen = key in _verified_objects
+                    if seen:
+                        continue
                 if direct_objects and _objects_fd is not None:
                     self.objects.read(key, dir_fd=_objects_fd)
                 else:
                     self.get(key)
                 if _verified_objects is not None:
-                    _verified_objects.add(key)
+                    if _memo_lock is not None:
+                        with _memo_lock:
+                            _verified_objects.add(key)
+                    else:
+                        _verified_objects.add(key)
 
         def load_validated_return(packet_name: str) -> dict[str, Any]:
-            if _validated_returns is not None and packet_name in _validated_returns:
-                return _validated_returns[packet_name]
+            if _validated_returns is not None:
+                if _memo_lock is not None:
+                    with _memo_lock:
+                        cached = _validated_returns.get(packet_name)
+                else:
+                    cached = _validated_returns.get(packet_name)
+                if cached is not None:
+                    return cached
             prior_dir = self.directory(packet_name)
             prior = read_json(prior_dir / 'return.json')
             self.validate_return(prior_dir, prior)
             if _validated_returns is not None:
-                _validated_returns[packet_name] = prior
+                if _memo_lock is not None:
+                    with _memo_lock:
+                        _validated_returns[packet_name] = prior
+                else:
+                    _validated_returns[packet_name] = prior
             return prior
 
         for entry in request['returns']:

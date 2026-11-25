@@ -546,6 +546,8 @@ class RecordStore:
     def _prepare_write(self, record, previous, previous_raw, *, information_mode=None,
                        feedback_write=False, observation_write=False, retain_basis=True,
                        preserve_basis: list | None = None):
+        if previous is None and self.cold_archive.has(record.get('id', '')):
+            raise ValueError(f"record {record['id']} is in cold archive; restore explicitly before modifying")
         if (record.get('kind') == FEEDBACK_KIND or (previous and previous['kind'] == FEEDBACK_KIND)) and not feedback_write:
             raise ValueError('feedback records must be changed through feedback operations')
         if (record.get('kind') == 'source-observation' or (previous and previous['kind'] == 'source-observation')) and not observation_write:

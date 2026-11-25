@@ -1,6 +1,8 @@
 """Build one turn from the owner's current records, selection and installed methods."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from continuation_support.ownership import packet_id, relative_path
 from continuation_support.storage import encode, write_json
 from composition import Composition
@@ -9,6 +11,7 @@ from feedback import Feedback
 from information import Information
 from native_runtime.inputs import (accounted_closure, artifact_target, fields, integer, strings,
                                    text, write_input)
+from native_runtime.records import is_content_addressed_basis
 from native_runtime.turn_context.record_scope import TurnScope, additional_basis
 from native_runtime.turn_context.preparation_journal import TurnPreparation, feedback_id
 
@@ -101,7 +104,7 @@ class TurnCapture:
             compositions.append(report)
         return compositions
 
-    def _record_materials(self, request, selected, record_origins):
+    def _record_materials(self, directory, request, selected, record_origins):
         materials = []
         for record in selected:
             path = self.records.material(record['id'])
@@ -109,22 +112,46 @@ class TurnCapture:
             for reason in record_origins[record['id']]:
                 self._origin('materials', path, record=record['id'], **reason)
         unavailable, historical_basis = [], []
+        exposed_basis_paths: set[str] = set()
+        staged_objects: dict[tuple[str, str], str] = {}
         explicit_records = set(request['records'][:request['record_limit']])
         for record in selected:
             content = record['content']
             closed = record['kind'] == 'obligation' and accounted_closure(content)
             for item in record['basis']:
+                basis_path = item['path']
                 if closed and record['id'] not in explicit_records:
                     historical_basis.append(dict(item, record=record['id'],
                         scope='Original closed-duty basis; current source not revalidated by this selection.'))
-                elif self.ex.path(item['path']).is_file():
-                    materials.append(item['path'])
-                    self._origin('materials', item['path'], kind='selected-record-basis',
+                elif not basis_path.startswith('object:') and self.ex.path(basis_path).is_file():
+                    materials.append(basis_path)
+                    exposed_basis_paths.add(basis_path)
+                    self._origin('materials', basis_path, kind='selected-record-basis',
                                  record=record['id'], revision=record['revision'],
                                  expected={k: item.get(k) for k in ('sha256', 'bytes')})
+                elif (is_content_addressed_basis(item) and item.get('sha256')
+                      and self.records.objects.has(item['sha256'])):
+                    try:
+                        raw = self.records.objects.read(
+                            item['sha256'], retained=True, expected_bytes=item['bytes'])
+                    except FileNotFoundError:
+                        unavailable.append({'record': record['id'], 'path': basis_path})
+                    else:
+                        ext = '' if basis_path.startswith('object:') else Path(basis_path).suffix
+                        cache_key = (item['sha256'], ext)
+                        staged = staged_objects.get(cache_key)
+                        if staged is None:
+                            staged = self._write_input(directory, f'record-basis/{item["sha256"]}{ext}', raw)
+                            staged_objects[cache_key] = staged
+                        materials.append(staged)
+                        exposed_basis_paths.add(basis_path)
+                        self._origin('materials', staged, kind='selected-record-basis',
+                                     record=record['id'], revision=record['revision'],
+                                     basis_path=basis_path,
+                                     expected={k: item.get(k) for k in ('sha256', 'bytes')})
                 else:
-                    unavailable.append({'record': record['id'], 'path': item['path']})
-        return materials, unavailable, historical_basis
+                    unavailable.append({'record': record['id'], 'path': basis_path})
+        return materials, unavailable, historical_basis, exposed_basis_paths
 
     def _discovery_summary(self, directory, query, discovery):
         # Full query/coverage remains exact in the recovered view. The
@@ -189,7 +216,8 @@ class TurnCapture:
             if set(identities) - set(actual_selectors[key]):
                 raise ValueError('a pinned discovery body is not selected in this context: ' + key)
         directory = prep.directory
-        materials, unavailable, historical_basis = self._record_materials(request, selected, selection.origins)
+        materials, unavailable, historical_basis, exposed_basis_paths = self._record_materials(
+            directory, request, selected, selection.origins)
         for path in request['sources']:
             path = relative_path(path)
             materials.append(path)
@@ -245,7 +273,7 @@ class TurnCapture:
             materials.append(path)
             for row in request['compositions']:
                 self._origin('materials', path, kind='composition-view', record=row['record'])
-        exposed_paths = set(materials + methods)
+        exposed_paths = set(materials + methods) | exposed_basis_paths
         outside_basis = [item for item in historical_basis if item['path'] not in exposed_paths]
         view = {'selected_records': [r['id'] for r in selected], 'omitted_records': selection.omitted,
                 'outside_record_basis': outside_basis,

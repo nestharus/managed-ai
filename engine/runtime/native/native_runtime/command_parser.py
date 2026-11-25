@@ -136,6 +136,9 @@ def _store_commands(sub):
     archive_exec.add_argument('--plan', required=True, type=Path)
     archive_exec.add_argument('--expected-plan', required=True)
     archive_exec.add_argument('--reason', required=True)
+    archive_restore = archive.add_parser('restore', allow_abbrev=False)
+    archive_restore.add_argument('--id', action='append', required=True, dest='ids')
+    archive_restore.add_argument('--reason', required=True)
 
     sub.add_parser('audit-objects', allow_abbrev=False,
                    help='read-only 9-layer transitive reachability audit over exchange/objects')

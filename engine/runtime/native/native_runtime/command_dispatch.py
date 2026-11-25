@@ -105,6 +105,8 @@ def act(system, args):
         from native_runtime import cold_archive
         if args.archive_action == 'plan':
             return cold_archive.plan_archive_records(system, ids=args.ids, kinds=args.kinds)
+        if args.archive_action == 'restore':
+            return cold_archive.restore_archived_records(system, ids=args.ids, reason=args.reason)
         return cold_archive.execute_archive_records(
             system, plan=read(args.plan), expected_plan=args.expected_plan, reason=args.reason)
     if action == 'audit-objects':

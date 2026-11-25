@@ -362,6 +362,10 @@ class System:
         from native_runtime.turn_context.turn_retirement import execute_turn_retirement
         return execute_turn_retirement(self, plan=plan, expected_plan=expected_plan, reason=reason)
 
+    def restore_archived_records(self, *, ids: list[str], reason: str) -> dict:
+        from native_runtime.cold_archive import restore_archived_records
+        return restore_archived_records(self, ids=ids, reason=reason)
+
     def _proposal_recovery_command(self, turn: str, producer: str, proposals: list[str]) -> str:
         origin = None
         if any(not os.path.isabs(item.partition('=')[2]) for item in proposals):

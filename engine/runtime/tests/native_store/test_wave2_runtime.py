@@ -308,6 +308,61 @@ class Wave2RuntimeTests(unittest.TestCase):
         st2 = json.loads(self.run_cli([*self.store_cli, 'status', '--verify-all-basis']).stdout)
         self.assertEqual(st2['gaps']['changed_record_basis'], [])
 
+        # C12-1: TurnCapture delivers deduplicated & object:<sha> basis bodies cleanly into context.md & request.json
+        with exclusive(self.store / 'exchange/owner.lock'):
+            s_ctx = System(self.store)
+            ctx_res = s_ctx.context('turn-obj-basis', {
+                'task': 'Verify deduplicated and object:<sha> basis capture.',
+                'records': ['comp-dedup', 'obj-ref-rec'],
+                'targets': ['outputs/obj-out.md'],
+            })
+            self.assertEqual(ctx_res['view']['unavailable_record_basis'], [])
+            req_doc = read_json(self.store / 'exchange/packets/turn-obj-basis/request.json')
+            mat_shas = {row['sha256'] for row in req_doc['materials']}
+            self.assertIn(p_sha, mat_shas)
+            recov = s_ctx.recover('turn-obj-basis')
+            self.assertIn('E' * 200, recov['context'])
+            # Publish also succeeds cleanly (observe_basis sees staged record-basis file unchanged)
+            reply_p = self.root / 'obj-reply.md'
+            reply_p.write_text('Object basis reply.\n', encoding='utf-8')
+            out_p = self.root / 'obj-out.md'
+            out_p.write_text('Adopted output.\n', encoding='utf-8')
+            s_ctx.receive('turn-obj-basis', reply_p, 'tester', [f'outputs/obj-out.md={out_p}'])
+            (s_ctx.work / 'outputs').mkdir(parents=True, exist_ok=True)
+            pub = s_ctx.adopt('turn-obj-basis', 'outputs/obj-out.md', 'Verify observe_basis passes')
+            self.assertEqual(pub['phase'], 'complete')
+
+        # C12-4: compact-objects dual-file handling (incompressible dual-file skipped; compressible dual-file exact savings parity)
+        import hashlib
+        incomp_raw = b''.join(hashlib.sha256(f'incompressible-chunk-{i}'.encode()).digest() for i in range(16))
+        self.assertGreaterEqual(len(zlib.compress(incomp_raw, level=6)), len(incomp_raw))
+        comp_dual_raw = b'Dual-file compressible object body! ' * 120
+        with exclusive(self.store / 'exchange/owner.lock'):
+            objs = System(self.store).ex.objects
+            incomp_key = sha(incomp_raw)
+            (objs.directory / incomp_key).write_bytes(incomp_raw)
+            (objs.directory / (incomp_key + '.deflate')).write_bytes(zlib.compress(incomp_raw, level=6))
+            dual_key = sha(comp_dual_raw)
+            (objs.directory / dual_key).write_bytes(comp_dual_raw)
+            (objs.directory / (dual_key + '.deflate')).write_bytes(zlib.compress(comp_dual_raw, level=6))
+
+        dual_plan = json.loads(self.run_cli([*self.store_cli, 'compact-objects', 'plan']).stdout)
+        cand_map = {c['object']: c for c in dual_plan['candidates']}
+        self.assertNotIn(incomp_key, cand_map)  # incompressible dual-file skipped, never crashes execute!
+        self.assertIn(dual_key, cand_map)
+        self.assertTrue(cand_map[dual_key]['already_deflated'])
+        self.assertEqual(cand_map[dual_key]['saved_bytes'], len(comp_dual_raw))
+        dual_plan_file = _write_json(self.root / 'dual-compact-plan.json', dual_plan)
+        dual_rcpt = json.loads(self.run_cli([
+            *self.store_cli, 'compact-objects', 'execute',
+            '--plan', str(dual_plan_file), '--expected-plan', dual_plan['plan_sha256'],
+            '--reason', 'Remove verified duplicate raw copy of dual-file object.',
+        ]).stdout)
+        self.assertEqual(dual_rcpt['saved_bytes'], dual_plan['reclaimable_bytes'])
+        self.assertFalse((self.store / 'exchange/objects' / dual_key).exists())
+        self.assertTrue((self.store / 'exchange/objects' / (dual_key + '.deflate')).is_file())
+        self.assertEqual(System(self.store).ex.objects.read(dual_key, retained=True), comp_dual_raw)
+
     def test_g2s06_cold_archive_safety_guards_and_transparent_readback(self):
         system = System(self.store)
         with exclusive(system.ex.root / 'owner.lock'):
@@ -368,18 +423,96 @@ class Wave2RuntimeTests(unittest.TestCase):
         shadow = _write_json(self.root / 'shadow.json', {'id': 'cold-candidate', 'kind': 'note', 'content': 'shadow'})
         self.run_cli([*self.store_cli, 'put', '--record', str(shadow), '--expected', '0', '--no-status'], expected_rc=2)
 
-        # Inactive record pinned by work/interpretations/*.json evidence must be refused by archive-records!
+        # C12-2: put-batch Phase 1 must reject cold-archived ID BEFORE writing any earlier record or batch receipt!
+        batch_spec = _write_json(self.root / 'batch-c12.json', {
+            'format': 'managed-ai-batch-update/1',
+            'id': 'batch-c12-cold',
+            'operations': [
+                {'mode': 'replace', 'id': 'fresh-r3', 'expected_revision': 0,
+                 'record': {'id': 'fresh-r3', 'kind': 'note', 'content': {'v': 1}}},
+                {'mode': 'replace', 'id': 'cold-candidate', 'expected_revision': 0,
+                 'record': {'id': 'cold-candidate', 'kind': 'note', 'content': {'v': 2}}},
+            ],
+        })
+        self.run_cli([*self.store_cli, 'put-batch', '--spec', str(batch_spec)], expected_rc=2)
+        self.assertFalse((self.store / 'work/records/fresh-r3.json').exists())
+        self.assertFalse((self.store / 'work/.system/batches/batch-c12-cold.json').exists())
+
+        # C12-3a: Inactive records pinned by interpretations, open committed packets, active attention, or uncommitted turns
         with exclusive(self.store / 'exchange/owner.lock'):
             s2 = System(self.store)
             s2.put({'id': 'interp-pinned-cold', 'kind': 'note', 'content': {'v': 1}, 'active': False}, 0)
             acct = self.root / 'interp-acct.txt'
             acct.write_text('Pinned cold record evidence.', encoding='utf-8')
             s2.interpret(1, 'continue', acct, ['records/interp-pinned-cold.json'])
+
+            s2.put({'id': 'open-pkt-cold', 'kind': 'note', 'content': {'v': 1}, 'active': False}, 0)
+            s2.context('turn-open-cold', {
+                'task': 'Hold open packet over inactive record.',
+                'records': ['open-pkt-cold'],
+                'targets': ['outputs/open-cold.md'],
+            })
+            reply_open = self.root / 'open-reply.md'
+            reply_open.write_text('Reply.\n', encoding='utf-8')
+            out_open = self.root / 'open-out.md'
+            out_open.write_text('Out.\n', encoding='utf-8')
+            s2.receive('turn-open-cold', reply_open, 'tester', [f'outputs/open-cold.md={out_open}'])
+
+            s2.put({'id': 'att-pinned-cold', 'kind': 'note', 'content': {'v': 1}, 'active': False}, 0)
+            att_spec = _write_json(self.root / 'att-cold.json', {
+                'items': [{'id': 'att-item-cold', 'question': 'Does the inactive record still matter?',
+                           'use': 'Guard active attention dependency on a hot record.',
+                           'basis': ['records/att-pinned-cold.json']}],
+            })
+            s2.track(att_spec)
+
+            s2.put({'id': 'uncom-turn-cold', 'kind': 'note', 'content': {'v': 1}, 'active': False}, 0)
+            uncom_dir = self.store / 'work/.system/turns/turn-uncommitted-c12'
+            uncom_dir.mkdir(parents=True, exist_ok=True)
+            _write_json(uncom_dir / 'request.json', {'records': ['uncom-turn-cold']})
+
         refused_plan = json.loads(self.run_cli([
-            *self.store_cli, 'archive-records', 'plan', '--id', 'interp-pinned-cold',
+            *self.store_cli, 'archive-records', 'plan',
+            '--id', 'interp-pinned-cold',
+            '--id', 'open-pkt-cold',
+            '--id', 'att-pinned-cold',
+            '--id', 'uncom-turn-cold',
         ]).stdout)
         self.assertEqual(refused_plan['eligible'], [])
-        self.assertIn('referenced-by-interpretation-or-staged-packet', refused_plan['ineligible'][0]['reasons'])
+        refused_map = {r['id']: r['reasons'] for r in refused_plan['ineligible']}
+        self.assertIn('referenced-by-interpretation', refused_map['interp-pinned-cold'])
+        self.assertIn('referenced-by-open-packet', refused_map['open-pkt-cold'])
+        self.assertIn('referenced-by-active-attention', refused_map['att-pinned-cold'])
+        self.assertIn('referenced-by-uncommitted-turn', refused_map['uncom-turn-cold'])
+        import shutil
+        shutil.rmtree(self.store / 'work/.system/turns/turn-uncommitted-c12')
+
+        # Publishing turn-open-cold still succeeds cleanly (records/open-pkt-cold.json stayed hot)
+        with exclusive(self.store / 'exchange/owner.lock'):
+            s3 = System(self.store)
+            (s3.work / 'outputs').mkdir(parents=True, exist_ok=True)
+            pub = s3.adopt('turn-open-cold', 'outputs/open-cold.md', 'Confirm open-packet guard preserved hot record')
+            self.assertEqual(pub['phase'], 'complete')
+
+        # C12-3b: Explicit restore brings cold-candidate back to hot tier & HeadIndex, allowing subsequent put!
+        restored = json.loads(self.run_cli([
+            *self.store_cli, 'archive-records', 'restore',
+            '--id', 'cold-candidate', '--reason', 'Restore to edit record',
+        ]).stdout)
+        self.assertEqual(restored['restored_count'], 1)
+        self.assertTrue((self.store / 'work/records/cold-candidate.json').is_file())
+        self.assertFalse((self.store / 'exchange/cold-records/records/cold-candidate.json.deflate').exists())
+        s_restored = System(self.store)
+        self.assertFalse(s_restored.record_store.cold_archive.has('cold-candidate'))
+        self.assertIn('cold-candidate', s_restored.record_store.indexed_summaries())
+        updated = _write_json(self.root / 'cold-updated.json', {
+            'id': 'cold-candidate', 'kind': 'research-source-reference',
+            'content': {'title': 'Restored and edited', 'payload': 'Y'}, 'active': False,
+        })
+        put_res = json.loads(self.run_cli([
+            *self.store_cli, 'put', '--record', str(updated), '--expected', '1', '--no-status',
+        ]).stdout)
+        self.assertEqual(put_res['record']['revision'], 2)
 
     def test_g2s06_9layer_transitive_audit_objects_and_guarded_gc(self):
         system = System(self.store)
@@ -571,6 +704,49 @@ class Wave2RuntimeTests(unittest.TestCase):
         self.assertIn('record:C', cand_refs)  # reached via content:claim_ids!
         self.assertNotIn('record:Q1', cand_refs)  # excluded via exclude_relation_labels=['answers']!
         self.assertEqual(disc_rec['coverage']['unresolved_references'], [])
+
+        # C12-5a: Foreign-store record_id with instance_id is NOT treated as a local record link!
+        # C12-5b: shortest_path(..., active_only=True) checks src active state too!
+        # C12-O2: include_content_links budget saturation records traversal_frontier!
+        with exclusive(self.store / 'exchange/owner.lock'):
+            s_c12 = System(self.store)
+            s_c12.put({
+                'id': 'foreign-ptr', 'kind': 'research-source-reference', 'active': True,
+                'content': {'instance_id': 'discovery-20261117', 'record_id': 'B', 'title': 'Foreign B'},
+            }, 0)
+            s_c12.put({
+                'id': 'inactive-src', 'kind': 'note', 'active': False,
+                'content': {'title': 'Inactive start'},
+                'relations': [{'relation': 'supports', 'target': 'B'}],
+            }, 0)
+            s_c12.reindex()
+
+        lt_foreign = json.loads(self.run_cli([*self.store_cli, 'graph', 'lint']).stdout)
+        self.assertFalse(any(d['id'] == 'foreign-ptr' for d in lt_foreign['content_relation_drift']))
+        disc_foreign = Discovery(System(self.store)).search({
+            'anchors': ['record:foreign-ptr'], 'scopes': ['records'], 'hops': 1,
+            'include_content_links': True, 'limit': 10,
+        })
+        self.assertNotIn('record:B', {c['ref'] for c in disc_foreign['candidates']})
+
+        # C12-5b: inactive start node refused for both src!=dst and src==dst under --active-only
+        pt_inactive = json.loads(self.run_cli([
+            *self.store_cli, 'graph', 'path', 'inactive-src', 'B', '--active-only',
+        ]).stdout)
+        self.assertFalse(pt_inactive['found'])
+        pt_inactive_self = json.loads(self.run_cli([
+            *self.store_cli, 'graph', 'path', 'inactive-src', 'inactive-src', '--active-only',
+        ]).stdout)
+        self.assertFalse(pt_inactive_self['found'])
+
+        # C12-O2: tight scan_limit hitting include_content_links records traversal_frontier
+        disc_sat = Discovery(System(self.store)).search({
+            'anchors': ['record:B'], 'scopes': ['records'], 'hops': 1,
+            'include_content_links': True, 'scan_limit': 1, 'limit': 10,
+        })
+        self.assertIn('relation-scan-budget', disc_sat['coverage']['saturated'])
+        self.assertTrue(any(f['ref'] == 'record:B' and f['reason'] == 'relation-scan-budget'
+                            for f in disc_sat['coverage']['traversal_frontier']))
 
     def test_perf68_raw_hmac_head_index_legacy_fallback_and_nofollow_body_read(self):
         import hmac as hmac_mod

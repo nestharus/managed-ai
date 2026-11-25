@@ -251,16 +251,24 @@ def plan_compact_objects(system, *, min_savings_bytes: int = 64) -> dict:
         if sha(raw) != key or len(raw) != disk_bytes:
             raise ValueError(f'corrupt object encountered during compaction plan: {key}')
         if key in compressed_keys:
-            # Duplicate raw copy left alongside already-valid .deflate; verify parity and nominate cleanup.
+            # Duplicate raw copy left alongside already-valid .deflate; nominate cleanup only when .deflate is strictly smaller.
             existing = objects.read(key, retained=True, expected_bytes=len(raw))
             require(existing == raw, f'conflicting raw and compressed object: {key}')
-            comp_bytes = (objects.directory / (key + '.deflate')).stat().st_size
-            candidates.append({
-                'object': key, 'raw_bytes': len(raw),
-                'compressed_bytes': comp_bytes, 'saved_bytes': len(raw),
-            })
-            total_raw += len(raw)
-            total_comp += comp_bytes
+            deflate_path = objects.directory / (key + '.deflate')
+            info = deflate_path.lstat()
+            require(not stat.S_ISLNK(info.st_mode) and stat.S_ISREG(info.st_mode),
+                    f'ordinary compressed object file required: {deflate_path}')
+            comp_bytes = info.st_size
+            if comp_bytes < len(raw) and len(raw) >= min_savings_bytes:
+                candidates.append({
+                    'object': key, 'raw_bytes': len(raw),
+                    'compressed_bytes': comp_bytes, 'saved_bytes': len(raw),
+                    'already_deflated': True,
+                })
+                total_raw += len(raw)
+                total_comp += comp_bytes
+            else:
+                skipped_incompressible += 1
             continue
         comp = zlib.compress(raw, level=6)
         saved = len(raw) - len(comp)
@@ -270,6 +278,7 @@ def plan_compact_objects(system, *, min_savings_bytes: int = 64) -> dict:
                 'raw_bytes': len(raw),
                 'compressed_bytes': len(comp),
                 'saved_bytes': saved,
+                'already_deflated': False,
             })
             total_raw += len(raw)
             total_comp += len(comp)
@@ -310,34 +319,58 @@ def execute_compact_objects(system, *, plan: dict, expected_plan: str, reason: s
     require(isinstance(candidates, list) and len(candidates) > 0,
             'compact-objects plan has no candidates')
 
-    # Pre-verify all candidates exist with exact raw digest before writing.
+    # Phase 1: Pre-verify EVERY candidate completely before writing or unlinking any object.
     seen: set[str] = set()
-    to_compact: list[tuple[str, Path, bytes]] = []
+    to_compact: list[tuple[str, Path, Path, bytes, bytes | None, int, int]] = []
     for row in candidates:
-        exact_fields(row, {'object', 'raw_bytes', 'compressed_bytes', 'saved_bytes'}, set(), 'compact candidate')
+        exact_fields(row, {'object', 'raw_bytes', 'compressed_bytes', 'saved_bytes', 'already_deflated'},
+                     set(), 'compact candidate')
+        require(type(row['already_deflated']) is bool, 'already_deflated must be a boolean')
         key = digest(row['object'], 'object sha256')
         require(key not in seen, 'duplicate object in compact plan: ' + key)
         seen.add(key)
         integer(row['raw_bytes'], 'raw_bytes')
+        integer(row['compressed_bytes'], 'compressed_bytes')
+        integer(row['saved_bytes'], 'saved_bytes', 1)
         raw_path = objects.directory / key
+        deflate_path = objects.directory / (key + '.deflate')
         raw = _read_ordinary_unbounded(raw_path)
         require(len(raw) == row['raw_bytes'] and sha(raw) == key,
                 'object changed since compaction plan: ' + key)
-        to_compact.append((key, raw_path, raw))
+        if row['already_deflated']:
+            info = deflate_path.lstat()
+            require(not stat.S_ISLNK(info.st_mode) and stat.S_ISREG(info.st_mode),
+                    'existing compressed object required: ' + key)
+            require(info.st_size == row['compressed_bytes'] and info.st_size < len(raw)
+                    and row['saved_bytes'] == len(raw),
+                    'dual-file compressed object changed since compaction plan: ' + key)
+            with deflate_path.open('rb') as stream:
+                roundtrip = objects._decompress_bounded(stream, len(raw), deflate_path)
+            require(roundtrip == raw and sha(roundtrip) == key,
+                    'existing .deflate verification failed: ' + key)
+            to_compact.append((key, raw_path, deflate_path, raw, None, info.st_size, len(raw)))
+        else:
+            require(not deflate_path.exists() and not deflate_path.is_symlink(),
+                    'object state changed since compaction plan: ' + key)
+            compressed = zlib.compress(raw, level=6)
+            require(len(compressed) < len(raw), 'object no longer compresses smaller: ' + key)
+            require(len(compressed) == row['compressed_bytes']
+                    and len(raw) - len(compressed) == row['saved_bytes'],
+                    'compressed size differs from compaction plan: ' + key)
+            require(zlib.decompress(compressed) == raw, 'round-trip decompression mismatch: ' + key)
+            to_compact.append((key, raw_path, deflate_path, raw, compressed, len(compressed), len(raw) - len(compressed)))
 
+    # Phase 2: Commit verified .deflate files (if needed) and unlink verified raw copies.
     compacted = 0
     raw_bytes_total = 0
     comp_bytes_total = 0
-    for key, raw_path, raw in to_compact:
-        deflate_path = objects.directory / (key + '.deflate')
-        compressed = zlib.compress(raw, level=6)
-        require(len(compressed) < len(raw), 'object no longer compresses smaller: ' + key)
-        require(zlib.decompress(compressed) == raw, 'round-trip decompression mismatch: ' + key)
-        atomic_bytes(deflate_path, compressed)
-        # Verify .deflate directly before unlinking raw copy.
-        with deflate_path.open('rb') as stream:
-            roundtrip = objects._decompress_bounded(stream, len(raw), deflate_path)
-        require(roundtrip == raw and sha(roundtrip) == key, 'written .deflate verification failed: ' + key)
+    saved_bytes_total = 0
+    for key, raw_path, deflate_path, raw, compressed, comp_size, saved_bytes in to_compact:
+        if compressed is not None:
+            atomic_bytes(deflate_path, compressed)
+            with deflate_path.open('rb') as stream:
+                roundtrip = objects._decompress_bounded(stream, len(raw), deflate_path)
+            require(roundtrip == raw and sha(roundtrip) == key, 'written .deflate verification failed: ' + key)
         raw_path.unlink()
         sync_dir(objects.directory)
         # Verify transparent ObjectStore.read() succeeds from .deflate.
@@ -345,7 +378,8 @@ def execute_compact_objects(system, *, plan: dict, expected_plan: str, reason: s
                 'post-compaction ObjectStore.read failed: ' + key)
         compacted += 1
         raw_bytes_total += len(raw)
-        comp_bytes_total += len(compressed)
+        comp_bytes_total += comp_size
+        saved_bytes_total += saved_bytes
 
     receipt = {
         'format': COMPACT_RECEIPT_FORMAT,
@@ -356,7 +390,7 @@ def execute_compact_objects(system, *, plan: dict, expected_plan: str, reason: s
         'compacted_objects': compacted,
         'raw_bytes': raw_bytes_total,
         'compressed_bytes': comp_bytes_total,
-        'saved_bytes': raw_bytes_total - comp_bytes_total,
+        'saved_bytes': saved_bytes_total,
     }
     receipt_path = _write_receipt(system, f'compact-objects-{expected_plan[:16]}.json', receipt)
     return dict(receipt, receipt_path=str(receipt_path))

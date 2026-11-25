@@ -264,6 +264,8 @@ def put_batch(system, spec):
     prepared = []
     for index, op in enumerate(operations):
         path = store.path(op['id'])
+        if not path.exists() and store.cold_archive.has(op['id']):
+            raise ValueError(f"record {op['id']} is in cold archive; restore explicitly before modifying")
         previous, previous_raw = store.read(op['id']) if path.exists() else (None, None)
         already_committed = None
         if index == 0 and pending_entry is not None:
