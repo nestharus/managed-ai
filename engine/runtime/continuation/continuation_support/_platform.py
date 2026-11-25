@@ -120,9 +120,9 @@ def check_ordinary_ancestors(path: Path, *, expect_dir: bool = False,
 
 
 def safe_relpath(path: Path | str, start: Path | str) -> str:
-    """Return relative path when on the same mount/drive, else canonical absolute path."""
+    """Return a POSIX-separated relative path when on the same mount/drive, else canonical absolute path."""
     try:
-        return os.path.relpath(path, start)
+        return os.path.relpath(path, start).replace('\\', '/')
     except ValueError:
         return str(Path(path).resolve())
 

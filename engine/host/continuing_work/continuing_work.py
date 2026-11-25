@@ -29,9 +29,9 @@ from occurrence_files import atomic_bytes, digest, file_lock, ident, loads_stric
 from repair_custody import RepairCustody
 
 def _safe_relpath(path: Path | str, start: Path | str) -> str:
-    """Return a relative path when possible, falling back to an absolute path across Windows drives."""
+    """Return a POSIX-separated relative path when possible, falling back to an absolute path across Windows drives."""
     try:
-        return os.path.relpath(path, start)
+        return os.path.relpath(path, start).replace('\\', '/')
     except ValueError:
         return str(Path(path).resolve())
 

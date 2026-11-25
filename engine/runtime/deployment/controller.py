@@ -242,9 +242,14 @@ class DeploymentSelection:
         self._require_current()
         packet_id(edition)
         engine = _engine_directory(engine)
+        store = self.config.get('store')
+        if isinstance(store, dict) and isinstance(store.get('path'), str):
+            store = dict(store, path=store['path'].replace('\\', '/'))
         value = dict(self.config, edition=edition,
                      engine={'path': safe_relpath(engine, self.root), 'code_sha256': code_identity(engine),
                              'engine_api': ENGINE_API})
+        if store is not None:
+            value['store'] = store
         atomic_bytes(self.root / 'candidate.json', encode(value))
         return {'edition': edition, 'candidate_sha256': sha(encode(value)), 'engine': str(engine)}
 

@@ -117,19 +117,19 @@
       "sha256": "2b7373ebd791979e5aa795d80ad35e93d0541e09f09e69fec96ce03004b5a5d0"
     },
     "host/continuing_work/capture_native.py": {
-      "bytes": 11525,
+      "bytes": 11637,
       "mode": 511,
-      "sha256": "5a199a72c8e7f736ce2ef56456e83e5f0239c1cfb9dc2f69ce93e0d28a268844"
+      "sha256": "12a5553c65fb2d7f55728a69b3cb3c1e6de128d62af1563117d743639aa2bbf5"
     },
     "host/continuing_work/continuing_work.py": {
-      "bytes": 52663,
+      "bytes": 52698,
       "mode": 511,
-      "sha256": "34e3f3e05f88007215c100e4a90b688d70163e7259e352bba86f7363110991cf"
+      "sha256": "10aef3a2921ee96cf1e43d6b17a462de016915402c95baa761bc6bf0a0ae9584"
     },
     "host/continuing_work/native_bridge.py": {
-      "bytes": 17663,
+      "bytes": 17669,
       "mode": 511,
-      "sha256": "64de016e5ef98bdf5cd11c3b114a7a66600a5699614fd504ae23005bef82f7d8"
+      "sha256": "e6b8f1ba916d561d1da3aa0c3691bfdb6118a478c84dde9d08b2d67f7c5e86dc"
     },
     "host/continuing_work/occurrence_files.py": {
       "bytes": 7328,
@@ -382,9 +382,9 @@
       "sha256": "1da5f9805567417a0300381f155cc7571102368515e3965df4864b2e4a1c1649"
     },
     "runtime/continuation/continuation_support/_platform.py": {
-      "bytes": 6312,
+      "bytes": 6349,
       "mode": 511,
-      "sha256": "64532fd175c981566f525c54f2bb83b4824cb2a16aa42b5454e22bcaf0b3802c"
+      "sha256": "70f767645245d1218d07f29b8bee4b4a33d939ae89c7802f01448a93da9f076a"
     },
     "runtime/continuation/continuation_support/attention.py": {
       "bytes": 24700,
@@ -472,9 +472,9 @@
       "sha256": "7f2becafa81691c853b5e54b6a3a009b2d9b9366a57b9c1f7e8b6e94470e25e8"
     },
     "runtime/deployment/controller.py": {
-      "bytes": 33943,
+      "bytes": 34195,
       "mode": 511,
-      "sha256": "287a7fa383f9eb3f0367048384ae1bc904dfd00cec88e1b55b4a0530ca6e7772"
+      "sha256": "78a9c792bd595c8ef7d5200d72177022fae4e280c95c28fbc35fcdf3b7cae2bd"
     },
     "runtime/docs/api.md": {
       "bytes": 11132,
@@ -1527,9 +1527,9 @@
       "sha256": "2530f1533c9603ce1b1afa39da12be8a744dd03b6d187e065dddabb107fb777e"
     },
     "runtime/tests/native_store/test_wave3_runtime.py": {
-      "bytes": 27363,
+      "bytes": 31314,
       "mode": 511,
-      "sha256": "82d4081eb3e2ee6a0c43e8694e064f7175976ee10f88f4516e2177c2c216a3c0"
+      "sha256": "6b956d78884e28a05452b34bc6203ad9f10bfefdc562b68bb55a65215350b678"
     },
     "runtime/tests/return_carrier/__init__.py": {
       "bytes": 28,

@@ -26,7 +26,7 @@ from continuation_support.storage import (
     sha,
     shared,
 )
-from controller import Deployment, code_identity, read_descriptor_bytes
+from controller import Deployment, DeploymentSelection, code_identity, read_descriptor_bytes
 from native_runtime.cold_archive import plan_archive_records
 from native_runtime.formats import (
     HEAD_INDEX_FORMAT,
@@ -501,6 +501,72 @@ class Wave3RuntimeTests(unittest.TestCase):
         ], expected_rc=0)
         self.assertEqual(proc.stdout.count('usage:'), 1, proc.stdout)
         self.assertEqual(proc.stderr, '')
+
+    def test_posix_relative_paths_serialized_in_descriptors(self):
+        """Wave 3.5: relative paths written to deployment.json, system.json, and host.json always use POSIX '/'."""
+        from continuation_support._platform import safe_relpath
+
+        base = self.root / 'posix-check'
+        eng_copy = base / 'trunk/engine'
+        shutil.copytree(ENGINE / 'runtime', eng_copy / 'runtime', ignore=shutil.ignore_patterns('tests', '__pycache__'))
+        dom_dir = base / 'trunk/domains/sample'
+        dom_dir.mkdir(parents=True)
+        cat_bytes = encode({'format': 'managed-ai-source-catalogue/1', 'sources': []})
+        (dom_dir / 'catalogue.json').write_bytes(cat_bytes)
+        dom_path = dom_dir / 'domain.json'
+        dom_path.write_bytes(encode({
+            'format': 'managed-ai-domain/1', 'id': 'sample', 'version': '1',
+            'engine_api': 'managed-ai-runtime/1', 'source_root': '.',
+            'catalogue': {'path': 'catalogue.json', 'sha256': sha(cat_bytes)},
+            'schemas': {}, 'entry_sources': [], 'tools': [],
+        }))
+        extra_cat = base / 'workspaces/sample/stores/extra/sources.json'
+        extra_cat.parent.mkdir(parents=True)
+        extra_cat.write_bytes(cat_bytes)
+        dep_dir = base / 'workspaces/sample'
+        store_dir = dep_dir / 'stores/main'
+        System.initialize(store_dir, {'contribution': 'Verify POSIX relative paths.'},
+                          instance_id='posix-relpath-inst', domains=[dom_path], catalogues=[extra_cat])
+        sys_doc = json.loads((store_dir / 'system.json').read_text(encoding='utf-8'))
+        for binding in (*sys_doc['domains'], *sys_doc['catalogues']):
+            self.assertNotIn('\\', binding['path'], f'backslash in system.json: {binding}')
+            self.assertIn('/', binding['path'])
+
+        Deployment.initialize(dep_dir, store_dir, eng_copy)
+        dep_doc = json.loads((dep_dir / 'deployment.json').read_text(encoding='utf-8'))
+        self.assertEqual(dep_doc['engine']['path'], '../../trunk/engine')
+        self.assertEqual(dep_doc['store']['path'], 'stores/main')
+
+        # Stage also normalizes any pre-existing Windows backslash store path and writes POSIX engine path.
+        dep_doc['store']['path'] = 'stores\\main'
+        (dep_dir / 'deployment.json').write_bytes(encode(dep_doc))
+        prior_sha = sha((dep_dir / 'deployment.json').read_bytes())
+        sel = DeploymentSelection(dep_dir)
+        staged = sel.stage('posix-ed', eng_copy)
+        cand = json.loads((dep_dir / 'candidate.json').read_text(encoding='utf-8'))
+        self.assertEqual(cand['engine']['path'], '../../trunk/engine')
+        self.assertEqual(cand['store']['path'], 'stores/main')
+        sel.activate('posix-ed', prior_sha, staged['candidate_sha256'], 'Normalize POSIX paths.')
+        act_doc = json.loads((dep_dir / 'deployment.json').read_text(encoding='utf-8'))
+        self.assertEqual(act_doc['engine']['path'], '../../trunk/engine')
+        self.assertEqual(act_doc['store']['path'], 'stores/main')
+        self.assertEqual(safe_relpath(eng_copy, dep_dir), '../../trunk/engine')
+
+        # Host continuing_work config also serializes POSIX relative paths for engine, native_root, and object pins.
+        cw_dir = str(ENGINE / 'host/continuing_work')
+        if cw_dir not in sys.path:
+            sys.path.insert(0, cw_dir)
+        import continuing_work
+        self.assertEqual(continuing_work._safe_relpath(eng_copy / 'runtime/manage_store.py', dep_dir / 'host'),
+                         '../../../trunk/engine/runtime/manage_store.py')
+        host_root = dep_dir / 'host'
+        comm = base / 'commission.md'
+        comm.write_text('Keep host paths portable.\n', encoding='utf-8')
+        h = continuing_work.Host(host_root)
+        h.root.mkdir(parents=True)
+        pinned = h.pin(comm)
+        self.assertNotIn('\\', pinned['object'])
+        self.assertTrue(pinned['object'].startswith('objects/'))
 
 
 if __name__ == '__main__':

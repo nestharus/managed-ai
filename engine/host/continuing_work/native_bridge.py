@@ -100,7 +100,7 @@ class NativeBridge:
                 raise ValueError(f'Retained object integrity mismatch for {sha}')
         else:
             atomic_bytes(obj, raw)
-        return str(obj.relative_to(self.root)), sha
+        return obj.relative_to(self.root).as_posix(), sha
 
     def _bound_event_value(self, value: dict) -> dict:
         bounded = dict(value)
