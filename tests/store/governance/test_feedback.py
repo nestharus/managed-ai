@@ -16,11 +16,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from tests._paths import cleanup_tempdir
+
+# isort: split
 from managed_ai.core.exchange.transport.collector import Collector
 from managed_ai.store.governance.feedback import Feedback
 from managed_ai.store.query.information import record_identity
 from managed_ai.store.system import System
-from tests._paths import cleanup_tempdir
 
 
 class FeedbackChecks(unittest.TestCase):

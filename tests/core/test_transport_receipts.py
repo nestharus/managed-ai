@@ -18,12 +18,14 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
+from tests._paths import ENGINE as ROOT  # noqa: E402
+from tests._paths import cleanup_tempdir  # noqa: E402
+
+# isort: split
 from managed_ai.core import storage  # noqa: E402
 from managed_ai.core.exchange import Exchange, carrier_receipts  # noqa: E402
 from managed_ai.core.exchange.transport.collector import material, worker_active  # noqa: E402
 from managed_ai.core.storage import MAX_BYTES, encode, sha, write_json  # noqa: E402
-from tests._paths import ENGINE as ROOT  # noqa: E402
-from tests._paths import cleanup_tempdir  # noqa: E402
 
 
 def until(predicate):

@@ -14,6 +14,10 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
+from tests._paths import ENGINE as ROOT  # noqa: E402
+from tests._paths import SRC, cleanup_tempdir  # noqa: E402
+
+# isort: split
 from managed_ai.core.exchange import Exchange  # noqa: E402
 from managed_ai.core.exchange.transport import collector  # noqa: E402
 from managed_ai.core.exchange.transport.collector import (  # noqa: E402
@@ -23,8 +27,6 @@ from managed_ai.core.exchange.transport.collector import (  # noqa: E402
     sha,
     write_json,
 )
-from tests._paths import ENGINE as ROOT  # noqa: E402
-from tests._paths import SRC, cleanup_tempdir  # noqa: E402
 
 
 class ReceivingViewTests(unittest.TestCase):
