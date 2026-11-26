@@ -134,27 +134,32 @@ class ImageLifecycleTests(unittest.TestCase):
         self.assertEqual(main_plan["promote_by"], "digest")
         self.assertEqual(main_plan["tags"], [f"sha-{sha12}"])
 
+        # C60B-1: pipe real 64-char context_sha256 from context-hash directly into tag-plan --context-sha.
+        real_ctx = json.loads(self._run_cli("context-hash", "--root", str(REPO)).stdout)
+        ctx_sha64 = real_ctx["context_sha256"]
+        self.assertEqual(len(ctx_sha64), 64)
+
         rel = json.loads(self._run_cli(
             "tag-plan", "--channel", "release", "--git-sha", sha_full, "--version", "1.2.3",
-            "--context-sha", "fedcba9876543210abcdef1234567890",
+            "--context-sha", ctx_sha64,
         ).stdout)
         self.assertTrue(rel["push_remote"])
         self.assertEqual(rel["promotion_tags"], ["v1.2.3", f"sha-{sha12}"])
-        self.assertEqual(rel["context_tag"], "ctx-fedcba987654")
-        self.assertEqual(rel["tags"], ["v1.2.3", f"sha-{sha12}", "ctx-fedcba987654"])
+        self.assertEqual(rel["context_tag"], f"ctx-{ctx_sha64[:12]}")
+        self.assertEqual(rel["tags"], ["v1.2.3", f"sha-{sha12}", f"ctx-{ctx_sha64[:12]}"])
 
         main_ctx = json.loads(self._run_cli(
             "tag-plan", "--channel", "main", "--git-sha", sha_full,
-            "--context-sha", "fedcba9876543210abcdef1234567890",
+            "--context-sha", ctx_sha64,
         ).stdout)
         self.assertEqual(main_ctx["promotion_tags"], [f"sha-{sha12}"])
-        self.assertEqual(main_ctx["tags"], [f"sha-{sha12}", "ctx-fedcba987654"])
+        self.assertEqual(main_ctx["tags"], [f"sha-{sha12}", f"ctx-{ctx_sha64[:12]}"])
 
         pr_ctx = json.loads(self._run_cli(
             "tag-plan", "--channel", "pr", "--git-sha", sha_full, "--pr-number", "42",
-            "--context-sha", "fedcba9876543210abcdef1234567890",
+            "--context-sha", ctx_sha64,
         ).stdout)
-        self.assertEqual(pr_ctx["context_tag"], "ctx-fedcba987654")
+        self.assertEqual(pr_ctx["context_tag"], f"ctx-{ctx_sha64[:12]}")
         self.assertEqual(pr_ctx["tags"], [f"pr-42-{sha12}"])
 
         for plan in (local, pr_default, pr_push, main_plan, rel, main_ctx, pr_ctx):
