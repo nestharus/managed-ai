@@ -1,20 +1,22 @@
 """Verify the PEP-517 wheel distribution built from root pyproject.toml and src/managed_ai."""
-from importlib.util import find_spec
+
 import json
-from pathlib import Path
 import shutil
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
 import unittest
 import zipfile
-
+from importlib.util import find_spec
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 REPO = Path(__file__).resolve().parents[2]
 
 
 class PackageWheelTest(unittest.TestCase):
-    @unittest.skipUnless(find_spec("setuptools") and find_spec("wheel"), "requires the wheel build tools")
+    @unittest.skipUnless(
+        find_spec("setuptools") and find_spec("wheel"), "requires the wheel build tools"
+    )
     def test_wheel_version_package_data_console_targets_and_no_maintainer_scripts(self):
         with TemporaryDirectory() as tmp:
             build = Path(tmp) / "managed-ai-build"
@@ -37,12 +39,13 @@ class PackageWheelTest(unittest.TestCase):
                 check=True,
                 capture_output=True,
             )
-            wheel, = build.glob("*.whl")
+            (wheel,) = build.glob("*.whl")
 
             with zipfile.ZipFile(wheel) as archive:
                 names = set(archive.namelist())
 
-            # Maintainer scripts, retired shims, and release assets must NEVER ship inside the wheel.
+            # Maintainer scripts, retired shims, and release assets must NEVER ship inside the
+            # wheel.
             for forbidden in (
                 "managed_ai/release/__init__.py",
                 "managed_ai/release/current_sources.json",
@@ -80,16 +83,29 @@ import managed_ai
 import managed_ai.platform
 from importlib.metadata import distribution
 dist = distribution('managed-ai')
-commands = [ep.name for ep in dist.entry_points if ep.group == 'console_scripts' and callable(ep.load())]
+commands = [
+    ep.name
+    for ep in dist.entry_points
+    if ep.group == 'console_scripts' and callable(ep.load())
+]
 print(json.dumps([dist.version, managed_ai.__version__, sorted(commands)]))
 """
-            raw = subprocess.check_output([sys.executable, "-I", "-c", probe, str(wheel)], cwd=build)
+            raw = subprocess.check_output(
+                [sys.executable, "-I", "-c", probe, str(wheel)], cwd=build
+            )
             metadata, imported, commands = json.loads(raw)
             self.assertEqual(metadata, imported)
             self.assertEqual(wheel.name, f"managed_ai-{imported}-py3-none-any.whl")
             self.assertEqual(
                 commands,
-                ["g60-attend", "g60-collect", "g60-work", "managed-ai", "managed-ai-deploy", "managed-ai-library"],
+                [
+                    "g60-attend",
+                    "g60-collect",
+                    "g60-work",
+                    "managed-ai",
+                    "managed-ai-deploy",
+                    "managed-ai-library",
+                ],
             )
 
 

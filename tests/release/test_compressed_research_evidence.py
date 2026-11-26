@@ -1,12 +1,12 @@
 """Release gates for compressed Research originals."""
+
 import gzip
 import hashlib
-from pathlib import Path
 import runpy
+import unittest
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-import unittest
-
 
 REPO = Path(__file__).resolve().parents[2]
 ENGINE = REPO / "src/managed_ai"
@@ -18,21 +18,32 @@ class CompressedResearchEvidenceTest(unittest.TestCase):
     def setUp(self):
         data = gzip.compress(b'{"count": 4}\n')
         pin = hashlib.sha256(data).hexdigest()
-        self.basis = {"path": f"evidence/research-originals/{pin[:2]}/{pin}.gz",
-                      "sha256": pin, "bytes": len(data)}
-        self.source = {"relation": "grounded in original edition", "origin": "study/cells.json.gz",
-                       "target": self.basis["path"], "sha256": pin, "bytes": len(data)}
+        self.basis = {
+            "path": f"evidence/research-originals/{pin[:2]}/{pin}.gz",
+            "sha256": pin,
+            "bytes": len(data),
+        }
+        self.source = {
+            "relation": "grounded in original edition",
+            "origin": "study/cells.json.gz",
+            "target": self.basis["path"],
+            "sha256": pin,
+            "bytes": len(data),
+        }
         self.ref = {"id": "trial", "revision": 1, "sha256": "a" * 64}
         head = dict(self.ref, relations=[self.source], basis=[self.basis])
         self.accepted = []
-        self.system = SimpleNamespace(records=lambda: [head],
-                                      completed_import_records=lambda: iter(self.accepted))
+        self.system = SimpleNamespace(
+            records=lambda: [head], completed_import_records=lambda: iter(self.accepted)
+        )
 
     def test_receipt_must_acknowledge_the_exact_head(self):
         evidence = package["received_compressed_text"]
         self.assertEqual(evidence(self.system), set())
         self.accepted.append(self.ref)
-        self.assertEqual(evidence(self.system), {(self.basis["path"], self.basis["sha256"], self.basis["bytes"])})
+        self.assertEqual(
+            evidence(self.system), {(self.basis["path"], self.basis["sha256"], self.basis["bytes"])}
+        )
         self.accepted[0] = dict(self.ref, revision=2)
         self.assertEqual(evidence(self.system), set())
 
@@ -57,7 +68,9 @@ class CompressedPayloadTest(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "sample.gz").write_bytes(gzip.compress(b"valid text"))
-            with self.assertRaisesRegex(ValueError, "Select extracted useful source instead of nested transport"):
+            with self.assertRaisesRegex(
+                ValueError, "Select extracted useful source instead of nested transport"
+            ):
                 package["members"](root, ENGINE)
 
 

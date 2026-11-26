@@ -1,4 +1,5 @@
 """Tests for the unified stdlib-only managed_ai.platform leaf adapter."""
+
 from __future__ import annotations
 
 import ast
@@ -6,27 +7,25 @@ import gc
 import hashlib
 import io
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import tokenize
 import unittest
+from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from tests._paths import ENGINE, SRC, cleanup_tempdir
-import managed_ai.platform as platform_pkg
-from managed_ai.platform import (
-    KeyedLockPool,
-    LockMode,
+import managed_ai.platform as platform_pkg  # noqa: E402
+from managed_ai.platform import (  # noqa: E402
     OPEN_DIR_NOFOLLOW,
     OPEN_RO_NOFOLLOW,
     PLATFORM,
+    KeyedLockPool,
+    LockMode,
     PlatformAdapter,
     ThreadLock,
     ThreadRLockState,
@@ -63,8 +62,9 @@ from managed_ai.platform import (
     verify_exact_filename,
     worker_environment,
 )
-from managed_ai.platform._posix import PosixPlatformAdapter
-from managed_ai.platform._windows import WindowsPlatformAdapter
+from managed_ai.platform._posix import PosixPlatformAdapter  # noqa: E402
+from managed_ai.platform._windows import WindowsPlatformAdapter  # noqa: E402
+from tests._paths import ENGINE, SRC, cleanup_tempdir  # noqa: E402
 
 
 class PlatformAdapterTests(unittest.TestCase):
@@ -77,7 +77,9 @@ class PlatformAdapterTests(unittest.TestCase):
 
     def _make_dir_link(self, link: Path, target: Path) -> bool:
         if os.name == "nt":
-            proc = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True)
+            proc = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True
+            )
             return proc.returncode == 0
         link.symlink_to(target)
         return True
@@ -119,7 +121,9 @@ class PlatformAdapterTests(unittest.TestCase):
                         violations.append(f"{py.name}:{node.lineno}: from {node.module}")
 
         self.assertEqual(violations, [], f"Platform leaf violations: {violations}")
-        self.assertFalse((ENGINE / "contracts").exists(), "No generic top-level contracts/ bucket folder")
+        self.assertFalse(
+            (ENGINE / "contracts").exists(), "No generic top-level contracts/ bucket folder"
+        )
 
     def test_platform_hygiene_zero_semicolons_and_clean_spacing(self):
         targets = sorted((ENGINE / "platform").rglob("*.py"))
@@ -134,12 +138,15 @@ class PlatformAdapterTests(unittest.TestCase):
             lines = text.splitlines()
             if py.name != "__init__.py" and len(lines) >= 40:
                 blank_ratio = sum(1 for line in lines if not line.strip()) / len(lines)
-                self.assertGreaterEqual(blank_ratio, 0.15, f"Low blank ratio in {py.name}: {blank_ratio:.2%}")
+                self.assertGreaterEqual(
+                    blank_ratio, 0.15, f"Low blank ratio in {py.name}: {blank_ratio:.2%}"
+                )
 
     def test_cold_import_avoids_heavy_stdlib_modules(self):
         code = (
             "import sys, managed_ai.platform; "
-            "heavy = [m for m in ('concurrent.futures', 'logging', 'subprocess', 'ctypes') if m in sys.modules]; "
+            "heavy = [m for m in ('concurrent.futures', 'logging', 'subprocess', 'ctypes') "
+            "if m in sys.modules]; "
             "print(','.join(heavy))"
         )
         env = dict(os.environ, PYTHONPATH=str(SRC))
@@ -182,7 +189,9 @@ class PlatformAdapterTests(unittest.TestCase):
             "unlock_file",
         )
         for name in expected_symbols:
-            self.assertTrue(hasattr(platform_pkg, name), f"Missing canonical platform export: {name}")
+            self.assertTrue(
+                hasattr(platform_pkg, name), f"Missing canonical platform export: {name}"
+            )
         self.assertIsInstance(OPEN_RO_NOFOLLOW, int)
         self.assertIsInstance(OPEN_DIR_NOFOLLOW, int)
 
@@ -196,9 +205,11 @@ class PlatformAdapterTests(unittest.TestCase):
             try:
                 lock_file_nonblocking(s2, exclusive=False)
                 try:
-                    with lock_path.open("a+b") as s3:
-                        with self.assertRaises(BlockingIOError):
-                            lock_file_nonblocking(s3, exclusive=True)
+                    with (
+                        lock_path.open("a+b") as s3,
+                        self.assertRaises(BlockingIOError),
+                    ):
+                        lock_file_nonblocking(s3, exclusive=True)
                 finally:
                     unlock_file(s2)
             finally:
@@ -242,11 +253,15 @@ class PlatformAdapterTests(unittest.TestCase):
         self.assertEqual(checked, leaf.resolve())
 
         missing = self.root / "future.lock"
-        self.assertEqual(check_unfollowed_ancestors(missing, include_target=True), missing.resolve())
+        self.assertEqual(
+            check_unfollowed_ancestors(missing, include_target=True), missing.resolve()
+        )
 
         # Fast relative descendant check skips re-walking drive root.
         validated_root = check_ordinary_ancestors(real_dir, expect_dir=True)
-        self.assertEqual(check_unfollowed_descendant(validated_root, "a/b/file.txt"), leaf.resolve())
+        self.assertEqual(
+            check_unfollowed_descendant(validated_root, "a/b/file.txt"), leaf.resolve()
+        )
         self.assertEqual(
             check_unfollowed_descendant(validated_root, "a/b/new.txt", allow_missing_leaf=True),
             nested / "new.txt",
@@ -327,15 +342,19 @@ class PlatformAdapterTests(unittest.TestCase):
 
         rw_pool = KeyedLockPool(ThreadRWLock)
         rw = rw_pool.get(self.root / "rw.lock")
-        with rw.hold(shared=True, nonblocking=True):
-            with rw.hold(shared=True, nonblocking=True):
-                with self.assertRaises(BlockingIOError):
-                    with rw.hold(shared=False, nonblocking=True):
-                        pass
-        with rw.hold(shared=False, nonblocking=True):
-            with self.assertRaises(BlockingIOError):
-                with rw.hold(shared=True, nonblocking=True):
-                    pass
+        with (
+            rw.hold(shared=True, nonblocking=True),
+            rw.hold(shared=True, nonblocking=True),
+            self.assertRaises(BlockingIOError),
+            rw.hold(shared=False, nonblocking=True),
+        ):
+            pass
+        with (
+            rw.hold(shared=False, nonblocking=True),
+            self.assertRaises(BlockingIOError),
+            rw.hold(shared=True, nonblocking=True),
+        ):
+            pass
         del rw
         gc.collect()
         self.assertEqual(len(rw_pool), 0)
@@ -357,13 +376,29 @@ class PlatformAdapterTests(unittest.TestCase):
 
         # QA7-2: Windows reserved device names and trailing dot/space collision rejection.
         for bad_seg in (
-            "CON", "con", "CON.json", "PRN", "prn.txt", "AUX", "aux.log",
-            "NUL", "nul.tar.gz", "COM1", "com9.json", "LPT1", "lpt9.bin",
-            "foo.", "foo ", "CON ", "CON.",
+            "CON",
+            "con",
+            "CON.json",
+            "PRN",
+            "prn.txt",
+            "AUX",
+            "aux.log",
+            "NUL",
+            "nul.tar.gz",
+            "COM1",
+            "com9.json",
+            "LPT1",
+            "lpt9.bin",
+            "foo.",
+            "foo ",
+            "CON ",
+            "CON.",
         ):
             with self.assertRaises(ValueError, msg=f"expected rejection for {bad_seg!r}"):
                 validate_safe_segment(bad_seg)
-            with self.assertRaises(ValueError, msg=f"safe_relpath expected rejection for {bad_seg!r}"):
+            with self.assertRaises(
+                ValueError, msg=f"safe_relpath expected rejection for {bad_seg!r}"
+            ):
                 safe_relpath(self.root / "sub" / bad_seg, self.root)
 
         self.assertTrue(is_reserved_windows_segment("CON"))
@@ -371,7 +406,15 @@ class PlatformAdapterTests(unittest.TestCase):
         self.assertFalse(is_reserved_windows_segment("console.json"))
         self.assertFalse(is_reserved_windows_segment("COM0"))
         self.assertFalse(is_reserved_windows_segment("LPT10"))
-        for ok_seg in ("console.json", "null_check.py", ".hidden", "README.md", "COM0", "LPT10", "a.b.c"):
+        for ok_seg in (
+            "console.json",
+            "null_check.py",
+            ".hidden",
+            "README.md",
+            "COM0",
+            "LPT10",
+            "a.b.c",
+        ):
             self.assertEqual(validate_safe_segment(ok_seg), ok_seg)
 
         sample = self.root / "ExactCase.json"
@@ -423,7 +466,8 @@ class PlatformAdapterTests(unittest.TestCase):
                 proc.wait(timeout=5)
 
     def test_c45_cross_os_parity_and_hardening_guards(self):
-        # C45-2: sha256_file(..., follow_symlinks=False) raises ValueError uniformly for missing, dir, and link.
+        # C45-2: sha256_file(..., follow_symlinks=False) raises ValueError uniformly for missing,
+        # dir, and link.
         with self.assertRaises(ValueError):
             sha256_file(self.root / "missing.bin", follow_symlinks=False)
         subdir = self.root / "a_dir"

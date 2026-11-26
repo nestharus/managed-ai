@@ -1,20 +1,21 @@
-"""Working releases without companions/peer verify cleanly; present peer manifests remain strictly gated."""
+"""Working releases without companions/peer verify cleanly; present peer manifests remain strictly
+gated."""
+
 import gzip
 import hashlib
 import json
 import os
-from pathlib import Path
 import runpy
 import shutil
 import stat
 import subprocess
 import sys
+import unittest
+import zipfile
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-import unittest
 from unittest import mock
-import zipfile
-
 
 REPO = Path(__file__).resolve().parents[2]
 ENGINE = REPO / "src/managed_ai"
@@ -47,18 +48,25 @@ def _build_minimal_bundle(root, *, include_siblings=False):
         (root / "docs/collective").mkdir(parents=True)
         (root / "docs/collective/README.md").write_bytes(b"# Collective\n\nOptional body.\n")
         (root / "docs/patterns/continuous-consolidation").mkdir(parents=True)
-        (root / "docs/patterns/continuous-consolidation/README.md").write_bytes(b"# Patterns\n\nPattern body.\n")
-        rows.extend([
-            {"id": "prototype/collective-work/README.md", "source": "../../docs/collective/README.md"},
-            {"id": "prototype/patterns/continuous-consolidation/README.md",
-             "source": "../../docs/patterns/continuous-consolidation/README.md"},
-        ])
+        (root / "docs/patterns/continuous-consolidation/README.md").write_bytes(
+            b"# Patterns\n\nPattern body.\n"
+        )
+        rows.extend(
+            [
+                {
+                    "id": "prototype/collective-work/README.md",
+                    "source": "../../docs/collective/README.md",
+                },
+                {
+                    "id": "prototype/patterns/continuous-consolidation/README.md",
+                    "source": "../../docs/patterns/continuous-consolidation/README.md",
+                },
+            ]
+        )
     (release / "current_sources.json").write_text(
         json.dumps({"edition": "working-test", "bodies": rows}), encoding="utf-8"
     )
-    (core / "store/catalogue.json").write_text(
-        json.dumps({"entries": rows}), encoding="utf-8"
-    )
+    (core / "store/catalogue.json").write_text(json.dumps({"entries": rows}), encoding="utf-8")
     (release / "navigation.json").write_text("{}", encoding="utf-8")
     subprocess.run(
         [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(core)],
@@ -194,7 +202,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             core = (bundle / "src/managed_ai").resolve(strict=True)
             tree = PACKAGE["members"](bundle, core)
             native = {
-                name[len("src/managed_ai/"):]: row
+                name[len("src/managed_ai/") :]: row
                 for name, row in tree.items()
                 if name.startswith("src/managed_ai/") and name != "src/managed_ai/MANIFEST.json"
             }
@@ -287,7 +295,10 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             by_id = {e["id"]: e for e in cat["entries"]}
             self.assertEqual(by_id["guide"]["source_root_relative"], "../../..")
             self.assertEqual(by_id["guide"]["body_path"], "docs/engine/guide.md")
-            self.assertEqual(by_id["prototype/collective-work/README.md"]["body_path"], "docs/collective/README.md")
+            self.assertEqual(
+                by_id["prototype/collective-work/README.md"]["body_path"],
+                "docs/collective/README.md",
+            )
             self.assertEqual(
                 by_id["prototype/patterns/continuous-consolidation/README.md"]["body_path"],
                 "docs/patterns/continuous-consolidation/README.md",
@@ -322,7 +333,14 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 },
             )
             ok = subprocess.run(
-                [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle), "--refresh-only"],
+                [
+                    sys.executable,
+                    "-B",
+                    str(RELEASE / "package.py"),
+                    "--root",
+                    str(bundle),
+                    "--refresh-only",
+                ],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -331,20 +349,38 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
 
             # Tampered component file fails before rewriting MANIFEST.json
             prior_manifest = (bundle / "MANIFEST.json").read_bytes()
-            (bundle / "src/managed_ai/companions/workbench/workbench_agent.py").write_bytes(b"AGENT = 2\n")
+            (bundle / "src/managed_ai/companions/workbench/workbench_agent.py").write_bytes(
+                b"AGENT = 2\n"
+            )
             tampered = subprocess.run(
-                [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle), "--refresh-only"],
+                [
+                    sys.executable,
+                    "-B",
+                    str(RELEASE / "package.py"),
+                    "--root",
+                    str(bundle),
+                    "--refresh-only",
+                ],
                 capture_output=True,
                 text=True,
             )
             self.assertNotEqual(tampered.returncode, 0)
-            self.assertIn("Shared component identity changed: workbench/workbench_agent.py", tampered.stderr)
+            self.assertIn(
+                "Shared component identity changed: workbench/workbench_agent.py", tampered.stderr
+            )
             self.assertEqual((bundle / "MANIFEST.json").read_bytes(), prior_manifest)
 
             # Present companions/peer without COMPONENTS.json must still fail
             (peer / "COMPONENTS.json").unlink()
             missing_manifest = subprocess.run(
-                [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle), "--refresh-only"],
+                [
+                    sys.executable,
+                    "-B",
+                    str(RELEASE / "package.py"),
+                    "--root",
+                    str(bundle),
+                    "--refresh-only",
+                ],
                 capture_output=True,
                 text=True,
             )
@@ -361,11 +397,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 peer / "COMPONENTS.json",
                 {
                     "schema": "peer-workbench-acquired-components/1",
-                    "files": {
-                        "../escape.py": {
-                            "identity": {"bytes": 1, "sha256": _sha256(b"x")}
-                        }
-                    },
+                    "files": {"../escape.py": {"identity": {"bytes": 1, "sha256": _sha256(b"x")}}},
                 },
             )
             with self.assertRaisesRegex(ValueError, "Unsafe shared component path"):
@@ -376,13 +408,13 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 {
                     "schema": "peer-workbench-acquired-components/1",
                     "files": {
-                        "workbench/missing.py": {
-                            "identity": {"bytes": 1, "sha256": _sha256(b"x")}
-                        }
+                        "workbench/missing.py": {"identity": {"bytes": 1, "sha256": _sha256(b"x")}}
                     },
                 },
             )
-            with self.assertRaisesRegex(ValueError, "Missing shared component: workbench/missing.py"):
+            with self.assertRaisesRegex(
+                ValueError, "Missing shared component: workbench/missing.py"
+            ):
                 PACKAGE["verify_workbench_components"](bundle)
 
             _write_json(
@@ -442,16 +474,22 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             _build_minimal_bundle(bundle)
             peer = _write_peer_components(bundle, {"workbench/workbench_agent.py": b"AGENT = 1\n"})
             rename_exact(peer / "COMPONENTS.json", "components.json")
-            with self.assertRaisesRegex(ValueError, "expected COMPONENTS.json, observed components.json"):
+            with self.assertRaisesRegex(
+                ValueError, "expected COMPONENTS.json, observed components.json"
+            ):
                 PACKAGE["verify_workbench_components"](bundle)
 
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
             _write_peer_components(bundle, {"workbench/workbench_agent.py": b"AGENT = 1\n"})
-            rename_exact(bundle / "src/managed_ai/companions/workbench/workbench_agent.py", "Workbench_Agent.py")
+            rename_exact(
+                bundle / "src/managed_ai/companions/workbench/workbench_agent.py",
+                "Workbench_Agent.py",
+            )
             with self.assertRaisesRegex(
-                ValueError, "expected workbench/workbench_agent.py, observed workbench/Workbench_Agent.py"
+                ValueError,
+                "expected workbench/workbench_agent.py, observed workbench/Workbench_Agent.py",
             ):
                 PACKAGE["verify_workbench_components"](bundle)
 
@@ -514,11 +552,15 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
 
             bundle = tmp / "bundle"
             core = _build_minimal_bundle(bundle)
-            (bundle / "scripts/release/navigation.json").write_text('{"a": 1, "a": 2}\n', encoding="utf-8")
+            (bundle / "scripts/release/navigation.json").write_text(
+                '{"a": 1, "a": 2}\n', encoding="utf-8"
+            )
             with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
                 REFRESH["render"](core)
 
-            (bundle / "scripts/release/navigation.json").write_text('{"score": Infinity}\n', encoding="utf-8")
+            (bundle / "scripts/release/navigation.json").write_text(
+                '{"score": Infinity}\n', encoding="utf-8"
+            )
             with self.assertRaisesRegex(ValueError, "nonfinite JSON"):
                 REFRESH["render"](core)
 
@@ -543,7 +585,9 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             tmp = Path(temporary)
             dom = tmp / "domain.json"
-            dom_raw = _write_json(dom, {"content_addressed_basis_prefixes": ["evidence/a", "evidence/b/"]})
+            dom_raw = _write_json(
+                dom, {"content_addressed_basis_prefixes": ["evidence/a", "evidence/b/"]}
+            )
             store_dir = tmp / "store"
             _write_json(
                 store_dir / "system.json",
@@ -569,7 +613,8 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 PACKAGE["_store_compressed_prefixes"](store_manifest)
 
     def test_refresh_guidance_rejects_reparse_point_and_escape(self):
-        # W4-CB8: Reparse-point stat must be rejected even on Windows where is_symlink() may be False
+        # W4-CB8: Reparse-point stat must be rejected even on Windows where is_symlink() may be
+        # False
         fake_reparse = SimpleNamespace(
             st_mode=stat.S_IFREG | 0o644,
             st_reparse_tag=0xA0000003,
@@ -587,13 +632,21 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                     return fake_reparse
                 return orig_lstat(path_self)
 
-            with mock.patch.object(Path, "lstat", patched_lstat):
-                with self.assertRaisesRegex(ValueError, "ordinary canonical source required"):
-                    REFRESH["render"](core)
+            with (
+                mock.patch.object(Path, "lstat", patched_lstat),
+                self.assertRaisesRegex(ValueError, "ordinary canonical source required"),
+            ):
+                REFRESH["render"](core)
 
-            # Traversal escaping above bundle root (3 levels up from src/managed_ai) must be rejected
+            # Traversal escaping above bundle root (3 levels up from src/managed_ai) must be
+            # rejected
             (bundle / "scripts/release/current_sources.json").write_text(
-                json.dumps({"edition": "working-test", "bodies": [{"id": "guide", "source": "../../../escape.md"}]}),
+                json.dumps(
+                    {
+                        "edition": "working-test",
+                        "bodies": [{"id": "guide", "source": "../../../escape.md"}],
+                    }
+                ),
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "escapes allowed package root"):
@@ -608,11 +661,22 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             ext.write_bytes(b"KEEP-ME-UNTOUCHED\n")
 
             if os.name == "nt":
-                # Windows real NTFS junction tests for --root on both refresh_guidance.py and package.py
+                # Windows real NTFS junction tests for --root on both refresh_guidance.py and
+                # package.py
                 junc_core = tmp / "junc_core"
-                subprocess.run(["cmd", "/c", "mklink", "/J", str(junc_core), str(core)], check=True, capture_output=True)
+                subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(junc_core), str(core)],
+                    check=True,
+                    capture_output=True,
+                )
                 ref_junc = subprocess.run(
-                    [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(junc_core)],
+                    [
+                        sys.executable,
+                        "-B",
+                        str(RELEASE / "refresh_guidance.py"),
+                        "--root",
+                        str(junc_core),
+                    ],
                     capture_output=True,
                     text=True,
                 )
@@ -620,9 +684,20 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 self.assertIn("ordinary engine directory required", ref_junc.stderr)
 
                 junc_bundle = tmp / "junc_bundle"
-                subprocess.run(["cmd", "/c", "mklink", "/J", str(junc_bundle), str(bundle)], check=True, capture_output=True)
+                subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(junc_bundle), str(bundle)],
+                    check=True,
+                    capture_output=True,
+                )
                 pkg_junc = subprocess.run(
-                    [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(junc_bundle), "--refresh-only"],
+                    [
+                        sys.executable,
+                        "-B",
+                        str(RELEASE / "package.py"),
+                        "--root",
+                        str(junc_bundle),
+                        "--refresh-only",
+                    ],
                     capture_output=True,
                     text=True,
                 )
@@ -633,10 +708,21 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 real_out_dir = tmp / "real_out_dir"
                 real_out_dir.mkdir()
                 junc_out_dir = tmp / "junc_out_dir"
-                subprocess.run(["cmd", "/c", "mklink", "/J", str(junc_out_dir), str(real_out_dir)], check=True, capture_output=True)
+                subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(junc_out_dir), str(real_out_dir)],
+                    check=True,
+                    capture_output=True,
+                )
                 pkg_out_junc = subprocess.run(
-                    [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle),
-                     "--output", str(junc_out_dir / "out.zip")],
+                    [
+                        sys.executable,
+                        "-B",
+                        str(RELEASE / "package.py"),
+                        "--root",
+                        str(bundle),
+                        "--output",
+                        str(junc_out_dir / "out.zip"),
+                    ],
                     capture_output=True,
                     text=True,
                 )
@@ -644,7 +730,8 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 self.assertIn("ordinary files and directories", pkg_out_junc.stderr)
                 self.assertFalse((real_out_dir / "out.zip").exists())
 
-                # Mocked reparse point on SOURCES.md must be refused by refresh() before staging/replace
+                # Mocked reparse point on SOURCES.md must be refused by refresh() before
+                # staging/replace
                 fake_reparse = SimpleNamespace(
                     st_mode=stat.S_IFREG | 0o644,
                     st_reparse_tag=0xA0000003,
@@ -655,17 +742,29 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 orig_lstat = Path.lstat
 
                 def patched_lstat(path_self):
-                    if os.path.normcase(os.path.abspath(path_self)) == os.path.normcase(os.path.abspath(sources_md)):
+                    if os.path.normcase(os.path.abspath(path_self)) == os.path.normcase(
+                        os.path.abspath(sources_md)
+                    ):
                         return fake_reparse
                     return orig_lstat(path_self)
 
-                with mock.patch.object(Path, "lstat", patched_lstat):
-                    with self.assertRaisesRegex(ValueError, "ordinary projection target required"):
-                        REFRESH["refresh"](core, include_sources_md=True)
+                with (
+                    mock.patch.object(Path, "lstat", patched_lstat),
+                    self.assertRaisesRegex(ValueError, "ordinary projection target required"),
+                ):
+                    REFRESH["refresh"](core, include_sources_md=True)
             else:
-                # POSIX real symlink clobber tests for C26-1 (SOURCES.md, CURRENT-RELEASE.json, --root)
+                # POSIX real symlink clobber tests for C26-1 (SOURCES.md, CURRENT-RELEASE.json,
+                # --root)
                 subprocess.run(
-                    [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(core), "--write-sources-md"],
+                    [
+                        sys.executable,
+                        "-B",
+                        str(RELEASE / "refresh_guidance.py"),
+                        "--root",
+                        str(core),
+                        "--write-sources-md",
+                    ],
                     check=True,
                     capture_output=True,
                 )
@@ -675,8 +774,14 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                     target.unlink()
                     target.symlink_to(ext)
                     res = subprocess.run(
-                        [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"),
-                         "--root", str(core), "--write-sources-md"],
+                        [
+                            sys.executable,
+                            "-B",
+                            str(RELEASE / "refresh_guidance.py"),
+                            "--root",
+                            str(core),
+                            "--write-sources-md",
+                        ],
                         capture_output=True,
                         text=True,
                     )
@@ -689,19 +794,34 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 link_core = tmp / "link_core"
                 link_core.symlink_to(core)
                 res_root = subprocess.run(
-                    [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(link_core)],
+                    [
+                        sys.executable,
+                        "-B",
+                        str(RELEASE / "refresh_guidance.py"),
+                        "--root",
+                        str(link_core),
+                    ],
                     capture_output=True,
                     text=True,
                 )
                 self.assertNotEqual(res_root.returncode, 0)
                 self.assertIn("ordinary engine directory required", res_root.stderr)
 
-                # C26-2: package.py refuses symlink --output (--replace and dangling) and symlink --root
+                # C26-2: package.py refuses symlink --output (--replace and dangling) and symlink
+                # --root
                 out_link = tmp / "out.zip"
                 out_link.symlink_to(ext)
                 res_rep = subprocess.run(
-                    [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle),
-                     "--output", str(out_link), "--replace"],
+                    [
+                        sys.executable,
+                        "-B",
+                        str(RELEASE / "package.py"),
+                        "--root",
+                        str(bundle),
+                        "--output",
+                        str(out_link),
+                        "--replace",
+                    ],
                     capture_output=True,
                     text=True,
                 )
@@ -713,8 +833,15 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 dangling = tmp / "dangling.zip"
                 dangling.symlink_to(missing_ext)
                 res_dang = subprocess.run(
-                    [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle),
-                     "--output", str(dangling)],
+                    [
+                        sys.executable,
+                        "-B",
+                        str(RELEASE / "package.py"),
+                        "--root",
+                        str(bundle),
+                        "--output",
+                        str(dangling),
+                    ],
                     capture_output=True,
                     text=True,
                 )
@@ -725,7 +852,14 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 link_bundle = tmp / "link_bundle"
                 link_bundle.symlink_to(bundle)
                 res_pkg_root = subprocess.run(
-                    [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(link_bundle), "--refresh-only"],
+                    [
+                        sys.executable,
+                        "-B",
+                        str(RELEASE / "package.py"),
+                        "--root",
+                        str(link_bundle),
+                        "--refresh-only",
+                    ],
                     capture_output=True,
                     text=True,
                 )
@@ -737,9 +871,12 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             tmp = Path(temporary)
             bundle = tmp / "bundle"
             _build_minimal_bundle(bundle)
-            # LICENSE, pyproject.toml, and .gitignore must be admitted cleanly (only .git is refused)
+            # LICENSE, pyproject.toml, and .gitignore must be admitted cleanly (only .git is
+            # refused)
             (bundle / "LICENSE").write_text("MIT License\n", encoding="utf-8")
-            (bundle / "pyproject.toml").write_text('[project]\nname = "managed-ai"\n', encoding="utf-8")
+            (bundle / "pyproject.toml").write_text(
+                '[project]\nname = "managed-ai"\n', encoding="utf-8"
+            )
             (bundle / ".gitignore").write_text("__pycache__/\n*.pyc\n", encoding="utf-8")
             # Declarative COMPONENTS.json (omitting "identity" in Git checkouts)
             comp_file = bundle / "src/managed_ai/companions/workbench/io_utils.py"
@@ -757,13 +894,22 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             )
             archive = tmp / "stamped.zip"
             res = subprocess.run(
-                [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle), "--output", str(archive)],
+                [
+                    sys.executable,
+                    "-B",
+                    str(RELEASE / "package.py"),
+                    "--root",
+                    str(bundle),
+                    "--output",
+                    str(archive),
+                ],
                 check=True,
                 capture_output=True,
                 text=True,
             )
             self.assertEqual(json.loads(res.stdout)["status"], "packaged")
-            # Exported bundle has stamped identity in COMPONENTS.json + generated SOURCES.md & MANIFEST.json
+            # Exported bundle has stamped identity in COMPONENTS.json + generated SOURCES.md &
+            # MANIFEST.json
             stamped = json.loads((peer / "COMPONENTS.json").read_text(encoding="utf-8"))
             self.assertEqual(
                 stamped["files"]["workbench/io_utils.py"]["identity"],
@@ -771,7 +917,9 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             )
             self.assertTrue((bundle / "src/managed_ai/SOURCES.md").is_file())
             manifest = json.loads((bundle / "MANIFEST.json").read_text(encoding="utf-8"))
-            inner_manifest = json.loads((bundle / "src/managed_ai/MANIFEST.json").read_text(encoding="utf-8"))
+            inner_manifest = json.loads(
+                (bundle / "src/managed_ai/MANIFEST.json").read_text(encoding="utf-8")
+            )
             self.assertIn("LICENSE", manifest["members"])
             self.assertIn("pyproject.toml", manifest["members"])
             self.assertIn(".gitignore", manifest["members"])
@@ -780,7 +928,8 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 inner_manifest["members"]["companions/peer/COMPONENTS.json"],
                 manifest["members"]["src/managed_ai/companions/peer/COMPONENTS.json"],
             )
-            # W5-B11: allow_abbrev=False refuses abbreviated flags on package.py & refresh_guidance.py
+            # W5-B11: allow_abbrev=False refuses abbreviated flags on package.py &
+            # refresh_guidance.py
             bad_pkg = subprocess.run(
                 [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle), "--ref"],
                 capture_output=True,
@@ -788,7 +937,13 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             )
             self.assertNotEqual(bad_pkg.returncode, 0)
             bad_ref = subprocess.run(
-                [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--ro", str(bundle / "src/managed_ai")],
+                [
+                    sys.executable,
+                    "-B",
+                    str(RELEASE / "refresh_guidance.py"),
+                    "--ro",
+                    str(bundle / "src/managed_ai"),
+                ],
                 capture_output=True,
                 text=True,
             )
@@ -796,6 +951,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
 
     def test_c41_2a_with_engine_keeps_external_managed_ai_mounted_for_lazy_imports(self):
         import importlib
+
         with TemporaryDirectory() as temporary:
             tmp = Path(temporary)
             coloc_src = tmp / "colocated/src"
@@ -810,7 +966,9 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 (pkg / "store/__init__.py").write_text("", encoding="utf-8")
                 (pkg / "store/shared_tag.py").write_text(f"TAG = {label!r}\n", encoding="utf-8")
                 if add_ext_only:
-                    (pkg / "store/ext_only_helper.py").write_text("ORIGIN = 'EXTERNAL_ONLY'\n", encoding="utf-8")
+                    (pkg / "store/ext_only_helper.py").write_text(
+                        "ORIGIN = 'EXTERNAL_ONLY'\n", encoding="utf-8"
+                    )
                 (pkg / "store/system.py").write_text(
                     "def run_lazy():\n"
                     "    from managed_ai.store.shared_tag import TAG\n"
@@ -820,7 +978,11 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 )
 
             coloc_str = str(coloc_src.resolve())
-            saved = {k: sys.modules.pop(k) for k in list(sys.modules) if k == "managed_ai" or k.startswith("managed_ai.")}
+            saved = {
+                k: sys.modules.pop(k)
+                for k in list(sys.modules)
+                if k == "managed_ai" or k.startswith("managed_ai.")
+            }
             sys.path.insert(0, coloc_str)
             try:
                 coloc_mod = importlib.import_module("managed_ai")
@@ -834,7 +996,9 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 (custom / "__init__.py").write_text("LABEL = 'CUSTOM'\n", encoding="utf-8")
                 (custom / "store/__init__.py").write_text("", encoding="utf-8")
                 (custom / "store/shared_tag.py").write_text("TAG = 'CUSTOM'\n", encoding="utf-8")
-                (custom / "store/ext_only_helper.py").write_text("ORIGIN = 'CUSTOM_ONLY'\n", encoding="utf-8")
+                (custom / "store/ext_only_helper.py").write_text(
+                    "ORIGIN = 'CUSTOM_ONLY'\n", encoding="utf-8"
+                )
                 (custom / "store/system.py").write_text(
                     "def run_lazy():\n"
                     "    from managed_ai.store.shared_tag import TAG\n"

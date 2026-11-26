@@ -1,20 +1,21 @@
 """Wave 7/8 architecture guards and regression tests for host, companions, and collective."""
+
 from __future__ import annotations
 
 import ast
-from dataclasses import FrozenInstanceError
 import gc
 import io
 import json
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import tokenize
 import unittest
-from unittest import mock
 import zipfile
+from dataclasses import FrozenInstanceError
+from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = REPO_ROOT / "src"
@@ -111,9 +112,9 @@ class Wave7ArchitectureGuardTests(unittest.TestCase):
                             bare_json_loads.append(f"{rel}:{node.lineno}")
 
                     is_parser_call = (
-                        (isinstance(func, ast.Attribute) and func.attr in {"ArgumentParser", "add_parser"})
-                        or (isinstance(func, ast.Name) and func.id == "ArgumentParser")
-                    )
+                        isinstance(func, ast.Attribute)
+                        and func.attr in {"ArgumentParser", "add_parser"}
+                    ) or (isinstance(func, ast.Name) and func.id == "ArgumentParser")
                     if is_parser_call:
                         allow_kw = [kw for kw in node.keywords if kw.arg == "allow_abbrev"]
                         if (
@@ -125,7 +126,9 @@ class Wave7ArchitectureGuardTests(unittest.TestCase):
 
         blank_ratio = blank_lines / max(total_lines, 1)
         self.assertEqual(semicolons, [], f"Semicolon-packed statements found: {semicolons}")
-        self.assertEqual(os_violations, [], f"Direct OS/Win32 branching outside platform/: {os_violations}")
+        self.assertEqual(
+            os_violations, [], f"Direct OS/Win32 branching outside platform/: {os_violations}"
+        )
         self.assertEqual(load_sibling_hits, [], f"_load_sibling hacks remain: {load_sibling_hits}")
         self.assertEqual(crlf_files, [], f"CRLF files found: {crlf_files}")
         self.assertEqual(bare_json_loads, [], f"Bare json.loads calls found: {bare_json_loads}")
@@ -154,8 +157,8 @@ class Wave7ArchitectureGuardTests(unittest.TestCase):
         )
         from managed_ai.host.continuing_work.continuing_work import Host
         from managed_ai.host.continuing_work.contract import (
-            ContinuingWorkService,
             DEFAULT_HOST_CONFIG,
+            ContinuingWorkService,
             HostConfig,
         )
         from managed_ai.host.material_retention.config import (
@@ -187,7 +190,9 @@ class Wave7ArchitectureGuardTests(unittest.TestCase):
             PublicationReviewService,
             RepresentationService,
         ):
-            self.assertTrue(getattr(proto, "_is_runtime_protocol", False), f"{proto} not runtime_checkable")
+            self.assertTrue(
+                getattr(proto, "_is_runtime_protocol", False), f"{proto} not runtime_checkable"
+            )
 
         with tempfile.TemporaryDirectory() as tmp:
             host = Host(Path(tmp) / "host")
@@ -261,7 +266,8 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
                         "import material_retention.managed_material as mm; "
                         "store = mm.Store(sys.argv[1]); "
                         "res = mm.verify(store); "
-                        "leaked = [m for m in sys.modules if m == 'managed_ai' or m.startswith('managed_ai.')]; "
+                        "leaked = [m for m in sys.modules "
+                        "if m == 'managed_ai' or m.startswith('managed_ai.')]; "
                         "print(json.dumps({'manifest': res['manifest'], 'leaked': leaked}))"
                     ),
                     str(extracted),
@@ -303,7 +309,8 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
 
     def test_p7_5_single_store_io_module_and_weakref_lock_pools_gc(self) -> None:
         from managed_ai.host.continuing_work import occurrence_files
-        from managed_ai.host.material_retention import managed_material as mm, store_io
+        from managed_ai.host.material_retention import managed_material as mm
+        from managed_ai.host.material_retention import store_io
 
         self.assertIs(mm._store_io, store_io)
 
@@ -326,8 +333,12 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
         from managed_ai.host.signal_field.operations import Field
 
         queue_file = SRC_ROOT / "managed_ai/host/signal_field/queue.py"
-        namespace: dict[str, object] = {"__name__": "signal_field_queue", "__file__": str(queue_file)}
-        exec(compile(queue_file.read_text(encoding="utf-8"), str(queue_file), "exec"), namespace)
+        namespace: dict[str, object] = {
+            "__name__": "signal_field_queue",
+            "__file__": str(queue_file),
+        }
+        code = compile(queue_file.read_text(encoding="utf-8"), str(queue_file), "exec")
+        exec(code, namespace)  # noqa: S102
         self.assertIn("planning_snapshot", namespace)
         self.assertIn("no_journal", namespace)
 
@@ -392,20 +403,25 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             code_file = root / "knowledge.py"
-            code_v1 = "\n".join([
-                "def search_query(q):",
-                "    return q",
-                "class FtsAnalyzer:",
-                "    @classmethod",
-                "    def identity(cls):",
-                "        return {'name': 'stub', 'v': 1}",
-                "    @classmethod",
-                "    def create(cls, db, records):",
-                "        return None",
-                "    @classmethod",
-                "    def search(cls, db, query, limit=8):",
-                "        return []",
-            ]) + "\n"
+            code_v1 = (
+                "\n".join(
+                    [
+                        "def search_query(q):",
+                        "    return q",
+                        "class FtsAnalyzer:",
+                        "    @classmethod",
+                        "    def identity(cls):",
+                        "        return {'name': 'stub', 'v': 1}",
+                        "    @classmethod",
+                        "    def create(cls, db, records):",
+                        "        return None",
+                        "    @classmethod",
+                        "    def search(cls, db, query, limit=8):",
+                        "        return []",
+                    ]
+                )
+                + "\n"
+            )
             code_file.write_text(code_v1, encoding="utf-8")
             impl1 = source_tools.SearchImplementation.cached(code_file)
             impl2 = source_tools.SearchImplementation.cached(code_file)
@@ -482,9 +498,11 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
                 },
             }
             config_bytes = json.dumps(spec).encode("utf-8")
-            with mock.patch.object(peer_harness.Harness, "event", side_effect=RuntimeError("boom")):
-                with self.assertRaisesRegex(RuntimeError, "boom"):
-                    peer_harness.Harness(spec, config_bytes, run_dir)
+            with (
+                mock.patch.object(peer_harness.Harness, "event", side_effect=RuntimeError("boom")),
+                self.assertRaisesRegex(RuntimeError, "boom"),
+            ):
+                peer_harness.Harness(spec, config_bytes, run_dir)
 
             events_file = run_dir / "events.jsonl"
             self.assertTrue(events_file.exists())
@@ -499,7 +517,9 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
         for bad in bad_segments:
             with self.assertRaises(ValueError, msg=f"occurrence_files.ident accepted {bad!r}"):
                 occurrence_files.ident(bad)
-            with self.assertRaises(ValueError, msg=f"material_retention.safe_relative accepted {bad!r}"):
+            with self.assertRaises(
+                ValueError, msg=f"material_retention.safe_relative accepted {bad!r}"
+            ):
                 store_io.safe_relative(f"dir/{bad}")
 
     def test_qa7_3_and_qa7_8_cli_clean_errors_and_roots_validation(self) -> None:
@@ -627,7 +647,12 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
                 zf.extractall(extracted)
 
             direct_zip_script = subprocess.run(
-                [sys.executable, "-I", str(extracted / "material_retention/managed_material.py"), "--help"],
+                [
+                    sys.executable,
+                    "-I",
+                    str(extracted / "material_retention/managed_material.py"),
+                    "--help",
+                ],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -636,7 +661,8 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
             self.assertIn("usage:", direct_zip_script.stdout.lower())
 
     def test_c47_o1_retire_guards_selection_descendant_path(self) -> None:
-        from managed_ai.host.material_retention import managed_material as mm, retirement
+        from managed_ai.host.material_retention import managed_material as mm
+        from managed_ai.host.material_retention import retirement
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -661,13 +687,17 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
             plan_bytes = json.dumps({"source_manifest": snap["manifest"]}).encode("utf-8")
             plan_path.write_bytes(plan_bytes)
 
-            with mock.patch.object(
-                retirement,
-                "check_unfollowed_descendant",
-                side_effect=ValueError("Current selection must not traverse a symlink or reparse point"),
-            ) as mocked_guard:
-                with self.assertRaisesRegex(ValueError, "symlink or reparse point"):
-                    mm.retire(store, plan_path, mm.sha(plan_bytes), snap["selection"])
+            with (
+                mock.patch.object(
+                    retirement,
+                    "check_unfollowed_descendant",
+                    side_effect=ValueError(
+                        "Current selection must not traverse a symlink or reparse point"
+                    ),
+                ) as mocked_guard,
+                self.assertRaisesRegex(ValueError, "symlink or reparse point"),
+            ):
+                mm.retire(store, plan_path, mm.sha(plan_bytes), snap["selection"])
             mocked_guard.assert_called_once()
 
     def test_qa7_4_and_qa7_7_check_representation_import_safe_and_strict_engine(self) -> None:
@@ -713,7 +743,9 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
             "inbox",
             "changes",
         }
-        registered_ops = set(collective_cli._LIFECYCLE_HANDLERS) | set(collective_cli._STORE_HANDLERS)
+        registered_ops = set(collective_cli._LIFECYCLE_HANDLERS) | set(
+            collective_cli._STORE_HANDLERS
+        )
         self.assertEqual(registered_ops, expected_ops)
 
         self.assertIn("collective", capture_native._CODE_ID_EXCLUDED_DIRS)
@@ -734,7 +766,11 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
             [sys.executable, "-B", "-m", "managed_ai.collective", "--help"],
             capture_output=True,
             text=True,
-            env={**dict(__import__("os").environ), "PYTHONPATH": str(SRC_ROOT), "PYTHONDONTWRITEBYTECODE": "1"},
+            env={
+                **dict(__import__("os").environ),
+                "PYTHONPATH": str(SRC_ROOT),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
             check=False,
         )
         self.assertEqual(module_help.returncode, 0, module_help.stderr)

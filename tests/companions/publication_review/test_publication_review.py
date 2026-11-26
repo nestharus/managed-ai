@@ -1,21 +1,22 @@
 """Wave 4 regression tests for companions/publication_review (W4-B7, W4-B10, W4-H5)."""
+
 import hashlib
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-SRC_ROOT = REPO_ROOT / 'src'
-PUB_DIR = SRC_ROOT / 'managed_ai/companions/publication_review'
+SRC_ROOT = REPO_ROOT / "src"
+PUB_DIR = SRC_ROOT / "managed_ai/companions/publication_review"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.companions.publication_review import (
+from managed_ai.companions.publication_review import (  # noqa: E402
     continuation_assessor,
     publication_observer,
     publication_review,
@@ -29,143 +30,171 @@ class PublicationReviewWave4Tests(unittest.TestCase):
         self.root = Path(self.tmp.name)
 
     def test_assessor_cli_rejects_duplicate_keys_and_nonfinite_json(self):
-        prev = self.root / 'prev.json'
-        curr = self.root / 'curr.json'
-        prev.write_text('{"artifacts":[],"obligations":[],"obligations":[]}\n', encoding='utf-8')
-        curr.write_text('{"requirements":{},"sources":{},"artifacts":{}}\n', encoding='utf-8')
-        rc = continuation_assessor._main(['--previous', str(prev), '--current', str(curr)])
+        prev = self.root / "prev.json"
+        curr = self.root / "curr.json"
+        prev.write_text('{"artifacts":[],"obligations":[],"obligations":[]}\n', encoding="utf-8")
+        curr.write_text('{"requirements":{},"sources":{},"artifacts":{}}\n', encoding="utf-8")
+        rc = continuation_assessor._main(["--previous", str(prev), "--current", str(curr)])
         self.assertEqual(rc, 2)
 
-        prev.write_text('{"artifacts":[],"obligations":[{"status":"open","score":NaN}]}\n', encoding='utf-8')
-        rc2 = continuation_assessor._main(['--previous', str(prev), '--current', str(curr)])
+        prev.write_text(
+            '{"artifacts":[],"obligations":[{"status":"open","score":NaN}]}\n', encoding="utf-8"
+        )
+        rc2 = continuation_assessor._main(["--previous", str(prev), "--current", str(curr)])
         self.assertEqual(rc2, 2)
 
     def test_observer_docstring_and_path_traversal_symlink_guards(self):
-        self.assertIn('docs/OBSERVATION-CONTRACT.md', publication_observer.__doc__)
-        self.assertNotIn('OBSERVER-INTERFACE.md', publication_observer.__doc__)
+        self.assertIn("docs/OBSERVATION-CONTRACT.md", publication_observer.__doc__)
+        self.assertNotIn("OBSERVER-INTERFACE.md", publication_observer.__doc__)
 
-        src_root = self.root / 'src'
+        src_root = self.root / "src"
         src_root.mkdir()
-        (src_root / 'doc.md').write_text('hello\n', encoding='utf-8')
+        (src_root / "doc.md").write_text("hello\n", encoding="utf-8")
 
-        for bad_path in (r'sub\doc.md', 'C:doc.md', 'D:foo/bar.md', '../escape.md', '/abs.md', 'a//b.md'):
+        for bad_path in (
+            r"sub\doc.md",
+            "C:doc.md",
+            "D:foo/bar.md",
+            "../escape.md",
+            "/abs.md",
+            "a//b.md",
+        ):
             with self.subTest(bad_path=bad_path):
                 decl = {
-                    'schema': publication_observer.DECLARATION_SCHEMA,
-                    'roots': {'src': str(src_root)},
-                    'sources': {'s1': {'root': 'src', 'path': bad_path}},
+                    "schema": publication_observer.DECLARATION_SCHEMA,
+                    "roots": {"src": str(src_root)},
+                    "sources": {"s1": {"root": "src", "path": bad_path}},
                 }
                 with self.assertRaises(ValueError):
                     publication_observer.observe(decl)
 
         # Symlink (POSIX) or NTFS junction (Windows) under configured root must be refused.
-        outside_dir = self.root / 'outside-dir'
+        outside_dir = self.root / "outside-dir"
         outside_dir.mkdir()
-        (outside_dir / 'secret.md').write_text('secret\n', encoding='utf-8')
-        if os.name == 'nt':
-            junc = src_root / 'junc'
+        (outside_dir / "secret.md").write_text("secret\n", encoding="utf-8")
+        if os.name == "nt":
+            junc = src_root / "junc"
             proc = subprocess.run(
-                ['cmd', '/c', 'mklink', '/J', str(junc), str(outside_dir)],
-                capture_output=True, text=True,
+                ["cmd", "/c", "mklink", "/J", str(junc), str(outside_dir)],
+                capture_output=True,
+                text=True,
             )
             if proc.returncode == 0:
                 decl_junc = {
-                    'schema': publication_observer.DECLARATION_SCHEMA,
-                    'roots': {'src': str(src_root)},
-                    'sources': {'s1': {'root': 'src', 'path': 'junc/secret.md'}},
+                    "schema": publication_observer.DECLARATION_SCHEMA,
+                    "roots": {"src": str(src_root)},
+                    "sources": {"s1": {"root": "src", "path": "junc/secret.md"}},
                 }
-                with self.assertRaisesRegex(ValueError, 'symlink|reparse'):
+                with self.assertRaisesRegex(ValueError, "symlink|reparse"):
                     publication_observer.observe(decl_junc)
-                subprocess.run(['cmd', '/c', 'rmdir', str(junc)], capture_output=True)
-        outside = self.root / 'outside.md'
-        outside.write_text('secret\n', encoding='utf-8')
-        link = src_root / 'linked.md'
+                subprocess.run(["cmd", "/c", "rmdir", str(junc)], capture_output=True)
+        outside = self.root / "outside.md"
+        outside.write_text("secret\n", encoding="utf-8")
+        link = src_root / "linked.md"
         try:
             link.symlink_to(outside)
         except OSError:
             return
         decl_link = {
-            'schema': publication_observer.DECLARATION_SCHEMA,
-            'roots': {'src': str(src_root)},
-            'sources': {'s1': {'root': 'src', 'path': 'linked.md'}},
+            "schema": publication_observer.DECLARATION_SCHEMA,
+            "roots": {"src": str(src_root)},
+            "sources": {"s1": {"root": "src", "path": "linked.md"}},
         }
-        with self.assertRaisesRegex(ValueError, 'symlink|reparse'):
+        with self.assertRaisesRegex(ValueError, "symlink|reparse"):
             publication_observer.observe(decl_link)
 
     def test_publication_review_direct_import_and_atomic_retain(self):
-        src_root = self.root / 'src'
+        src_root = self.root / "src"
         src_root.mkdir()
-        body = b'published text\n'
-        (src_root / 'art.md').write_bytes(body)
+        body = b"published text\n"
+        (src_root / "art.md").write_bytes(body)
         sha = hashlib.sha256(body).hexdigest()
 
         previous = {
-            'artifacts': [{
-                'id': 'art', 'artifact_sha256': sha,
-                'requirements': {}, 'sources': {},
-            }],
-            'obligations': [],
+            "artifacts": [
+                {
+                    "id": "art",
+                    "artifact_sha256": sha,
+                    "requirements": {},
+                    "sources": {},
+                }
+            ],
+            "obligations": [],
         }
         declaration = {
-            'schema': publication_observer.DECLARATION_SCHEMA,
-            'roots': {'src': str(src_root)},
-            'artifacts': {'art': {'root': 'src', 'path': 'art.md'}},
+            "schema": publication_observer.DECLARATION_SCHEMA,
+            "roots": {"src": str(src_root)},
+            "artifacts": {"art": {"root": "src", "path": "art.md"}},
         }
         report = publication_review.review(previous, declaration)
-        self.assertEqual(report['assessment']['artifacts'][0]['status'], 'current')
-        actual_assessor = (PUB_DIR / 'continuation_assessor.py').read_bytes()
-        self.assertEqual(report['assessor'], {
-            'bytes': len(actual_assessor),
-            'sha256': hashlib.sha256(actual_assessor).hexdigest(),
-        })
+        self.assertEqual(report["assessment"]["artifacts"][0]["status"], "current")
+        actual_assessor = (PUB_DIR / "continuation_assessor.py").read_bytes()
+        self.assertEqual(
+            report["assessor"],
+            {
+                "bytes": len(actual_assessor),
+                "sha256": hashlib.sha256(actual_assessor).hexdigest(),
+            },
+        )
 
         # Atomic _retain: failure partway leaves NO partial output_dir!
-        out_dir = self.root / 'retained-fail'
+        out_dir = self.root / "retained-fail"
         real_json_text = publication_review._json_text
-        calls = {'n': 0}
+        calls = {"n": 0}
 
         def fail_midway(value):
-            calls['n'] += 1
-            if calls['n'] == 3:
-                raise OSError('simulated disk full midway')
+            calls["n"] += 1
+            if calls["n"] == 3:
+                raise OSError("simulated disk full midway")
             return real_json_text(value)
 
-        with patch.object(publication_review, '_json_text', side_effect=fail_midway):
-            with self.assertRaisesRegex(OSError, 'simulated disk full'):
-                publication_review._retain(out_dir, previous, report)
+        with (
+            patch.object(publication_review, "_json_text", side_effect=fail_midway),
+            self.assertRaisesRegex(OSError, "simulated disk full"),
+        ):
+            publication_review._retain(out_dir, previous, report)
         self.assertFalse(out_dir.exists())
-        self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith('.retain-')], [])
+        self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith(".retain-")], [])
 
         # Successful atomic _retain publishes all 6 JSON files cleanly.
-        ok_dir = self.root / 'retained-ok'
+        ok_dir = self.root / "retained-ok"
         published = publication_review._retain(ok_dir, previous, report)
         self.assertEqual(Path(published), ok_dir.resolve())
         self.assertEqual(
             sorted(p.name for p in ok_dir.iterdir()),
-            ['assessment.json', 'current.json', 'observation.json', 'observed-origins.json', 'previous.json', 'report.json'],
+            [
+                "assessment.json",
+                "current.json",
+                "observation.json",
+                "observed-origins.json",
+                "previous.json",
+                "report.json",
+            ],
         )
         # Re-retaining to an existing target refuses.
         with self.assertRaises(FileExistsError):
             publication_review._retain(ok_dir, previous, report)
 
-    # --- C28-2: CLI --root must not pre-resolve symlinks/junctions; _load_assessor checks ancestors ---
+    # --- C28-2: CLI --root must not pre-resolve symlinks/junctions; _load_assessor checks ancestors
+    # ---
     def test_cli_root_and_explicit_assessor_refuse_symlink_and_junction_ancestors(self):
-        real_root = self.root / 'real-root'
+        real_root = self.root / "real-root"
         real_root.mkdir()
-        (real_root / 'doc.md').write_text('hello\n', encoding='utf-8')
-        real_assessor_dir = self.root / 'real-assessor'
+        (real_root / "doc.md").write_text("hello\n", encoding="utf-8")
+        real_assessor_dir = self.root / "real-assessor"
         real_assessor_dir.mkdir()
-        real_assessor = real_assessor_dir / 'custom_assessor.py'
-        real_assessor.write_bytes((PUB_DIR / 'continuation_assessor.py').read_bytes())
+        real_assessor = real_assessor_dir / "custom_assessor.py"
+        real_assessor.write_bytes((PUB_DIR / "continuation_assessor.py").read_bytes())
 
-        alias_root = self.root / 'alias-root'
-        alias_assessor_dir = self.root / 'alias-assessor'
+        alias_root = self.root / "alias-root"
+        alias_assessor_dir = self.root / "alias-assessor"
         cleanup_junctions = []
-        if os.name == 'nt':
+        if os.name == "nt":
             for link, target in ((alias_root, real_root), (alias_assessor_dir, real_assessor_dir)):
                 proc = subprocess.run(
-                    ['cmd', '/c', 'mklink', '/J', str(link), str(target)],
-                    capture_output=True, text=True,
+                    ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                    capture_output=True,
+                    text=True,
                 )
                 if proc.returncode != 0:
                     return
@@ -175,58 +204,83 @@ class PublicationReviewWave4Tests(unittest.TestCase):
             alias_assessor_dir.symlink_to(real_assessor_dir)
 
         try:
-            decl_path = self.root / 'decl.json'
-            decl_path.write_text(json.dumps({
-                'schema': publication_observer.DECLARATION_SCHEMA,
-                'roots': {'src': str(real_root)},
-                'sources': {'s1': {'root': 'src', 'path': 'doc.md'}},
-            }), encoding='utf-8')
-            prev_path = self.root / 'prev.json'
-            prev_path.write_text(json.dumps({'artifacts': [], 'obligations': []}), encoding='utf-8')
+            decl_path = self.root / "decl.json"
+            decl_path.write_text(
+                json.dumps(
+                    {
+                        "schema": publication_observer.DECLARATION_SCHEMA,
+                        "roots": {"src": str(real_root)},
+                        "sources": {"s1": {"root": "src", "path": "doc.md"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            prev_path = self.root / "prev.json"
+            prev_path.write_text(json.dumps({"artifacts": [], "obligations": []}), encoding="utf-8")
 
             # Both CLIs must refuse symlink/junction --root overrides!
-            rc_obs = publication_observer._main([
-                '--declaration', str(decl_path),
-                '--root', 'src=' + str(alias_root),
-            ])
+            rc_obs = publication_observer._main(
+                [
+                    "--declaration",
+                    str(decl_path),
+                    "--root",
+                    "src=" + str(alias_root),
+                ]
+            )
             self.assertEqual(rc_obs, 2)
 
-            rc_rev = publication_review.main([
-                '--previous', str(prev_path),
-                '--declaration', str(decl_path),
-                '--root', 'src=' + str(alias_root),
-            ])
+            rc_rev = publication_review.main(
+                [
+                    "--previous",
+                    str(prev_path),
+                    "--declaration",
+                    str(decl_path),
+                    "--root",
+                    "src=" + str(alias_root),
+                ]
+            )
             self.assertEqual(rc_rev, 2)
 
-            # _load_assessor must refuse an assessor inside a symlinked/junctioned ancestor directory!
-            with self.assertRaisesRegex(ValueError, 'symlink|reparse'):
-                publication_review._load_assessor(alias_assessor_dir / 'custom_assessor.py')
+            # _load_assessor must refuse an assessor inside a symlinked/junctioned ancestor
+            # directory!
+            with self.assertRaisesRegex(ValueError, "symlink|reparse"):
+                publication_review._load_assessor(alias_assessor_dir / "custom_assessor.py")
 
-            # W5-B11: _retain() must refuse an output directory whose parent is a symlink or NTFS junction!
-            previous = {'artifacts': [], 'obligations': []}
+            # W5-B11: _retain() must refuse an output directory whose parent is a symlink or NTFS
+            # junction!
+            previous = {"artifacts": [], "obligations": []}
             report = {
-                'current': {'requirements': {}, 'sources': {}, 'artifacts': {}},
-                'origins': {},
-                'observation': {'current': {}, 'origins': {}},
-                'assessment': {'artifacts': [], 'open_obligations': []},
+                "current": {"requirements": {}, "sources": {}, "artifacts": {}},
+                "origins": {},
+                "observation": {"current": {}, "origins": {}},
+                "assessment": {"artifacts": [], "open_obligations": []},
             }
-            with self.assertRaisesRegex(ValueError, 'symlink|reparse'):
-                publication_review._retain(alias_root / 'retained-out', previous, report)
-            self.assertFalse((real_root / 'retained-out').exists())
-            self.assertEqual([p.name for p in real_root.iterdir() if p.name.startswith('.retain-')], [])
+            with self.assertRaisesRegex(ValueError, "symlink|reparse"):
+                publication_review._retain(alias_root / "retained-out", previous, report)
+            self.assertFalse((real_root / "retained-out").exists())
+            self.assertEqual(
+                [p.name for p in real_root.iterdir() if p.name.startswith(".retain-")], []
+            )
 
             # W5-B11: CLIs must reject abbreviated options (allow_abbrev=False).
-            for script in ('publication_review.py', 'publication_observer.py', 'continuation_assessor.py'):
+            for script in (
+                "publication_review.py",
+                "publication_observer.py",
+                "continuation_assessor.py",
+            ):
                 proc = subprocess.run(
-                    [sys.executable, '-B', str(PUB_DIR / script), '--hel'],
-                    capture_output=True, text=True,
+                    [sys.executable, "-B", str(PUB_DIR / script), "--hel"],
+                    capture_output=True,
+                    text=True,
                 )
                 self.assertEqual(proc.returncode, 2)
-                self.assertTrue('required' in proc.stderr or 'unrecognized' in proc.stderr, proc.stderr)
+                self.assertTrue(
+                    "required" in proc.stderr or "unrecognized" in proc.stderr, proc.stderr
+                )
         finally:
             for link in cleanup_junctions:
-                subprocess.run(['cmd', '/c', 'rmdir', str(link)], capture_output=True)
+                subprocess.run(["cmd", "/c", "rmdir", str(link)], capture_output=True)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main(verbosity=2)

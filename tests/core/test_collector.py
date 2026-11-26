@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Contract checks using temporary runtime directories outside the distribution."""
+
 from __future__ import annotations
 
 import base64
-from datetime import datetime, timezone
 import hashlib
 import json
 import os
-from pathlib import Path
 import signal
 import subprocess
 import sys
@@ -15,20 +14,24 @@ import tempfile
 import time
 import unittest
 import uuid
+from datetime import UTC, datetime
+from pathlib import Path
 
 sys.dont_write_bytecode = True
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
-from tests._paths import ENGINE as ROOT, SRC, cleanup_tempdir
-from managed_ai.core.exchange.transport import collector
+from managed_ai.core.exchange.transport import collector  # noqa: E402
+from tests._paths import ENGINE as ROOT  # noqa: E402
+from tests._paths import cleanup_tempdir  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 TOOL = ROOT / "core" / "exchange" / "transport" / "collector.py"
 OBSERVATIONS: list[dict] = []
 
 # A ready/release handshake tests fresh CLI invocations while the actual child
 # is still open. The deadline also bounds cleanup when an assertion fails.
-GATED_CHILD = r'''
+GATED_CHILD = r"""
 import os, pathlib, sys, time
 folder = pathlib.Path(sys.argv[1])
 with (folder / "invocations.txt").open("ab", buffering=0) as out:
@@ -42,11 +45,11 @@ while not (folder / "release").exists() and time.monotonic() < deadline:
 os.write(1, b"last\n")
 (folder / "child-finished").write_text("finished")
 sys.exit(7)
-'''
+"""
 
 
 def utc() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def until(predicate, seconds: float = 8) -> bool:
@@ -101,18 +104,23 @@ class CollectorBehavior(unittest.TestCase):
     def cli(self, *args: str, expected_code: int = 0, env: dict[str, str] | None = None):
         process = subprocess.run(
             [sys.executable, "-B", str(TOOL), "--root", str(self.root), *args],
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, timeout=10, env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=10,
+            env=env,
         )
         try:
             response = json.loads(process.stdout)
         except ValueError:
             response = None
-        self.note["actions"].append({
-            "argv": list(args), "returncode": process.returncode,
-            "stderr": process.stderr.decode("utf-8", errors="replace"),
-            "response": compact(response),
-        })
+        self.note["actions"].append(
+            {
+                "argv": list(args),
+                "returncode": process.returncode,
+                "stderr": process.stderr.decode("utf-8", errors="replace"),
+                "response": compact(response),
+            }
+        )
         self.assertEqual(process.returncode, expected_code, process.stderr.decode(errors="replace"))
         if expected_code == 0:
             self.assertEqual(process.stderr, b"")
@@ -120,8 +128,18 @@ class CollectorBehavior(unittest.TestCase):
         return response
 
     def admit(self, argv: list[str], job_id: str = "job-1", consumer: str = "reviewer"):
-        return self.cli("admit", "--consumer", consumer, "--cwd", str(self.folder),
-                        "--brief", str(self.brief), job_id, "--", *argv)
+        return self.cli(
+            "admit",
+            "--consumer",
+            consumer,
+            "--cwd",
+            str(self.folder),
+            "--brief",
+            str(self.brief),
+            job_id,
+            "--",
+            *argv,
+        )
 
     def directory(self, job_id: str = "job-1") -> Path:
         return self.root / "jobs" / hashlib.sha256(job_id.encode()).hexdigest()
@@ -132,8 +150,10 @@ class CollectorBehavior(unittest.TestCase):
         return views[0]
 
     def terminal(self):
-        self.assertTrue(until(lambda: (self.directory() / "result.json").exists()),
-                        "worker did not publish a result within the bounded wait")
+        self.assertTrue(
+            until(lambda: (self.directory() / "result.json").exists()),
+            "worker did not publish a result within the bounded wait",
+        )
         return self.view()
 
     def bytes(self, view: dict, stream: str) -> bytes:
@@ -181,8 +201,9 @@ class CollectorBehavior(unittest.TestCase):
         self.assertEqual(changed["result"], completed["result"])
         alternate = self.folder / "other-current.md"
         alternate.write_text("Origin brief v1.\n", encoding="utf-8")
-        self.assertEqual(self.view("--current-brief", str(alternate))["interpretation"],
-                         "origin-brief-unchanged")
+        self.assertEqual(
+            self.view("--current-brief", str(alternate))["interpretation"], "origin-brief-unchanged"
+        )
         self.brief.unlink()
         missing = self.view()
         self.assertEqual(missing["interpretation"], "current-context-unavailable")
@@ -206,7 +227,9 @@ class CollectorBehavior(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix", "POSIX signal exit encoding")
     def test_signal_exit_is_actual_child_outcome(self) -> None:
-        script = "import os,signal; os.write(1,b'before signal'); os.kill(os.getpid(),signal.SIGTERM)"
+        script = (
+            "import os,signal; os.write(1,b'before signal'); os.kill(os.getpid(),signal.SIGTERM)"
+        )
         self.admit([sys.executable, "-c", script])
         self.cli("resume")
         view = self.terminal()
@@ -219,23 +242,41 @@ class CollectorBehavior(unittest.TestCase):
         """Inject the documented pre-spawn durable boundary into fresh test state."""
         token = uuid.uuid4().hex
         request = collector.read_json(self.directory() / "request.json")
-        collector.write_json(self.directory() / "dispatch.json", {
-            "attempt_id": token, "requested_at": utc(),
-            "request_sha256": collector.sha(collector.encode(request)),
-        })
+        collector.write_json(
+            self.directory() / "dispatch.json",
+            {
+                "attempt_id": token,
+                "requested_at": utc(),
+                "request_sha256": collector.sha(collector.encode(request)),
+            },
+        )
         self.note["fixture"] = "fresh valid dispatch marker written before any worker spawn"
         return token
 
     def test_worker_loss_keeps_bytes_and_unknown_exit(self) -> None:
         self.admit(self.gated_argv())
         token = self.record_dispatch()
-        detach = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-                  if os.name == "nt" else {"start_new_session": True})
+        detach = (
+            {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+            if os.name == "nt"
+            else {"start_new_session": True}
+        )
         with (self.folder / "owned-worker.log").open("wb") as log:
             worker = subprocess.Popen(
-                [sys.executable, "-B", str(TOOL), "--root", str(self.root), "_worker",
-                 self.directory().name, token], stdin=subprocess.DEVNULL,
-                stdout=log, stderr=log, **detach,
+                [
+                    sys.executable,
+                    "-B",
+                    str(TOOL),
+                    "--root",
+                    str(self.root),
+                    "_worker",
+                    self.directory().name,
+                    token,
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+                **detach,
             )
         self.owned_workers.append(worker)
         self.assertTrue(until(lambda: (self.folder / "ready").exists()))
@@ -275,9 +316,21 @@ class CollectorBehavior(unittest.TestCase):
         argv = [sys.executable, "-c", "print('original')"]
         self.admit(argv)
         preserved = (self.directory() / "request.json").read_bytes()
-        self.cli("admit", "--consumer", "reviewer", "--cwd", str(self.folder),
-                 "--brief", str(self.brief), "job-1", "--", sys.executable,
-                 "-c", "print('changed')", expected_code=2)
+        self.cli(
+            "admit",
+            "--consumer",
+            "reviewer",
+            "--cwd",
+            str(self.folder),
+            "--brief",
+            str(self.brief),
+            "job-1",
+            "--",
+            sys.executable,
+            "-c",
+            "print('changed')",
+            expected_code=2,
+        )
         self.assertEqual((self.directory() / "request.json").read_bytes(), preserved)
         self.assertFalse((self.directory() / "dispatch.json").exists())
 

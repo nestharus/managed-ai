@@ -1,14 +1,14 @@
 """Regression tests for managed_material locking, strict JSON, and orphan handling (SO2(1), A5)."""
-import importlib.util
+
 import json
 import math
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -16,7 +16,7 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.host.material_retention import managed_material as material
+from managed_ai.host.material_retention import managed_material as material  # noqa: E402
 
 IMPL_MODULE = "managed_ai.host.material_retention"
 
@@ -67,12 +67,16 @@ class MaterialRetentionHardening(unittest.TestCase):
             material.loads_json(b'{"a":NaN}')
 
         bad_spec = self.root / "bad-spec.json"
-        bad_spec.write_text('{"format":"managed-material-selection/1","id":"bad","id":"dup","roots":[]}')
+        bad_spec.write_text(
+            '{"format":"managed-material-selection/1","id":"bad","id":"dup","roots":[]}'
+        )
         with self.assertRaisesRegex(ValueError, "(?i)duplicate JSON key"):
             material.snapshot(self.store, bad_spec)
 
         nan_spec = self.root / "nan-spec.json"
-        nan_spec.write_text('{"format":"managed-material-selection/1","id":"bad","score":NaN,"roots":[]}')
+        nan_spec.write_text(
+            '{"format":"managed-material-selection/1","id":"bad","score":NaN,"roots":[]}'
+        )
         with self.assertRaisesRegex(ValueError, "(?i)nonfinite JSON"):
             material.snapshot(self.store, nan_spec)
 
@@ -82,11 +86,26 @@ class MaterialRetentionHardening(unittest.TestCase):
         seed = self.make_spec("seed", b"seed body\n")
         material.snapshot(self.store, seed)
 
-        specs = [self.make_spec(f"worker-{i}", f"payload-{i}-unique-body\n".encode()) for i in range(4)]
+        specs = [
+            self.make_spec(f"worker-{i}", f"payload-{i}-unique-body\n".encode()) for i in range(4)
+        ]
         procs = [
             subprocess.Popen(
-                [sys.executable, "-B", "-m", IMPL_MODULE, "snapshot", "--store", str(self.store_dir), "--spec", str(sp)],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_subproc_env(),
+                [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    IMPL_MODULE,
+                    "snapshot",
+                    "--store",
+                    str(self.store_dir),
+                    "--spec",
+                    str(sp),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=_subproc_env(),
             )
             for sp in specs
         ]
@@ -97,7 +116,8 @@ class MaterialRetentionHardening(unittest.TestCase):
             results.append(json.loads(out))
 
         fresh = material.Store(self.store_dir)
-        # Every concurrent worker's body and occurrence must survive in index.json and verify cleanly!
+        # Every concurrent worker's body and occurrence must survive in index.json and verify
+        # cleanly!
         for i in range(4):
             body = f"payload-{i}-unique-body\n".encode()
             self.assertIn(material.sha(body), fresh.objects)
@@ -110,20 +130,32 @@ class MaterialRetentionHardening(unittest.TestCase):
     def test_nonblocking_store_lock_detects_active_holder(self):
         ready = self.root / "locked.flag"
         release = self.root / "release.flag"
-        holder_code = "\n".join([
-            "import sys, time",
-            "from pathlib import Path",
-            "from managed_ai.host.material_retention import managed_material as mm",
-            "with mm.store_lock(Path(sys.argv[1])):",
-            "    Path(sys.argv[2]).write_text('ready')",
-            "    deadline = time.monotonic() + 15",
-            "    while not Path(sys.argv[3]).exists() and time.monotonic() < deadline:",
-            "        time.sleep(0.05)",
-        ])
+        holder_code = "\n".join(
+            [
+                "import sys, time",
+                "from pathlib import Path",
+                "from managed_ai.host.material_retention import managed_material as mm",
+                "with mm.store_lock(Path(sys.argv[1])):",
+                "    Path(sys.argv[2]).write_text('ready')",
+                "    deadline = time.monotonic() + 15",
+                "    while not Path(sys.argv[3]).exists() and time.monotonic() < deadline:",
+                "        time.sleep(0.05)",
+            ]
+        )
         proc = subprocess.Popen(
-            [sys.executable, "-B", "-c", holder_code,
-             str(self.store_dir), str(ready), str(release)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_subproc_env(),
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                holder_code,
+                str(self.store_dir),
+                str(ready),
+                str(release),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_subproc_env(),
         )
         try:
             deadline = time.monotonic() + 15
@@ -132,9 +164,11 @@ class MaterialRetentionHardening(unittest.TestCase):
             if not ready.exists():
                 out, err = proc.communicate(timeout=5)
                 self.fail(f"Lock holder subprocess failed (rc={proc.returncode}): {err or out}")
-            with self.assertRaises(BlockingIOError):
-                with material.store_lock(self.store_dir, nonblocking=True):
-                    pass
+            with (
+                self.assertRaises(BlockingIOError),
+                material.store_lock(self.store_dir, nonblocking=True),
+            ):
+                pass
         finally:
             release.write_text("go")
             proc.communicate(timeout=15)
@@ -145,13 +179,19 @@ class MaterialRetentionHardening(unittest.TestCase):
         folder.mkdir()
         (folder / "old.txt").write_bytes(b"obsolete data")
         req = self.root / "init.json"
-        req.write_text(json.dumps({
-            "format": "managed-material-selection/1",
-            "id": "initial",
-            "roots": [{"label": "obsolete", "path": str(folder)}],
-            "current": [],
-            "materialization_groups": [{"prefix": "obsolete", "state": "retirement-candidate"}],
-        }))
+        req.write_text(
+            json.dumps(
+                {
+                    "format": "managed-material-selection/1",
+                    "id": "initial",
+                    "roots": [{"label": "obsolete", "path": str(folder)}],
+                    "current": [],
+                    "materialization_groups": [
+                        {"prefix": "obsolete", "state": "retirement-candidate"}
+                    ],
+                }
+            )
+        )
         first = material.snapshot(self.store, req)
         proposal = {
             "format": "managed-material-retirement-proposal/1",
@@ -168,9 +208,12 @@ class MaterialRetentionHardening(unittest.TestCase):
         second_spec = self.make_spec("second", b"newer current")
         material.snapshot(other_store, second_spec)
 
-        # Calling retire on the older Store handle must reload under lock and refuse stale expected_selection.
+        # Calling retire on the older Store handle must reload under lock and refuse stale
+        # expected_selection.
         with self.assertRaisesRegex(ValueError, "Current selection changed since receiving"):
-            material.retire(self.store, plan_path, material.sha(plan_path.read_bytes()), first["selection"])
+            material.retire(
+                self.store, plan_path, material.sha(plan_path.read_bytes()), first["selection"]
+            )
         self.assertTrue(folder.exists())
 
     # --- SO2(1): Orphaned occurrence prevention and explicit reporting ---
@@ -179,17 +222,21 @@ class MaterialRetentionHardening(unittest.TestCase):
         material.snapshot(self.store, first_spec)
 
         real_immutable = material.immutable
+
         def fail_selection(path, raw):
             if Path(path).parent.name == "selections":
                 raise OSError("selection disk full")
             return real_immutable(path, raw)
 
         second_spec = self.make_spec("second", b"second bytes")
-        with patch.object(material, "immutable", side_effect=fail_selection):
-            with self.assertRaisesRegex(OSError, "selection disk full"):
-                material.snapshot(self.store, second_spec)
+        with (
+            patch.object(material, "immutable", side_effect=fail_selection),
+            self.assertRaisesRegex(OSError, "selection disk full"),
+        ):
+            material.snapshot(self.store, second_spec)
 
-        # Because occurrence pointer is written AFTER selection succeeds, no orphan occurrence exists!
+        # Because occurrence pointer is written AFTER selection succeeds, no orphan occurrence
+        # exists!
         self.assertFalse((self.store_dir / "occurrences/second.json").exists())
         self.assertEqual(material.unpublished_occurrences(self.store), [])
         last = json.loads((self.store_dir / "events.jsonl").read_bytes().splitlines()[-1])
@@ -201,15 +248,18 @@ class MaterialRetentionHardening(unittest.TestCase):
         first = material.snapshot(self.store, first_spec)
 
         real_replace = material.replace_json
+
         def refuse_current(path, value):
             if Path(path).name == "CURRENT.json":
                 raise OSError("pointer unavailable")
             return real_replace(path, value)
 
         second_spec = self.make_spec("second", b"retained bytes")
-        with patch.object(material, "replace_json", side_effect=refuse_current):
-            with self.assertRaisesRegex(OSError, "pointer unavailable"):
-                material.snapshot(self.store, second_spec)
+        with (
+            patch.object(material, "replace_json", side_effect=refuse_current),
+            self.assertRaisesRegex(OSError, "pointer unavailable"),
+        ):
+            material.snapshot(self.store, second_spec)
 
         # Preserves existing contract while eliminating silent orphan inconsistency.
         self.assertEqual(material.current_selection(self.store)[0], first["selection"])
@@ -248,7 +298,8 @@ class MaterialRetentionHardening(unittest.TestCase):
         material.export(reused, archive)
         self.assertTrue(archive.is_file())
 
-    # --- C4-1(b)+(c): Pre-lock store creates .store.lock on shared read & thread nonblocking raises ---
+    # --- C4-1(b)+(c): Pre-lock store creates .store.lock on shared read & thread nonblocking raises
+    # ---
     def test_shared_lock_creates_lockfile_and_thread_nonblocking_raises(self):
         # Remove .store.lock to simulate a pre-lock or extracted-export store.
         lock_file = self.store_dir / ".store.lock"
@@ -257,21 +308,27 @@ class MaterialRetentionHardening(unittest.TestCase):
         with material.store_lock(self.store_dir, shared=True):
             self.assertTrue(lock_file.exists())
 
-        # Cross-thread nonblocking=True must immediately raise BlockingIOError without blocking on rlock.
+        # Cross-thread nonblocking=True must immediately raise BlockingIOError without blocking on
+        # rlock.
         import threading
+
         entered = threading.Event()
         release = threading.Event()
+
         def hold():
             with material.store_lock(self.store_dir):
                 entered.set()
                 release.wait(timeout=10)
+
         t = threading.Thread(target=hold)
         t.start()
         try:
             self.assertTrue(entered.wait(timeout=5))
-            with self.assertRaises(BlockingIOError):
-                with material.store_lock(self.store_dir, nonblocking=True):
-                    pass
+            with (
+                self.assertRaises(BlockingIOError),
+                material.store_lock(self.store_dir, nonblocking=True),
+            ):
+                pass
         finally:
             release.set()
             t.join(timeout=5)
@@ -282,71 +339,119 @@ class MaterialRetentionHardening(unittest.TestCase):
         material.snapshot(self.store, first_spec)
 
         # 1. Simulate abrupt SIGKILL between occurrence pointer write and CURRENT.json replacement:
-        # snapshot-started is written, occurrence/manifest/selection exist, NO snapshot-failed event!
+        # snapshot-started is written, occurrence/manifest/selection exist, NO snapshot-failed
+        # event!
         crash_spec = self.make_spec("hard-crash", b"hard crash payload")
+
         def simulate_sigkill(path, value):
             if Path(path).name == "CURRENT.json":
                 raise BaseException("simulated SIGKILL")
             return real_replace(path, value)
+
         real_replace = material.replace_json
-        with patch.object(material, "replace_json", side_effect=simulate_sigkill):
-            with self.assertRaises(BaseException):
-                material.snapshot(self.store, crash_spec)
+        with (
+            patch.object(material, "replace_json", side_effect=simulate_sigkill),
+            self.assertRaises(BaseException),  # noqa: B017
+        ):
+            material.snapshot(self.store, crash_spec)
         # Confirm no snapshot-failed was logged for hard-crash.
-        events = [material.loads_json(line) for line in (self.store_dir / "events.jsonl").read_bytes().splitlines()]
-        self.assertFalse(any(e.get("kind") == "snapshot-failed" and e.get("id") == "hard-crash" for e in events))
+        events = [
+            material.loads_json(line)
+            for line in (self.store_dir / "events.jsonl").read_bytes().splitlines()
+        ]
+        self.assertFalse(
+            any(e.get("kind") == "snapshot-failed" and e.get("id") == "hard-crash" for e in events)
+        )
 
         # 2. Simulate failed retain_artifact() at CURRENT.json replacement.
         extra = self.root / "extra-evidence.bin"
         extra.write_bytes(b"historical artifact bytes")
+
         def fail_current_os(path, value):
             if Path(path).name == "CURRENT.json":
                 raise OSError("current pointer busy")
             return real_replace(path, value)
-        with patch.object(material, "replace_json", side_effect=fail_current_os):
-            with self.assertRaisesRegex(OSError, "current pointer busy"):
-                material.retain_artifact(self.store, extra, "evidence", "Retain failed test.")
+
+        with (
+            patch.object(material, "replace_json", side_effect=fail_current_os),
+            self.assertRaisesRegex(OSError, "current pointer busy"),
+        ):
+            material.retain_artifact(self.store, extra, "evidence", "Retain failed test.")
 
         unpublished = {row["id"]: row for row in material.unpublished_occurrences(self.store)}
         self.assertIn("hard-crash", unpublished)
-        self.assertEqual(unpublished["hard-crash"]["reason"], "unconfirmed-occurrence-not-published")
+        self.assertEqual(
+            unpublished["hard-crash"]["reason"], "unconfirmed-occurrence-not-published"
+        )
         self.assertIsNotNone(unpublished["hard-crash"]["manifest"])
         self.assertIsNotNone(unpublished["hard-crash"]["selection"])
 
         retained_id = "retained-evidence-" + material.sha(b"historical artifact bytes")[:16]
         self.assertIn(retained_id, unpublished)
-        self.assertEqual(unpublished[retained_id]["reason"], "historical-artifact-retention-failed-before-current-publish")
+        self.assertEqual(
+            unpublished[retained_id]["reason"],
+            "historical-artifact-retention-failed-before-current-publish",
+        )
         self.assertEqual(unpublished[retained_id]["error"], "current pointer busy")
         self.assertNotIn("first", unpublished)
 
     def test_decomposed_exports_and_shared_lock_coexistence(self):
         # Verify all key public symbols remain re-exported on managed_material after decomposition.
         for name in (
-            "sha", "loads_json", "js", "utc", "require", "sync_dir", "store_lock",
-            "immutable", "replace_json", "deflate", "safe_relative", "path_state",
-            "read_manifest", "manifest_closure", "current_selection", "selection_closure",
-            "representation_closure", "observed_materialization_state", "materialization_state",
-            "selected_for_manifest", "unpublished_occurrences", "Store",
+            "sha",
+            "loads_json",
+            "js",
+            "utc",
+            "require",
+            "sync_dir",
+            "store_lock",
+            "immutable",
+            "replace_json",
+            "deflate",
+            "safe_relative",
+            "path_state",
+            "read_manifest",
+            "manifest_closure",
+            "current_selection",
+            "selection_closure",
+            "representation_closure",
+            "observed_materialization_state",
+            "materialization_state",
+            "selected_for_manifest",
+            "unpublished_occurrences",
+            "Store",
         ):
             self.assertTrue(hasattr(material, name), f"Missing re-export: {name}")
 
         # Cross-process shared locks coexist while blocking nonblocking exclusive acquisition.
         ready = self.root / "shared.ready"
         release = self.root / "shared.release"
-        holder_code = "\n".join([
-            "import sys, time",
-            "from pathlib import Path",
-            "from managed_ai.host.material_retention import managed_material as mm",
-            "with mm.store_lock(Path(sys.argv[1]), shared=True):",
-            "    Path(sys.argv[2]).write_text('ready', encoding='utf-8')",
-            "    deadline = time.monotonic() + 15",
-            "    while not Path(sys.argv[3]).exists() and time.monotonic() < deadline:",
-            "        time.sleep(0.05)",
-        ])
+        holder_code = "\n".join(
+            [
+                "import sys, time",
+                "from pathlib import Path",
+                "from managed_ai.host.material_retention import managed_material as mm",
+                "with mm.store_lock(Path(sys.argv[1]), shared=True):",
+                "    Path(sys.argv[2]).write_text('ready', encoding='utf-8')",
+                "    deadline = time.monotonic() + 15",
+                "    while not Path(sys.argv[3]).exists() and time.monotonic() < deadline:",
+                "        time.sleep(0.05)",
+            ]
+        )
         proc = subprocess.Popen(
-            [sys.executable, "-B", "-c", holder_code,
-             str(self.store_dir), str(ready), str(release)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_subproc_env(),
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                holder_code,
+                str(self.store_dir),
+                str(ready),
+                str(release),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_subproc_env(),
         )
         try:
             deadline = time.monotonic() + 15
@@ -355,9 +460,11 @@ class MaterialRetentionHardening(unittest.TestCase):
             self.assertTrue(ready.exists())
             with material.store_lock(self.store_dir, shared=True, nonblocking=True):
                 pass
-            with self.assertRaises(BlockingIOError):
-                with material.store_lock(self.store_dir, shared=False, nonblocking=True):
-                    pass
+            with (
+                self.assertRaises(BlockingIOError),
+                material.store_lock(self.store_dir, shared=False, nonblocking=True),
+            ):
+                pass
         finally:
             release.write_text("go", encoding="utf-8")
             proc.communicate(timeout=15)
@@ -371,20 +478,32 @@ class MaterialRetentionHardening(unittest.TestCase):
 
         ready = self.root / "rebuild-lock.ready"
         release = self.root / "rebuild-lock.release"
-        holder_code = "\n".join([
-            "import sys, time",
-            "from pathlib import Path",
-            "from managed_ai.host.material_retention import managed_material as mm",
-            "with mm.store_lock(Path(sys.argv[1]), shared=False):",
-            "    Path(sys.argv[2]).write_text('ready', encoding='utf-8')",
-            "    deadline = time.monotonic() + 15",
-            "    while not Path(sys.argv[3]).exists() and time.monotonic() < deadline:",
-            "        time.sleep(0.05)",
-        ])
+        holder_code = "\n".join(
+            [
+                "import sys, time",
+                "from pathlib import Path",
+                "from managed_ai.host.material_retention import managed_material as mm",
+                "with mm.store_lock(Path(sys.argv[1]), shared=False):",
+                "    Path(sys.argv[2]).write_text('ready', encoding='utf-8')",
+                "    deadline = time.monotonic() + 15",
+                "    while not Path(sys.argv[3]).exists() and time.monotonic() < deadline:",
+                "        time.sleep(0.05)",
+            ]
+        )
         proc = subprocess.Popen(
-            [sys.executable, "-B", "-c", holder_code,
-             str(self.store_dir), str(ready), str(release)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_subproc_env(),
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                holder_code,
+                str(self.store_dir),
+                str(ready),
+                str(release),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_subproc_env(),
         )
         rebuilt_dir = self.root / "rebuilt-store"
         rebuild_proc = None
@@ -394,17 +513,33 @@ class MaterialRetentionHardening(unittest.TestCase):
                 time.sleep(0.05)
             self.assertTrue(ready.exists())
             rebuild_proc = subprocess.Popen(
-                [sys.executable, "-B", "-m", IMPL_MODULE, "rebuild",
-                 "--source-store", str(self.store_dir),
-                 "--output", str(rebuilt_dir),
-                 "--expected-index", expected_index,
-                 "--expected-selection", seed_res["selection"],
-                 "--account", "Verify rebuild shared lock waits for exclusive writer."],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_subproc_env(),
+                [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    IMPL_MODULE,
+                    "rebuild",
+                    "--source-store",
+                    str(self.store_dir),
+                    "--output",
+                    str(rebuilt_dir),
+                    "--expected-index",
+                    expected_index,
+                    "--expected-selection",
+                    seed_res["selection"],
+                    "--account",
+                    "Verify rebuild shared lock waits for exclusive writer.",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=_subproc_env(),
             )
             # While exclusive lock is held, rebuild must wait rather than read a torn store.
             time.sleep(0.35)
-            self.assertIsNone(rebuild_proc.poll(), "rebuild exited while exclusive store_lock was held")
+            self.assertIsNone(
+                rebuild_proc.poll(), "rebuild exited while exclusive store_lock was held"
+            )
         finally:
             release.write_text("go", encoding="utf-8")
             proc.communicate(timeout=15)
@@ -433,9 +568,11 @@ class MaterialRetentionHardening(unittest.TestCase):
             "a/b\x00c",
             "/abs/path",
         ):
-            with self.subTest(bad=bad):
-                with self.assertRaisesRegex(ValueError, "Unsafe materialization path"):
-                    material.safe_relative(bad)
+            with (
+                self.subTest(bad=bad),
+                self.assertRaisesRegex(ValueError, "Unsafe materialization path"),
+            ):
+                material.safe_relative(bad)
         for good in ("selected", "a/b/c.txt", "obsolete/"):
             with self.subTest(good=good):
                 self.assertTrue(material.safe_relative(good).parts)
@@ -444,12 +581,18 @@ class MaterialRetentionHardening(unittest.TestCase):
         if os.name == "nt":
             proc = subprocess.run(
                 ["cmd", "/c", "mklink", "/J", str(link_path), str(target_dir)],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
             if proc.returncode != 0:
                 return False
-            self.addCleanup(lambda p=link_path: subprocess.run(["cmd", "/c", "rmdir", str(p)], capture_output=True)
-                            if p.exists() or material.is_reparse_or_symlink(p) else None)
+            self.addCleanup(
+                lambda p=link_path: (
+                    subprocess.run(["cmd", "/c", "rmdir", str(p)], capture_output=True)
+                    if p.exists() or material.is_reparse_or_symlink(p)
+                    else None
+                )
+            )
             return True
         link_path.symlink_to(target_dir)
         self.addCleanup(lambda p=link_path: p.unlink(missing_ok=True))
@@ -463,9 +606,11 @@ class MaterialRetentionHardening(unittest.TestCase):
         link_store = self.root / "store-link"
         self.assertTrue(self._make_dir_link(link_store, self.store_dir))
 
-        with self.assertRaisesRegex(ValueError, "symlink or reparse point"):
-            with material.store_lock(link_store):
-                pass
+        with (
+            self.assertRaisesRegex(ValueError, "symlink or reparse point"),
+            material.store_lock(link_store),
+        ):
+            pass
         with self.assertRaisesRegex(ValueError, "symlink or reparse point"):
             material.Store(link_store)
 
@@ -478,9 +623,17 @@ class MaterialRetentionHardening(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "symlink or reparse point"):
             material.export(self.store, out_link / "export.zip")
         with self.assertRaisesRegex(ValueError, "symlink or reparse point"):
-            material.rebuild(link_store, self.root / "rebuilt-1", expected_index, seed_res["selection"], "test")
+            material.rebuild(
+                link_store, self.root / "rebuilt-1", expected_index, seed_res["selection"], "test"
+            )
         with self.assertRaisesRegex(ValueError, "symlink or reparse point"):
-            material.rebuild(self.store_dir, out_link / "rebuilt-2", expected_index, seed_res["selection"], "test")
+            material.rebuild(
+                self.store_dir,
+                out_link / "rebuilt-2",
+                expected_index,
+                seed_res["selection"],
+                "test",
+            )
 
         # retain_artifact must refuse files reached through a junction/symlink ancestor.
         extra_dir = self.root / "extra-real"
@@ -491,7 +644,8 @@ class MaterialRetentionHardening(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "symlink or reparse point"):
             material.retain_artifact(self.store, extra_link / "evidence.txt", "ev", "test")
 
-        # retire() and _remove_planned_materializations must NEVER rmtree an NTFS junction or symlink!
+        # retire() and _remove_planned_materializations must NEVER rmtree an NTFS junction or
+        # symlink!
         victim = self.root / "victim-dir"
         victim.mkdir()
         precious = victim / "precious.txt"
@@ -501,13 +655,20 @@ class MaterialRetentionHardening(unittest.TestCase):
         retire_dir.mkdir()
         (retire_dir / "old.txt").write_bytes(b"retirable bytes")
         req = self.root / "retire-spec.json"
-        req.write_text(json.dumps({
-            "format": "managed-material-selection/1",
-            "id": "retire-occ",
-            "roots": [{"label": "obsolete", "path": str(retire_dir)}],
-            "current": [],
-            "materialization_groups": [{"prefix": "obsolete", "state": "retirement-candidate"}],
-        }), encoding="utf-8")
+        req.write_text(
+            json.dumps(
+                {
+                    "format": "managed-material-selection/1",
+                    "id": "retire-occ",
+                    "roots": [{"label": "obsolete", "path": str(retire_dir)}],
+                    "current": [],
+                    "materialization_groups": [
+                        {"prefix": "obsolete", "state": "retirement-candidate"}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
         occ = material.snapshot(self.store, req)
         proposal = {
             "format": "managed-material-retirement-proposal/1",
@@ -521,24 +682,34 @@ class MaterialRetentionHardening(unittest.TestCase):
 
         # Swap retire_dir for a junction/symlink pointing to victim!
         import shutil as _shutil
+
         _shutil.rmtree(retire_dir)
         self.assertTrue(self._make_dir_link(retire_dir, victim))
         with self.assertRaisesRegex(ValueError, "reparse|junction|changed"):
-            material.retire(self.store, plan_path, material.sha(plan_path.read_bytes()), occ["selection"])
+            material.retire(
+                self.store, plan_path, material.sha(plan_path.read_bytes()), occ["selection"]
+            )
         self.assertTrue(precious.is_file())
         self.assertEqual(precious.read_bytes(), b"do not delete me")
 
-        # Also directly exercise _remove_planned_materializations (simulating TOCTOU after plan check).
+        # Also directly exercise _remove_planned_materializations (simulating TOCTOU after plan
+        # check).
         if os.name == "nt":
             with self.assertRaisesRegex(ValueError, "reparse|junction"):
                 material._retirement._remove_planned_materializations(
-                    self.store, plan["materializations"], [], "p", occ["selection"],
+                    self.store,
+                    plan["materializations"],
+                    [],
+                    "p",
+                    occ["selection"],
                 )
             self.assertTrue(precious.is_file())
 
-    # --- W5-R2 / W7: Decomposed export ZIP bundles miniature package + vendored _platform under python -I ---
+    # --- W5-R2 / W7: Decomposed export ZIP bundles miniature package + vendored _platform under
+    # python -I ---
     def test_decomposed_export_zip_bundles_all_modules_and_runs_isolated(self):
         import zipfile as _zipfile
+
         spec = self.make_spec("portable-w5", b"portable wave5 payload\n")
         material.snapshot(self.store, spec)
         archive = self.root / "portable-w5.zip"
@@ -565,34 +736,69 @@ class MaterialRetentionHardening(unittest.TestCase):
         }
         with _zipfile.ZipFile(archive) as zf:
             names = set(zf.namelist())
-            self.assertTrue(expected_modules <= names, f"Missing modules in export ZIP: {expected_modules - names}")
+            self.assertTrue(
+                expected_modules <= names,
+                f"Missing modules in export ZIP: {expected_modules - names}",
+            )
             extracted = self.root / "extracted-portable"
             zf.extractall(extracted)
         proc = subprocess.run(
-            [sys.executable, "-I", str(extracted / "managed_material.py"), "verify", "--store", "."],
-            cwd=extracted, capture_output=True, text=True,
+            [
+                sys.executable,
+                "-I",
+                str(extracted / "managed_material.py"),
+                "verify",
+                "--store",
+                ".",
+            ],
+            cwd=extracted,
+            capture_output=True,
+            text=True,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         proc_mod = subprocess.run(
             [sys.executable, "-B", "-m", "material_retention", "verify", "--store", "."],
-            cwd=extracted, capture_output=True, text=True,
+            cwd=extracted,
+            capture_output=True,
+            text=True,
             env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"},
         )
         self.assertEqual(proc_mod.returncode, 0, proc_mod.stderr)
         restored = self.root / "extracted-restored"
         proc_restore = subprocess.run(
-            [sys.executable, "-I", str(extracted / "managed_material.py"), "restore",
-             "--store", ".", "--output", str(restored)],
-            cwd=extracted, capture_output=True, text=True,
+            [
+                sys.executable,
+                "-I",
+                str(extracted / "managed_material.py"),
+                "restore",
+                "--store",
+                ".",
+                "--output",
+                str(restored),
+            ],
+            cwd=extracted,
+            capture_output=True,
+            text=True,
         )
         self.assertEqual(proc_restore.returncode, 0, proc_restore.stderr)
         self.assertEqual((restored / "selected").read_bytes(), b"portable wave5 payload\n")
-        # Re-exporting from inside the extracted standalone recovery archive must also stay self-contained.
+        # Re-exporting from inside the extracted standalone recovery archive must also stay
+        # self-contained.
         reexport = self.root / "reexported.zip"
         proc_reexport = subprocess.run(
-            [sys.executable, "-I", str(extracted / "managed_material.py"), "export",
-             "--store", ".", "--output", str(reexport)],
-            cwd=extracted, capture_output=True, text=True,
+            [
+                sys.executable,
+                "-I",
+                str(extracted / "managed_material.py"),
+                "export",
+                "--store",
+                ".",
+                "--output",
+                str(reexport),
+            ],
+            cwd=extracted,
+            capture_output=True,
+            text=True,
         )
         self.assertEqual(proc_reexport.returncode, 0, proc_reexport.stderr)
         self.assertTrue(reexport.is_file())

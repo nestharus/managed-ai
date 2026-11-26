@@ -1,21 +1,22 @@
 """Resume replays completed calls only under the original source binding."""
+
 import json
-from pathlib import Path
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-SRC_ROOT = REPO_ROOT / 'src'
-WORKBENCH_DIR = SRC_ROOT / 'managed_ai/companions/workbench'
+SRC_ROOT = REPO_ROOT / "src"
+WORKBENCH_DIR = SRC_ROOT / "managed_ai/companions/workbench"
 for _p in (str(SRC_ROOT), str(REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from managed_ai.companions.workbench import durable_agent, inspect_config, resumable_workbench
-from managed_ai.companions.workbench.source_tools import SearchImplementation
-from tests.companions.workbench._fixtures import change_query_parser, search_layout
+from managed_ai.companions.workbench import durable_agent, inspect_config, resumable_workbench  # noqa: E402
+from managed_ai.companions.workbench.source_tools import SearchImplementation  # noqa: E402
+from tests.companions.workbench._fixtures import change_query_parser, search_layout  # noqa: E402
 
 
 class SourceReplay(unittest.TestCase):
@@ -25,47 +26,65 @@ class SourceReplay(unittest.TestCase):
         self.root = Path(directory.name)
         corpus = self.root / "corpus"
         corpus.mkdir()
-        (corpus / "basis.md").write_text("# Basis\n\nThe receiving owner judges the current source.\n",
-                                         encoding="utf-8", newline="\n")
-        self.config = {"run_id": "source-replay", "task": "Acquire the source and return.",
-                       "corpus_root": str(corpus), "workspace": str(self.root / "workspace"),
-                       "state_dir": str(self.root / "state"), "max_steps": 2,
-                       "model": {"kind": "injected", "identity": "source-replay-fixture"}}
+        (corpus / "basis.md").write_text(
+            "# Basis\n\nThe receiving owner judges the current source.\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        self.config = {
+            "run_id": "source-replay",
+            "task": "Acquire the source and return.",
+            "corpus_root": str(corpus),
+            "workspace": str(self.root / "workspace"),
+            "state_dir": str(self.root / "state"),
+            "max_steps": 2,
+            "model": {"kind": "injected", "identity": "source-replay-fixture"},
+        }
 
     def test_resume_refuses_dependency_drift_before_dispatch(self):
         runtime, entry = search_layout(self.root)
         steps = []
 
         def model(request):
-            steps.append(request['step'])
-            if request['step'] == 1:
+            steps.append(request["step"])
+            if request["step"] == 1:
                 return {"kind": "tool", "name": "source_inventory", "arguments": {}}
             return {"kind": "final", "answer": "Ready."}
 
-        with patch.object(resumable_workbench, 'SearchImplementation', side_effect=lambda: SearchImplementation(entry)):
+        with patch.object(
+            resumable_workbench,
+            "SearchImplementation",
+            side_effect=lambda: SearchImplementation(entry),
+        ):
             start = resumable_workbench.run_workbench(self.config, model=model)
-            self.assertEqual(start['status'], 'complete', start)
+            self.assertEqual(start["status"], "complete", start)
             self.assertEqual(steps, [1, 2])
-            state = self.root / 'state'
-            receipts = state / 'source-service/receipts.json'
-            manifest_file = state / 'durable/manifest.json'
+            state = self.root / "state"
+            receipts = state / "source-service/receipts.json"
+            manifest_file = state / "durable/manifest.json"
             receipt_bytes, manifest_bytes = receipts.read_bytes(), manifest_file.read_bytes()
-            binding = json.loads(manifest_bytes)['contract']['binding']
-            self.assertEqual(set(binding['source_search_code']),
-                             {str(runtime / rel) for rel in (
-                                 'lexical.py', 'config.py',
-                             )})
-            self.assertIn('tokenizer', binding['source_search_analyzer'])
-            predecessor = change_query_parser(runtime / 'lexical.py')
+            binding = json.loads(manifest_bytes)["contract"]["binding"]
+            self.assertEqual(
+                set(binding["source_search_code"]),
+                {
+                    str(runtime / rel)
+                    for rel in (
+                        "lexical.py",
+                        "config.py",
+                    )
+                },
+            )
+            self.assertIn("tokenizer", binding["source_search_analyzer"])
+            predecessor = change_query_parser(runtime / "lexical.py")
             drift = resumable_workbench.run_workbench(self.config, resume=True, model=model)
-            self.assertEqual(drift['status'], 'binding_mismatch', drift)
+            self.assertEqual(drift["status"], "binding_mismatch", drift)
             self.assertEqual(steps, [1, 2])
             self.assertEqual(receipts.read_bytes(), receipt_bytes)
             self.assertEqual(manifest_file.read_bytes(), manifest_bytes)
 
-            (runtime / 'lexical.py').write_bytes(predecessor)
+            (runtime / "lexical.py").write_bytes(predecessor)
             resumed = resumable_workbench.run_workbench(self.config, resume=True, model=model)
-            self.assertEqual(resumed['status'], 'complete', resumed)
+            self.assertEqual(resumed["status"], "complete", resumed)
             self.assertEqual(steps, [1, 2])
 
     def test_resumption_reuses_actual_source_observation(self):
@@ -83,13 +102,16 @@ class SourceReplay(unittest.TestCase):
         second = resumable_workbench.run_workbench(self.config, resume=True, model=model)
         self.assertEqual(second["status"], "complete", second)
         self.assertEqual(dispatches, [1, 2])
-        self.assertEqual(second["durable"]["actual_dispatches_this_invocation"], {"model": 0, "tool": 0})
+        self.assertEqual(
+            second["durable"]["actual_dispatches_this_invocation"], {"model": 0, "tool": 0}
+        )
 
     def test_resume_sees_receipt_published_before_it_obtains_the_journal_lock(self):
         calls = []
+
         def model(request):
-            calls.append(request['step'])
-            if request['step'] == 1:
+            calls.append(request["step"])
+            if request["step"] == 1:
                 return {"kind": "tool", "name": "source_read", "arguments": {"path": "basis.md"}}
             return {"kind": "final", "answer": "Read."}
 
@@ -97,82 +119,106 @@ class SourceReplay(unittest.TestCase):
             raise OSError("paused after recorded model request")
 
         paused = resumable_workbench.run_workbench(self.config, model=model, after_record=interrupt)
-        self.assertEqual(paused['status'], 'state_error')
+        self.assertEqual(paused["status"], "state_error")
         lock = durable_agent._lock
+
         def finish_before_lock(root):
-            with patch.object(durable_agent, '_lock', lock):
+            with patch.object(durable_agent, "_lock", lock):
                 first = resumable_workbench.run_workbench(self.config, resume=True, model=model)
-                self.assertEqual(first['status'], 'complete', first)
+                self.assertEqual(first["status"], "complete", first)
             return lock(root)
 
-        with patch.object(durable_agent, '_lock', finish_before_lock):
+        with patch.object(durable_agent, "_lock", finish_before_lock):
             second = resumable_workbench.run_workbench(self.config, resume=True, model=model)
-        self.assertEqual(second['status'], 'complete', second)
-        self.assertEqual(second['durable']['actual_dispatches_this_invocation'], {'model': 0, 'tool': 0})
+        self.assertEqual(second["status"], "complete", second)
+        self.assertEqual(
+            second["durable"]["actual_dispatches_this_invocation"], {"model": 0, "tool": 0}
+        )
         self.assertEqual(calls, [1, 2])
-
 
     def test_unwritten_completion_leaves_an_intent_that_resume_will_not_dispatch(self):
         calls = []
+
         def model(request):
-            calls.append(request['step'])
+            calls.append(request["step"])
             return {"kind": "final", "answer": "Ready."}
 
         write_record = durable_agent._write_new
+
         def fail_completion(path, record):
-            if path.name.endswith('.return.json'):
+            if path.name.endswith(".return.json"):
                 raise OSError("cannot record completion")
             write_record(path, record)
 
-        with patch.object(durable_agent, '_write_new', fail_completion):
+        with patch.object(durable_agent, "_write_new", fail_completion):
             first = resumable_workbench.run_workbench(self.config, model=model)
-        self.assertEqual(first['status'], 'unresolved', first)
+        self.assertEqual(first["status"], "unresolved", first)
         resumed = resumable_workbench.run_workbench(self.config, resume=True, model=model)
-        self.assertEqual(resumed['status'], 'unresolved', resumed)
+        self.assertEqual(resumed["status"], "unresolved", resumed)
         self.assertEqual(calls, [1])
-        self.assertEqual(resumed['durable']['actual_dispatches_this_invocation'], {"model": 0, "tool": 0})
+        self.assertEqual(
+            resumed["durable"]["actual_dispatches_this_invocation"], {"model": 0, "tool": 0}
+        )
 
     def test_observer_failure_leaves_a_completed_call_for_replay(self):
         calls = []
+
         def model(request):
-            calls.append(request['step'])
+            calls.append(request["step"])
             return {"kind": "final", "answer": "Ready."}
 
         def stop_after_completion(event):
             raise OSError("observer stopped")
 
-        first = resumable_workbench.run_workbench(self.config, model=model, after_record=stop_after_completion)
-        self.assertEqual(first['status'], 'state_error', first)
-        resumed = resumable_workbench.run_workbench(self.config, resume=True, model=model,
-                                                    after_record=stop_after_completion)
-        self.assertEqual(resumed['status'], 'complete', resumed)
+        first = resumable_workbench.run_workbench(
+            self.config, model=model, after_record=stop_after_completion
+        )
+        self.assertEqual(first["status"], "state_error", first)
+        resumed = resumable_workbench.run_workbench(
+            self.config, resume=True, model=model, after_record=stop_after_completion
+        )
+        self.assertEqual(resumed["status"], "complete", resumed)
         self.assertEqual(calls, [1])
-        self.assertEqual(resumed['durable']['replayed_callbacks_this_invocation'], {"model": 1, "tool": 0})
+        self.assertEqual(
+            resumed["durable"]["replayed_callbacks_this_invocation"], {"model": 1, "tool": 0}
+        )
 
     def test_cross_process_durable_owner_lock_refuses_concurrent_holder(self):
         import subprocess
         import sys
         import time
 
-        durable_dir = self.root / 'locked-durable'
+        durable_dir = self.root / "locked-durable"
         durable_dir.mkdir()
-        ready = self.root / 'ready.flag'
-        release = self.root / 'release.flag'
-        holder = "\n".join([
-            "import sys, time",
-            "from pathlib import Path",
-            "sys.path.insert(0, sys.argv[1])",
-            "from managed_ai.companions.workbench import durable_agent",
-            "with durable_agent._lock(Path(sys.argv[2])):",
-            "    Path(sys.argv[3]).write_text('ready', encoding='utf-8')",
-            "    deadline = time.monotonic() + 15",
-            "    while not Path(sys.argv[4]).exists() and time.monotonic() < deadline:",
-            "        time.sleep(0.05)",
-        ])
+        ready = self.root / "ready.flag"
+        release = self.root / "release.flag"
+        holder = "\n".join(
+            [
+                "import sys, time",
+                "from pathlib import Path",
+                "sys.path.insert(0, sys.argv[1])",
+                "from managed_ai.companions.workbench import durable_agent",
+                "with durable_agent._lock(Path(sys.argv[2])):",
+                "    Path(sys.argv[3]).write_text('ready', encoding='utf-8')",
+                "    deadline = time.monotonic() + 15",
+                "    while not Path(sys.argv[4]).exists() and time.monotonic() < deadline:",
+                "        time.sleep(0.05)",
+            ]
+        )
         proc = subprocess.Popen(
-            [sys.executable, "-B", "-c", holder, str(SRC_ROOT),
-             str(durable_dir), str(ready), str(release)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                holder,
+                str(SRC_ROOT),
+                str(durable_dir),
+                str(ready),
+                str(release),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
         try:
             deadline = time.monotonic() + 15

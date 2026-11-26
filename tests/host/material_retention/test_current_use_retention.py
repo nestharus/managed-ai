@@ -1,26 +1,27 @@
 """Behavioral retention checks using small actual stores and exported recovery."""
+
 import importlib.util
-import io
 import json
 import os
 import subprocess
 import sys
-from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
 import zipfile
-
+from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-IMPL = Path(os.environ.get(
-    "MATERIAL_IMPLEMENTATION",
-    REPO_ROOT / "src/managed_ai/host/material_retention/managed_material.py",
-))
+IMPL = Path(
+    os.environ.get(
+        "MATERIAL_IMPLEMENTATION",
+        REPO_ROOT / "src/managed_ai/host/material_retention/managed_material.py",
+    )
+)
 if os.environ.get("MATERIAL_IMPLEMENTATION"):
     spec = importlib.util.spec_from_file_location("material_under_test", IMPL)
     material = importlib.util.module_from_spec(spec)
@@ -41,10 +42,14 @@ class RetentionContract(unittest.TestCase):
     def capture(self, name, body, **options):
         source = self.root / (name + ".txt")
         source.write_bytes(body)
-        value = {"format": "managed-material-selection/1", "id": name,
-                 "roots": [{"label": "selected", "path": str(source)}],
-                 "current": [{"role": "current-output", "path": "selected"}],
-                 "account": "Selected useful test body.", **options}
+        value = {
+            "format": "managed-material-selection/1",
+            "id": name,
+            "roots": [{"label": "selected", "path": str(source)}],
+            "current": [{"role": "current-output", "path": "selected"}],
+            "account": "Selected useful test body.",
+            **options,
+        }
         path = self.root / (name + ".json")
         path.write_text(json.dumps(value))
         return material.snapshot(self.store, path)
@@ -72,11 +77,26 @@ class RetentionContract(unittest.TestCase):
             IMPL.read_bytes(),
         )
         for args in (["verify"], ["restore", "--output", str(self.root / "portable-output")]):
-            subprocess.run([sys.executable, "-I", str(portable), *args, "--store", ".", "--occurrence", "second"],
-                           cwd=recovered.root, check=True, capture_output=True)
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    str(portable),
+                    *args,
+                    "--store",
+                    ".",
+                    "--occurrence",
+                    "second",
+                ],
+                cwd=recovered.root,
+                check=True,
+                capture_output=True,
+            )
         self.assertEqual((self.root / "portable-output/selected").read_bytes(), current)
         self.assertNotIn(obsolete, recovered.objects)
-        self.assertNotIn(first["manifest"], material.selection_closure(recovered, second["selection"])[2])
+        self.assertNotIn(
+            first["manifest"], material.selection_closure(recovered, second["selection"])[2]
+        )
         self.assertEqual(report["retained_selections"], 1)
         material.restore(recovered, self.root / "current-output")
         self.assertEqual((self.root / "current-output/selected").read_bytes(), current)
@@ -89,7 +109,9 @@ class RetentionContract(unittest.TestCase):
         recovered, report = self.exported_store("explicit")
         self.assertEqual(report["historical_manifests"], 2)
         material.restore(recovered, self.root / "previous-output", occurrence="first")
-        self.assertEqual((self.root / "previous-output/selected").read_bytes(), b"needed earlier evidence\n")
+        self.assertEqual(
+            (self.root / "previous-output/selected").read_bytes(), b"needed earlier evidence\n"
+        )
         material.restore(recovered, self.root / "later-output")
         self.assertEqual((self.root / "later-output/selected").read_bytes(), b"current body\n")
 
@@ -99,14 +121,20 @@ class RetentionContract(unittest.TestCase):
         recovered, report = self.exported_store("appended")
         self.assertEqual(report["historical_manifests"], 2)
         self.assertEqual(report["retained_selections"], 2)
-        self.assertEqual(recovered.materialize(material.sha(b"first observation\n")), b"first observation\n")
+        self.assertEqual(
+            recovered.materialize(material.sha(b"first observation\n")), b"first observation\n"
+        )
 
     def test_conflicting_policy_refuses_before_new_selection(self):
         first = self.capture("first", b"still current\n")
         before = (self.store.root / "CURRENT.json").read_bytes()
         with self.assertRaisesRegex(ValueError, "current-use"):
-            self.capture("conflict", b"not published\n", retention_policy="current-use",
-                         history=[first["manifest"]])
+            self.capture(
+                "conflict",
+                b"not published\n",
+                retention_policy="current-use",
+                history=[first["manifest"]],
+            )
         self.assertEqual((self.store.root / "CURRENT.json").read_bytes(), before)
         self.assertFalse(self.last_event()["selection_published"])
 
@@ -122,7 +150,10 @@ class RetentionContract(unittest.TestCase):
                 raise OSError("pointer unavailable")
             replace_pointer(path, value)
 
-        with patch.object(material, "replace_json", refuse_current), self.assertRaisesRegex(OSError, "pointer unavailable"):
+        with (
+            patch.object(material, "replace_json", refuse_current),
+            self.assertRaisesRegex(OSError, "pointer unavailable"),
+        ):
             self.capture("second", b"retained bytes")
 
         self.assertEqual(material.current_selection(self.store)[0], first["selection"])
@@ -138,13 +169,16 @@ class RetentionContract(unittest.TestCase):
                 body = occurrence.encode()
                 record_event = self.store.event
 
-                def fail_completion(kind, data):
+                def fail_completion(kind, data, failure=failure, record_event=record_event):
                     if kind == "snapshot-completed":
                         raise OSError(failure)
                     record_event(kind, data)
 
-                fault = (patch.object(self.store, "stats", side_effect=OSError(failure))
-                         if failure == "statistics" else patch.object(self.store, "event", fail_completion))
+                fault = (
+                    patch.object(self.store, "stats", side_effect=OSError(failure))
+                    if failure == "statistics"
+                    else patch.object(self.store, "event", fail_completion)
+                )
                 with fault, self.assertRaisesRegex(OSError, failure):
                     self.capture(occurrence, body)
 
@@ -167,16 +201,32 @@ class RetentionContract(unittest.TestCase):
             z.writestr("old.txt", b"unneeded earlier transport payload")
         original = archive.read_bytes()
         request = self.root / "initial.json"
-        request.write_text(json.dumps({"format": "managed-material-selection/1", "id": "old-transport",
-            "roots": [{"label": "obsolete", "path": str(source)}], "current": [],
-            "materialization_groups": [{"prefix": "obsolete", "state": "retirement-candidate"}]}))
+        request.write_text(
+            json.dumps(
+                {
+                    "format": "managed-material-selection/1",
+                    "id": "old-transport",
+                    "roots": [{"label": "obsolete", "path": str(source)}],
+                    "current": [],
+                    "materialization_groups": [
+                        {"prefix": "obsolete", "state": "retirement-candidate"}
+                    ],
+                }
+            )
+        )
         first = material.snapshot(self.store, request)
-        proposal = {"format": "managed-material-retirement-proposal/1", "prefixes": ["obsolete"],
-                    "protected_prefixes": ["current-output"], "account": "Disposable test transport is no longer used."}
+        proposal = {
+            "format": "managed-material-retirement-proposal/1",
+            "prefixes": ["obsolete"],
+            "protected_prefixes": ["current-output"],
+            "account": "Disposable test transport is no longer used.",
+        }
         plan = material.retirement_plan(self.store, proposal)
         plan_path = self.root / "retirement.json"
         plan_path.write_bytes(material.js(plan))
-        material.retire(self.store, plan_path, material.sha(plan_path.read_bytes()), first["selection"])
+        material.retire(
+            self.store, plan_path, material.sha(plan_path.read_bytes()), first["selection"]
+        )
         self.assertFalse(source.exists())
         self.capture("current", b"selected current artifact\n")
         recovered, report = self.exported_store("pruned")

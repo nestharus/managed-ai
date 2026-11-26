@@ -1,12 +1,12 @@
 """A coherently registered body can still have a stale identity in the bundle's source list."""
+
 import hashlib
 import json
-from pathlib import Path
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
 import unittest
-
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 REPO = Path(__file__).resolve().parents[2]
 RELEASE = REPO / "scripts/release"
@@ -32,8 +32,20 @@ class SourceListTest(unittest.TestCase):
                         path.mkdir()
                     else:
                         path.write_text("gitdir: example", encoding="utf-8")
-                    result = subprocess.run([sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(root),
-                                             "--output", str(transport), "--replace"], capture_output=True, text=True)
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            "-B",
+                            str(RELEASE / "package.py"),
+                            "--root",
+                            str(root),
+                            "--output",
+                            str(transport),
+                            "--replace",
+                        ],
+                        capture_output=True,
+                        text=True,
+                    )
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("Git checkout metadata", result.stderr)
                     self.assertTrue(all(p.read_bytes() == b"existing" for p in prior))
@@ -53,7 +65,9 @@ class SourceListTest(unittest.TestCase):
             release.mkdir(parents=True)
             (core / catalogue_root).mkdir(parents=True)
             (root / "docs").mkdir(parents=True)
-            rows = [{"id": name, "source": f"../../docs/{name}.md"} for name in ("neighbor", "guide")]
+            rows = [
+                {"id": name, "source": f"../../docs/{name}.md"} for name in ("neighbor", "guide")
+            ]
             (release / "current_sources.json").write_text(
                 json.dumps({"edition": "test", "bodies": rows}), encoding="utf-8"
             )
@@ -63,9 +77,18 @@ class SourceListTest(unittest.TestCase):
             (release / "navigation.json").write_text("{}", encoding="utf-8")
             (root / "docs/neighbor.md").write_bytes(b"neighbor")
             (root / "docs/guide.md").write_bytes(b"current")
-            subprocess.run([sys.executable, "-B", str(RELEASE / "refresh_guidance.py"),
-                            "--root", str(core), "--write-sources-md"],
-                           check=True, capture_output=True)
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(RELEASE / "refresh_guidance.py"),
+                    "--root",
+                    str(core),
+                    "--write-sources-md",
+                ],
+                check=True,
+                capture_output=True,
+            )
 
             page = core / "SOURCES.md"
             current = "7 bytes; SHA-256 `" + hashlib.sha256(b"current").hexdigest() + "`"
@@ -79,11 +102,27 @@ class SourceListTest(unittest.TestCase):
                 path.write_bytes(b"prior contents")
             for args in (["--refresh-only"], ["--output", str(transport), "--replace"]):
                 with self.subTest(args=args):
-                    result = subprocess.run([sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(root), *args],
-                                            capture_output=True, text=True)
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            "-B",
+                            str(RELEASE / "package.py"),
+                            "--root",
+                            str(root),
+                            *args,
+                        ],
+                        capture_output=True,
+                        text=True,
+                    )
                     self.assertEqual(result.returncode, 1, result)
-                    self.assertIn("Expected guide: [../../docs/guide.md](../../docs/guide.md) — " + current, result.stderr)
-                    self.assertIn("Observed guide: [../../docs/guide.md](../../docs/guide.md) — " + stale, result.stderr)
+                    self.assertIn(
+                        "Expected guide: [../../docs/guide.md](../../docs/guide.md) — " + current,
+                        result.stderr,
+                    )
+                    self.assertIn(
+                        "Observed guide: [../../docs/guide.md](../../docs/guide.md) — " + stale,
+                        result.stderr,
+                    )
                     self.assertIn("Run release guidance refresh", result.stderr)
                     for path in protected:
                         self.assertEqual(path.read_bytes(), b"prior contents")
@@ -100,16 +139,30 @@ class SourceListTest(unittest.TestCase):
             (release / "current_sources.json").write_text(
                 json.dumps({"edition": "test", "bodies": rows}), encoding="utf-8"
             )
-            (core / "store/catalogue.json").write_text(json.dumps({"entries": rows}), encoding="utf-8")
+            (core / "store/catalogue.json").write_text(
+                json.dumps({"entries": rows}), encoding="utf-8"
+            )
             (release / "navigation.json").write_text("{}", encoding="utf-8")
             (root / "docs/guide.md").write_bytes(b"# Guide\n\nBody.\n")
-            subprocess.run([sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(core)],
-                           check=True, capture_output=True)
+            subprocess.run(
+                [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(core)],
+                check=True,
+                capture_output=True,
+            )
             # Default refresh_guidance does not create SOURCES.md in Git checkouts
             self.assertFalse((core / "SOURCES.md").exists())
             result = subprocess.run(
-                [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(root), "--refresh-only"],
-                check=True, capture_output=True, text=True,
+                [
+                    sys.executable,
+                    "-B",
+                    str(RELEASE / "package.py"),
+                    "--root",
+                    str(root),
+                    "--refresh-only",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
             )
             self.assertEqual(json.loads(result.stdout)["status"], "verified")
             self.assertTrue((core / "SOURCES.md").is_file())

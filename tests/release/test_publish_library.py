@@ -1,13 +1,16 @@
-"""Dual-OS tests for scripts/publish_library.py (publish, idempotent re-publish, audit, CLI guards)."""
+"""Dual-OS tests for scripts/publish_library.py.
+
+Covers publish, idempotent re-publish, audit, and CLI guards.
+"""
+
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
 import unittest
-
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 REPO = Path(__file__).resolve().parents[2]
 PUBLISH_SCRIPT = REPO / "scripts/publish_library.py"
