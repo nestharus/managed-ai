@@ -16,7 +16,8 @@ class SourceListTest(unittest.TestCase):
     def test_checkout_metadata_refuses_before_manifest_or_transport_write(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary) / "bundle"
-            release = root / "src/managed_ai/release"
+            (root / "src/managed_ai").mkdir(parents=True)
+            release = root / "scripts/release"
             release.mkdir(parents=True)
             (release / "current_sources.json").write_text("{}", encoding="utf-8")
             domain = root / "domains/research"
@@ -48,17 +49,18 @@ class SourceListTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             root = Path(temporary) / "bundle"
             core = root / "src/managed_ai"
-            (core / "release").mkdir(parents=True)
+            release = root / "scripts/release"
+            release.mkdir(parents=True)
             (core / catalogue_root).mkdir(parents=True)
             (root / "docs").mkdir(parents=True)
             rows = [{"id": name, "source": f"../../docs/{name}.md"} for name in ("neighbor", "guide")]
-            (core / "release/current_sources.json").write_text(
+            (release / "current_sources.json").write_text(
                 json.dumps({"edition": "test", "bodies": rows}), encoding="utf-8"
             )
             (core / catalogue_root / "catalogue.json").write_text(
                 json.dumps({"entries": rows}), encoding="utf-8"
             )
-            (core / "release/navigation.json").write_text("{}", encoding="utf-8")
+            (release / "navigation.json").write_text("{}", encoding="utf-8")
             (root / "docs/neighbor.md").write_bytes(b"neighbor")
             (root / "docs/guide.md").write_bytes(b"current")
             subprocess.run([sys.executable, "-B", str(RELEASE / "refresh_guidance.py"),
@@ -90,15 +92,16 @@ class SourceListTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             root = Path(temporary) / "bundle"
             core = root / "src/managed_ai"
-            (core / "release").mkdir(parents=True)
+            release = root / "scripts/release"
+            release.mkdir(parents=True)
             (core / "store").mkdir(parents=True)
             (root / "docs").mkdir(parents=True)
             rows = [{"id": "guide", "source": "../../docs/guide.md"}]
-            (core / "release/current_sources.json").write_text(
+            (release / "current_sources.json").write_text(
                 json.dumps({"edition": "test", "bodies": rows}), encoding="utf-8"
             )
             (core / "store/catalogue.json").write_text(json.dumps({"entries": rows}), encoding="utf-8")
-            (core / "release/navigation.json").write_text("{}", encoding="utf-8")
+            (release / "navigation.json").write_text("{}", encoding="utf-8")
             (root / "docs/guide.md").write_bytes(b"# Guide\n\nBody.\n")
             subprocess.run([sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(core)],
                            check=True, capture_output=True)

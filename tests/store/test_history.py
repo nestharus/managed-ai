@@ -89,20 +89,20 @@ class HistoryChecks(unittest.TestCase):
             dict(return_number=1, account='The door now opens under load.')])])
         rows.extend([dict(kind='feedback-use', content=fixed), feedback(state='open', revision_reason='Next plan.')])
         self.install_history('trial', rows)
-        result = self.command('tools/audit_feedback.py', PRODUCT, self.root, 'trial')
+        result = self.command('store/governance/audit_feedback.py', PRODUCT, self.root, 'trial')
         self.assertEqual(result['unexplained_drops'], [dict(revision=2, prior_revision=1,
             returns=[dict(number=1, observation=pin, interpretation='Door stayed locked.')])])
         self.assertEqual(result['through_revision'], 6)
         parent = self.store.show('trial')['previous_object']
         (self.store.objects.directory / parent).unlink()
-        self.command('tools/audit_feedback.py', PRODUCT, self.root, 'trial', success=False)
+        self.command('store/governance/audit_feedback.py', PRODUCT, self.root, 'trial', success=False)
 
     def test_obligation_tracks_retyping_and_inactive_history(self):
         basis = [dict(path='proof', sha256='b'*64)]
         self.install_history('duty', [dict(kind='obligation', content={}, basis=basis),
             dict(kind='obligation', content={}, active=False),
             dict(kind='obligation', content={'disposition':'released'}), dict(kind='note', content='Moved')])
-        result = self.command('tools/audit_feedback.py', PRODUCT, self.root, 'duty', '--obligation')
+        result = self.command('store/governance/audit_feedback.py', PRODUCT, self.root, 'duty', '--obligation')
         self.assertEqual(result['inactive_for_navigation'], [2])
         self.assertEqual([(r['revision'], r['observations']) for r in result['history']], [
             (2, ['earlier evidence removed or replaced without account']), (3, ['closure had no account']),

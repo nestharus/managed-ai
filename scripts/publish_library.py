@@ -22,7 +22,22 @@ for _entry in (str(REPO_ROOT / "src"), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai.library.reader import knowledge
+from managed_ai.library.catalogue import Library
+from managed_ai.library.format import (
+    FORMAT,
+    MAX_BODY,
+    MAX_MANIFEST,
+    MAX_PACKAGE,
+    check_manifest,
+    decoded,
+    digest,
+    encoded,
+    need,
+    ordinary,
+    read_bytes,
+    relative,
+    text as check_text,
+)
 from managed_ai.platform import sync_dir
 
 DEFAULT_SOURCE_MAP = REPO_ROOT / "src/managed_ai/library/source-map.json"
@@ -30,12 +45,12 @@ DEFAULT_LIBRARY = REPO_ROOT / "src/managed_ai/library/library"
 
 
 def owner(root: Path, overlay: Path | None, path: str) -> Path:
-    knowledge.relative(path)
+    relative(path)
     candidate = overlay / path if overlay is not None else None
     if candidate is not None and (candidate.exists() or candidate.is_symlink()):
-        return knowledge.ordinary(candidate)
+        return ordinary(candidate)
 
-    return knowledge.ordinary(root / path)
+    return ordinary(root / path)
 
 
 def navigation(body: bytes, ident: str) -> tuple[str, str]:
@@ -78,26 +93,26 @@ def references(body: bytes, link_base: str) -> list[dict[str, str]]:
 
 
 def source_map(path: Path) -> dict:
-    spec = knowledge.decoded(knowledge.read_bytes(path, knowledge.MAX_MANIFEST))
-    knowledge.need(
+    spec = decoded(read_bytes(path, MAX_MANIFEST))
+    need(
         isinstance(spec, dict) and set(spec) == {"format", "families", "additional", "overrides", "modules"},
         "invalid source-map fields",
     )
-    knowledge.need(spec["format"] == "knowledge-source-map/1", "unsupported source map")
+    need(spec["format"] == "knowledge-source-map/1", "unsupported source map")
 
     for key in ("families", "additional"):
-        knowledge.need(isinstance(spec[key], list), "invalid " + key)
+        need(isinstance(spec[key], list), "invalid " + key)
         for item in spec[key]:
-            knowledge.relative(item)
+            relative(item)
 
-    knowledge.need(isinstance(spec["overrides"], dict), "invalid source overrides")
+    need(isinstance(spec["overrides"], dict), "invalid source overrides")
     for ident, row in spec["overrides"].items():
-        knowledge.relative(ident)
-        knowledge.need(isinstance(row, dict) and set(row) == {"owner", "link_base"}, "invalid owner override")
-        knowledge.relative(row["owner"])
-        knowledge.relative(row["link_base"])
+        relative(ident)
+        need(isinstance(row, dict) and set(row) == {"owner", "link_base"}, "invalid owner override")
+        relative(row["owner"])
+        relative(row["link_base"])
 
-    knowledge.need(isinstance(spec["modules"], list), "invalid module views")
+    need(isinstance(spec["modules"], list), "invalid module views")
     return spec
 
 
@@ -107,27 +122,27 @@ def _collect_family_ids(root: Path, overlay: Path | None, families: list[str]) -
     for family in families:
         seen = False
         for base in bases:
-            directory = knowledge.ordinary(base / family)
+            directory = ordinary(base / family)
             if not directory.exists():
                 continue
-            knowledge.need(directory.is_dir(), "source family is not a directory")
+            need(directory.is_dir(), "source family is not a directory")
             seen = True
             for path in directory.rglob("*.md"):
-                knowledge.ordinary(path)
+                ordinary(path)
                 if path.is_file():
                     ids.add(path.relative_to(base).as_posix())
-        knowledge.need(seen, "required source family unavailable: " + family)
+        need(seen, "required source family unavailable: " + family)
 
     return ids
 
 
 def construct(root: Path, overlay: Path | None, spec: dict, edition: str) -> tuple[bytes, dict[str, bytes]]:
-    ordinary_root = knowledge.ordinary(root)
-    knowledge.need(ordinary_root.is_dir(), "source root required")
+    ordinary_root = ordinary(root)
+    need(ordinary_root.is_dir(), "source root required")
 
-    ordinary_overlay = knowledge.ordinary(overlay) if overlay is not None else None
+    ordinary_overlay = ordinary(overlay) if overlay is not None else None
     if ordinary_overlay is not None:
-        knowledge.need(ordinary_overlay.is_dir(), "overlay directory required")
+        need(ordinary_overlay.is_dir(), "overlay directory required")
 
     ids = set(spec["additional"]) | set(spec["overrides"]) | _collect_family_ids(
         ordinary_root, ordinary_overlay, spec["families"]
@@ -139,13 +154,13 @@ def construct(root: Path, overlay: Path | None, spec: dict, edition: str) -> tup
     for ident in sorted(ids):
         override = spec["overrides"].get(ident, {"owner": ident, "link_base": ident})
         path = owner(ordinary_root, ordinary_overlay, override["owner"])
-        body = knowledge.read_bytes(path, knowledge.MAX_BODY)
+        body = read_bytes(path, MAX_BODY)
         body.decode("utf-8")
         total += len(body)
-        knowledge.need(total <= knowledge.MAX_PACKAGE, "source collection exceeds total byte bound")
+        need(total <= MAX_PACKAGE, "source collection exceeds total byte bound")
 
         title, summary = navigation(body, ident)
-        digest_hex = knowledge.digest(body)
+        digest_hex = digest(body)
         object_path = "objects/" + digest_hex + ".txt"
         rows.append(
             {
@@ -163,12 +178,12 @@ def construct(root: Path, overlay: Path | None, spec: dict, edition: str) -> tup
         objects[object_path] = body
 
     manifest = {
-        "format": knowledge.FORMAT,
-        "edition": knowledge.text(edition, "edition", 512),
+        "format": FORMAT,
+        "edition": check_text(edition, "edition", 512),
         "bodies": rows,
         "modules": spec["modules"],
         "provenance": {
-            "source_map_sha256": knowledge.digest(knowledge.encoded(spec)),
+            "source_map_sha256": digest(encoded(spec)),
             "scope": (
                 "Complete ordinary UTF-8 source copies from the selected authoring tree. "
                 "Navigation summaries and overlapping module views are authored nominations. "
@@ -178,28 +193,28 @@ def construct(root: Path, overlay: Path | None, spec: dict, edition: str) -> tup
             "publication": "source-tree-acquisition/1",
         },
     }
-    knowledge.check_manifest(manifest)
-    raw = knowledge.encoded(manifest)
-    knowledge.need(len(raw) <= knowledge.MAX_MANIFEST, "published catalogue exceeds byte bound")
+    check_manifest(manifest)
+    raw = encoded(manifest)
+    need(len(raw) <= MAX_MANIFEST, "published catalogue exceeds byte bound")
     return raw, objects
 
 
 def publish(root: Path, overlay: Path | None, spec: dict, edition: str, output: Path) -> dict:
     raw, objects = construct(root, overlay, spec, edition)
-    target = knowledge.ordinary(output)
-    knowledge.need(target.parent.is_dir(), "existing output parent required")
+    target = ordinary(output)
+    need(target.parent.is_dir(), "existing output parent required")
 
     if target.exists():
-        existing = knowledge.Library(target)
+        existing = Library(target)
         existing.verify()
-        knowledge.need(existing.raw == raw, "output contains a different publication; choose a fresh directory")
+        need(existing.raw == raw, "output contains a different publication; choose a fresh directory")
         expected = {"catalogue.json"} | set(objects)
         actual = {
             item.relative_to(target).as_posix()
             for item in target.rglob("*")
             if item.is_file() or item.is_symlink()
         }
-        knowledge.need(actual == expected, "existing publication has unexpected members")
+        need(actual == expected, "existing publication has unexpected members")
         status = "already-present-verified"
     else:
         staging = target.parent / (".publish-" + target.name + "-" + os.urandom(16).hex())
@@ -220,21 +235,21 @@ def publish(root: Path, overlay: Path | None, spec: dict, edition: str, output: 
             raise
         status = "published-data"
 
-    result = knowledge.Library(target).verify()
+    result = Library(target).verify()
     result["status"] = status
     result["library"] = str(target)
     return result
 
 
 def audit(root: Path, overlay: Path | None, library, spec: dict | None = None) -> dict:
-    ordinary_root = knowledge.ordinary(root)
-    ordinary_overlay = knowledge.ordinary(overlay) if overlay is not None else None
+    ordinary_root = ordinary(root)
+    ordinary_overlay = ordinary(overlay) if overlay is not None else None
     results = []
 
     for row in library.bodies.values():
         try:
-            body = knowledge.read_bytes(owner(ordinary_root, ordinary_overlay, row["source"]["path"]), knowledge.MAX_BODY)
-            observed = knowledge.digest(body)
+            body = read_bytes(owner(ordinary_root, ordinary_overlay, row["source"]["path"]), MAX_BODY)
+            observed = digest(body)
             status = "same" if observed == row["sha256"] else "changed"
             results.append(
                 {
@@ -257,12 +272,12 @@ def audit(root: Path, overlay: Path | None, library, spec: dict | None = None) -
     map_same = (
         None
         if spec is None
-        else knowledge.digest(knowledge.encoded(spec)) == library.catalogue["provenance"].get("source_map_sha256")
+        else digest(encoded(spec)) == library.catalogue["provenance"].get("source_map_sha256")
     )
     inventory = None
     if spec is not None:
         expected_raw, _ = construct(ordinary_root, ordinary_overlay, spec, library.catalogue["edition"])
-        expected = knowledge.decoded(expected_raw)
+        expected = decoded(expected_raw)
         before = {row["id"]: row for row in library.catalogue["bodies"]}
         after = {row["id"]: row for row in expected["bodies"]}
         inventory = {
@@ -318,13 +333,13 @@ def main() -> int:
         if args.action == "publish":
             result = publish(args.root, args.overlay, spec, args.edition, args.output)
         else:
-            result = audit(args.root, args.overlay, knowledge.Library(args.library), spec)
+            result = audit(args.root, args.overlay, Library(args.library), spec)
 
-        sys.stdout.buffer.write(knowledge.encoded(result))
+        sys.stdout.buffer.write(encoded(result))
         if args.action == "audit" and result["status"] != "same":
             raise SystemExit(1)
     except (OSError, ValueError, KeyError, UnicodeError) as error:
-        sys.stderr.buffer.write(knowledge.encoded({"status": "refused", "error": str(error)}))
+        sys.stderr.buffer.write(encoded({"status": "refused", "error": str(error)}))
         raise SystemExit(2)
 
     return 0

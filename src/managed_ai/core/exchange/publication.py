@@ -84,7 +84,7 @@ def _publication_basis(packet, target, request, record, proposal, changed):
         "changed": rows,
         "omitted": len(changed) - len(rows),
         "inspect": {
-            "entry": "core/cli/exchange_packets.py",
+            "entry": "core/exchange/cli.py",
             "root": "store exchange",
             "arguments": ["inspect", packet],
         },

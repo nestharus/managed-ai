@@ -38,12 +38,13 @@ from managed_ai.store.contract import CatalogueReader, ObjectRepository, RecordR
 from managed_ai.store.records import cold_archive, compaction, head_index, head_receipts
 from managed_ai.store.records.object_audit import audit_objects
 from managed_ai.store.system import System
-from managed_ai.tools import audit_feedback
+from managed_ai.core.exchange import open_contact
+from managed_ai.store.governance import audit_feedback
 
-OWNED_PACKAGES = ('platform', 'deployment', 'core', 'store', 'library', 'tools')
+OWNED_PACKAGES = ('platform', 'deployment', 'core', 'store', 'library')
 
 
-def _owned_python_files(*, include_platform: bool = True, include_legacy_publish: bool = False) -> list[Path]:
+def _owned_python_files(*, include_platform: bool = True) -> list[Path]:
     files: list[Path] = []
     for pkg in OWNED_PACKAGES:
         if not include_platform and pkg == 'platform':
@@ -52,9 +53,6 @@ def _owned_python_files(*, include_platform: bool = True, include_legacy_publish
         if not pkg_dir.is_dir():
             continue
         for py in sorted(pkg_dir.rglob('*.py')):
-            rel = py.relative_to(ENGINE).as_posix()
-            if not include_legacy_publish and rel == 'library/bundles/publish.py':
-                continue
             files.append(py)
     return files
 
@@ -461,7 +459,7 @@ class Wave7ArchitectureTests(unittest.TestCase):
         library_sandbox_violations: list[str] = []
         crlf_violations: list[str] = []
 
-        for py in _owned_python_files(include_platform=True, include_legacy_publish=False):
+        for py in _owned_python_files(include_platform=True):
             rel = py.relative_to(ENGINE).as_posix()
             raw = py.read_bytes()
             if b'\r\n' in raw:
@@ -470,7 +468,7 @@ class Wave7ArchitectureTests(unittest.TestCase):
             text = raw.decode('utf-8')
             tree = ast.parse(text, filename=str(py))
 
-            # 1) Zero semicolons outside untouched library/bundles/publish.py
+            # 1) Zero semicolons across owned production modules
             for tok in tokenize.generate_tokens(io.StringIO(text).readline):
                 if tok.type == tokenize.OP and tok.string == ';':
                     semicolon_violations.append(f'{rel}:{tok.start[0]}')
@@ -486,7 +484,7 @@ class Wave7ArchitectureTests(unittest.TestCase):
             # 3) AST walks across owned code
             is_platform = rel.startswith('platform/')
             is_library_isolated = rel.startswith('library/') and rel != 'library/cli.py'
-            is_strict_json_owner = rel in {'platform/_common.py', 'tools/open_contact.py'}
+            is_strict_json_owner = rel == 'platform/_common.py'
 
             for node in ast.walk(tree):
                 if not is_platform:
@@ -538,6 +536,70 @@ class Wave7ArchitectureTests(unittest.TestCase):
         self.assertEqual(bare_json_loads_violations, [], f'Bare json.loads calls: {bare_json_loads_violations}')
         self.assertEqual(library_sandbox_violations, [], f'Library sandbox leakage: {library_sandbox_violations}')
         self.assertEqual(crlf_violations, [], f'CRLF line endings found: {crlf_violations}')
+
+    def test_w8_no_legacy_shims_orphaned_packages_or_grab_bags(self) -> None:
+        retired_dirs = (
+            'library/bundles',
+            'library/reader',
+            'library/search',
+            'release',
+            'core/cli',
+            'tools',
+        )
+        still_present = [rel for rel in retired_dirs if (ENGINE / rel).exists()]
+        self.assertEqual(still_present, [], f'Retired directories must be absent: {still_present}')
+
+        # Zero orphaned code-less packages anywhere under src/managed_ai/
+        codeless_packages: list[str] = []
+        for init_py in sorted(ENGINE.rglob('__init__.py')):
+            pkg_dir = init_py.parent
+            if pkg_dir == ENGINE:
+                continue
+            has_other_py = any(p.name != '__init__.py' for p in pkg_dir.rglob('*.py'))
+            if not has_other_py:
+                tree = ast.parse(init_py.read_text(encoding='utf-8'), filename=str(init_py))
+                non_doc_nodes = [
+                    node for node in tree.body
+                    if not (
+                        isinstance(node, ast.Expr)
+                        and isinstance(node.value, ast.Constant)
+                        and isinstance(node.value.value, str)
+                    )
+                ]
+                if not non_doc_nodes:
+                    codeless_packages.append(pkg_dir.relative_to(ENGINE).as_posix())
+        self.assertEqual(codeless_packages, [], f'Orphaned code-less packages found: {codeless_packages}')
+
+        # open_contact uses a declarative command handler map (no if/elif dispatch chain in main)
+        self.assertEqual(
+            set(open_contact._COMMAND_HANDLERS),
+            {'init', 'open', 'return', 'context', 'stages', 'status'},
+        )
+
+    def test_w8_no_single_child_meta_folders_or_vague_subbuckets(self) -> None:
+        self.assertFalse((ENGINE / 'optional').exists(), 'Single-child optional/ meta-folder must be absent')
+        self.assertFalse(
+            (ENGINE / 'companions' / 'workbench' / 'controller').exists(),
+            'companions/workbench/controller/ must be flattened into companions/workbench/',
+        )
+        self.assertFalse(
+            (ENGINE / 'companions' / 'workbench' / 'core').exists(),
+            'companions/workbench/core/ must be flattened into companions/workbench/',
+        )
+
+        # No top-level package under src/managed_ai/ may be a single-child meta-wrapper
+        single_child_wrappers: list[str] = []
+        for child in sorted(ENGINE.iterdir()):
+            if not child.is_dir() or child.name.startswith('_') or not (child / '__init__.py').is_file():
+                continue
+            entries = [p for p in child.iterdir() if p.name not in {'__init__.py', '__pycache__'}]
+            if len(entries) == 1 and entries[0].is_dir():
+                single_child_wrappers.append(child.name)
+        self.assertEqual(
+            single_child_wrappers,
+            [],
+            f'Single-child meta-folder wrappers found: {single_child_wrappers}',
+        )
 
 
 if __name__ == '__main__':

@@ -146,7 +146,7 @@ class ReturnedArtifactTests(unittest.TestCase):
                 self.current(artifacts=['large:large.txt'])
 
     def test_cli_selects_artifact(self):
-        result = subprocess.run([sys.executable, '-B', str(ROOT / 'core/cli/exchange_packets.py'), '--root', str(self.root),
+        result = subprocess.run([sys.executable, '-B', str(ROOT / 'core/exchange/cli.py'), '--root', str(self.root),
                                  'prepare', 'cli', '--consumer', 'recipient', '--brief', 'brief.md',
                                  '--artifact', 'origin:method.md'], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)

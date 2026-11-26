@@ -18,27 +18,25 @@ if __package__:
 else:
     from native_test_paths import APP, ENGINE
 
+from managed_ai.core.exchange import open_contact
 from managed_ai.core.storage import encode, exclusive, sha, shared, sync_dir
 from managed_ai.deployment.controller import Deployment, DeploymentSelection, code_identity
-from managed_ai.library.bundles import product_bundle
+from managed_ai.library import bundle as product_bundle
+from managed_ai.library import format as library_format
+from managed_ai.library.catalogue import Library
 
 
 def _load_publish_module():
-    """Load scripts/publish_library.py when moved in Stage 7.3, else fallback to library.bundles.publish."""
+    """Load scripts/publish_library.py directly."""
     script = ENGINE.parents[1] / 'scripts' / 'publish_library.py'
-    if script.is_file():
-        spec = importlib.util.spec_from_file_location('publish_library_script', str(script))
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-    from managed_ai.library.bundles import publish as legacy_publish
-    return legacy_publish
+    spec = importlib.util.spec_from_file_location('publish_library_script', str(script))
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 publish = _load_publish_module()
-from managed_ai.library.reader import library_format
-from managed_ai.library.reader.knowledge import Library
 from managed_ai.store.composition import composition_boundary
 from managed_ai.store.records import record_batch, record_import, record_transfer
 from managed_ai.store.records.cold_archive import execute_archive_records, plan_archive_records
@@ -47,7 +45,6 @@ from managed_ai.store.records.object_audit import audit_objects
 from managed_ai.store.selection.domain_selection import DomainSelection
 from managed_ai.store.system import System
 from managed_ai.store.turns.turn_retirement import plan_turn_retirement
-from managed_ai.tools import open_contact
 
 
 class Wave5CoreTests(unittest.TestCase):
@@ -588,7 +585,7 @@ class Wave5CoreTests(unittest.TestCase):
             encoding='utf-8',
         )
         proc = self._run(
-            [sys.executable, '-B', str(ENGINE / 'tools/audit_feedback.py'),
+            [sys.executable, '-B', str(ENGINE / 'store/governance/audit_feedback.py'),
              str(marker_ext), str(self.store), 'goal', '--obligation'],
             expected_rc=2,
         )

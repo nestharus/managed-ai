@@ -20,14 +20,14 @@ The selected source can itself be a compact qualified view or a local answer for
 
 Requires Python 3.11 or newer with SQLite 3.38 or newer and JSON support. Keep mutable state outside this product directory. The database is one local owner's durable admission boundary; do not treat copied databases as independent continuations of the same authority.
 
-The component enforces exclusion of its own directory and the enclosing `engine/` directory. From the repository or package root, use `src/managed_ai/optional/collective/manage_collective.py`:
+The component enforces exclusion of its own directory and the enclosing `engine/` directory. From the repository or package root, use `src/managed_ai/collective/__main__.py` (or `python -B -m managed_ai.collective`):
 
 ```sh
-python -B src/managed_ai/optional/collective/manage_collective.py --db /path/to/runtime/collective.sqlite init
-python -B src/managed_ai/optional/collective/manage_collective.py --db /path/to/runtime/collective.sqlite call --request /path/to/requests/create.json
-python -B src/managed_ai/optional/collective/manage_collective.py --db /path/to/runtime/collective.sqlite inbox --actor product-composer
-python -B src/managed_ai/optional/collective/manage_collective.py --db /path/to/runtime/collective.sqlite show product-promise
-python -B src/managed_ai/optional/collective/manage_collective.py --db /path/to/runtime/collective.sqlite notice 1
+python -B src/managed_ai/collective/__main__.py --db /path/to/runtime/collective.sqlite init
+python -B src/managed_ai/collective/__main__.py --db /path/to/runtime/collective.sqlite call --request /path/to/requests/create.json
+python -B src/managed_ai/collective/__main__.py --db /path/to/runtime/collective.sqlite inbox --actor product-composer
+python -B src/managed_ai/collective/__main__.py --db /path/to/runtime/collective.sqlite show product-promise
+python -B src/managed_ai/collective/__main__.py --db /path/to/runtime/collective.sqlite notice 1
 ```
 
 Each `call` reads exactly one JSON object with `actor`, `command` and `op`. The trusted host supplies the actor identity and permits effects. An actor string is not authentication. Every new attempt has a new command identity. Reusing an identity with the exact same request returns the historical result, including a refusal; a changed request under that identity conflicts.

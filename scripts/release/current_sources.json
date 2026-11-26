@@ -29,8 +29,8 @@
       "link_base": "../../docs/engine/store/README.md",
       "presentation": "../../docs/engine/store/README.md",
       "kind": "guide",
-      "sha256": "41bac03d46b1b1e9b623a8cab468fe062b1742df72667a16ba90e63beb5787d6",
-      "bytes": 50291,
+      "sha256": "234e5b826cb17b392c51b274434ffd001f900a6ef3fbde3a6a4b0c85ddfb4820",
+      "bytes": 50284,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -49,8 +49,8 @@
       "link_base": "../../docs/collective/README.md",
       "presentation": "../../docs/collective/README.md",
       "kind": "guide",
-      "sha256": "f465b1c8a3a24da77155397259ead3f4074d5e701c45a39d3ab2a41f8f73fd9a",
-      "bytes": 34133,
+      "sha256": "06231fd96f35c9ee30a09755aab89f15b66e787349287da63bf1f98d0f2e9347",
+      "bytes": 34067,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -59,8 +59,8 @@
       "link_base": "../../docs/engine/library/README.md",
       "presentation": "../../docs/engine/library/README.md",
       "kind": "guide",
-      "sha256": "132d3c11918f640567c6064e73a5726b2f60b84e1397aa71fcf2a36c901de1fa",
-      "bytes": 8917,
+      "sha256": "1ca32aa3f6fb349270a7cb31f3e8c9506f49bd23c03194558319f7d5b46fa905",
+      "bytes": 8909,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -79,8 +79,8 @@
       "link_base": "../../docs/engine/library/MIGRATION.md",
       "presentation": "../../docs/engine/library/MIGRATION.md",
       "kind": "guide",
-      "sha256": "31754d8cfa0ecbf4e6feef860fb1234dac374e3bb1be3a2c81c3eefa064c0c29",
-      "bytes": 6375,
+      "sha256": "670aaec1f59a2a6bf5477229ef701c450b4a0917533b46d518ef0c1c2aee7281",
+      "bytes": 6362,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {

@@ -188,7 +188,7 @@ class ReceivingViewTests(unittest.TestCase):
         self.assertEqual(json.loads(intent.read_text())['phase'], 'intent')
 
     def test_cli_context_text_is_exact_and_json_retains_binding(self):
-        command = [sys.executable, '-B', str(ROOT / 'core/cli/exchange_packets.py'), '--root', str(self.root),
+        command = [sys.executable, '-B', str(ROOT / 'core/exchange/cli.py'), '--root', str(self.root),
                    'context', 'origin']
         before = self.retained_bytes()
         text = subprocess.run(command + ['--text'], capture_output=True, timeout=10)

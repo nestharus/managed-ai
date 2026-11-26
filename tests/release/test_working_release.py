@@ -36,7 +36,8 @@ def _write_json(path, value):
 
 def _build_minimal_bundle(root, *, include_siblings=False):
     core = root / "src/managed_ai"
-    (core / "release").mkdir(parents=True)
+    release = root / "scripts/release"
+    release.mkdir(parents=True)
     (core / "store").mkdir(parents=True)
     (core / "__init__.py").write_text("", encoding="utf-8")
     (root / "docs/engine").mkdir(parents=True)
@@ -52,13 +53,13 @@ def _build_minimal_bundle(root, *, include_siblings=False):
             {"id": "prototype/patterns/continuous-consolidation/README.md",
              "source": "../../docs/patterns/continuous-consolidation/README.md"},
         ])
-    (core / "release/current_sources.json").write_text(
+    (release / "current_sources.json").write_text(
         json.dumps({"edition": "working-test", "bodies": rows}), encoding="utf-8"
     )
     (core / "store/catalogue.json").write_text(
         json.dumps({"entries": rows}), encoding="utf-8"
     )
-    (core / "release/navigation.json").write_text("{}", encoding="utf-8")
+    (release / "navigation.json").write_text("{}", encoding="utf-8")
     subprocess.run(
         [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(core)],
         check=True,
@@ -316,8 +317,8 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             peer = _write_peer_components(
                 bundle,
                 {
-                    "workbench/core/workbench_agent.py": b"AGENT = 1\n",
-                    "workbench/controller/agent_runtime.py": b"RUNTIME = 1\n",
+                    "workbench/workbench_agent.py": b"AGENT = 1\n",
+                    "workbench/agent_runtime.py": b"RUNTIME = 1\n",
                 },
             )
             ok = subprocess.run(
@@ -330,14 +331,14 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
 
             # Tampered component file fails before rewriting MANIFEST.json
             prior_manifest = (bundle / "MANIFEST.json").read_bytes()
-            (bundle / "src/managed_ai/companions/workbench/core/workbench_agent.py").write_bytes(b"AGENT = 2\n")
+            (bundle / "src/managed_ai/companions/workbench/workbench_agent.py").write_bytes(b"AGENT = 2\n")
             tampered = subprocess.run(
                 [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle), "--refresh-only"],
                 capture_output=True,
                 text=True,
             )
             self.assertNotEqual(tampered.returncode, 0)
-            self.assertIn("Shared component identity changed: workbench/core/workbench_agent.py", tampered.stderr)
+            self.assertIn("Shared component identity changed: workbench/workbench_agent.py", tampered.stderr)
             self.assertEqual((bundle / "MANIFEST.json").read_bytes(), prior_manifest)
 
             # Present companions/peer without COMPONENTS.json must still fail
@@ -354,7 +355,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
-            peer = _write_peer_components(bundle, {"workbench/core/workbench_agent.py": b"AGENT = 1\n"})
+            peer = _write_peer_components(bundle, {"workbench/workbench_agent.py": b"AGENT = 1\n"})
 
             _write_json(
                 peer / "COMPONENTS.json",
@@ -375,13 +376,13 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 {
                     "schema": "peer-workbench-acquired-components/1",
                     "files": {
-                        "workbench/core/missing.py": {
+                        "workbench/missing.py": {
                             "identity": {"bytes": 1, "sha256": _sha256(b"x")}
                         }
                     },
                 },
             )
-            with self.assertRaisesRegex(ValueError, "Missing shared component: workbench/core/missing.py"):
+            with self.assertRaisesRegex(ValueError, "Missing shared component: workbench/missing.py"):
                 PACKAGE["verify_workbench_components"](bundle)
 
             _write_json(
@@ -389,7 +390,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 {
                     "schema": "peer-workbench-acquired-components/1",
                     "files": {
-                        "workbench/core/workbench_agent.py": {
+                        "workbench/workbench_agent.py": {
                             "identity": {"bytes": True, "sha256": _sha256(b"AGENT = 1\n")}
                         }
                     },
@@ -399,7 +400,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 PACKAGE["verify_workbench_components"](bundle)
 
             (peer / "COMPONENTS.json").write_text(
-                '{"files": {"workbench/core/workbench_agent.py": {}}, "files": {}}',
+                '{"files": {"workbench/workbench_agent.py": {}}, "files": {}}',
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
@@ -423,7 +424,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
-            _write_peer_components(bundle, {"workbench/core/workbench_agent.py": b"AGENT = 1\n"})
+            _write_peer_components(bundle, {"workbench/workbench_agent.py": b"AGENT = 1\n"})
             rename_exact(bundle / "src/managed_ai/companions", "Companions")
             with self.assertRaisesRegex(ValueError, "expected companions, observed Companions"):
                 PACKAGE["verify_workbench_components"](bundle)
@@ -431,7 +432,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
-            peer = _write_peer_components(bundle, {"workbench/core/workbench_agent.py": b"AGENT = 1\n"})
+            peer = _write_peer_components(bundle, {"workbench/workbench_agent.py": b"AGENT = 1\n"})
             rename_exact(peer, "Peer")
             with self.assertRaisesRegex(ValueError, "expected peer, observed Peer"):
                 PACKAGE["verify_workbench_components"](bundle)
@@ -439,7 +440,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
-            peer = _write_peer_components(bundle, {"workbench/core/workbench_agent.py": b"AGENT = 1\n"})
+            peer = _write_peer_components(bundle, {"workbench/workbench_agent.py": b"AGENT = 1\n"})
             rename_exact(peer / "COMPONENTS.json", "components.json")
             with self.assertRaisesRegex(ValueError, "expected COMPONENTS.json, observed components.json"):
                 PACKAGE["verify_workbench_components"](bundle)
@@ -447,20 +448,20 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
-            _write_peer_components(bundle, {"workbench/core/workbench_agent.py": b"AGENT = 1\n"})
-            rename_exact(bundle / "src/managed_ai/companions/workbench/core/workbench_agent.py", "Workbench_Agent.py")
+            _write_peer_components(bundle, {"workbench/workbench_agent.py": b"AGENT = 1\n"})
+            rename_exact(bundle / "src/managed_ai/companions/workbench/workbench_agent.py", "Workbench_Agent.py")
             with self.assertRaisesRegex(
-                ValueError, "expected workbench/core/workbench_agent.py, observed workbench/core/Workbench_Agent.py"
+                ValueError, "expected workbench/workbench_agent.py, observed workbench/Workbench_Agent.py"
             ):
                 PACKAGE["verify_workbench_components"](bundle)
 
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
-            _write_peer_components(bundle, {"workbench/controller/agent_runtime.py": b"RT = 1\n"})
-            rename_exact(bundle / "src/managed_ai/companions/workbench/controller", "Controller")
+            _write_peer_components(bundle, {"workbench/configs/sample.json": b"{}\n"})
+            rename_exact(bundle / "src/managed_ai/companions/workbench/configs", "Configs")
             with self.assertRaisesRegex(
-                ValueError, "expected workbench/controller, observed workbench/Controller"
+                ValueError, "expected workbench/configs, observed workbench/Configs"
             ):
                 PACKAGE["verify_workbench_components"](bundle)
 
@@ -478,10 +479,10 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 PACKAGE["verify_workbench_components"](bundle)
 
             (bundle / "src/managed_ai/companions/peer").unlink()
-            _write_peer_components(bundle, {"workbench/core/workbench_agent.py": b"AGENT = 1\n"})
+            _write_peer_components(bundle, {"workbench/workbench_agent.py": b"AGENT = 1\n"})
             ext_file = tmp / "ext.py"
             ext_file.write_bytes(b"AGENT = 1\n")
-            target = bundle / "src/managed_ai/companions/workbench/core/workbench_agent.py"
+            target = bundle / "src/managed_ai/companions/workbench/workbench_agent.py"
             target.unlink()
             target.symlink_to(ext_file)
             with self.assertRaisesRegex(ValueError, "ordinary files and directories"):
@@ -513,16 +514,16 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
 
             bundle = tmp / "bundle"
             core = _build_minimal_bundle(bundle)
-            (core / "release/navigation.json").write_text('{"a": 1, "a": 2}\n', encoding="utf-8")
+            (bundle / "scripts/release/navigation.json").write_text('{"a": 1, "a": 2}\n', encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
                 REFRESH["render"](core)
 
-            (core / "release/navigation.json").write_text('{"score": Infinity}\n', encoding="utf-8")
+            (bundle / "scripts/release/navigation.json").write_text('{"score": Infinity}\n', encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "nonfinite JSON"):
                 REFRESH["render"](core)
 
-            (core / "release/navigation.json").write_text("{}\n", encoding="utf-8")
-            (core / "release/current_sources.json").write_text(
+            (bundle / "scripts/release/navigation.json").write_text("{}\n", encoding="utf-8")
+            (bundle / "scripts/release/current_sources.json").write_text(
                 '{"edition": "x", "edition": "y", "bodies": []}\n', encoding="utf-8"
             )
             with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
@@ -591,7 +592,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                     REFRESH["render"](core)
 
             # Traversal escaping above bundle root (3 levels up from src/managed_ai) must be rejected
-            (core / "release/current_sources.json").write_text(
+            (bundle / "scripts/release/current_sources.json").write_text(
                 json.dumps({"edition": "working-test", "bodies": [{"id": "guide", "source": "../../../escape.md"}]}),
                 encoding="utf-8",
             )
@@ -741,7 +742,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             (bundle / "pyproject.toml").write_text('[project]\nname = "managed-ai"\n', encoding="utf-8")
             (bundle / ".gitignore").write_text("__pycache__/\n*.pyc\n", encoding="utf-8")
             # Declarative COMPONENTS.json (omitting "identity" in Git checkouts)
-            comp_file = bundle / "src/managed_ai/companions/workbench/core/io_utils.py"
+            comp_file = bundle / "src/managed_ai/companions/workbench/io_utils.py"
             comp_file.parent.mkdir(parents=True)
             comp_raw = b"IO = 1\n"
             comp_file.write_bytes(comp_raw)
@@ -751,7 +752,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 peer / "COMPONENTS.json",
                 {
                     "schema": "peer-workbench-acquired-components/1",
-                    "files": {"workbench/core/io_utils.py": {"source": "workbench/core/io_utils.py"}},
+                    "files": {"workbench/io_utils.py": {"source": "workbench/io_utils.py"}},
                 },
             )
             archive = tmp / "stamped.zip"
@@ -765,7 +766,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             # Exported bundle has stamped identity in COMPONENTS.json + generated SOURCES.md & MANIFEST.json
             stamped = json.loads((peer / "COMPONENTS.json").read_text(encoding="utf-8"))
             self.assertEqual(
-                stamped["files"]["workbench/core/io_utils.py"]["identity"],
+                stamped["files"]["workbench/io_utils.py"]["identity"],
                 {"bytes": len(comp_raw), "sha256": _sha256(comp_raw)},
             )
             self.assertTrue((bundle / "src/managed_ai/SOURCES.md").is_file())

@@ -1,6 +1,6 @@
 """Find a feedback revision which dropped outstanding adverse returns.
 
-Usage: python audit_feedback.py PATH_TO_ENGINE RUNTIME_ROOT FEEDBACK_ID
+Usage: python -B src/managed_ai/store/governance/audit_feedback.py PATH_TO_ENGINE RUNTIME_ROOT FEEDBACK_ID
 The optional --obligation check follows the verified retained revisions of a native record.
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 import sys
 
 sys.dont_write_bytecode = True
-ENGINE_ROOT = Path(__file__).resolve().parents[1]
+ENGINE_ROOT = Path(__file__).resolve().parents[2]
 _ISOLATED_ROOT_PACKAGES = frozenset({'managed_ai', 'core', 'store', 'library', 'deployment'})
 
 
@@ -115,6 +115,7 @@ def scan(product: Path, root: Path, ident: str):
         Feedback, KIND = feedback_mod.Feedback, feedback_mod.KIND
         if current['kind'] != KIND:
             raise ValueError('record does not own a feedback use')
+
         head_revision = current['revision']
         gaps = []
         for previous in records:
@@ -128,6 +129,7 @@ def scan(product: Path, root: Path, ident: str):
                                      returns=[dict(number=n, observation=pending[n]['observation'],
                                                    interpretation=pending[n]['interpretation']) for n in sorted(missing)]))
             current = previous
+
         gaps.reverse()
         return {'feedback': ident, 'through_revision': head_revision, 'unexplained_drops': gaps,
                 'scope': 'Historical representational gaps. Inspect the pinned return and test the current receiving use.'}
@@ -155,11 +157,13 @@ def scan_obligation(product: Path, root: Path, ident: str):
                     inactive_revisions.append(current['revision'])
                 if isinstance(current['content'], dict) and current['content'].get('disposition') in ('fulfilled', 'released'):
                     issues.append('closure had no account')
+
             parent = current['previous_object']
             if previous is None:
                 if issues:
                     findings.append({'revision': 1, 'observations': issues})
                 break
+
             if owed(previous):
                 if current['kind'] != 'obligation':
                     issues.append('retyped before accounted closure')
@@ -173,9 +177,11 @@ def scan_obligation(product: Path, root: Path, ident: str):
                     if not accounted and any(
                             r['path'] not in basis or basis[r['path']] != r['sha256'] for r in previous['basis']):
                         issues.append('earlier evidence removed or replaced without account')
+
             if issues:
                 findings.append({'revision': current['revision'], 'observations': issues, 'predecessor_object': parent})
             current = previous
+
         return {'record': ident, 'through_revision': head_revision, 'history': list(reversed(findings)),
                 'inactive_for_navigation': list(reversed(inactive_revisions)),
                 'scope': 'Historical transitions. Inactive revisions are informational and are excluded from the findings. Ordinary work retains typed open duties.'}

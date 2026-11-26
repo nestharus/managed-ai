@@ -1,16 +1,16 @@
 # Release maintenance and packaging
 
-Maintainer release scripts live under `scripts/release/` (outside `src/managed_ai/` so built wheels ship only runtime packages and `src/managed_ai/release/*.json` data assets). They refresh core guidance pins (`src/managed_ai/release/current_sources.json`, `src/managed_ai/store/catalogue.json`, `src/managed_ai/CURRENT-RELEASE.json`) and produce self-verifying release archives from a clean exported tree.
+Maintainer release scripts and selection metadata live under `scripts/release/` (outside `src/managed_ai/` so built wheels ship only runtime packages and runtime package data). They refresh core guidance pins (`scripts/release/current_sources.json`, `src/managed_ai/store/catalogue.json`, `src/managed_ai/CURRENT-RELEASE.json`) and produce self-verifying release archives from a clean exported tree.
 
 ## Refresh core guidance pins
 
-After editing any core guidance file listed in `src/managed_ai/release/current_sources.json`, run:
+After editing any core guidance file listed in `scripts/release/current_sources.json`, run:
 
 ```sh
 python -B scripts/release/refresh_guidance.py
 ```
 
-This updates `src/managed_ai/release/current_sources.json`, `src/managed_ai/store/catalogue.json`, and `src/managed_ai/CURRENT-RELEASE.json`. Generated release files (`MANIFEST.json`, `src/managed_ai/MANIFEST.json`, and `src/managed_ai/SOURCES.md`) are not tracked in Git; `scripts/release/package.py` generates them dynamically during release packaging. Pass `--write-sources-md` to `refresh_guidance.py` only when you explicitly want `src/managed_ai/SOURCES.md` written locally.
+This updates `scripts/release/current_sources.json`, `src/managed_ai/store/catalogue.json`, and `src/managed_ai/CURRENT-RELEASE.json`. Generated release files (`MANIFEST.json`, `src/managed_ai/MANIFEST.json`, and `src/managed_ai/SOURCES.md`) are not tracked in Git; `scripts/release/package.py` generates them dynamically during release packaging. Pass `--write-sources-md` to `refresh_guidance.py` only when you explicitly want `src/managed_ai/SOURCES.md` written locally.
 
 ## Verify and package an exported release
 

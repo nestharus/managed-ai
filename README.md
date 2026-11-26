@@ -6,8 +6,8 @@ A domain-neutral, standard-library Python 3.11+ engine for persistent goals, sch
 
 | Path | Responsibility |
 | --- | --- |
-| [`src/managed_ai/`](docs/engine/README.md) | Installable Python runtime package: `platform/`, `deployment/`, `core/`, `store/`, `library/`, `host/`, `tools/`, `companions/`, `optional/collective/`, and runtime `release/*.json` assets. |
-| [`scripts/`](docs/engine/release/README.md) | Maintainer and CI/CD tooling (not shipped in wheels): `scripts/release/{package,check_current,refresh_guidance}.py` and `scripts/publish_library.py`. |
+| [`src/managed_ai/`](docs/engine/README.md) | Installable Python runtime package: `platform/`, `deployment/`, `core/`, `store/`, `library/`, `host/`, `companions/`, `collective/`, and runtime package data. |
+| [`scripts/`](docs/engine/release/README.md) | Maintainer and CI/CD tooling (not shipped in wheels): `scripts/release/{package,check_current,refresh_guidance}.py`, `scripts/release/{current_sources,navigation}.json`, and `scripts/publish_library.py`. |
 | [`docs/`](docs/engine/README.md) | Engine, companion, collective, and continuous-consolidation documentation. |
 | [`examples/`](examples/README.md) | Runnable feedback, receiving, continuing-state, and canary examples. |
 | `tests/` | Unified unit and integration suites mirroring `src/managed_ai/` and `scripts/`. |

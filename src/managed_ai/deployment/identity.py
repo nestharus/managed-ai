@@ -33,7 +33,7 @@ VERSION = "0.3.0"
 NATIVE_ENTRY = Path("store/system.py")
 NATIVE_CONTRACT = Path("store/selection/domain_selection.py")
 NON_SOURCE_SUFFIXES = (".pyc", ".pyo", ".pyd", ".so", *EXTENSION_SUFFIXES)
-CODE_IDENTITY_EXCLUDED_DIRS = frozenset({"tests", "examples", "patterns", "companions", "optional"})
+CODE_IDENTITY_EXCLUDED_DIRS = frozenset({"tests", "examples", "patterns", "companions", "collective"})
 
 
 def read_descriptor_bytes(path: Path | str) -> bytes:

@@ -11,9 +11,15 @@ import json
 from pathlib import Path
 import sys
 
-from ..ownership import external_root
-from ..storage import AdmissionContended, admission_deadline, exclusive, owner_admission, shared
-from .api import Exchange
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
+    _src_root = str(Path(__file__).resolve().parents[3])
+    if _src_root not in sys.path:
+        sys.path.insert(0, _src_root)
+
+from managed_ai.core.exchange.api import Exchange
+from managed_ai.core.ownership import external_root
+from managed_ai.core.storage import AdmissionContended, admission_deadline, exclusive, owner_admission, shared
 
 _READONLY_ACTIONS = frozenset({"list", "inspect", "context", "recover_transport"})
 

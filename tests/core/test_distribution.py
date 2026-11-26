@@ -13,7 +13,7 @@ from tests._paths import ENGINE as ROOT, SRC
 
 class DistributionContract(unittest.TestCase):
     def call(self, *args):
-        return subprocess.run([sys.executable, "-B", str(ROOT / "core/cli/collect_returns.py"), *args],
+        return subprocess.run([sys.executable, "-B", str(ROOT / "core/exchange/transport/collector.py"), *args],
                               capture_output=True, text=True, timeout=10)
     def test_help(self):
         p = self.call("--help")

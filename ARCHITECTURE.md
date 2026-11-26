@@ -8,7 +8,7 @@ flowchart TD
     P["OS platform adapter leaf (src/managed_ai/platform/)"] --> E
     E --> S1["External store A (system.json, exchange/, work/)"]
     E --> S2["External store B (system.json, exchange/, work/)"]
-    C["Optional companions & collective (src/managed_ai/companions/, optional/)"] --> E
+    C["Optional companions & collective (src/managed_ai/companions/, collective/)"] --> E
     S1 <-->|"Pinned cross-store record transfer"| S2
 ```
 
@@ -18,14 +18,13 @@ flowchart TD
 | --- | --- |
 | `src/managed_ai/platform/` | Sole OS/platform adapter leaf (`PlatformAdapter`, `LockMode`, Windows `LockFileEx`/POSIX `fcntl`, unfollowed reparse/symlink & Windows reserved-name guards, streaming `sha256_file`, scatter-write `atomic_bytes`, weakref `KeyedLockPool`, and process-group helpers). Stdlib-only and safe for isolated library/recovery-archive reuse. |
 | `src/managed_ai/deployment/` | Deployment contract and descriptors (`agent-system-deployment/2`), `code_identity()` verification, engine staging/activation, and cross-store owner admission. |
-| `src/managed_ai/core/` | Content-addressed object store, packet exchange, attention tracking, return collection, layout ownership, and wire-format constants. |
-| `src/managed_ai/store/` | Native records (`g60-agent-system/0.1`), schema validation, domain/catalogue selection, context capture, `g60-composition/1` views, discovery, graph queries, transfer, and turn retirement. |
+| `src/managed_ai/core/` | Content-addressed object store, packet exchange (`exchange/cli.py`, `exchange/open_contact.py`), attention tracking (`attention.py`), return collection (`exchange/transport/collector.py`), layout ownership, and wire-format constants. |
+| `src/managed_ai/store/` | Native records (`g60-agent-system/0.1`), schema validation, domain/catalogue selection, context capture, `g60-composition/1` views, discovery, graph queries, transfer, governance (`governance/audit_feedback.py`), and turn retirement. |
 | `src/managed_ai/library/` | Standalone stdlib lexical/BM25/FTS5 knowledge reader, config, search index, catalogue, producer, and product bundles (isolated from `core`/`store`/`deployment`). |
 | `src/managed_ai/host/` | Concrete continuing-work, material-retention, and signal-field observation services built on top of native stores, each owning its own contract, config, storage, and CLI. |
-| `src/managed_ai/tools/` | Operator runtime helpers (`audit_feedback.py`, `open_contact.py`). |
 | `src/managed_ai/companions/` | Optional adapters: `workbench/` (model/tool callbacks & durable resume), `peer/` (bounded worker harness), `publication_review/` (dependency observation), and `representation/` (structural checks). |
-| `src/managed_ai/optional/collective/` | Optional SQLite-backed multi-owner receiving authority. |
-| `scripts/` | Repo-local maintainer and CI/CD tooling (never bundled into wheels): `scripts/release/{package,check_current,refresh_guidance}.py` and `scripts/publish_library.py`. |
+| `src/managed_ai/collective/` | Optional SQLite-backed multi-owner receiving authority. |
+| `scripts/` | Repo-local maintainer and CI/CD tooling (never bundled into wheels): `scripts/release/{package,check_current,refresh_guidance}.py`, `scripts/release/{current_sources,navigation}.json`, and `scripts/publish_library.py`. |
 | External domains | Separate repositories owning domain schemas, source catalogues, entry guidance, and declared tools (`source_root: "."`). Loading a domain never executes its tools. |
 | External stores | Caller-owned directories (`system.json`, `exchange/`, `work/`) outside the engine checkout holding goals, records, packets, and local receiving accounts. |
 

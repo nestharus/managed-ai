@@ -13,18 +13,19 @@ _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 from tests._paths import ENGINE, SRC
-from managed_ai.library.reader import knowledge
-from managed_ai.library.reader.source_producer import Producer
+from managed_ai.library import catalogue, format as lib_format
+from managed_ai.library.catalogue import Library
+from managed_ai.library.producer import Producer
 
 
 def has_fts5():
-    if knowledge.sqlite3 is None:
+    if catalogue.sqlite3 is None:
         return False
     try:
-        with closing(knowledge.sqlite3.connect(':memory:')) as connection:
+        with closing(catalogue.sqlite3.connect(':memory:')) as connection:
             connection.execute('CREATE VIRTUAL TABLE availability USING fts5(body)')
         return True
-    except knowledge.SQLITE_ERRORS:
+    except catalogue.SQLITE_ERRORS:
         return False
 
 
@@ -46,7 +47,7 @@ class SourceProducerTest(unittest.TestCase):
         }
         rows = []
         for ident, body in supplied.items():
-            sha256 = knowledge.digest(body)
+            sha256 = lib_format.digest(body)
             object_path = 'objects/' + sha256 + '.txt'
             (self.directory / object_path).write_bytes(body)
             rows.append(dict(id=ident, title=ident, summary='Complete supplied body',
@@ -62,20 +63,20 @@ class SourceProducerTest(unittest.TestCase):
                  members=['notes/short.md'], requires=['and'], parents=[],
                  external_participation=[]),
         ]
-        self.manifest = dict(format=knowledge.FORMAT, edition='test-source-producer',
+        self.manifest = dict(format=lib_format.FORMAT, edition='test-source-producer',
                              bodies=rows, modules=modules, provenance={})
         self.publish(self.manifest)
-        self.oracle = knowledge.Library(self.directory)
+        self.oracle = Library(self.directory)
         self.addCleanup(self.oracle.close)
         self.pin = self.oracle.sha256
         self.producer = Producer(self.directory)
         self.addCleanup(self.producer.close)
 
     def publish(self, manifest):
-        knowledge.check_manifest(manifest)
-        data = knowledge.encoded(manifest)
+        lib_format.check_manifest(manifest)
+        data = lib_format.encoded(manifest)
         (self.directory / 'catalogue.json').write_bytes(data)
-        return knowledge.digest(data)
+        return lib_format.digest(data)
 
     def request(self, operation, *, use='current', selected=None, **fields):
         request = dict(operation=operation, **fields)
@@ -124,7 +125,7 @@ class SourceProducerTest(unittest.TestCase):
         expected = self.oracle.show('notes/later.md')
         for use in ('current', 'historical', 'current'):
             with self.subTest(use=use):
-                with patch.object(knowledge, 'read_bytes', wraps=knowledge.read_bytes) as reads:
+                with patch.object(catalogue, 'read_bytes', wraps=catalogue.read_bytes) as reads:
                     response = self.request('show', id='notes/later.md', use=use)
                 self.assert_ok(response)
                 self.assertEqual(response['result'], expected)
@@ -144,7 +145,7 @@ class SourceProducerTest(unittest.TestCase):
                 ('current', 'source', 3), ('historical', 'source', 0),
                 ('current', 'correcting', 0)):
             expected = self.oracle.discover(query, backend='fts5')
-            with patch.object(knowledge, 'read_bytes', wraps=knowledge.read_bytes) as reads:
+            with patch.object(catalogue, 'read_bytes', wraps=catalogue.read_bytes) as reads:
                 response = self.request('discover', query=query, use=use)
             self.assert_discovery(response, expected)
             self.assert_read_account(response, reads.call_args_list,
@@ -179,7 +180,7 @@ class SourceProducerTest(unittest.TestCase):
         self.assert_refused(self.request('discover', query='source'))
         self.assert_refused(self.request('show', id='a'))
         self.assert_ok(self.request('describe'), current_pin)
-        with closing(knowledge.Library(self.directory)) as current:
+        with closing(Library(self.directory)) as current:
             self.assert_discovery(self.request('discover', query='qualification', selected=current_pin),
                                   current.discover('qualification', backend='fts5'))
             self.assertEqual(self.request('show', id='a', selected=current_pin)['result'], current.show('a'))
@@ -231,8 +232,8 @@ class SourceProducerTest(unittest.TestCase):
         invalid = [dict(query=''), dict(query='"unclosed'), dict(query='é' * 1025),
                    dict(query=' '.join('unit' + str(i) for i in range(129))),
                    dict(limit=0), dict(limit=101), dict(limit=True), dict(scan_limit=0),
-                   dict(scan_limit=knowledge.MAX_BODIES + 1), dict(max_bytes=0),
-                   dict(max_bytes=knowledge.MAX_PACKAGE + 1), dict(max_bytes=1.0),
+                   dict(scan_limit=lib_format.MAX_BODIES + 1), dict(max_bytes=0),
+                   dict(max_bytes=lib_format.MAX_PACKAGE + 1), dict(max_bytes=1.0),
                    dict(use='latest'), dict(library_sha256='invalid'), dict(unknown=True)]
         for fields in invalid:
             with self.subTest(fields=fields):
@@ -255,21 +256,21 @@ class SourceProducerTest(unittest.TestCase):
     @NEEDS_FTS5
     def test_close_releases_native_indexes_and_new_instance_reconstructs(self):
         connections = []
-        connect = knowledge.sqlite3.connect
+        connect = catalogue.sqlite3.connect
 
         def observed_connect(*args, **kwargs):
             connection = connect(*args, **kwargs)
             connections.append(connection)
             return connection
 
-        with patch.object(knowledge.sqlite3, 'connect', side_effect=observed_connect):
+        with patch.object(catalogue.sqlite3, 'connect', side_effect=observed_connect):
             self.assert_ok(self.request('discover', query='source'))
             self.assert_ok(self.request('discover', query='source', scan_limit=1))
         self.assertTrue(connections)
         self.producer.close()
         self.producer.close()
         for connection in connections:
-            with self.assertRaises(knowledge.sqlite3.ProgrammingError):
+            with self.assertRaises(catalogue.sqlite3.ProgrammingError):
                 connection.execute('SELECT 1')
         self.producer = Producer(self.directory)
         self.addCleanup(self.producer.close)

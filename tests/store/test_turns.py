@@ -111,7 +111,7 @@ class TurnCommit(unittest.TestCase):
         sibling=self.other_work()
         # An independent use of Attention can even claim the same text. Only the
         # exact occurrence warrants resuming; a different one must allow withdrawal.
-        result=subprocess.run([sys.executable,'-B',ENGINE/'core/cli/track_attention.py','--root',self.root/'exchange',
+        result=subprocess.run([sys.executable,'-B',ENGINE/'core/attention.py','--root',self.root/'exchange',
                                'feedback','turn-cart'],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
         competing=self.index()['feedbacks']['turn-cart']

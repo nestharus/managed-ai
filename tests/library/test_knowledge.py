@@ -13,25 +13,31 @@ _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 from tests._paths import ENGINE, SRC
+from managed_ai.library.bundle import context as bundle_context, export, import_bundle, inspect_bundle, product
+from managed_ai.library.catalogue import Library
 from managed_ai.library.config import LibraryConfig
 from managed_ai.library.contract import LibraryReader, SearchBackend, SourceProducerService
+from managed_ai.library.format import (
+    FORMAT,
+    SELECTION,
+    check_manifest,
+    decoded,
+    digest,
+    encoded,
+)
 from managed_ai.library.index import SearchIndex
 from managed_ai.library.lexical import search_query
 from managed_ai.library.producer import Producer
-from managed_ai.library.reader import knowledge
 
 
 def _load_publish_module():
-    """Load scripts/publish_library.py when moved in Stage 7.3, else fallback to library.bundles.publish."""
+    """Load scripts/publish_library.py directly."""
     script = _REPO / 'scripts' / 'publish_library.py'
-    if script.is_file():
-        spec = importlib.util.spec_from_file_location('publish_library_script', str(script))
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-    from managed_ai.library.bundles import publish as legacy_publish
-    return legacy_publish
+    spec = importlib.util.spec_from_file_location('publish_library_script', str(script))
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 publish = _load_publish_module()
@@ -50,7 +56,7 @@ class KnowledgeTest(unittest.TestCase):
         directory = self.root / name; directory.mkdir(); (directory / 'objects').mkdir()
         rows = []
         for ident, body in bodies.items():
-            h = knowledge.digest(body); obj = 'objects/' + h + '.txt'
+            h = digest(body); obj = 'objects/' + h + '.txt'
             (directory / obj).write_bytes(body)
             rows.append(dict(id=ident, title=ident, summary='Complete supplied body', object=obj,
                 sha256=h, bytes=len(body), source=dict(path=ident, sha256=h), link_base=ident,
@@ -61,77 +67,77 @@ class KnowledgeTest(unittest.TestCase):
         if len(bodies) > 1:
             modules.append(dict(id='joined', title='Joined use', purpose='Supply both declared contributions',
                 members=[list(bodies)[1]], requires=['base'], parents=[], external_participation=['Actual receiving host.']))
-        manifest = dict(format=knowledge.FORMAT, edition=name, bodies=rows, modules=modules, provenance={})
-        (directory / 'catalogue.json').write_bytes(knowledge.encoded(manifest))
-        return knowledge.Library(directory)
+        manifest = dict(format=FORMAT, edition=name, bodies=rows, modules=modules, provenance={})
+        (directory / 'catalogue.json').write_bytes(encoded(manifest))
+        return Library(directory)
 
     def selection(self, library=None, module='joined'):
         library = library or self.library
-        return dict(format=knowledge.SELECTION, purpose='Actual complete-body receiving test', bodies=[],
+        return dict(format=SELECTION, purpose='Actual complete-body receiving test', bodies=[],
             modules=[library.pin(library.modules[module], 'module')])
 
     def test_required_closure_and_full_data_roundtrip(self):
         selection = self.selection(); bundle = self.root / 'out.zip'
-        context = knowledge.context([self.library], selection)
+        context = bundle_context([self.library], selection)
         self.assertEqual({x['text'] for x in context['bodies']}, {'Complete A\n', 'Complete B\n'})
-        result = knowledge.export([self.library], selection, 'joined-product', bundle)
+        result = export([self.library], selection, 'joined-product', bundle)
         self.assertEqual((result['bodies'], result['modules']), (2, 2))
         self.assertTrue(any(x['target'] == 'outside/history.md' for x in result['provenance']['outside_reference_routes']))
         store = self.root / 'store'; store.mkdir()
-        first = knowledge.import_bundle(bundle, store); second = knowledge.import_bundle(bundle, store)
+        first = import_bundle(bundle, store); second = import_bundle(bundle, store)
         self.assertEqual(first['status'], 'imported-data'); self.assertEqual(second['status'], 'already-present-verified')
-        received = knowledge.Library(first['library']); received.verify()
+        received = Library(first['library']); received.verify()
         self.assertEqual(received.body('meaning/a.md'), b'Complete A\n')
         self.assertNotIn('outside-parent', received.modules)
         self.assertIn('No source owner', first['authority'])
 
     def test_stale_pin_and_complete_body_budget_refuse(self):
         stale = self.selection(); stale['modules'][0]['sha256'] = '0' * 64
-        with self.assertRaises(ValueError): knowledge.context([self.library], stale)
-        with self.assertRaises(ValueError): knowledge.context([self.library], self.selection(), max_bytes=1)
-        self.assertEqual(knowledge.context([self.library], self.selection())['body_bytes'], 22)
+        with self.assertRaises(ValueError): bundle_context([self.library], stale)
+        with self.assertRaises(ValueError): bundle_context([self.library], self.selection(), max_bytes=1)
+        self.assertEqual(bundle_context([self.library], self.selection())['body_bytes'], 22)
 
     def test_colliding_logical_id_needs_explicit_version_selection(self):
         other = self.make_library('second', {'meaning/a.md': b'Different source A\n'})
-        selection = dict(format=knowledge.SELECTION, purpose='Compare both versions', modules=[], bodies=[
+        selection = dict(format=SELECTION, purpose='Compare both versions', modules=[], bodies=[
             self.library.pin(self.library.bodies['meaning/a.md']), other.pin(other.bodies['meaning/a.md'])])
-        self.assertEqual(len(knowledge.context([self.library, other], selection)['bodies']), 2)
-        with self.assertRaisesRegex(ValueError, 'collision'): knowledge.product([self.library, other], selection, 'ambiguous')
+        self.assertEqual(len(bundle_context([self.library, other], selection)['bodies']), 2)
+        with self.assertRaisesRegex(ValueError, 'collision'): product([self.library, other], selection, 'ambiguous')
 
     def test_missing_required_member_and_unsupported_schema_refuse(self):
         malformed = copy.deepcopy(self.library.catalogue)
         malformed['modules'][0]['members'].append('missing.md')
-        with self.assertRaises(ValueError): knowledge.check_manifest(malformed)
+        with self.assertRaises(ValueError): check_manifest(malformed)
         malformed = copy.deepcopy(self.library.catalogue); malformed['format'] = 'knowledge-library/99'
-        with self.assertRaises(ValueError): knowledge.check_manifest(malformed)
+        with self.assertRaises(ValueError): check_manifest(malformed)
         malformed = copy.deepcopy(self.library.catalogue); malformed['modules'][0]['members'] = [{}]
-        with self.assertRaises(ValueError): knowledge.check_manifest(malformed)
-        with self.assertRaises(ValueError): knowledge.decoded(b'{"same":1,"same":2}')
-        with self.assertRaises(ValueError): knowledge.decoded(b'{"numeric":NaN}')
+        with self.assertRaises(ValueError): check_manifest(malformed)
+        with self.assertRaises(ValueError): decoded(b'{"same":1,"same":2}')
+        with self.assertRaises(ValueError): decoded(b'{"numeric":NaN}')
 
     def test_import_rejects_unselected_members_before_store_mutation(self):
-        good = self.root / 'good.zip'; knowledge.export([self.library], self.selection(), 'good', good)
+        good = self.root / 'good.zip'; export([self.library], self.selection(), 'good', good)
         bad = self.root / 'bad.zip'
         with zipfile.ZipFile(good) as source, zipfile.ZipFile(bad, 'w') as target:
             for info in source.infolist(): target.writestr(info, source.read(info.filename))
             target.writestr('../escape.txt', b'Never extracted')
         store = self.root / 'store'; store.mkdir()
-        with self.assertRaises(ValueError): knowledge.import_bundle(bad, store)
+        with self.assertRaises(ValueError): import_bundle(bad, store)
         self.assertEqual(list(store.iterdir()), [])
         self.assertFalse((self.root / 'escape.txt').exists())
 
     def test_import_rejects_changed_object_and_symlink_input(self):
-        good = self.root / 'good.zip'; knowledge.export([self.library], self.selection(), 'good', good)
+        good = self.root / 'good.zip'; export([self.library], self.selection(), 'good', good)
         bad = self.root / 'bad.zip'
         with zipfile.ZipFile(good) as source, zipfile.ZipFile(bad, 'w') as target:
             for info in source.infolist():
                 body = source.read(info.filename)
                 target.writestr(info, b'X' * len(body) if info.filename.startswith('objects/') else body)
         store = self.root / 'store'; store.mkdir()
-        with self.assertRaises(ValueError): knowledge.import_bundle(bad, store)
+        with self.assertRaises(ValueError): import_bundle(bad, store)
         self.assertEqual(list(store.iterdir()), [])
         link = self.root / 'linked.zip'; link.symlink_to(good)
-        with self.assertRaises(ValueError): knowledge.inspect_bundle(link)
+        with self.assertRaises(ValueError): inspect_bundle(link)
 
     def test_discovery_reports_unexamined_bodies(self):
         result = self.library.discover('complete', scan_limit=1, max_bytes=1024)
@@ -149,7 +155,7 @@ class KnowledgeTest(unittest.TestCase):
         first = publish.publish(project, None, spec, 'current', output)
         again = publish.publish(project, None, spec, 'current', output)
         self.assertEqual(first['status'], 'published-data'); self.assertEqual(again['status'], 'already-present-verified')
-        library = knowledge.Library(output)
+        library = Library(output)
         self.assertIn(b'Full operating source', library.body('current/a.md'))
         self.assertEqual(publish.audit(project, None, library, spec)['status'], 'same')
         (project / 'current/new.md').write_text('# New understanding\n\nA newly necessary contribution.\n')
@@ -190,9 +196,9 @@ class KnowledgeTest(unittest.TestCase):
         def rewrite_edition(edition_name: str) -> str:
             manifest = copy.deepcopy(self.library.catalogue)
             manifest['edition'] = edition_name
-            raw = knowledge.encoded(manifest)
+            raw = encoded(manifest)
             manifest_path.write_bytes(raw)
-            return knowledge.digest(raw)
+            return digest(raw)
 
         with Producer(lib_dir, max_retained_catalogues=2) as producer:
             self.assertIsInstance(producer, SourceProducerService)

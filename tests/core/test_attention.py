@@ -374,7 +374,7 @@ class AttentionTests(unittest.TestCase):
     def test_fresh_cli_processes(self):
         self.write('spec.json',{'field':'field.md','items':[self.item()]})
         def call(*args):
-            p=subprocess.run([sys.executable,'-B',str(ROOT/'core/cli/track_attention.py'),'--root',str(self.root),*args],capture_output=True,text=True,timeout=10)
+            p=subprocess.run([sys.executable,'-B',str(ROOT/'core/attention.py'),'--root',str(self.root),*args],capture_output=True,text=True,timeout=10)
             self.assertEqual(p.returncode,0,p.stderr);return json.loads(p.stdout)
         call('track','--spec','spec.json');call('feedback','p1')
         self.write('r.json',{'id':'r1','assessments':[dict(item='q1',disposition='considered',account='actual public account')]})
@@ -382,7 +382,7 @@ class AttentionTests(unittest.TestCase):
         self.assertEqual(call('feedback','p2')['counts']['considered'],1)
 
     def test_distributed_root_rejected(self):
-        p=subprocess.run([sys.executable,'-B',str(ROOT/'core/cli/track_attention.py'),'--root',str(ROOT/'forbidden-runtime'),'feedback','p1'],capture_output=True,text=True,timeout=10)
+        p=subprocess.run([sys.executable,'-B',str(ROOT/'core/attention.py'),'--root',str(ROOT/'forbidden-runtime'),'feedback','p1'],capture_output=True,text=True,timeout=10)
         self.assertEqual(p.returncode,2)
         self.assertIn('outside',p.stderr)
         self.assertFalse((ROOT/'forbidden-runtime').exists())

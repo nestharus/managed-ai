@@ -4,8 +4,7 @@ An optional, standard-library workbench that connects caller-supplied model and 
 
 ## Layout
 
-- `core/`: `inspect_config.py` (preflight), `workbench_agent.py` (single-run assistant), `resumable_workbench.py` & `durable_agent.py` (restartable checkpoint/resume), `source_tools.py` (exact library source reads & bounded search), `model_bridges.py` (command/mailbox bridges), `io_utils.py` & `config.py` (shared strict JSON, atomic writes, unfollowed path checks).
-- `controller/`: `agent_runtime.py` & `evidence_support.py` (bounded callable controller loop).
+- `src/managed_ai/companions/workbench/`: `inspect_config.py` (preflight), `workbench_agent.py` (single-run assistant), `resumable_workbench.py` & `durable_agent.py` (restartable checkpoint/resume), `agent_runtime.py` & `evidence_support.py` (bounded callable controller loop), `source_tools.py` (exact library source reads & bounded search), `model_bridges.py` (command/mailbox bridges), `io_utils.py` & `config.py` (shared strict JSON, atomic writes, unfollowed path checks).
 - `configs/`: example configuration templates.
 
 ## Preflight and launch
@@ -13,7 +12,7 @@ An optional, standard-library workbench that connects caller-supplied model and 
 Inspect a configuration before starting any model call:
 
 ```sh
-python -B src/managed_ai/companions/workbench/core/inspect_config.py --config /path/to/config.json
+python -B src/managed_ai/companions/workbench/inspect_config.py --config /path/to/config.json
 ```
 
 Preflight validates JSON strictness (no duplicate keys or non-finite numbers), checks that `workspace`, `state_dir`, and `library` are ordinary unfollowed paths outside the engine, verifies declared tool/receiver commands, and confirms the configured source basis without mutating state.
@@ -21,8 +20,8 @@ Preflight validates JSON strictness (no duplicate keys or non-finite numbers), c
 ### Single-run assistant (`workbench_agent.py`)
 
 ```sh
-python -B src/managed_ai/companions/workbench/core/workbench_agent.py run --config /path/to/config.json
-python -B src/managed_ai/companions/workbench/core/workbench_agent.py respond --workspace /path/to/workspace --reply /path/to/reply.json
+python -B src/managed_ai/companions/workbench/workbench_agent.py run --config /path/to/config.json
+python -B src/managed_ai/companions/workbench/workbench_agent.py respond --workspace /path/to/workspace --reply /path/to/reply.json
 ```
 
 Supports both command-adapter model bridges and host-mediated mailbox exchanges. The controller bounds tool turns, bytes, and wall time; `SourceService` reads exact complete bodies from the configured library and closes handles in `finally`.
@@ -30,9 +29,9 @@ Supports both command-adapter model bridges and host-mediated mailbox exchanges.
 ### Restartable construction (`resumable_workbench.py`)
 
 ```sh
-python -B src/managed_ai/companions/workbench/core/resumable_workbench.py start --config /path/to/config.json
-python -B src/managed_ai/companions/workbench/core/resumable_workbench.py inspect --state-dir /path/to/work/state
-python -B src/managed_ai/companions/workbench/core/resumable_workbench.py resume --config /path/to/config.json
+python -B src/managed_ai/companions/workbench/resumable_workbench.py start --config /path/to/config.json
+python -B src/managed_ai/companions/workbench/resumable_workbench.py inspect --state-dir /path/to/work/state
+python -B src/managed_ai/companions/workbench/resumable_workbench.py resume --config /path/to/config.json
 ```
 
 See [RESUME.md](RESUME.md) for durable state inspection, `binding_mismatch` handling, source observation accounting, and resolving interrupted callbacks.
