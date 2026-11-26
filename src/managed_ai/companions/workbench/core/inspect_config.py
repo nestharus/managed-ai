@@ -38,14 +38,17 @@ try:
     )
     from .io_utils import canonical_bytes, loads_strict
 except ImportError:
-    from config import (
+    _src_root = Path(__file__).resolve().parents[4]
+    if str(_src_root) not in sys.path:
+        sys.path.insert(0, str(_src_root))
+    from managed_ai.companions.workbench.core.config import (
         CORE_MODULES,
         DEFAULT_CONTROLLER_DIR,
         default_search_paths,
         is_clean_relative_posix,
         paths_overlap,
     )
-    from io_utils import canonical_bytes, loads_strict
+    from managed_ai.companions.workbench.core.io_utils import canonical_bytes, loads_strict
 
 
 class Inspection:

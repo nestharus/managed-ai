@@ -9,6 +9,7 @@ import argparse
 import inspect
 import json
 from pathlib import Path
+import sys
 import time
 import uuid
 
@@ -31,7 +32,10 @@ try:
     from .source_tools import SearchImplementation
     from .workbench_agent import Workbench, WorkbenchBasisMismatch
 except ImportError:
-    from config import (
+    _src_root = Path(__file__).resolve().parents[4]
+    if str(_src_root) not in sys.path:
+        sys.path.insert(0, str(_src_root))
+    from managed_ai.companions.workbench.core.config import (
         CORE_MODULES,
         build_model_transport,
         command_code as _command_code,
@@ -39,15 +43,15 @@ except ImportError:
         pin_files as _pins,
         validate_resolution_payload,
     )
-    from durable_agent import (
+    from managed_ai.companions.workbench.core.durable_agent import (
         inspect_durable_state,
         resolve_durable_operation,
         run_durable_agent,
     )
-    from io_utils import atomic_json, loads_strict, pin_file as pin
-    from model_bridges import write_mailbox_response
-    from source_tools import SearchImplementation
-    from workbench_agent import Workbench, WorkbenchBasisMismatch
+    from managed_ai.companions.workbench.core.io_utils import atomic_json, loads_strict, pin_file as pin
+    from managed_ai.companions.workbench.core.model_bridges import write_mailbox_response
+    from managed_ai.companions.workbench.core.source_tools import SearchImplementation
+    from managed_ai.companions.workbench.core.workbench_agent import Workbench, WorkbenchBasisMismatch
 
 
 VERSION = "g60-resumable-workbench/1"

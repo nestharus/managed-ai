@@ -6,18 +6,21 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-HOST_DIR = REPO_ROOT / 'engine/host/continuing_work'
-if str(HOST_DIR) not in sys.path:
-    sys.path.insert(0, str(HOST_DIR))
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SRC_ROOT = REPO_ROOT / 'src'
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
-import capture_native
-from continuing_work import Host
+from managed_ai.host.continuing_work import capture_native
+from managed_ai.host.continuing_work.continuing_work import Host
 
 
 def _default_engine():
-    primary = REPO_ROOT / 'engine/store/manage_store.py'
-    return primary if primary.is_file() else REPO_ROOT / 'engine/runtime/manage_store.py'
+    primary = SRC_ROOT / 'managed_ai/store/manage_store.py'
+    if primary.is_file():
+        return primary
+    legacy = REPO_ROOT / 'engine/store/manage_store.py'
+    return legacy if legacy.is_file() else REPO_ROOT / 'engine/runtime/manage_store.py'
 
 
 class SelectedCapture(unittest.TestCase):

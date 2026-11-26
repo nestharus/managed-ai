@@ -8,11 +8,12 @@ import unittest
 from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-REP_DIR = REPO_ROOT / 'companions/representation'
-if str(REP_DIR) not in sys.path:
-    sys.path.insert(0, str(REP_DIR))
+SRC_ROOT = REPO_ROOT / 'src'
+REP_DIR = SRC_ROOT / 'managed_ai/companions/representation'
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
-import representation
+from managed_ai.companions.representation import representation
 
 
 class RepresentationWave4Tests(unittest.TestCase):

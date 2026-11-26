@@ -30,7 +30,10 @@ try:
         sync_dir,
     )
 except ImportError:
-    from io_utils import (
+    _src_root = Path(__file__).resolve().parents[4]
+    if str(_src_root) not in sys.path:
+        sys.path.insert(0, str(_src_root))
+    from managed_ai.companions.workbench.core.io_utils import (
         canonical_bytes as encoded,
         canonical_digest as identity,
         is_reparse_or_symlink,
@@ -85,14 +88,18 @@ def relative(value):
     return value
 
 
-def _default_runtime_entry(repo_root):
-    primary = repo_root / 'engine' / _RUNTIME_ENTRY
-    if primary.exists() or primary.is_symlink():
-        return primary
-    legacy = repo_root / 'engine' / _LEGACY_RUNTIME_ENTRY
-    if legacy.exists() or legacy.is_symlink():
-        return legacy
-    return primary
+def _default_runtime_entry(base_root):
+    base = Path(base_root)
+    candidates = (
+        base / _RUNTIME_ENTRY,
+        base / 'src/managed_ai' / _RUNTIME_ENTRY,
+        base / 'engine' / _RUNTIME_ENTRY,
+        base / 'engine' / _LEGACY_RUNTIME_ENTRY,
+    )
+    for candidate in candidates:
+        if candidate.exists() or candidate.is_symlink():
+            return candidate
+    return candidates[0]
 
 
 def _search_bytes(path):

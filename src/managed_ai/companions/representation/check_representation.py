@@ -11,13 +11,14 @@ import unittest
 
 arguments = argparse.ArgumentParser(allow_abbrev=False)
 arguments.add_argument('--engine', required=True, type=Path, metavar='ENGINE',
-                       help='canonical engine directory containing store/ and core/')
+                       help='canonical src/managed_ai package directory containing store/ and core/')
 args, rest = arguments.parse_known_args()
 engine_root = args.engine.resolve()
-if str(engine_root) not in sys.path:
-    sys.path.insert(0, str(engine_root))
-from store.system import System
-from representation import RepresentationOperations, OPERATION, encoded
+src_root = engine_root.parent if (engine_root / '__init__.py').is_file() and engine_root.name == 'managed_ai' else engine_root
+if str(src_root) not in sys.path:
+    sys.path.insert(0, str(src_root))
+from managed_ai.store.system import System
+from managed_ai.companions.representation.representation import RepresentationOperations, OPERATION, encoded
 
 
 class NativeRepresentationChecks(unittest.TestCase):

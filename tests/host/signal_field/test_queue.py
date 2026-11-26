@@ -9,8 +9,8 @@ import sys
 import tempfile
 import unittest
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-QUEUE_PATH = REPO_ROOT / 'engine/host/signal_field/queue.py'
+REPO_ROOT = Path(__file__).resolve().parents[3]
+QUEUE_PATH = REPO_ROOT / 'src/managed_ai/host/signal_field/queue.py'
 spec = importlib.util.spec_from_file_location('signal_field_queue_under_test', QUEUE_PATH)
 queue_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(queue_mod)
@@ -49,7 +49,7 @@ class SignalFieldQueueTests(unittest.TestCase):
     def test_refuses_database_inside_product_directory(self):
         for candidate in (
             PRODUCT_ROOT / 'host/signal_field/forbidden.sqlite',
-            PRODUCT_ROOT / 'runtime/forbidden.sqlite',
+            PRODUCT_ROOT / 'store/forbidden.sqlite',
             PRODUCT_ROOT / 'forbidden.sqlite',
         ):
             with self.subTest(candidate=str(candidate)):

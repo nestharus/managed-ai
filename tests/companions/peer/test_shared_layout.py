@@ -9,17 +9,17 @@ import unittest
 from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-PEER_DIR = REPO_ROOT / 'companions/peer'
-WORKBENCH_CORE = REPO_ROOT / 'companions/workbench/core'
-TESTS_COMPANIONS = REPO_ROOT / 'tests/companions'
-for _p in (str(PEER_DIR), str(WORKBENCH_CORE), str(TESTS_COMPANIONS)):
+SRC_ROOT = REPO_ROOT / 'src'
+PEER_DIR = SRC_ROOT / 'managed_ai/companions/peer'
+WORKBENCH_CORE = SRC_ROOT / 'managed_ai/companions/workbench/core'
+for _p in (str(SRC_ROOT), str(REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import peer_workbench
-import source_tools
-from source_tools import SearchImplementation, SourceService, identity
-from workbench_fixtures import change_query_parser, search_layout
+from managed_ai.companions.peer import peer_workbench
+from managed_ai.companions.workbench.core import source_tools
+from managed_ai.companions.workbench.core.source_tools import SearchImplementation, SourceService, identity
+from tests.companions.workbench_fixtures import change_query_parser, search_layout
 
 
 class SharedLayout(unittest.TestCase):
@@ -30,7 +30,7 @@ class SharedLayout(unittest.TestCase):
             corpus = root / 'corpus'
             corpus.mkdir()
             (corpus / 'example.md').write_text('# Example lexical fixture\n', encoding='utf-8', newline='\n')
-            tools = root / 'companions/workbench/core/source_tools.py'
+            tools = root / 'src/managed_ai/companions/workbench/core/source_tools.py'
             tools.parent.mkdir(parents=True)
             tools.write_bytes(Path(source_tools.__file__).read_bytes())
 

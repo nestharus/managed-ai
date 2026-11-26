@@ -1,7 +1,7 @@
 """Retain a failure, qualify its generation inputs and accept its received repair."""
 from pathlib import Path
 
-from occurrence_files import ident, nonempty, now, read, write
+from managed_ai.host.continuing_work.occurrence_files import ident, nonempty, now, read, write
 
 
 class RepairCustody:

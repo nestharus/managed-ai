@@ -178,34 +178,44 @@ def changed_paths(before, after, prefix=''):
 
 def _load_engine_api(engine: Path):
     """Import System, exclusive, NativeLayout, packet_id, and artifact_target from the engine root."""
-    engine = Path(engine).resolve()
+    engine = _check_unfollowed_ancestors(engine, 'Engine directory', include_target=True).resolve()
     if (engine / 'store/system.py').is_file():
-        if str(engine) not in sys.path:
-            sys.path.insert(0, str(engine))
-        from store.system import System
-        from store.protocol.inputs import artifact_target
-        from core.ownership import NativeLayout, packet_id
-        from core.storage import exclusive
-        return System, exclusive, NativeLayout, packet_id, artifact_target
-    raise ValueError('Engine directory must contain canonical Wave 4 store/ and core/ packages: ' + str(engine))
+        src_root = engine.parent
+        if (engine / '__init__.py').is_file() and engine.name == 'managed_ai':
+            if str(src_root) not in sys.path:
+                sys.path.insert(0, str(src_root))
+            from managed_ai.store.system import System
+            from managed_ai.store.protocol.inputs import artifact_target
+            from managed_ai.core.ownership import NativeLayout, packet_id
+            from managed_ai.core.storage import exclusive
+            return System, exclusive, NativeLayout, packet_id, artifact_target
+        raise ValueError('Engine directory must be a canonical src/managed_ai package: ' + str(engine))
+    raise ValueError('Engine directory must contain canonical store/ and core/ packages: ' + str(engine))
+
+
+def _ensure_src_path() -> None:
+    src_root = Path(__file__).resolve().parents[3]
+    if (src_root / 'managed_ai/__init__.py').is_file() and str(src_root) not in sys.path:
+        sys.path.insert(0, str(src_root))
 
 
 def _packet_id_fn():
-    try:
-        from core.ownership import packet_id
-        return packet_id
-    except ImportError:
-        from continuation_support.ownership import packet_id
-        return packet_id
+    _ensure_src_path()
+    from managed_ai.core.ownership import packet_id
+    return packet_id
 
 
 def _artifact_target_fn():
-    try:
-        from store.protocol.inputs import artifact_target
-        return artifact_target
-    except ImportError:
-        from native_runtime.inputs import artifact_target
-        return artifact_target
+    _ensure_src_path()
+    from managed_ai.store.protocol.inputs import artifact_target
+    return artifact_target
+
+
+def _contract_path() -> Path:
+    local = Path(__file__).resolve().with_name('CONTRACT.md')
+    if local.is_file():
+        return local
+    return Path(__file__).resolve().parents[4] / 'docs/companions/representation/CONTRACT.md'
 
 
 class RepresentationOperations:
@@ -313,7 +323,7 @@ class RepresentationOperations:
         native = dict(spec.get('native', {}))
         require(not set(native) & {'task', 'consumer', 'sources', 'targets'},
                 'native additions cannot replace the bound task, consumer, sources or targets')
-        contract = Path(__file__).with_name('CONTRACT.md')
+        contract = _contract_path()
         require(contract.is_file(), 'adapter contract is missing')
         contract_bytes = contract.read_bytes()
         operation_bytes = encoded(spec)

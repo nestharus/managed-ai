@@ -8,21 +8,23 @@ import unittest
 from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-WORKBENCH_CORE = REPO_ROOT / 'companions/workbench/core'
-TESTS_COMPANIONS = REPO_ROOT / 'tests/companions'
-for _p in (str(WORKBENCH_CORE), str(TESTS_COMPANIONS)):
+SRC_ROOT = REPO_ROOT / 'src'
+WORKBENCH_CORE = SRC_ROOT / 'managed_ai/companions/workbench/core'
+for _p in (str(SRC_ROOT), str(REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import config as wb_config
-import durable_agent
-import inspect_config
-import io_utils
-import model_bridges
-import resumable_workbench
-import source_tools
-import workbench_agent
-from workbench_fixtures import search_layout
+from managed_ai.companions.workbench.core import (
+    config as wb_config,
+    durable_agent,
+    inspect_config,
+    io_utils,
+    model_bridges,
+    resumable_workbench,
+    source_tools,
+    workbench_agent,
+)
+from tests.companions.workbench_fixtures import search_layout
 
 
 class WorkbenchWave4Tests(unittest.TestCase):

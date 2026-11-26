@@ -6,6 +6,8 @@ Evidence snapshots are implemented by the companion ``evidence_support`` module.
 """
 
 from collections.abc import Mapping
+from pathlib import Path
+import sys
 
 try:
     from .evidence_support import (
@@ -15,7 +17,10 @@ try:
         source_snapshots,
     )
 except ImportError:
-    from evidence_support import (
+    _src_root = Path(__file__).resolve().parents[4]
+    if str(_src_root) not in sys.path:
+        sys.path.insert(0, str(_src_root))
+    from managed_ai.companions.workbench.controller.evidence_support import (
         capture_return,
         detached_json,
         interaction_history,

@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import stat
 
-from occurrence_files import (
+from managed_ai.host.continuing_work.occurrence_files import (
     atomic_bytes,
     check_unfollowed_ancestors,
     digest,
@@ -15,6 +15,16 @@ from occurrence_files import (
 )
 
 HERE = Path(__file__).resolve().parent
+
+
+def operation_guide_path() -> Path:
+    local = HERE / 'OPERATION.md'
+    if local.is_file():
+        return local
+    repo_doc = HERE.parents[3] / 'docs/engine/host/continuing_work/OPERATION.md'
+    if repo_doc.is_file():
+        return repo_doc
+    raise FileNotFoundError(f'Host operation guide is absent: {repo_doc}')
 
 
 def prepare_questions(supplied_questions, selected_sources, task):
@@ -282,7 +292,8 @@ class ScopeLifecycle:
         }
         if 'attention_max_bytes' in spec:
             request['attention_max_bytes'] = spec['attention_max_bytes']
-        method_raw = (HERE / 'OPERATION.md').read_bytes()
+        guide_path = operation_guide_path()
+        method_raw = guide_path.read_bytes()
         method_sha = digest(method_raw)
         method_path = 'sources/host/method-' + method_sha + '.md'
         method_file = self._host.work / method_path
@@ -304,7 +315,7 @@ class ScopeLifecycle:
             'prepared_at_utc': now(),
             'host_producer': self._host.pin((HERE / 'continuing_work.py').resolve()),
             'host_dependencies': self._host.producer_dependencies(),
-            'host_method': self._host.pin(HERE / 'OPERATION.md'),
+            'host_method': self._host.pin(guide_path),
             'spec': spec,
             'parent_goal': {k: goal[k] for k in ('revision', 'sha256')},
             'reads': reads,

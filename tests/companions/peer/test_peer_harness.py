@@ -9,13 +9,12 @@ import unittest
 from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-PEER_DIR = REPO_ROOT / 'companions/peer'
-if str(PEER_DIR) not in sys.path:
-    sys.path.insert(0, str(PEER_DIR))
+SRC_ROOT = REPO_ROOT / 'src'
+PEER_DIR = SRC_ROOT / 'managed_ai/companions/peer'
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
-import peer_harness
-import peer_protocol
-import peer_workbench
+from managed_ai.companions.peer import peer_harness, peer_protocol, peer_workbench
 
 
 WORKER_ECHO = """

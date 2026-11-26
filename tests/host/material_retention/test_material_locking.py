@@ -11,8 +11,8 @@ import time
 import unittest
 from unittest.mock import patch
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-IMPL = REPO_ROOT / "engine/host/material_retention/managed_material.py"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+IMPL = REPO_ROOT / "src/managed_ai/host/material_retention/managed_material.py"
 spec = importlib.util.spec_from_file_location("managed_material_lock_test", IMPL)
 material = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(material)

@@ -10,22 +10,25 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-HOST_DIR = REPO_ROOT / 'engine/host/continuing_work'
-if str(HOST_DIR) not in sys.path:
-    sys.path.insert(0, str(HOST_DIR))
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SRC_ROOT = REPO_ROOT / 'src'
+HOST_DIR = SRC_ROOT / 'managed_ai/host/continuing_work'
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
-import capture_native
-from continuing_work import Host
-import native_bridge
-import repair_custody
-import scope_lifecycle
+from managed_ai.host.continuing_work import (
+    capture_native,
+    native_bridge,
+    repair_custody,
+    scope_lifecycle,
+)
+from managed_ai.host.continuing_work.continuing_work import Host
 
 
 class Wave4HostArchitectureTests(unittest.TestCase):
     def test_native_sources_narrows_to_deployment_core_store_only(self):
         with tempfile.TemporaryDirectory() as tmp:
-            engine = Path(tmp) / 'engine'
+            engine = Path(tmp) / 'src/managed_ai'
             included = (
                 'deployment/select_deployment.py',
                 'core/attention.py',
@@ -38,6 +41,8 @@ class Wave4HostArchitectureTests(unittest.TestCase):
                 'tools/collect_returns.py',
                 'host/continuing_work/continuing_work.py',
                 'release/package.py',
+                'companions/peer/peer_harness.py',
+                'optional/collective/collective.py',
             )
             for rel in included + excluded:
                 path = engine / rel
@@ -47,7 +52,10 @@ class Wave4HostArchitectureTests(unittest.TestCase):
             native_path, programs = capture_native.native_sources(engine / 'store/manage_store.py')
             self.assertEqual(native_path, (engine / 'store/system.py').resolve())
             self.assertEqual(set(programs), set(included))
-            self.assertFalse(any(k.startswith(('library/', 'tools/', 'host/', 'release/')) for k in programs))
+            self.assertFalse(any(
+                k.startswith(('library/', 'tools/', 'host/', 'release/', 'companions/', 'optional/'))
+                for k in programs
+            ))
             self.assertNotIn('store/test_ignored.py', programs)
 
     def test_host_uses_composition_instead_of_mixin_inheritance(self):
@@ -147,9 +155,103 @@ class Wave4HostArchitectureTests(unittest.TestCase):
         self.assertNotIn('1 through 2000', combined)
         self.assertIn('from 1 through 200', combined)
 
+    # --- C41-2b: qualified_engine context keeps external managed_ai mounted across lazy imports ---
+    def test_qualified_engine_context_keeps_external_managed_ai_mounted_for_lazy_imports(self):
+        import importlib
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ext_engine = root / 'ext_pkg'
+            for sub in ('deployment', 'core', 'store'):
+                (ext_engine / sub).mkdir(parents=True)
+                (ext_engine / sub / '__init__.py').write_text('', encoding='utf-8', newline='\n')
+            (ext_engine / '__init__.py').write_text(
+                "ENGINE_MARKER = 'EXTERNAL_ENGINE'\n",
+                encoding='utf-8', newline='\n',
+            )
+            (ext_engine / 'store/manage_store.py').write_text('# external entry\n', encoding='utf-8', newline='\n')
+            (ext_engine / 'store/lazy_helper.py').write_text(
+                "SOURCE = 'EXTERNAL_LAZY_HELPER'\n",
+                encoding='utf-8', newline='\n',
+            )
+            (ext_engine / 'store/system.py').write_text(
+                "\n".join([
+                    "from contextlib import contextmanager",
+                    "from pathlib import Path",
+                    "from types import SimpleNamespace",
+                    "ENTRYPOINT = SimpleNamespace(",
+                    "    engine_api='managed-ai-runtime/1',",
+                    "    deployment_api='agent-system-deployment/2',",
+                    ")",
+                    "@contextmanager",
+                    "def exclusive(lock_path):",
+                    "    yield",
+                    "class Attention:",
+                    "    def inspect_receipt(self, rid): return None",
+                    "class Exchange:",
+                    "    def __init__(self, root):",
+                    "        self.root = Path(root) / 'exchange'",
+                    "    def inspect(self, turn):",
+                    "        return {'consumer': 'reader', 'publications': [], 'return': None, 'transport_outcome': None}",
+                    "    def directory(self, turn): return self.root / 'packets' / turn",
+                    "    def packet_summary(self, directory, consumer, publications, *, returned, outcome):",
+                    "        from managed_ai import ENGINE_MARKER",
+                    "        from managed_ai.store.lazy_helper import SOURCE",
+                    "        return {'packet': directory.name, 'transport': 'prepared', 'publications': publications,",
+                    "                'marker': ENGINE_MARKER, 'lazy_source': SOURCE}",
+                    "class System:",
+                    "    def __init__(self, root):",
+                    "        self.root = Path(root)",
+                    "        self.ex = Exchange(root)",
+                    "        self.attention = Attention()",
+                    "    def assess(self, turn, receipt, producer): return {}",
+                    "def resolve_lazy():",
+                    "    from managed_ai import ENGINE_MARKER",
+                    "    from managed_ai.store.lazy_helper import SOURCE",
+                    "    return (ENGINE_MARKER, SOURCE)",
+                ]) + "\n",
+                encoding='utf-8', newline='\n',
+            )
+            ext_entry = ext_engine / 'store/manage_store.py'
+            _, programs = capture_native.native_sources(ext_entry)
+            live_profile = capture_native._profile_digest(programs)
+
+            colocated_init = (SRC_ROOT / 'managed_ai/__init__.py').resolve()
+            self.assertEqual(Path(sys.modules['managed_ai'].__file__).resolve(), colocated_init)
+
+            # In-process context keeps external managed_ai.* mounted for lazy imports and blocks co-located leaks.
+            with capture_native.qualified_engine(ext_entry, expected_profile=live_profile) as (mod, info):
+                self.assertEqual(info['admission'], 'expected-profile')
+                self.assertEqual(info['profile'], live_profile)
+                self.assertEqual(mod.resolve_lazy(), ('EXTERNAL_ENGINE', 'EXTERNAL_LAZY_HELPER'))
+                self.assertEqual(
+                    Path(sys.modules['managed_ai.store.lazy_helper'].__file__).resolve(),
+                    (ext_engine / 'store/lazy_helper.py').resolve(),
+                )
+                with self.assertRaises(ModuleNotFoundError):
+                    importlib.import_module('managed_ai.host.continuing_work.occurrence_files')
+
+            # Context exit cleanly restores co-located managed_ai.* and removes external submodules.
+            self.assertEqual(Path(sys.modules['managed_ai'].__file__).resolve(), colocated_init)
+            self.assertNotIn('managed_ai.store.lazy_helper', sys.modules)
+
+            # End-to-end CLI invocation executes System + packet_summary lazy imports inside qualified_engine().
+            fake_store = root / 'fake-store'
+            (fake_store / 'exchange').mkdir(parents=True)
+            proc = subprocess.run(
+                [sys.executable, '-B', str(HOST_DIR / 'capture_native.py'),
+                 '--engine', str(ext_entry), '--root', str(fake_store),
+                 '--expected-profile', live_profile, 'inspect-turn', 'turn-lazy'],
+                capture_output=True, text=True, encoding='utf-8',
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            out = json.loads(proc.stdout)
+            self.assertEqual(out['turn']['marker'], 'EXTERNAL_ENGINE')
+            self.assertEqual(out['turn']['lazy_source'], 'EXTERNAL_LAZY_HELPER')
+            self.assertEqual(out['capture_adapter']['admission'], 'expected-profile')
+
     # --- Wave 5 (#213 Part B): Co-located auto-admission + external --expected-profile / --deployment ---
     def test_colocated_engine_auto_admits_and_records_live_profile_and_git_commit(self):
-        entry = REPO_ROOT / 'engine/store/manage_store.py'
+        entry = SRC_ROOT / 'managed_ai/store/manage_store.py'
         module, info = capture_native.qualify_engine(entry)
         self.assertEqual(info['admission'], 'colocated')
         self.assertEqual(len(info['profile']), 64)
@@ -188,9 +290,11 @@ class Wave4HostArchitectureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             ext_engine = root / 'ext_engine'
+            ext_engine.mkdir()
+            shutil.copy2(SRC_ROOT / 'managed_ai/__init__.py', ext_engine / '__init__.py')
             for subdir in ('deployment', 'core', 'store'):
                 shutil.copytree(
-                    REPO_ROOT / 'engine' / subdir,
+                    SRC_ROOT / 'managed_ai' / subdir,
                     ext_engine / subdir,
                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc'),
                 )
@@ -220,18 +324,17 @@ class Wave4HostArchitectureTests(unittest.TestCase):
             _, programs = capture_native.native_sources(ext_entry)
             live_profile = capture_native._profile_digest(programs)
 
-            # 3. External engine with matching --expected-profile succeeds!
-            mod_prof, info_prof = capture_native.qualify_engine(ext_entry, expected_profile=live_profile)
-            self.assertEqual(info_prof['admission'], 'expected-profile')
-            self.assertEqual(info_prof['profile'], live_profile)
-
-            # 4. Initialize a real store and real Deployment pointing to ext_engine, then qualify via --deployment!
+            # 3. External engine with matching --expected-profile succeeds & stays mounted across calls!
             store_dir = root / 'store'
-            mod_prof.System.initialize(store_dir, {'contribution': 'Test external deployment qualification.'})
+            with capture_native.qualified_engine(ext_entry, expected_profile=live_profile) as (mod_prof, info_prof):
+                self.assertEqual(info_prof['admission'], 'expected-profile')
+                self.assertEqual(info_prof['profile'], live_profile)
+                # 4. Initialize a real store inside the qualified external context.
+                mod_prof.System.initialize(store_dir, {'contribution': 'Test external deployment qualification.'})
+
+            # Initialize real Deployment pointing to ext_engine, then qualify via --deployment!
             dep_dir = root / 'deployment'
-            if str(REPO_ROOT / 'engine') not in sys.path:
-                sys.path.insert(0, str(REPO_ROOT / 'engine'))
-            from deployment.controller import Deployment
+            from managed_ai.deployment.controller import Deployment
             Deployment.initialize(dep_dir, store_dir, engine=ext_engine)
 
             # CLI checks: unqualified refused (rc=2), --expected-profile accepted (rc=0), --deployment accepted (rc=0)!

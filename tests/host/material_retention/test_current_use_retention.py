@@ -12,10 +12,10 @@ from unittest.mock import patch
 import zipfile
 
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 IMPL = Path(os.environ.get(
     "MATERIAL_IMPLEMENTATION",
-    REPO_ROOT / "engine/host/material_retention/managed_material.py",
+    REPO_ROOT / "src/managed_ai/host/material_retention/managed_material.py",
 ))
 spec = importlib.util.spec_from_file_location("material_under_test", IMPL)
 material = importlib.util.module_from_spec(spec)

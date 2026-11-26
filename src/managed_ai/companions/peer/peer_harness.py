@@ -43,7 +43,10 @@ try:
         target_path,
     )
 except ImportError:
-    from peer_protocol import (
+    _src_root = Path(__file__).resolve().parents[3]
+    if str(_src_root) not in sys.path:
+        sys.path.insert(0, str(_src_root))
+    from managed_ai.companions.peer.peer_protocol import (
         HARNESS_CONFIG_SCHEMA,
         HARNESS_RESULT_SCHEMA,
         OWNER_STATUSES,

@@ -22,8 +22,13 @@ try:
     from . import continuation_assessor as _default_assessor
     from . import publication_observer as _default_observer
 except ImportError:
-    import continuation_assessor as _default_assessor
-    import publication_observer as _default_observer
+    _src_root = Path(__file__).resolve().parents[3]
+    if str(_src_root) not in sys.path:
+        sys.path.insert(0, str(_src_root))
+    from managed_ai.companions.publication_review import (
+        continuation_assessor as _default_assessor,
+        publication_observer as _default_observer,
+    )
 
 
 HERE = Path(__file__).resolve().parent

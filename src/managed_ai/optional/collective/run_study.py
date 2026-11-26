@@ -7,8 +7,15 @@ import json
 import multiprocessing
 import os
 from pathlib import Path
+import sys
 
-from collective import Collective, PRODUCT
+try:
+    from .collective import Collective, PRODUCT
+except ImportError:
+    _src_root = Path(__file__).resolve().parents[3]
+    if str(_src_root) not in sys.path:
+        sys.path.insert(0, str(_src_root))
+    from managed_ai.optional.collective.collective import Collective, PRODUCT
 
 COUNT = 12
 AFFECTED = 5

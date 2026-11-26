@@ -15,13 +15,12 @@ import subprocess
 import sys
 
 HERE = Path(__file__).resolve().parent
+SRC_ROOT = HERE.parents[2]
+if __package__ in (None, '') and str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
-# This entry also supports loading by an explicit filename from a deployment.
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
-
-from capture_native import native_sources
-from native_bridge import (
+from managed_ai.host.continuing_work.capture_native import native_sources
+from managed_ai.host.continuing_work.native_bridge import (
     MAX_EVENT_LINE_BYTES,
     MAX_EVENT_STREAM_BYTES,
     NativeBridge,
@@ -29,7 +28,7 @@ from native_bridge import (
     capture_error,
     resolve_sibling_cli,
 )
-from occurrence_files import (
+from managed_ai.host.continuing_work.occurrence_files import (
     atomic_bytes,
     check_unfollowed_ancestors,
     digest,
@@ -43,9 +42,10 @@ from occurrence_files import (
     sync_dir,
     write,
 )
-from repair_custody import RepairCustody
-from scope_lifecycle import (
+from managed_ai.host.continuing_work.repair_custody import RepairCustody
+from managed_ai.host.continuing_work.scope_lifecycle import (
     ScopeLifecycle,
+    operation_guide_path,
     overlap_rows,
     prepare_attention_selection,
     prepare_questions,
@@ -186,7 +186,7 @@ class Host:
         engine = engine_checked.resolve()
         commission, commission_bytes = _read_ordinary_file_bytes(spec['commission'], 'Commission source')
         commission_text = commission_bytes.decode('utf-8')
-        operation_bytes = (HERE / 'OPERATION.md').read_bytes()
+        operation_bytes = operation_guide_path().read_bytes()
         duties = spec['duties']
         if not duties:
             raise ValueError('This continuing-work route requires explicit commissioned duties')
@@ -410,7 +410,7 @@ class Host:
         self._write(self.config_path, self.config)
         host_producer = self.pin(Path(__file__).resolve())
         host_dependencies = self.producer_dependencies()
-        host_method = self.pin(HERE / 'OPERATION.md')
+        host_method = self.pin(operation_guide_path())
         self.event('producing-release-selected', {
             'before_engine': self.pin(old),
             'current_engine': self.pin(new),
