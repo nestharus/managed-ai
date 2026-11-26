@@ -1,2 +1,0 @@
-Dispatch desk instruction, issue 3
-Only bags whose physical tag carries the triangle mark may enter the north vehicle. A blue register entry proposes an inspection but grants no permission to load. Hold unverified bags at the desk. If a destination is changed, check the same tag again before releasing the bag.

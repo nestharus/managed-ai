@@ -1,9 +1,0 @@
-[submodule "research"]
-	path = domains/research
-	url = https://github.com/nestharus/managed-ai-domain-research.git
-[submodule "writing"]
-	path = domains/writing
-	url = https://github.com/nestharus/managed-ai-domain-writing.git
-[submodule "ai-system-building"]
-	path = domains/ai-system-building
-	url = https://github.com/nestharus/managed-ai-domain-ai-system-building.git

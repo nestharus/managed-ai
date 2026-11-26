@@ -1,1 +1,0 @@
-Write a two-sentence dispatch card a volunteer can use to decide which bag to move and where. The volunteer has a printed color register but can also inspect an item's tag. Keep it usable on its own. Return the partial card, an unresolved decision and its contrasting alternative. Cite the governing sentence from the complete instruction.
