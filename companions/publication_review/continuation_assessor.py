@@ -155,7 +155,7 @@ def assess(previous: dict, current: dict) -> dict:
 
 
 def _main(argv=None):
-    parser = _argparse.ArgumentParser(description=__doc__)
+    parser = _argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--previous", required=True, help="previous receipts JSON")
     parser.add_argument("--current", required=True, help="current observations JSON")
     args = parser.parse_args(argv)

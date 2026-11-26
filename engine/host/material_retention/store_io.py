@@ -1,4 +1,4 @@
-"""Cooperative locking, strict JSON codecs, atomic durability, and event logging for managed_material."""
+"""Cooperative locking, strict JSON codecs, reparse/path guards, atomic durability, and event logging for managed_material."""
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -7,7 +7,7 @@ import errno
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import stat
 import threading
 import time
@@ -55,6 +55,7 @@ if os.name == "nt":
 FORMAT = "managed-material/1"
 RAW_BODY_KINDS = {"blob", "slice-view", "record-view", "recipe-view"}
 IMMUTABLE_RECORD_DIRS = ("manifests", "selections", "lifecycle", "occurrences", "transitions")
+_REPARSE_ATTR = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
 
 _LOCK_REGISTRY_GUARD = threading.Lock()
 _LOCK_REGISTRY: dict[Path, tuple[threading.RLock, threading.local]] = {}
@@ -95,6 +96,60 @@ def utc():
 def require(ok, message):
     if not ok:
         raise ValueError(message)
+
+
+def is_reparse_or_symlink(path) -> bool:
+    """Return True if path is a symbolic link or Windows NTFS reparse point (junction/mount)."""
+    try:
+        info = Path(path).lstat()
+    except FileNotFoundError:
+        return False
+    return bool(stat.S_ISLNK(info.st_mode) or (getattr(info, "st_file_attributes", 0) & _REPARSE_ATTR))
+
+
+def check_unfollowed_ancestors(raw_path, role: str = "Path", *, include_target: bool = True) -> Path:
+    """Reject symlinks and NTFS reparse points along every unfollowed ancestor (including raw '..' prefixes)."""
+    text = os.fspath(raw_path)
+    require(isinstance(text, str) and bool(text.strip()) and "\0" not in text,
+            f"{role} must be a valid nonempty path")
+    raw = Path(text)
+    if not raw.is_absolute():
+        require(not raw.drive and not raw.anchor, f"{role} must not use a drive-relative path: {text}")
+        pwd = os.environ.get("PWD")
+        if pwd and os.path.isabs(pwd):
+            try:
+                if os.path.samefile(pwd, os.getcwd()):
+                    logical = Path(pwd)
+                    for ancestor in (*reversed(logical.parents), logical):
+                        require(
+                            not is_reparse_or_symlink(ancestor),
+                            f"{role} must not traverse a symlink or reparse point: {ancestor}",
+                        )
+            except OSError:
+                pass
+        cur = Path(os.getcwd())
+        raw_parts = raw.parts
+    else:
+        cur = Path(raw.anchor)
+        raw_parts = raw.parts[1:]
+    for idx, part in enumerate(raw_parts):
+        if part == ".":
+            continue
+        is_last = idx == len(raw_parts) - 1
+        cur = cur.parent if part == ".." else cur / part
+        if include_target or not is_last:
+            require(
+                not is_reparse_or_symlink(cur),
+                f"{role} must not traverse or be a symlink or reparse point: {cur}",
+            )
+    abs_path = Path(os.path.abspath(raw))
+    parts = (*reversed(abs_path.parents), abs_path) if include_target else tuple(reversed(abs_path.parents))
+    for part in parts:
+        require(
+            not is_reparse_or_symlink(part),
+            f"{role} must not traverse or be a symlink or reparse point: {part}",
+        )
+    return abs_path
 
 
 def sync_dir(path):
@@ -159,7 +214,7 @@ def _win32_unlock(stream):
 @contextmanager
 def store_lock(root, *, shared=False, nonblocking=False):
     """Cooperative store lock serializing index/CURRENT mutations across processes and threads."""
-    root = Path(root)
+    root = check_unfollowed_ancestors(root, "Store root", include_target=True)
     rlock, state = _lock_entry(root)
     if not rlock.acquire(blocking=not nonblocking):
         raise BlockingIOError("Managed material store is busy: " + str(root / ".store.lock"))
@@ -176,7 +231,10 @@ def store_lock(root, *, shared=False, nonblocking=False):
             return
         lock_path = root / ".store.lock"
         if shared:
-            require(not lock_path.is_symlink(), "Store lock path must not be a symlink: " + str(lock_path))
+            require(
+                not is_reparse_or_symlink(lock_path),
+                "Store lock path must not be a symlink or reparse point: " + str(lock_path),
+            )
             try:
                 stream = lock_path.open("a+b")
             except OSError as open_exc:
@@ -196,7 +254,10 @@ def store_lock(root, *, shared=False, nonblocking=False):
                     raise open_exc from read_exc
         else:
             root.mkdir(parents=True, exist_ok=True)
-            require(not lock_path.is_symlink(), "Store lock path must not be a symlink: " + str(lock_path))
+            require(
+                not is_reparse_or_symlink(lock_path),
+                "Store lock path must not be a symlink or reparse point: " + str(lock_path),
+            )
             stream = lock_path.open("a+b")
         with stream:
             locked = False
@@ -228,14 +289,20 @@ def store_lock(root, *, shared=False, nonblocking=False):
 
 
 def append_event_jsonl(root, kind, data):
-    root = Path(root)
+    root = check_unfollowed_ancestors(root, "Store root", include_target=True)
     path = root / "events.jsonl"
     lock_path = root / ".events.lock"
     payload = js({"at": utc(), "kind": kind, **data})
     root.mkdir(parents=True, exist_ok=True)
     with _event_lock(path):
-        require(not path.is_symlink(), "Event log must not be a symlink: " + str(path))
-        require(not lock_path.is_symlink(), "Event lock must not be a symlink: " + str(lock_path))
+        require(
+            not is_reparse_or_symlink(path),
+            "Event log must not be a symlink or reparse point: " + str(path),
+        )
+        require(
+            not is_reparse_or_symlink(lock_path),
+            "Event lock must not be a symlink or reparse point: " + str(lock_path),
+        )
         created = not path.exists()
         with lock_path.open("a+b") as lock_stream:
             locked = False
@@ -247,6 +314,7 @@ def append_event_jsonl(root, kind, data):
                     _win32_lock(lock_stream, lock_path, shared=False, nonblocking=False)
                     locked = True
                 with path.open("ab") as f:
+                    require(stat.S_ISREG(os.fstat(f.fileno()).st_mode), "Event log must be an ordinary file: " + str(path))
                     f.write(payload)
                     f.flush()
                     os.fsync(f.fileno())
@@ -261,10 +329,14 @@ def append_event_jsonl(root, kind, data):
 
 
 def immutable(path, raw):
-    path = Path(path)
+    path = check_unfollowed_ancestors(path, "Immutable object", include_target=True)
     path.parent.mkdir(parents=True, exist_ok=True)
-    require(not path.is_symlink(), "Immutable object must not be a symlink: " + str(path))
+    require(
+        not is_reparse_or_symlink(path),
+        "Immutable object must not be a symlink or reparse point: " + str(path),
+    )
     if path.exists():
+        require(stat.S_ISREG(path.lstat().st_mode), "Immutable object must be an ordinary file: " + str(path))
         require(path.read_bytes() == raw, "Immutable object conflict: " + str(path))
         return
     temp = path.with_name("." + path.name + "." + uuid.uuid4().hex + ".tmp")
@@ -280,9 +352,12 @@ def immutable(path, raw):
 
 
 def replace_json(path, value):
-    path = Path(path)
+    path = check_unfollowed_ancestors(path, "Replaced JSON target", include_target=True)
     path.parent.mkdir(parents=True, exist_ok=True)
-    require(not path.is_symlink(), "Replaced JSON target must not be a symlink: " + str(path))
+    require(
+        not is_reparse_or_symlink(path),
+        "Replaced JSON target must not be a symlink or reparse point: " + str(path),
+    )
     temp = path.with_name("." + path.name + "." + uuid.uuid4().hex + ".tmp")
     try:
         with temp.open("xb") as f:
@@ -301,9 +376,23 @@ def deflate(raw, level=6, mem_level=8, strategy=zlib.Z_DEFAULT_STRATEGY):
 
 
 def safe_relative(value):
+    require(
+        isinstance(value, str) and bool(value) and "\0" not in value and "\\" not in value,
+        "Unsafe materialization path: " + str(value),
+    )
+    require(not PureWindowsPath(value).drive, "Unsafe materialization path: " + value)
     p = PurePosixPath(value)
-    require(not p.is_absolute() and p.parts and ".." not in p.parts and "\\" not in value,
-            "Unsafe materialization path: " + value)
+    raw_segments = [seg for seg in value.split("/") if seg]
+    require(
+        not p.is_absolute()
+        and bool(p.parts)
+        and ".." not in p.parts
+        and "." not in raw_segments
+        and ".." not in raw_segments
+        and not any(len(part) >= 2 and part[1] == ":" for part in p.parts)
+        and not any(len(part) >= 2 and part[1] == ":" for part in raw_segments),
+        "Unsafe materialization path: " + value,
+    )
     return p
 
 

@@ -166,6 +166,38 @@ class SharedLayout(unittest.TestCase):
         )
         self.assertEqual(len(manifest["files"]), 7)
         self.assertTrue(all(not key.startswith("..") for key in manifest["files"]))
+        # Wave 5 (#213 Part B): Git-tracked COMPONENTS.json is declarative (no hardcoded identity),
+        # while peer_workbench.components() measures live identities for every loaded component.
+        raw_manifest = json.loads((peer_workbench.HERE / "COMPONENTS.json").read_bytes())
+        self.assertTrue(all("identity" not in entry for entry in raw_manifest["files"].values()))
+        for key, entry in manifest["files"].items():
+            self.assertEqual(entry["source"], key)
+            self.assertIn("identity", entry)
+            self.assertEqual(len(entry["identity"]["sha256"]), 64)
+
+    def test_peer_components_verifies_stamped_identities_and_records_live_input_identities(self):
+        # Stamped manifest (e.g. from a release bundle) passes when matching and refuses tampering!
+        _, live_manifest = peer_workbench.components()
+        with patch.object(peer_workbench, "decode_json", return_value=live_manifest):
+            loaded, verified = peer_workbench.components()
+            self.assertEqual(verified["files"], live_manifest["files"])
+            self.assertIn("workbench_agent", loaded)
+
+        tampered = json.loads(json.dumps(live_manifest))
+        tampered["files"]["workbench/core/io_utils.py"]["identity"]["sha256"] = "0" * 64
+        with patch.object(peer_workbench, "decode_json", return_value=tampered):
+            with self.assertRaisesRegex(ValueError, "Acquired component differs from accepted body"):
+                peer_workbench.components()
+
+        # Verify peer_workbench and peer_harness CLIs refuse abbreviated flags (W5-B11).
+        import subprocess as _subprocess
+        for script in ("peer_workbench.py", "peer_harness.py"):
+            proc = _subprocess.run(
+                [sys.executable, "-B", str(PEER_DIR / script), "--hel"],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(proc.returncode, 2)
+            self.assertTrue("required" in proc.stderr or "unrecognized" in proc.stderr, proc.stderr)
 
 
 if __name__ == "__main__":

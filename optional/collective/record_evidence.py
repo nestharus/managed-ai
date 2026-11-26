@@ -94,12 +94,12 @@ def record(db,source,spec,actor,ident,command):
         return native(db,'call','--request',request)
 
 def main():
-    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--db',type=Path,required=True)
+    ap=argparse.ArgumentParser(description=__doc__, allow_abbrev=False);ap.add_argument('--db',type=Path,required=True)
     sub=ap.add_subparsers(dest='verb',required=True)
-    sub.add_parser('init')
-    w=sub.add_parser('record');w.add_argument('id');w.add_argument('--actor',required=True);w.add_argument('--command',required=True);w.add_argument('--source',type=Path,required=True);w.add_argument('--spec',type=Path,required=True)
+    sub.add_parser('init', allow_abbrev=False)
+    w=sub.add_parser('record', allow_abbrev=False);w.add_argument('id');w.add_argument('--actor',required=True);w.add_argument('--command',required=True);w.add_argument('--source',type=Path,required=True);w.add_argument('--spec',type=Path,required=True)
     for op in ('show','check'):
-        p=sub.add_parser(op);p.add_argument('id')
+        p=sub.add_parser(op, allow_abbrev=False);p.add_argument('id')
         p.add_argument('--revision',type=int,help='Read this retained revision. Defaults to the current head.')
         if op=='show':p.add_argument('--selection',action='store_true',help='Write the exact retained selected bytes to stdout.')
         if op=='check':p.add_argument('--source',type=Path,required=True)
@@ -118,7 +118,7 @@ def main():
         else:
             witness,_=selection(saved);length,edition,part=observe(args.source,witness['start'],witness['end'])
             result=dict(source_edition_matches=edition==witness['source_sha256'],selection_at_old_position_matches=hashlib.sha256(part).hexdigest()==witness['selected_sha256'],current_bytes=length,scope='Physical checks at the old byte interval. Revisit the receiving interpretation if its evidence, surroundings or purpose have changed.')
-    print(json.dumps(result,ensure_ascii=False,indent=2))
+    print(json.dumps(result,ensure_ascii=False,indent=2,allow_nan=False))
 if __name__=='__main__':
     try:main()
     except (ValueError,OSError) as e:sys.exit(str(e))

@@ -394,7 +394,7 @@ def observe_file(declaration_path, roots=None):
 
 
 def _main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--declaration", required=True)
     parser.add_argument("--root", action="append", default=[], metavar="NAME=PATH")
     parser.add_argument("--output", help="New JSON output file; omit for stdout")

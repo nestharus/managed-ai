@@ -242,19 +242,19 @@ def resolve_workbench_operation(state_dir, resolution_payload):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     commands = parser.add_subparsers(dest="command", required=True)
     for command in ("start", "resume"):
-        item = commands.add_parser(command)
+        item = commands.add_parser(command, allow_abbrev=False)
         item.add_argument("--config", required=True)
-    item = commands.add_parser("inspect")
+    item = commands.add_parser("inspect", allow_abbrev=False)
     item.add_argument("--state-dir", required=True)
-    item = commands.add_parser("respond")
+    item = commands.add_parser("respond", allow_abbrev=False)
     item.add_argument("--mailbox", required=True)
     item.add_argument("--step", required=True, type=int)
     item.add_argument("--action", required=True)
     item.add_argument("--producer", default="host-supplied model participant")
-    item = commands.add_parser("resolve")
+    item = commands.add_parser("resolve", allow_abbrev=False)
     item.add_argument("--state-dir", required=True)
     item.add_argument("--resolution", required=True,
                       help="JSON with operation_id, value, checkpoint, evidence and expected_contract_sha256")

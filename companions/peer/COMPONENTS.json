@@ -1,55 +1,27 @@
 {
   "schema": "peer-workbench-acquired-components/1",
-  "scope": "Current shared implementations after Wave 4 consolidation; one canonical body per component under companions/. Shared import routing, bundled engine/library search routing, and preservation of the study exposure boundary are explicit parts of this release.",
+  "scope": "Declarative manifest of shared workbench components under companions/. Release packages stamp exact file identities on export; runtime verifies any stamped identity and always records live loaded module identities in input-identities.json.",
   "files": {
     "workbench/core/io_utils.py": {
-      "source": "workbench/core/io_utils.py",
-      "identity": {
-        "bytes": 7364,
-        "sha256": "4b84c4fbdae50fd23a20756d88c0756c5eea1662358981fb95b52a60acf505c7"
-      }
+      "source": "workbench/core/io_utils.py"
     },
     "workbench/core/config.py": {
-      "source": "workbench/core/config.py",
-      "identity": {
-        "bytes": 9697,
-        "sha256": "3fc8935bd7fa0feca95ac91c76e3684efcaab8c33350c3622f5fec167b692bb8"
-      }
+      "source": "workbench/core/config.py"
     },
     "workbench/core/model_bridges.py": {
-      "source": "workbench/core/model_bridges.py",
-      "identity": {
-        "bytes": 6800,
-        "sha256": "2f57ca0643998ab46e564927e0888e2d3d4ebcddcb882fdc627bdfd7fc79ce89"
-      }
+      "source": "workbench/core/model_bridges.py"
     },
     "workbench/core/source_tools.py": {
-      "source": "workbench/core/source_tools.py",
-      "identity": {
-        "bytes": 28546,
-        "sha256": "162aab50badbcb34f8978b146b21a1c54b8389dcc95a2db7c22db6861a7f7a8c"
-      }
+      "source": "workbench/core/source_tools.py"
     },
     "workbench/core/workbench_agent.py": {
-      "source": "workbench/core/workbench_agent.py",
-      "identity": {
-        "bytes": 26046,
-        "sha256": "693c68cdc50829f13b29d5631366fe9d674e2bea32c80b12e5d944059bf0abff"
-      }
+      "source": "workbench/core/workbench_agent.py"
     },
     "workbench/controller/agent_runtime.py": {
-      "source": "workbench/controller/agent_runtime.py",
-      "identity": {
-        "bytes": 6941,
-        "sha256": "fc7436fa3fa53d42384f8bb97c7bbc922771c85290a37feacc36eda5669d3a98"
-      }
+      "source": "workbench/controller/agent_runtime.py"
     },
     "workbench/controller/evidence_support.py": {
-      "source": "workbench/controller/evidence_support.py",
-      "identity": {
-        "bytes": 3699,
-        "sha256": "66562f88424f04c1bb98026c10f5beab8769b98fe6d78a65dca1e8511fb52547"
-      }
+      "source": "workbench/controller/evidence_support.py"
     }
   }
 }

@@ -11,16 +11,22 @@ from contextlib import contextmanager
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import sqlite3
 import stat
 import subprocess
 import sys
+import threading
+import time
 import uuid
 
 FORMAT = 'g60-signal-field/1'
 MODES = {'live', 'historical', 'each-change'}
 MAX_WORKER_STREAM_BYTES = 16 * 1024
+MAX_WORKER_STDOUT_BYTES = 4 * 1024 * 1024
+MAX_WORKER_DRAIN_BYTES = 64 * 1024 * 1024
+_REPARSE_ATTR = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)
 
 
 def encoded(x):
@@ -54,6 +60,54 @@ def loads_strict(raw):
     return json.loads(text, object_pairs_hook=_unique_json, parse_constant=_reject_constant)
 
 
+def _is_reparse_or_symlink(path: Path) -> bool:
+    try:
+        info = Path(path).lstat()
+    except FileNotFoundError:
+        return False
+    return bool(stat.S_ISLNK(info.st_mode) or (getattr(info, 'st_file_attributes', 0) & _REPARSE_ATTR))
+
+
+def _check_unfollowed_ancestors(raw: Path, role: str) -> Path:
+    raw = Path(raw)
+    if not raw.is_absolute():
+        require(not raw.drive and not raw.anchor, f'{role} must not use a drive-relative path: {raw}')
+        pwd = os.environ.get('PWD')
+        if pwd and os.path.isabs(pwd):
+            try:
+                if os.path.samefile(pwd, os.getcwd()):
+                    logical = Path(pwd)
+                    for ancestor in (*reversed(logical.parents), logical):
+                        require(
+                            not _is_reparse_or_symlink(ancestor),
+                            f'{role} must not traverse a symlink or reparse point: {ancestor}',
+                        )
+            except OSError:
+                pass
+        cur = Path(os.getcwd())
+        raw_parts = raw.parts
+    else:
+        cur = Path(raw.anchor)
+        raw_parts = raw.parts[1:]
+    for idx, part in enumerate(raw_parts):
+        if part == '.':
+            continue
+        is_last = idx == len(raw_parts) - 1
+        cur = cur.parent if part == '..' else cur / part
+        if not is_last:
+            require(
+                not _is_reparse_or_symlink(cur),
+                f'{role} must not traverse a symlink or reparse point: {cur}',
+            )
+    abs_path = Path(os.path.abspath(raw))
+    for ancestor in reversed(abs_path.parents):
+        require(
+            not _is_reparse_or_symlink(ancestor),
+            f'{role} must not traverse a symlink or reparse point: {ancestor}',
+        )
+    return abs_path
+
+
 def _product_root() -> Path:
     here = Path(__file__).resolve().parent
     if here.name == 'signal_field' and here.parent.name == 'host':
@@ -72,39 +126,173 @@ def inside_product(path: Path, product: Path | None = None) -> bool:
     return False
 
 
-def _require_ordinary_non_symlink(path: Path, role: str, *, must_exist: bool = False) -> None:
-    require(not path.is_symlink(), f'{role} must not be a symlink: {path}')
+def _require_ordinary_non_symlink(path: Path, role: str, *, must_exist: bool = False) -> Path:
+    abs_path = _check_unfollowed_ancestors(Path(path).expanduser(), role)
+    require(not _is_reparse_or_symlink(abs_path), f'{role} must not be a symlink or reparse point: {abs_path}')
     try:
-        info = path.lstat()
+        info = abs_path.lstat()
     except FileNotFoundError:
         if must_exist:
-            raise ValueError(f'ordinary {role} required: {path}')
-        return
-    require(stat.S_ISREG(info.st_mode), f'ordinary {role} required: {path}')
+            raise ValueError(f'ordinary {role} required: {abs_path}')
+        return abs_path
+    require(stat.S_ISREG(info.st_mode), f'ordinary {role} required: {abs_path}')
+    return abs_path
 
 
 def validate_db_path(path, *, product: Path | None = None) -> Path:
     require(isinstance(path, (str, Path)) and str(path).strip() and '\0' not in str(path),
             'database path must be a valid nonempty path')
     raw = Path(path).expanduser()
-    _require_ordinary_non_symlink(raw, 'database file', must_exist=False)
-    for suffix in ('-journal', '-wal', '-shm'):
-        _require_ordinary_non_symlink(Path(str(raw) + suffix), 'database journal file', must_exist=False)
     resolved = raw.resolve()
-    require(not inside_product(resolved, product),
+    require(not inside_product(resolved, product) and not inside_product(Path(os.path.abspath(raw)), product),
             'database must be outside the product directory')
-    if raw.parent.exists():
-        require(raw.parent.is_dir(), 'database parent must be a directory')
+    abs_db = _require_ordinary_non_symlink(raw, 'database file', must_exist=False)
+    for suffix in ('-journal', '-wal', '-shm'):
+        _require_ordinary_non_symlink(Path(str(abs_db) + suffix), 'database journal file', must_exist=False)
+    if abs_db.parent.exists():
+        require(abs_db.parent.is_dir() and not _is_reparse_or_symlink(abs_db.parent),
+                'database parent must be an ordinary directory')
     return resolved
 
 
 def no_journal(path):
-    require(not any(Path(str(path) + suffix).exists() or Path(str(path) + suffix).is_symlink()
+    require(not any(Path(str(path) + suffix).exists() or _is_reparse_or_symlink(Path(str(path) + suffix))
                  for suffix in ('-journal', '-wal', '-shm')),
          'host journal/WAL state requires its owner; no host operations prepared')
 
 
+class _StreamCapture:
+    """Memory-bounded pipe capture preserving exact streamed byte count and SHA-256."""
+
+    __slots__ = ('kept', 'total_bytes', 'sha256', 'keep_limit', 'limit_exceeded', 'overflowed')
+
+    def __init__(self, keep_limit: int):
+        self.kept = bytearray()
+        self.total_bytes = 0
+        self.sha256 = hashlib.sha256().hexdigest()
+        self.keep_limit = keep_limit
+        self.limit_exceeded = False
+        self.overflowed = False
+
+
+class _WorkerRunResult:
+    __slots__ = ('returncode', 'stdout', 'stderr', 'timed_out', 'error')
+
+    def __init__(self, *, returncode: int | None, stdout: _StreamCapture, stderr: _StreamCapture,
+                 timed_out: bool = False, error: str | None = None):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+        self.timed_out = timed_out
+        self.error = error
+
+
+def _drain_stream(stream, capture: _StreamCapture, proc: subprocess.Popen, drain_limit: int) -> None:
+    hasher = hashlib.sha256()
+    try:
+        fd = stream.fileno()
+        while True:
+            try:
+                chunk = os.read(fd, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            hasher.update(chunk)
+            capture.total_bytes += len(chunk)
+            room = capture.keep_limit - len(capture.kept)
+            if room > 0:
+                capture.kept.extend(chunk[:room])
+            if capture.total_bytes > capture.keep_limit:
+                capture.limit_exceeded = True
+            if capture.total_bytes > drain_limit:
+                capture.overflowed = True
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+                break
+    finally:
+        capture.sha256 = hasher.hexdigest()
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+
+def _feed_stdin(stream, payload: bytes) -> None:
+    try:
+        view = memoryview(payload)
+        offset = 0
+        while offset < len(view):
+            written = stream.write(view[offset:offset + 65536])
+            if not written:
+                break
+            offset += written
+        stream.flush()
+    except OSError:
+        pass
+    finally:
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+
+def _run_worker_bounded(argv: list[str], payload: bytes, timeout: float, *,
+                        max_stdout_bytes: int = MAX_WORKER_STDOUT_BYTES,
+                        max_stderr_bytes: int = MAX_WORKER_STREAM_BYTES,
+                        max_drain_bytes: int = MAX_WORKER_DRAIN_BYTES) -> _WorkerRunResult:
+    """Invoke worker subprocess without shell and bound stdout/stderr memory usage."""
+    stdout_cap = _StreamCapture(max_stdout_bytes)
+    stderr_cap = _StreamCapture(max_stderr_bytes)
+    proc = subprocess.Popen(
+        argv,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    feeder = threading.Thread(target=_feed_stdin, args=(proc.stdin, payload), daemon=True)
+    out_reader = threading.Thread(target=_drain_stream, args=(proc.stdout, stdout_cap, proc, max_drain_bytes), daemon=True)
+    err_reader = threading.Thread(target=_drain_stream, args=(proc.stderr, stderr_cap, proc, max_drain_bytes), daemon=True)
+    feeder.start()
+    out_reader.start()
+    err_reader.start()
+    timed_out = False
+    timeout_error = None
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        timed_out = True
+        timeout_error = str(exc)
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            pass
+    join_wait = 0.5 if timed_out else max(1.0, min(float(timeout), 5.0))
+    deadline = time.monotonic() + join_wait
+    for reader in (out_reader, err_reader):
+        remaining = max(0.0, deadline - time.monotonic())
+        reader.join(timeout=remaining)
+    feeder.join(timeout=0.5)
+    return _WorkerRunResult(
+        returncode=None if timed_out else proc.returncode,
+        stdout=stdout_cap,
+        stderr=stderr_cap,
+        timed_out=timed_out,
+        error=timeout_error,
+    )
+
+
 def _stream_details(data, limit: int = MAX_WORKER_STREAM_BYTES) -> tuple[str, int, str, bool]:
+    if isinstance(data, _StreamCapture):
+        truncated = data.total_bytes > limit
+        text = bytes(data.kept[:limit]).decode('utf-8', errors='replace')
+        return text, data.total_bytes, data.sha256, truncated
     if data is None:
         raw = b''
     elif isinstance(data, str):
@@ -144,8 +332,7 @@ def _worker_outcome(kind: str, *, returncode: int | None, stdout=b'', stderr=b''
 
 def planning_snapshot(path, read_guard):
     """Read the exact rollback-journal cut guarded by the caller."""
-    path = Path(path)
-    _require_ordinary_non_symlink(path, 'database file', must_exist=True)
+    path = _require_ordinary_non_symlink(Path(path), 'database file', must_exist=True)
     no_journal(path)
     database_raw = read_guard()
     require(database_raw[:16] == b'SQLite format 3\x00' and len(database_raw) >= 100
@@ -198,29 +385,33 @@ class Field:
         self.db.row_factory = sqlite3.Row
         self.sql_calls = 0
         self.rows_returned = 0
-        self.db.executescript('''
-        CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, epoch TEXT NOT NULL,
-            position INTEGER NOT NULL, value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS uses (id TEXT PRIMARY KEY, spec TEXT NOT NULL,
-            signature TEXT NOT NULL, generation INTEGER NOT NULL, latest TEXT, last_rejected TEXT);
-        CREATE TABLE IF NOT EXISTS dependencies (source TEXT NOT NULL, use_id TEXT NOT NULL,
-            PRIMARY KEY (source,use_id));
-        CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, use_id TEXT NOT NULL,
-            generation INTEGER NOT NULL, basis TEXT NOT NULL, spec TEXT NOT NULL,
-            ticket INTEGER, token TEXT, gap TEXT, attempt TEXT, worker_outcome TEXT);
-        CREATE INDEX IF NOT EXISTS eligible ON jobs(ticket) WHERE token IS NULL;
-        CREATE INDEX IF NOT EXISTS use_jobs ON jobs(use_id);
-        CREATE TABLE IF NOT EXISTS selected_history (name TEXT PRIMARY KEY, snapshot TEXT NOT NULL);
-        ''')
-        with self.mutation():
-            columns = {row['name'] for row in self.db.execute('PRAGMA table_info(jobs)').fetchall()}
-            if 'worker_outcome' not in columns:
-                self.db.execute('ALTER TABLE jobs ADD COLUMN worker_outcome TEXT')
-            self.db.execute('INSERT OR IGNORE INTO meta VALUES (?,?)', ('format', FORMAT))
-            self.db.execute('INSERT OR IGNORE INTO meta VALUES (?,?)', ('sequence', '0'))
-        require(self.one('SELECT value FROM meta WHERE key=?', ('format',))['value'] == FORMAT,
-                'unsupported signal field format')
+        try:
+            self.db.executescript('''
+            CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, epoch TEXT NOT NULL,
+                position INTEGER NOT NULL, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS uses (id TEXT PRIMARY KEY, spec TEXT NOT NULL,
+                signature TEXT NOT NULL, generation INTEGER NOT NULL, latest TEXT, last_rejected TEXT);
+            CREATE TABLE IF NOT EXISTS dependencies (source TEXT NOT NULL, use_id TEXT NOT NULL,
+                PRIMARY KEY (source,use_id));
+            CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, use_id TEXT NOT NULL,
+                generation INTEGER NOT NULL, basis TEXT NOT NULL, spec TEXT NOT NULL,
+                ticket INTEGER, token TEXT, gap TEXT, attempt TEXT, worker_outcome TEXT);
+            CREATE INDEX IF NOT EXISTS eligible ON jobs(ticket) WHERE token IS NULL;
+            CREATE INDEX IF NOT EXISTS use_jobs ON jobs(use_id);
+            CREATE TABLE IF NOT EXISTS selected_history (name TEXT PRIMARY KEY, snapshot TEXT NOT NULL);
+            ''')
+            with self.mutation():
+                columns = {row['name'] for row in self.db.execute('PRAGMA table_info(jobs)').fetchall()}
+                if 'worker_outcome' not in columns:
+                    self.db.execute('ALTER TABLE jobs ADD COLUMN worker_outcome TEXT')
+                self.db.execute('INSERT OR IGNORE INTO meta VALUES (?,?)', ('format', FORMAT))
+                self.db.execute('INSERT OR IGNORE INTO meta VALUES (?,?)', ('sequence', '0'))
+            require(self.one('SELECT value FROM meta WHERE key=?', ('format',))['value'] == FORMAT,
+                    'unsupported signal field format')
+        except BaseException:
+            self.db.close()
+            raise
 
     def close(self):
         self.db.close()
@@ -378,6 +569,29 @@ class Field:
                          (token, encoded(packet), job['id']))
             return packet
 
+    def _record_stale_return(self, job, use, packet: dict, result: dict) -> dict:
+        self.execute(
+            'UPDATE uses SET last_rejected=? WHERE id=?',
+            (encoded({'generation': packet['generation'], 'basis': packet['basis'], 'result': result}), use['id']),
+        )
+        if packet['spec']['mode'] == 'live':
+            current_spec = loads_strict(use['spec'])
+            current_basis = self.basis(current_spec)
+            if job['basis'] != encoded(current_basis) or job['spec'] != use['spec']:
+                self.execute('UPDATE uses SET generation=generation+1 WHERE id=?', (use['id'],))
+                use = self.one('SELECT * FROM uses WHERE id=?', (use['id'],))
+            # Recover this affected live use now, even when its optional
+            # wakeup was missed during the callback. Preserve its ticket.
+            self.queue(use, current_basis)
+        self.execute(
+            'UPDATE jobs SET token=NULL,attempt=NULL,worker_outcome=NULL,ticket=COALESCE(ticket,?) WHERE id=?',
+            (self.ticket(), job['id']),
+        )
+        return {
+            'status': 'stale',
+            'reason': 'Returned work differs from current receiving basis; candidate retained separately by its native owner.',
+        }
+
     def receive(self, packet, result):
         require(isinstance(packet, dict) and isinstance(packet.get('job'), str) and packet['job']
                 and isinstance(packet.get('token'), str) and packet['token'],
@@ -399,20 +613,7 @@ class Field:
             if packet['spec']['mode'] == 'live':
                 matches = matches and use['spec'] == job['spec'] and self.basis(packet['spec']) == packet['basis']
             if not matches:
-                self.execute('UPDATE uses SET last_rejected=? WHERE id=?',
-                             (encoded({'generation': packet['generation'], 'basis': packet['basis'], 'result': result}), use['id']))
-                if packet['spec']['mode'] == 'live':
-                    current_spec = loads_strict(use['spec'])
-                    current_basis = self.basis(current_spec)
-                    if job['basis'] != encoded(current_basis) or job['spec'] != use['spec']:
-                        self.execute('UPDATE uses SET generation=generation+1 WHERE id=?', (use['id'],))
-                        use = self.one('SELECT * FROM uses WHERE id=?', (use['id'],))
-                    # Recover this affected live use now, even when its optional
-                    # wakeup was missed during the callback. Preserve its ticket.
-                    self.queue(use, current_basis)
-                self.execute('UPDATE jobs SET token=NULL,attempt=NULL,worker_outcome=NULL,ticket=COALESCE(ticket,?) WHERE id=?',
-                             (self.ticket(), job['id']))
-                return {'status': 'stale', 'reason': 'Returned work differs from current receiving basis; candidate retained separately by its native owner.'}
+                return self._record_stale_return(job, use, packet, result)
             snapshot = {'signature': digest(packet['spec']), 'generation': packet['generation'],
                         'basis': packet['basis'], 'result': result, 'mode': packet['spec']['mode']}
             # An owed historical return can be served under its original contract,
@@ -460,6 +661,23 @@ class Field:
                 'blocked_recovery': loads_strict(row['gap']) if row['gap'] else None,
                 'worker_outcome': loads_strict(outcome) if outcome else None}
 
+    @staticmethod
+    def _oversized_job_summary(row, full_bytes: int) -> dict:
+        has_outcome = bool(row['worker_outcome']) if 'worker_outcome' in row.keys() else False
+        return {
+            'job': row['id'],
+            'use': row['use_id'],
+            'desired_generation': row['generation'],
+            'eligible_ticket': row['ticket'],
+            'token': row['token'],
+            'oversized': True,
+            'full_bytes': full_bytes,
+            'has_captured_attempt': row['attempt'] is not None,
+            'has_blocked_recovery': row['gap'] is not None,
+            'has_worker_outcome': has_outcome,
+            'detail': 'Job exceeds pending max_bytes; call inspect(job_id=...) with a larger max_bytes for full details.',
+        }
+
     def pending(self, after='', limit=20, max_bytes=65536):
         require(isinstance(after, str) and type(limit) is int and 1 <= limit <= 100,
                 'pending requires a string cursor and limit from 1 through 100')
@@ -469,9 +687,20 @@ class Field:
         items = []
         for row in rows[:limit]:
             candidate = self.job_view(row)
-            if len(encoded(items + [candidate]).encode()) > max_bytes:
+            if len(encoded(items + [candidate]).encode()) <= max_bytes:
+                items.append(candidate)
+                continue
+            if items:
                 break
-            items.append(candidate)
+            # Guarantee monotone cursor progress when a single job entry alone exceeds max_bytes.
+            full_bytes = len(encoded(candidate).encode())
+            summary = self._oversized_job_summary(row, full_bytes)
+            require(
+                len(encoded([summary]).encode()) <= max_bytes,
+                'next pending job exceeds max_bytes and cannot be summarized within bound; request a larger max_bytes',
+            )
+            items.append(summary)
+            break
         return {'items': items, 'next_after': items[-1]['job'] if items else after,
                 'more': len(rows) > len(items), 'next_omitted': rows[len(items)]['id'] if len(rows) > len(items) else None,
                 'scope': 'Trusted host recovery metadata, bounded output over enrolled jobs. The token supplies no external-effect authority.'}
@@ -524,6 +753,21 @@ class Field:
             self.execute('UPDATE jobs SET worker_outcome=? WHERE id=? AND token=?',
                          (encoded(outcome), packet['job'], packet['token']))
 
+    def _unresolved_run(self, packet: dict, outcome: dict, *, invoked: int, packet_bytes: int,
+                        received: list[dict], reason: str) -> dict:
+        self._record_worker_outcome(packet, outcome)
+        return {
+            'status': 'worker-unresolved',
+            'invocations': invoked,
+            'packet_bytes': packet_bytes,
+            'returns': received,
+            'reason': reason,
+            'in_flight_job': packet['job'],
+            'worker': outcome,
+            'recovery': 'Inspect the retained attempt and actual worker/native outcome before explicitly retrying.',
+            'remaining': self.status(),
+        }
+
     def run(self, argv, budget, timeout):
         require(isinstance(argv, list) and argv and all(isinstance(x, str) and x and '\0' not in x for x in argv),
                 'worker requires explicit subprocess argv')
@@ -537,53 +781,43 @@ class Field:
             if packet is None:
                 break
             payload = encoded(packet).encode(); packet_bytes += len(payload); invoked += 1
-            worker = None
             try:
-                worker = subprocess.run(argv, input=payload, capture_output=True, timeout=timeout, check=False)
-                if worker.returncode != 0:
-                    outcome = _worker_outcome('non-zero-exit', returncode=worker.returncode,
-                                              stdout=worker.stdout, stderr=worker.stderr,
-                                              error='worker exited without a valid return')
-                    self._record_worker_outcome(packet, outcome)
-                    return {'status': 'worker-unresolved', 'invocations': invoked, 'packet_bytes': packet_bytes,
-                            'returns': received,
-                            'reason': 'worker exited without a valid return', 'in_flight_job': packet['job'],
-                            'worker': outcome,
-                            'recovery': 'Inspect the retained attempt and actual worker/native outcome before explicitly retrying.',
-                            'remaining': self.status()}
-                result = loads_strict(worker.stdout)
-                received.append(self.receive(packet, result))
-            except subprocess.TimeoutExpired as exc:
-                outcome = _worker_outcome('timeout', returncode=None,
-                                          stdout=exc.stdout, stderr=exc.stderr,
-                                          error=str(exc), timeout=timeout)
-                self._record_worker_outcome(packet, outcome)
-                return {'status': 'worker-unresolved', 'invocations': invoked, 'packet_bytes': packet_bytes,
-                        'returns': received,
-                        'reason': str(exc), 'in_flight_job': packet['job'], 'worker': outcome,
-                        'recovery': 'Inspect the retained attempt and actual worker/native outcome before explicitly retrying.',
-                        'remaining': self.status()}
+                worker = _run_worker_bounded(argv, payload, timeout)
             except OSError as exc:
                 outcome = _worker_outcome('launch-error', returncode=None,
                                           error=str(exc), errno_value=exc.errno)
-                self._record_worker_outcome(packet, outcome)
-                return {'status': 'worker-unresolved', 'invocations': invoked, 'packet_bytes': packet_bytes,
-                        'returns': received,
-                        'reason': str(exc), 'in_flight_job': packet['job'], 'worker': outcome,
-                        'recovery': 'Inspect the retained attempt and actual worker/native outcome before explicitly retrying.',
-                        'remaining': self.status()}
+                return self._unresolved_run(packet, outcome, invoked=invoked, packet_bytes=packet_bytes,
+                                            received=received, reason=str(exc))
+            if worker.timed_out:
+                reason = worker.error or f'worker timed out after {timeout} seconds'
+                outcome = _worker_outcome('timeout', returncode=None,
+                                          stdout=worker.stdout, stderr=worker.stderr,
+                                          error=reason, timeout=timeout)
+                return self._unresolved_run(packet, outcome, invoked=invoked, packet_bytes=packet_bytes,
+                                            received=received, reason=reason)
+            if worker.returncode != 0:
+                reason = 'worker exited without a valid return'
+                outcome = _worker_outcome('non-zero-exit', returncode=worker.returncode,
+                                          stdout=worker.stdout, stderr=worker.stderr,
+                                          error=reason)
+                return self._unresolved_run(packet, outcome, invoked=invoked, packet_bytes=packet_bytes,
+                                            received=received, reason=reason)
+            if worker.stdout.limit_exceeded:
+                reason = f'worker stdout exceeded {MAX_WORKER_STDOUT_BYTES}-byte return limit'
+                outcome = _worker_outcome('invalid-return', returncode=worker.returncode,
+                                          stdout=worker.stdout, stderr=worker.stderr,
+                                          error=reason)
+                return self._unresolved_run(packet, outcome, invoked=invoked, packet_bytes=packet_bytes,
+                                            received=received, reason=reason)
+            try:
+                result = loads_strict(bytes(worker.stdout.kept))
+                received.append(self.receive(packet, result))
             except (ValueError, TypeError) as exc:
-                outcome = _worker_outcome('invalid-return',
-                                          returncode=worker.returncode if worker is not None else None,
-                                          stdout=worker.stdout if worker is not None else b'',
-                                          stderr=worker.stderr if worker is not None else b'',
+                outcome = _worker_outcome('invalid-return', returncode=worker.returncode,
+                                          stdout=worker.stdout, stderr=worker.stderr,
                                           error=str(exc))
-                self._record_worker_outcome(packet, outcome)
-                return {'status': 'worker-unresolved', 'invocations': invoked, 'packet_bytes': packet_bytes,
-                        'returns': received,
-                        'reason': str(exc), 'in_flight_job': packet['job'], 'worker': outcome,
-                        'recovery': 'Inspect the retained attempt and actual worker/native outcome before explicitly retrying.',
-                        'remaining': self.status()}
+                return self._unresolved_run(packet, outcome, invoked=invoked, packet_bytes=packet_bytes,
+                                            received=received, reason=str(exc))
         state = self.status()
         return {'status': 'budget-exhausted' if state['eligible'] else 'awaiting-in-flight' if state['in_flight'] else
                 'blocked' if state['blocked_occurrences'] or state['blocked_live_uses'] else 'current-enrolled-service-caught-up',
@@ -698,8 +932,8 @@ def main():
     parser.add_argument('--request', type=Path, help='JSON operation; omit to read one operation from stdin')
     args = parser.parse_args()
     if args.request is not None:
-        _require_ordinary_non_symlink(args.request, 'request file', must_exist=True)
-        raw_request = args.request.read_bytes()
+        req_path = _require_ordinary_non_symlink(args.request, 'request file', must_exist=True)
+        raw_request = req_path.read_bytes()
     else:
         raw_request = sys.stdin.buffer.read()
     request = loads_strict(raw_request)

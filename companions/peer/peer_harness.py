@@ -438,6 +438,46 @@ class Harness:
             reason=reason, returncode=record["returncode"],
         )
 
+    def _validate_return_messages(self, item, response):
+        ack = response["ack"]
+        if not isinstance(ack, list) or any(not isinstance(x, str) for x in ack) or len(ack) != len(set(ack)):
+            raise ValueError("ack must be a unique string array")
+        exposed = {message["id"] for message in item["request"]["inbox"]}
+        if set(ack) - exposed:
+            raise ValueError("Acknowledgement names a message absent from this request")
+        if not isinstance(response["send"], list):
+            raise ValueError("send must be an array")
+        sends = {}
+        for message in response["send"]:
+            fields(message, ("id", "to", "payload"))
+            if not identifier(message["id"]) or message["to"] not in self.owners:
+                raise ValueError("Invalid message ID or recipient")
+            mid = item["owner"] + ":" + message["id"]
+            identity = canonical({"to": message["to"], "payload": message["payload"]})
+            existing = sends.get(mid, self.messages.get(mid))
+            if existing is not None and existing["identity"] != identity:
+                raise ValueError("Sender-local message ID reused with changed recipient/payload")
+            sends[mid] = {
+                "id": mid, "from": item["owner"], "to": message["to"],
+                "payload": message["payload"], "identity": identity, "acknowledged": False,
+            }
+        return sends
+
+    def _validate_return_files(self, response):
+        if not isinstance(response["files"], dict):
+            raise ValueError("files must be an object")
+        captured = {}
+        for path, encoded in response["files"].items():
+            target_path(path)
+            if not isinstance(encoded, str):
+                raise ValueError("File contents must be base64 strings")
+            captured[path] = base64.b64decode(encoded, validate=True)
+        if path_conflicts(captured):
+            raise ValueError("Owner return contains a file/directory path conflict")
+        if sum(len(value) for value in captured.values()) > self.limits["max_artifact_bytes"]:
+            raise Rejection("artifact_limit", "Owner checkpoint exceeds artifact byte limit")
+        return captured
+
     def validate_return(self, item):
         raw = (item["directory"] / "stdout.bin").read_bytes()
         try:
@@ -457,40 +497,8 @@ class Harness:
                 raise ValueError("obligations must be an array")
             if response["status"] == "complete" and response["obligations"]:
                 raise ValueError("A complete owner cannot retain declared obligations")
-            ack = response["ack"]
-            if not isinstance(ack, list) or any(not isinstance(x, str) for x in ack) or len(ack) != len(set(ack)):
-                raise ValueError("ack must be a unique string array")
-            exposed = {message["id"] for message in item["request"]["inbox"]}
-            if set(ack) - exposed:
-                raise ValueError("Acknowledgement names a message absent from this request")
-            if not isinstance(response["send"], list):
-                raise ValueError("send must be an array")
-            sends = {}
-            for message in response["send"]:
-                fields(message, ("id", "to", "payload"))
-                if not identifier(message["id"]) or message["to"] not in self.owners:
-                    raise ValueError("Invalid message ID or recipient")
-                mid = item["owner"] + ":" + message["id"]
-                identity = canonical({"to": message["to"], "payload": message["payload"]})
-                existing = sends.get(mid, self.messages.get(mid))
-                if existing is not None and existing["identity"] != identity:
-                    raise ValueError("Sender-local message ID reused with changed recipient/payload")
-                sends[mid] = {
-                    "id": mid, "from": item["owner"], "to": message["to"],
-                    "payload": message["payload"], "identity": identity, "acknowledged": False,
-                }
-            if not isinstance(response["files"], dict):
-                raise ValueError("files must be an object")
-            captured = {}
-            for path, encoded in response["files"].items():
-                target_path(path)
-                if not isinstance(encoded, str):
-                    raise ValueError("File contents must be base64 strings")
-                captured[path] = base64.b64decode(encoded, validate=True)
-            if path_conflicts(captured):
-                raise ValueError("Owner return contains a file/directory path conflict")
-            if sum(len(value) for value in captured.values()) > self.limits["max_artifact_bytes"]:
-                raise Rejection("artifact_limit", "Owner checkpoint exceeds artifact byte limit")
+            sends = self._validate_return_messages(item, response)
+            captured = self._validate_return_files(response)
             return raw, response, sends, captured
         except (ValueError, TypeError, KeyError, UnicodeError, binascii.Error) as exc:
             raise Rejection("protocol_error", f"{item['owner']} turn {item['turn']}: {exc}") from exc
@@ -597,75 +605,31 @@ class Harness:
         }
         self.reason = "submitted"
 
-    def run(self):
-        old_signals = {}
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                old_signals[sig] = signal.getsignal(sig)
-                signal.signal(sig, lambda *_: setattr(self, "cancel_requested", True))
-            except (OSError, ValueError):
-                pass
-        try:
-            while self.reason is None:
-                if self.cancel_requested or (self.root / "CANCEL").exists():
-                    self.fail("cancelled", "Local cancellation requested")
-                    break
-                if time.monotonic() >= self.deadline:
-                    self.fail("wall_limit", "Run wall-clock allowance exhausted")
-                    break
-                self.pump()
-                for owner, item in list(self.active.items()):
-                    if self.reason is not None:
-                        break
-                    if time.monotonic() >= item["deadline"]:
-                        self.fail("worker_timeout", f"{owner} turn {item['turn']} exceeded per-turn allowance")
-                        break
-                    if item["process"].poll() is not None:
-                        reason = "completed" if item["process"].returncode == 0 else "worker_failed"
-                        self.finish_process(item, reason)
-                        del self.active[owner]
-                        if self.reason is None and time.monotonic() >= self.deadline:
-                            self.fail("wall_limit", "Run deadline reached before return admission")
-                        elif self.reason is None and time.monotonic() >= item["deadline"]:
-                            self.fail("worker_timeout", "Turn deadline reached before return admission")
-                        if self.reason is None:
-                            if reason != "completed":
-                                self.fail("worker_failed", f"{owner} exited with code {item['process'].returncode}")
-                            else:
-                                self.accept_return(item)
-                if self.reason is not None:
-                    break
-                if self.complete():
-                    self.submit()
-                    break
-                while self.ready and len(self.active) < self.limits["parallelism"] and self.reason is None:
-                    if self.turn_count >= self.limits["max_turns"]:
-                        self.fail("turn_limit", "Total invocation allowance exhausted")
-                        break
-                    owner = self.ready.popleft()
-                    self.queued.remove(owner)
-                    self.launch(owner)
-                if self.reason is None and not self.active and not self.ready:
-                    self.fail("stalled", "No runnable owner; selected completion obligations remain")
-                if self.reason is None:
-                    self.pump(0.02)
-        except Rejection as exc:
-            self.fail(exc.reason, str(exc))
-        except Exception as exc:
-            self.fail("harness_error", f"{type(exc).__name__}: {exc}")
-        finally:
-            for item in self.active.values():
-                self.signal_group(item, "term")
-            for item in list(self.active.values()):
-                self.finish_process(item, self.reason or "harness_error")
-            self.active.clear()
-            for sig, handler in old_signals.items():
-                try:
-                    signal.signal(sig, handler)
-                except (OSError, ValueError):
-                    pass
+    def _poll_active_workers(self):
+        for owner, item in list(self.active.items()):
+            if self.reason is not None:
+                break
+            if time.monotonic() >= item["deadline"]:
+                self.fail("worker_timeout", f"{owner} turn {item['turn']} exceeded per-turn allowance")
+                break
+            if item["process"].poll() is None:
+                continue
+            reason = "completed" if item["process"].returncode == 0 else "worker_failed"
+            self.finish_process(item, reason)
+            del self.active[owner]
+            if self.reason is None and time.monotonic() >= self.deadline:
+                self.fail("wall_limit", "Run deadline reached before return admission")
+            elif self.reason is None and time.monotonic() >= item["deadline"]:
+                self.fail("worker_timeout", "Turn deadline reached before return admission")
+            if self.reason is None:
+                if reason != "completed":
+                    self.fail("worker_failed", f"{owner} exited with code {item['process'].returncode}")
+                else:
+                    self.accept_return(item)
+
+    def _build_run_result(self):
         cpu_user, cpu_sys = _child_cpu_times()
-        result = {
+        return {
             "schema": HARNESS_RESULT_SCHEMA,
             "run_id": self.config["run_id"],
             "submitted": self.reason == "submitted",
@@ -698,6 +662,57 @@ class Harness:
                 "limits": self.limits,
             },
         }
+
+    def run(self):
+        old_signals = {}
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                old_signals[sig] = signal.getsignal(sig)
+                signal.signal(sig, lambda *_: setattr(self, "cancel_requested", True))
+            except (OSError, ValueError):
+                pass
+        try:
+            while self.reason is None:
+                if self.cancel_requested or (self.root / "CANCEL").exists():
+                    self.fail("cancelled", "Local cancellation requested")
+                    break
+                if time.monotonic() >= self.deadline:
+                    self.fail("wall_limit", "Run wall-clock allowance exhausted")
+                    break
+                self.pump()
+                self._poll_active_workers()
+                if self.reason is not None:
+                    break
+                if self.complete():
+                    self.submit()
+                    break
+                while self.ready and len(self.active) < self.limits["parallelism"] and self.reason is None:
+                    if self.turn_count >= self.limits["max_turns"]:
+                        self.fail("turn_limit", "Total invocation allowance exhausted")
+                        break
+                    owner = self.ready.popleft()
+                    self.queued.remove(owner)
+                    self.launch(owner)
+                if self.reason is None and not self.active and not self.ready:
+                    self.fail("stalled", "No runnable owner; selected completion obligations remain")
+                if self.reason is None:
+                    self.pump(0.02)
+        except Rejection as exc:
+            self.fail(exc.reason, str(exc))
+        except Exception as exc:
+            self.fail("harness_error", f"{type(exc).__name__}: {exc}")
+        finally:
+            for item in self.active.values():
+                self.signal_group(item, "term")
+            for item in list(self.active.values()):
+                self.finish_process(item, self.reason or "harness_error")
+            self.active.clear()
+            for sig, handler in old_signals.items():
+                try:
+                    signal.signal(sig, handler)
+                except (OSError, ValueError):
+                    pass
+        result = self._build_run_result()
         write_json(self.root / "result.json", result)
         self.event("run_finished", reason=self.reason, submitted=result["submitted"], total_turns=self.turn_count)
         self.events.close()
@@ -705,7 +720,7 @@ class Harness:
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--config", required=True)
     parser.add_argument("--run-dir", required=True)
     args = parser.parse_args(argv)

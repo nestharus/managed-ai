@@ -487,9 +487,9 @@ def resolve_durable_operation(*, state_dir, operation_id, value, checkpoint,
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", required=True)
-    inspect = sub.add_parser("inspect", help="inspect retained material state")
+    inspect = sub.add_parser("inspect", allow_abbrev=False, help="inspect retained material state")
     inspect.add_argument("--state-dir", required=True)
     args = parser.parse_args()
     result = inspect_durable_state(args.state_dir)

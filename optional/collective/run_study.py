@@ -143,10 +143,10 @@ def run(directory):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--directory', required=True, type=Path)
     args = parser.parse_args()
-    print(json.dumps(run(args.directory), indent=2))
+    print(json.dumps(run(args.directory), indent=2, allow_nan=False))
 
 
 if __name__ == '__main__':

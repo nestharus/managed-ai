@@ -11,9 +11,11 @@ from tempfile import NamedTemporaryFile
 
 from occurrence_files import (
     atomic_bytes,
+    check_unfollowed_ancestors,
     digest,
     file_lock,
     ident,
+    is_reparse_or_symlink,
     loads_strict,
     nonempty,
     now,
@@ -37,6 +39,8 @@ SAFE_CAPTURE_ERRORS = frozenset({
     'nonempty bounded assessments required',
     'Native return already exists; use its retained body or a new current occurrence',
     'Selected native engine does not match the reviewed capture adapter; requalify this adapter before capture',
+    'External native engine requires explicit --expected-profile or verified --deployment pin before capture',
+    'Selected native engine does not satisfy the required capture adapter contract',
 })
 
 _PRECOMMIT_CLEANUP_ERRORS = frozenset({
@@ -47,6 +51,8 @@ _PRECOMMIT_CLEANUP_ERRORS = frozenset({
     'nonempty bounded assessments required',
     'Native return already exists; use its retained body or a new current occurrence',
     'Selected native engine does not match the reviewed capture adapter; requalify this adapter before capture',
+    'External native engine requires explicit --expected-profile or verified --deployment pin before capture',
+    'Selected native engine does not satisfy the required capture adapter contract',
 })
 
 
@@ -76,6 +82,7 @@ def capture_error(raw):
 
 def _temp_receipt_file(directory: Path, body: bytes) -> Path:
     """Write a closed temporary JSON file so child processes can read it on all platforms."""
+    directory = check_unfollowed_ancestors(directory, 'Temporary request directory', include_target=True)
     directory.mkdir(parents=True, exist_ok=True)
     with NamedTemporaryFile(dir=directory, suffix='.json', delete=False) as selected:
         selected.write(body)
@@ -85,10 +92,10 @@ def _temp_receipt_file(directory: Path, body: bytes) -> Path:
 
 def resolve_sibling_cli(engine_entry: Path, canonical_rel: str, legacy_name: str) -> Path:
     """Resolve an engine CLI script relative to store/manage_store.py (or historical runtime/manage_store.py)."""
-    entry = Path(engine_entry).resolve()
+    entry = check_unfollowed_ancestors(engine_entry, 'Engine entry', include_target=True).resolve()
     if entry.parent.name == 'store':
         candidate = entry.parents[1] / canonical_rel
-        if candidate.is_file():
+        if candidate.is_file() and not is_reparse_or_symlink(candidate):
             return candidate
     return entry.with_name(legacy_name)
 
@@ -102,9 +109,10 @@ class NativeBridge:
     def _put_object_bytes(self, raw: bytes) -> tuple[str, str]:
         sha = digest(raw)
         obj = self._host.root / 'objects' / sha
-        if obj.is_symlink() or obj.exists():
-            if obj.is_symlink() or not obj.is_file():
+        if is_reparse_or_symlink(obj) or obj.exists():
+            if is_reparse_or_symlink(obj) or not obj.is_file():
                 raise ValueError(f'Retained object must be an ordinary file: {obj}')
+            check_unfollowed_ancestors(obj, 'Retained object', include_target=True)
             existing = obj.read_bytes()
             if existing != raw or digest(existing) != sha:
                 raise ValueError(f'Retained object integrity mismatch for {sha}')
@@ -128,6 +136,7 @@ class NativeBridge:
         return bounded
 
     def event(self, action, value):
+        check_unfollowed_ancestors(self._host.root, 'Host root', include_target=True)
         self._host.root.mkdir(parents=True, exist_ok=True)
         bounded = self._bound_event_value(value)
         row = {'at_utc': now(), 'action': action, **bounded}
@@ -147,8 +156,9 @@ class NativeBridge:
         events_path = self._host.root / 'EVENTS.jsonl'
         events_lock = self._host.root / '.events.lock'
         with file_lock(events_lock):
-            if events_path.is_symlink():
+            if is_reparse_or_symlink(events_path):
                 raise ValueError('EVENTS.jsonl must be an ordinary file')
+            check_unfollowed_ancestors(events_path, 'EVENTS.jsonl', include_target=True)
             created = not events_path.exists()
             with events_path.open('ab') as f:
                 if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
@@ -180,11 +190,21 @@ class NativeBridge:
             raise ValueError(capture_error(p.stderr or p.stdout) if scoped_errors else p.stderr or p.stdout)
         return loads_strict(p.stdout)
 
+    def _capture_qualification_flags(self) -> list[str]:
+        flags: list[str] = []
+        config = self._host.config or {}
+        if config.get('expected_profile'):
+            flags.extend(['--expected-profile', str(config['expected_profile'])])
+        if config.get('deployment'):
+            flags.extend(['--deployment', str((self._host.root / config['deployment']).resolve())])
+        return flags
+
     def capture_native(self, sid, receipt, producer):
         """Use the qualified host adapter over the unchanged selected engine."""
         adapter = HERE / 'capture_native.py'
         argv = [sys.executable, '-B', str(adapter), '--engine', self._host.engine,
-                '--root', str(self._host.native), 'assess', sid, '--receipt', str(receipt), '--producer', producer]
+                '--root', str(self._host.native), *self._capture_qualification_flags(),
+                'assess', sid, '--receipt', str(receipt), '--producer', producer]
         p = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8')
         self._host.event('native-call', {'argv': argv, 'exit': p.returncode, 'stdout': p.stdout, 'stderr': p.stderr,
                                          'capture_adapter': self._host.pin(adapter)})
@@ -196,7 +216,8 @@ class NativeBridge:
         """Verify an already-committed native Attention receipt for crash recovery."""
         adapter = HERE / 'capture_native.py'
         argv = [sys.executable, '-B', str(adapter), '--engine', self._host.engine,
-                '--root', str(self._host.native), 'reconcile-assess', sid, '--receipt', str(receipt), '--producer', producer]
+                '--root', str(self._host.native), *self._capture_qualification_flags(),
+                'reconcile-assess', sid, '--receipt', str(receipt), '--producer', producer]
         p = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8')
         self._host.event('native-capture-reconciliation', {'argv': argv, 'exit': p.returncode, 'stdout': p.stdout,
                                                            'stderr': p.stderr, 'capture_adapter': self._host.pin(adapter)})
@@ -210,7 +231,14 @@ class NativeBridge:
         return p
 
     def pin(self, path):
-        p = Path(path).resolve()
+        checked = check_unfollowed_ancestors(path, 'Pinned file', include_target=True)
+        try:
+            info = checked.lstat()
+        except FileNotFoundError as exc:
+            raise ValueError(f'Pinned file is absent: {checked}') from exc
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f'Pinned file must be an ordinary file: {checked}')
+        p = checked.resolve()
         raw = p.read_bytes()
         obj_rel, sha = self._put_object_bytes(raw)
         return {'path': str(p), 'sha256': sha, 'bytes': len(raw), 'object': obj_rel}
@@ -231,7 +259,7 @@ class NativeBridge:
 
     def _pending_capture_paths(self, sid):
         folder = self._host.root / 'captures' / sid
-        if not folder.is_dir():
+        if is_reparse_or_symlink(folder) or not folder.is_dir():
             return []
         return sorted(folder.glob('.pending-*.json'))
 
@@ -248,8 +276,9 @@ class NativeBridge:
                 pending_path.unlink(missing_ok=True)
                 continue
             obj_path = self._host.root / pending['receipt_object']
-            if obj_path.is_symlink() or not obj_path.is_file():
+            if is_reparse_or_symlink(obj_path) or not obj_path.is_file():
                 raise ValueError(f'Retained pending receipt object is unavailable: {rid}')
+            check_unfollowed_ancestors(obj_path, 'Retained pending receipt object', include_target=True)
             body = obj_path.read_bytes()
             if digest(body) != pending['receipt_sha256']:
                 raise ValueError(f'Retained pending receipt object integrity mismatch: {rid}')
@@ -282,14 +311,15 @@ class NativeBridge:
         if 'result' in scope or 'superseded' in scope:
             raise ValueError('Candidate capture uses an open producing scope, not a completed or superseded one')
         producer = nonempty(spec['producer'], 'producer')
-        receipt = Path(spec['receipt']).resolve()
+        checked_receipt = check_unfollowed_ancestors(spec['receipt'], 'Assessment receipt', include_target=True)
+        receipt = checked_receipt.resolve()
         with receipt.open('rb') as submitted:
             if not stat.S_ISREG(os.fstat(submitted.fileno()).st_mode):
                 raise ValueError('An ordinary assessment receipt file is required')
             body = submitted.read()
         rid = ident(loads_strict(body)['id'])
         target = self._host.root / 'captures' / sid / f'{rid}.json'
-        if target.exists():
+        if target.exists() or is_reparse_or_symlink(target):
             raise ValueError('Retain the existing candidate capture; use a fresh receipt for a new occurrence')
         receipt_obj, receipt_sha = self._put_object_bytes(body)
         pending_path = self._host.root / 'captures' / sid / f'.pending-{rid}.json'
@@ -301,7 +331,9 @@ class NativeBridge:
             if (existing_pending.get('receipt_sha256') != receipt_sha
                     or existing_pending.get('producer') != producer):
                 old_obj = self._host.root / existing_pending['receipt_object']
-                old_body = old_obj.read_bytes() if old_obj.is_file() and not old_obj.is_symlink() else None
+                old_body = (old_obj.read_bytes()
+                            if old_obj.is_file() and not is_reparse_or_symlink(old_obj)
+                            else None)
                 if old_body is not None and digest(old_body) == existing_pending.get('receipt_sha256'):
                     prior_path = _temp_receipt_file(requests_dir, old_body)
                     try:

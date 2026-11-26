@@ -540,14 +540,114 @@ class ContinuingWorkHardening(unittest.TestCase):
         self.assertTrue(res['native_programs_unchanged'])
         self.assertIn('sha256', res['host_producer'])
         self.assertIn('sha256', res['host_method'])
-        self.assertEqual(len(res['host_dependencies']), 3)
+        self.assertEqual(len(res['host_dependencies']), 4)
         self.assertEqual({Path(d['path']).name for d in res['host_dependencies']},
-                         {'occurrence_files.py', 'repair_custody.py', 'native_bridge.py'})
+                         {'occurrence_files.py', 'repair_custody.py', 'native_bridge.py', 'scope_lifecycle.py'})
         last_line = (self.host.root / 'EVENTS.jsonl').read_bytes().splitlines()[-1]
         self.assertLessEqual(len(last_line), MAX_EVENT_LINE_BYTES)
         parsed = json.loads(last_line)
         self.assertTrue(parsed['truncated'])
         self.assertEqual(parsed['action'], 'producing-release-selected')
+
+    # --- W5-B5: Failed commission() must never mutate COMMISSION.md or corrupt goal basis ---
+    def test_failed_commission_does_not_mutate_commission_md_or_goal_basis(self):
+        comm_target = self.host.work / 'sources/host/COMMISSION.md'
+        original_comm = comm_target.read_bytes()
+        original_cfg = (self.host.root / 'host.json').read_bytes()
+        original_goal = self.host.goal()
+
+        revised = self.base / 'revised-commission.md'
+        revised.write_text('Revised instructions that should not take effect on failure.\n', encoding='utf-8')
+
+        # 1. Blank account fails BEFORE touching COMMISSION.md.
+        with self.assertRaisesRegex(ValueError, 'commission continuation account'):
+            self.host.commission({'path': str(revised), 'account': '   '})
+        self.assertEqual(comm_target.read_bytes(), original_comm)
+        self.assertEqual((self.host.root / 'host.json').read_bytes(), original_cfg)
+
+        # 2. Conflicting duty text fails BEFORE touching COMMISSION.md.
+        with self.assertRaisesRegex(ValueError, 'silently replace an earlier duty'):
+            self.host.commission({
+                'path': str(revised),
+                'account': 'Try to alter duty.',
+                'duties': [{'id': 'custody', 'text': 'Altered duty text.'}],
+            })
+        self.assertEqual(comm_target.read_bytes(), original_comm)
+
+        # 3. Failing native put rolls back COMMISSION.md atomically so goal basis stays intact!
+        real_call = self.host.call
+        def fail_put(*args, **kwargs):
+            if args and args[0] == 'put':
+                raise ValueError('simulated native put failure')
+            return real_call(*args, **kwargs)
+        with patch.object(self.host, 'call', side_effect=fail_put):
+            with self.assertRaisesRegex(ValueError, 'simulated native put failure'):
+                self.host.commission({'path': str(revised), 'account': 'Valid account.'})
+        self.assertEqual(comm_target.read_bytes(), original_comm)
+        self.assertEqual((self.host.root / 'host.json').read_bytes(), original_cfg)
+        self.assertEqual(self.host.goal()['sha256'], original_goal['sha256'])
+
+    # --- W5-B5: Failed init() must not persist host.json; successful init writes atomically ---
+    def test_failed_init_does_not_persist_host_json_and_init_writes_atomically(self):
+        bad_host = Host(self.base / 'failed-init-host')
+        real_call = bad_host.call
+        def fail_track(*args, **kwargs):
+            if args and args[0] == 'track':
+                raise ValueError('simulated track failure during init')
+            return real_call(*args, **kwargs)
+        with patch.object(bad_host, 'call', side_effect=fail_track):
+            with self.assertRaisesRegex(ValueError, 'simulated track failure'):
+                bad_host.init({
+                    'commission': str(self.commission),
+                    'engine': str(ENGINE),
+                    'duties': [{'id': 'd1', 'text': 'Duty one.'}],
+                })
+        self.assertFalse((bad_host.root / 'host.json').exists())
+        self.assertIsNone(bad_host.config)
+
+        # Verify successful init writes COMMISSION.md, OPERATION.md, FIELD.md, start-receipt.md via atomic_bytes.
+        written = []
+        real_atomic = continuing_work.atomic_bytes
+        def record_atomic(path, data):
+            written.append(Path(path).name)
+            return real_atomic(path, data)
+        good_host = Host(self.base / 'atomic-init-host')
+        with patch.object(continuing_work, 'atomic_bytes', side_effect=record_atomic):
+            good_host.init({
+                'commission': str(self.commission),
+                'engine': str(ENGINE),
+                'duties': [{'id': 'd1', 'text': 'Duty one.'}],
+            })
+        self.assertTrue((good_host.root / 'host.json').is_file())
+        for expected_name in ('COMMISSION.md', 'OPERATION.md', 'FIELD.md', 'start-receipt.md'):
+            self.assertIn(expected_name, written)
+
+    # --- W5-B5: NTFS junction / symlink refusal in occurrence_files & native_bridge ---
+    def test_reparse_point_or_symlink_refused_in_occurrence_files_and_native_bridge(self):
+        real_dir = self.base / 'real-dir'
+        real_dir.mkdir()
+        real_file = real_dir / 'data.json'
+        real_file.write_text('{"ok": true}\n', encoding='utf-8')
+        link_dir = self.base / 'link-dir'
+        if os.name == 'nt':
+            proc = subprocess.run(['cmd', '/c', 'mklink', '/J', str(link_dir), str(real_dir)], capture_output=True)
+            if proc.returncode != 0:
+                return
+            self.addCleanup(lambda: subprocess.run(['cmd', '/c', 'rmdir', str(link_dir)], capture_output=True))
+        else:
+            link_dir.symlink_to(real_dir)
+
+        with self.assertRaisesRegex(ValueError, 'symlink or reparse point'):
+            with occurrence_files.file_lock(link_dir / 'lock'):
+                pass
+        with self.assertRaisesRegex(ValueError, 'symlink or reparse point'):
+            occurrence_files.atomic_bytes(link_dir / 'out.bin', b'abc')
+        with self.assertRaisesRegex(ValueError, 'symlink or reparse point'):
+            occurrence_files.read(link_dir / 'data.json')
+        with self.assertRaisesRegex(ValueError, 'symlink or reparse point'):
+            self.host.pin(link_dir / 'data.json')
+        with self.assertRaisesRegex(ValueError, 'symlink or reparse point'):
+            self.host.commission({'path': str(link_dir / 'data.json'), 'account': 'Refuse junction source.'})
 
 
 if __name__ == '__main__':

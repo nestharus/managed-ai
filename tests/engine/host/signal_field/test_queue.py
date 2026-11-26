@@ -288,6 +288,129 @@ class SignalFieldQueueTests(unittest.TestCase):
             self.assertEqual(res['worker']['returncode'], 2)
             self.assertEqual(field.inspect(job_id=res['in_flight_job'])['worker_outcome']['stderr'], 'boom')
 
+    # --- W5-B3: NTFS junction / symlink ancestors, handle close on init error, pending stall, bounded capture ---
+    def _make_dir_link(self, link_path: Path, target_dir: Path) -> bool:
+        if os.name == 'nt':
+            proc = subprocess.run(
+                ['cmd', '/c', 'mklink', '/J', str(link_path), str(target_dir)],
+                capture_output=True, text=True,
+            )
+            if proc.returncode != 0:
+                return False
+            self.addCleanup(lambda p=link_path: subprocess.run(['cmd', '/c', 'rmdir', str(p)], capture_output=True)
+                            if p.exists() or queue_mod._is_reparse_or_symlink(p) else None)
+            return True
+        link_path.symlink_to(target_dir)
+        self.addCleanup(lambda p=link_path: p.unlink(missing_ok=True))
+        return True
+
+    def test_refuses_ntfs_junction_or_symlink_ancestors_on_db_request_and_planning_snapshot(self):
+        real_dir = self.root / 'real-dir'
+        real_dir.mkdir()
+        link_dir = self.root / 'link-dir'
+        self.assertTrue(self._make_dir_link(link_dir, real_dir))
+
+        # Database beneath a junction/symlink ancestor is refused.
+        with self.assertRaisesRegex(ValueError, 'symlink or reparse point'):
+            queue_mod.Field(link_dir / 'queue.sqlite')
+
+        # Request file beneath a junction/symlink ancestor is refused by CLI.
+        req_file = real_dir / 'req.json'
+        req_file.write_text('{"op":"status"}', encoding='utf-8')
+        proc = subprocess.run(
+            [sys.executable, '-B', str(QUEUE_PATH), '--db', str(self.db_path),
+             '--request', str(link_dir / 'req.json')],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn('symlink or reparse point', json.loads(proc.stderr)['reason'])
+
+        # planning_snapshot refuses DB beneath a junction/symlink ancestor.
+        real_db = real_dir / 'snap.sqlite'
+        with queue_mod.Field(real_db):
+            pass
+        with self.assertRaisesRegex(ValueError, 'symlink or reparse point'):
+            queue_mod.planning_snapshot(link_dir / 'snap.sqlite', lambda: real_db.read_bytes())
+
+    def test_corrupt_database_closes_sqlite_handle_on_init_failure(self):
+        corrupt = self.root / 'corrupt.sqlite'
+        corrupt.write_bytes(b'not a valid sqlite database header at all')
+        with self.assertRaises(sqlite3.DatabaseError):
+            queue_mod.Field(corrupt)
+        # Immediately unlinking fails with WinError 32 on Windows if the SQLite connection leaked.
+        corrupt.unlink()
+        self.assertFalse(corrupt.exists())
+
+    def test_pending_oversized_single_job_advances_cursor_without_infinite_loop(self):
+        with queue_mod.Field(self.db_path) as field:
+            huge = sample_use('a_huge')
+            huge['observer'] = {'definition': 'D' * 2500}
+            field.enroll(huge)
+            field.enroll(sample_use('b_normal'))
+
+            collected = []
+            cursor = ''
+            steps = 0
+            while True:
+                steps += 1
+                self.assertLessEqual(steps, 5, 'pending() stalled in an infinite pagination loop')
+                page = field.pending(after=cursor, limit=20, max_bytes=1024)
+                self.assertLessEqual(len(queue_mod.encoded(page['items']).encode('utf-8')), 1024)
+                self.assertTrue(page['items'], 'pending() must not return empty items while more=True')
+                self.assertGreater(page['next_after'], cursor)
+                collected.extend(page['items'])
+                cursor = page['next_after']
+                if not page['more']:
+                    break
+
+            self.assertEqual([item['job'] for item in collected], ['use:a_huge', 'use:b_normal'])
+            self.assertTrue(collected[0].get('oversized'))
+            self.assertGreater(collected[0]['full_bytes'], 1024)
+            self.assertNotIn('oversized', collected[1])
+            self.assertEqual(collected[1]['desired_spec']['id'], 'b_normal')
+            # Full job remains inspectable with an explicit larger bound.
+            full = field.inspect(job_id='use:a_huge', max_bytes=8192)
+            self.assertEqual(full['desired_spec']['observer']['definition'], 'D' * 2500)
+
+    def test_run_bounds_worker_stdout_and_stderr_capture(self):
+        with queue_mod.Field(self.db_path) as field:
+            field.enroll(sample_use('u1'))
+            # Oversized stdout exceeding MAX_WORKER_STDOUT_BYTES is bounded and refused cleanly.
+            over_out = queue_mod.MAX_WORKER_STDOUT_BYTES + 16384
+            res = field.run(
+                [sys.executable, '-c',
+                 f"import sys; sys.stdout.write('{{\"state\":\"complete\",\"account\":\"' + 'A' * {over_out} + '\"}}')"],
+                budget=1, timeout=15,
+            )
+            self.assertEqual(res['status'], 'worker-unresolved')
+            self.assertEqual(res['worker']['kind'], 'invalid-return')
+            self.assertIn('exceeded', res['reason'])
+            self.assertTrue(res['worker']['stdout_truncated'])
+            self.assertGreater(res['worker']['stdout_bytes'], queue_mod.MAX_WORKER_STDOUT_BYTES)
+            self.assertEqual(
+                len(res['worker']['stdout'].encode('utf-8')),
+                queue_mod.MAX_WORKER_STREAM_BYTES,
+            )
+
+            # Large stderr is streamed with bounded memory while retaining exact byte count & SHA-256.
+            job_id = res['in_flight_job']
+            field.retry(job_id, field.inspect(job_id=job_id)['token'])
+            big_err = queue_mod.MAX_WORKER_STREAM_BYTES * 8
+            import hashlib as _hashlib
+            expected_err_sha = _hashlib.sha256(b'Z' * big_err).hexdigest()
+            res_err = field.run(
+                [sys.executable, '-c', f"import sys; sys.stderr.write('Z' * {big_err}); sys.exit(4)"],
+                budget=1, timeout=15,
+            )
+            self.assertEqual(res_err['worker']['returncode'], 4)
+            self.assertEqual(res_err['worker']['stderr_bytes'], big_err)
+            self.assertEqual(res_err['worker']['stderr_sha256'], expected_err_sha)
+            self.assertTrue(res_err['worker']['stderr_truncated'])
+            self.assertEqual(
+                len(res_err['worker']['stderr'].encode('utf-8')),
+                queue_mod.MAX_WORKER_STREAM_BYTES,
+            )
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

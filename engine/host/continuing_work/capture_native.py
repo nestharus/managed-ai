@@ -1,65 +1,71 @@
 #!/usr/bin/env python3
-"""Host-owned selected capture for an explicitly reviewed native implementation.
+"""Host-owned selected capture for a qualified native implementation.
 
-Exchange owns the current packet summary. Earlier pinned engines require their
-original single-packet projection. Requalify after any native program change.
+Canonical engine/store/manage_store.py implementations qualify through:
+  1. ordinary unfollowed paths across engine/{deployment,core,store} (no symlinks/junctions),
+  2. verified store/system.py ENTRYPOINT contract (engine_api, deployment_api) and required
+     public APIs (Attention.inspect_receipt, Exchange.packet_summary, System.assess), and
+  3. co-located auto-admission (recording live profile SHA-256 and optional Git HEAD commit),
+     OR explicit --expected-profile <sha256> / verified --deployment <dir> for external engines.
+
+Frozen LEGACY_NATIVE_PROFILES remain strictly for historical pre-Wave-4 engine/runtime/ replay.
 """
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
+from importlib.machinery import EXTENSION_SUFFIXES
 import importlib.util
 import json
+import os
 from pathlib import Path
+import re
+import stat
 import sys
 
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
 
-REVIEWED_NATIVE_PROFILE = 'f65119d9a2751f7927ecfb502df1f26c07ee1c958c9b219aeb13f6efc1c6565e'
-REORGANIZED_NATIVE_PROFILE = '65d21e3482ae5ca9a4a9a3060e8d2c60e98bc95e224f6969dbed198d317910aa'
-REPAIRED_NATIVE_PROFILE = '7b6176300e8802b9c2714bf9cd9ebdfa8d2741b41d21c680c39f5bf5a32784e3'
-COMMAND_ROUTES_NATIVE_PROFILE = 'fb535b60e0d22b6fc482f84dcd4482ecce2dda52fa6e06ee5915268a4cc3f621'
-BODY_REPAIRS_NATIVE_PROFILE = 'e92245c09bc33a22e7aa086be2ae141093dd19bf2302f69d53c771e5e8e23cc9'
-SCHEMA_REPAIRS_NATIVE_PROFILE = '5f0830029a210dd73fd3299a3a6f5c170a2802dadf85b3076b5640831774d836'
-LIFECYCLE_NATIVE_PROFILE = 'e031f4e246801e7ea5d41306c7356891872af6444f7fd9b998bacd48ea67945a'
-OUTLIER_REPAIRS_NATIVE_PROFILE = '9b879473fc1a7a46b530027d5f7045101b05183b9742027861af15d3f145e6ea'
-SCOPED_COMPOSITION_NATIVE_PROFILE = '6bb020ad0a1feacaab040b7b8bfe448e9f472525902bad1203344d2ec2f436f4'
-JOINED_NATIVE_PROFILE = '27c5c10a3c1a0016fb5fb9e86454025103aa1a22e9889044ad65bd9f8932316d'
-PACKET_LIFECYCLE_NATIVE_PROFILE = 'db6b9c8a443483e99932b8970b5abbc506622d1a2f337a1fe9b452a98cec706a'
-BOUNDED_ADMISSION_NATIVE_PROFILE = 'cc7fb2cdb1c88b5ecff826bac7088e93d11f13a0317fd673f5291778736f1c44'
-EXPONENTIAL_ADMISSION_NATIVE_PROFILE = 'e772c4c3a51d8db2937a5cbcb991dc0a5c2433f70082a7b02d32cda5aabdd5e4'
-WAVE1_NATIVE_PROFILE = '2eb453170ca260aa32575b628480ec529d71f78d80dcbe052ebe5f807569945f'
-WAVE2_NATIVE_PROFILE = 'a61df8f59eadde2f1631f7002e062770ae68c577de973717e9f4997748fee1d4'
-PRE_WAVE3_NATIVE_PROFILE = 'dbfaee1c623984cbd60833413de6c4aab1033214d4ddf6300c415b04bfbeefce'
-WAVE3_NATIVE_PROFILE = '23c5c06540959fe6cbdd0e9e58e3bb69c328616f879caa6fd4604b22d790cf82'
-WAVE3_5_NATIVE_PROFILE = '82f1d0421b9cb9c134e5d0fb97c14e530407c409ac3716730a7f758e16ddd609'
-WAVE4_NATIVE_PROFILE = '22f7b59566fd3b2cf5d02be7c774d0748f316f8bc5963278d9291d946771e5e2'
-CURRENT_NATIVE_PROFILE = WAVE4_NATIVE_PROFILE
+from occurrence_files import check_unfollowed_ancestors, is_reparse_or_symlink, loads_strict
 
-ADMITTED_NATIVE_PROFILES = frozenset({
-    REVIEWED_NATIVE_PROFILE,
-    REORGANIZED_NATIVE_PROFILE,
-    REPAIRED_NATIVE_PROFILE,
-    COMMAND_ROUTES_NATIVE_PROFILE,
-    BODY_REPAIRS_NATIVE_PROFILE,
-    SCHEMA_REPAIRS_NATIVE_PROFILE,
-    LIFECYCLE_NATIVE_PROFILE,
-    OUTLIER_REPAIRS_NATIVE_PROFILE,
-    SCOPED_COMPOSITION_NATIVE_PROFILE,
-    JOINED_NATIVE_PROFILE,
-    PACKET_LIFECYCLE_NATIVE_PROFILE,
-    BOUNDED_ADMISSION_NATIVE_PROFILE,
-    EXPONENTIAL_ADMISSION_NATIVE_PROFILE,
-    WAVE1_NATIVE_PROFILE,
-    WAVE2_NATIVE_PROFILE,
-    PRE_WAVE3_NATIVE_PROFILE,
-    WAVE3_NATIVE_PROFILE,
-    WAVE3_5_NATIVE_PROFILE,
-    WAVE4_NATIVE_PROFILE,
-    CURRENT_NATIVE_PROFILE,
+COLOCATED_ENGINE_ROOT = HERE.parents[1]
+COLOCATED_ENGINE_ENTRY = COLOCATED_ENGINE_ROOT / 'store/manage_store.py'
+EXPECTED_ENGINE_API = 'managed-ai-runtime/1'
+EXPECTED_DEPLOYMENT_API = 'agent-system-deployment/2'
+EXPECTED_STORE_SCHEMA = 'managed-ai-store/1'
+_SHA256_RE = re.compile(r'^[0-9a-f]{64}$')
+_CODE_ID_EXCLUDED_DIRS = frozenset({'tests', 'examples', 'patterns'})
+_NON_SOURCE_SUFFIXES = ('.pyc', '.pyo', '.pyd', '.so', *EXTENSION_SUFFIXES)
+
+# Frozen historical pre-Wave-4 engine/runtime/ profiles kept only for archival replay.
+LEGACY_NATIVE_PROFILES = frozenset({
+    'f65119d9a2751f7927ecfb502df1f26c07ee1c958c9b219aeb13f6efc1c6565e',  # reviewed
+    '65d21e3482ae5ca9a4a9a3060e8d2c60e98bc95e224f6969dbed198d317910aa',  # reorganized
+    '7b6176300e8802b9c2714bf9cd9ebdfa8d2741b41d21c680c39f5bf5a32784e3',  # repaired
+    'fb535b60e0d22b6fc482f84dcd4482ecce2dda52fa6e06ee5915268a4cc3f621',  # command-routes
+    'e92245c09bc33a22e7aa086be2ae141093dd19bf2302f69d53c771e5e8e23cc9',  # body-repairs
+    '5f0830029a210dd73fd3299a3a6f5c170a2802dadf85b3076b5640831774d836',  # schema-repairs
+    'e031f4e246801e7ea5d41306c7356891872af6444f7fd9b998bacd48ea67945a',  # lifecycle
+    '9b879473fc1a7a46b530027d5f7045101b05183b9742027861af15d3f145e6ea',  # outlier-repairs
+    '6bb020ad0a1feacaab040b7b8bfe448e9f472525902bad1203344d2ec2f436f4',  # scoped-composition
+    '27c5c10a3c1a0016fb5fb9e86454025103aa1a22e9889044ad65bd9f8932316d',  # joined
+    'db6b9c8a443483e99932b8970b5abbc506622d1a2f337a1fe9b452a98cec706a',  # packet-lifecycle
+    'cc7fb2cdb1c88b5ecff826bac7088e93d11f13a0317fd673f5291778736f1c44',  # bounded-admission
+    'e772c4c3a51d8db2937a5cbcb991dc0a5c2433f70082a7b02d32cda5aabdd5e4',  # exponential-admission
+    '2eb453170ca260aa32575b628480ec529d71f78d80dcbe052ebe5f807569945f',  # wave1
+    'a61df8f59eadde2f1631f7002e062770ae68c577de973717e9f4997748fee1d4',  # wave2
+    'dbfaee1c623984cbd60833413de6c4aab1033214d4ddf6300c415b04bfbeefce',  # pre-wave3
+    '23c5c06540959fe6cbdd0e9e58e3bb69c328616f879caa6fd4604b22d790cf82',  # wave3
+    '82f1d0421b9cb9c134e5d0fb97c14e530407c409ac3716730a7f758e16ddd609',  # wave3.5
 })
 
 PROFILE_ERROR = ('Selected native engine does not match the reviewed capture adapter; '
                  'requalify this adapter before capture')
+EXTERNAL_PROFILE_ERROR = ('External native engine requires explicit --expected-profile or '
+                          'verified --deployment pin before capture')
+CONTRACT_ERROR = 'Selected native engine does not satisfy the required capture adapter contract'
 RETURN_ERROR = 'Native return already exists; use its retained body or a new current occurrence'
 
 
@@ -68,49 +74,306 @@ def _is_test_module(name: str) -> bool:
     return lower.endswith('.py') and (lower.startswith('test_') or lower.endswith('_test.py'))
 
 
+def _profile_digest(programs: dict[str, str]) -> str:
+    return hashlib.sha256(
+        json.dumps(programs, sort_keys=True, separators=(',', ':')).encode('utf-8'),
+    ).hexdigest()
+
+
+def _scan_ordinary_programs(base: Path, roots: tuple[Path, ...], *, exclude_tests: bool) -> dict[str, str]:
+    programs: dict[str, str] = {}
+    for folder in roots:
+        if is_reparse_or_symlink(folder):
+            raise ValueError(f'Native engine tree must not contain symlinks or reparse points: {folder}')
+        if not folder.is_dir():
+            continue
+        for parent, dirs, files in os.walk(folder, followlinks=False):
+            dirs.sort()
+            files.sort()
+            kept_dirs = []
+            for dname in dirs:
+                dpath = Path(parent) / dname
+                if is_reparse_or_symlink(dpath):
+                    raise ValueError(f'Native engine tree must not contain symlinks or reparse points: {dpath}')
+                if dname == '__pycache__':
+                    continue
+                if exclude_tests and dname == 'tests':
+                    continue
+                kept_dirs.append(dname)
+            dirs[:] = kept_dirs
+            for fname in files:
+                if not fname.endswith('.py'):
+                    continue
+                fpath = Path(parent) / fname
+                if is_reparse_or_symlink(fpath):
+                    raise ValueError(f'Native engine tree must not contain symlinks or reparse points: {fpath}')
+                if not stat.S_ISREG(fpath.lstat().st_mode):
+                    raise ValueError(f'Native engine source must be an ordinary file: {fpath}')
+                if exclude_tests and _is_test_module(fname):
+                    continue
+                programs[fpath.relative_to(base).as_posix()] = hashlib.sha256(fpath.read_bytes()).hexdigest()
+    return programs
+
+
+def _native_sources_with_layout(entry: Path) -> tuple[Path, dict[str, str], str]:
+    checked = check_unfollowed_ancestors(entry, 'Native engine entry', include_target=True)
+    if not checked.exists() or not stat.S_ISREG(checked.lstat().st_mode):
+        raise ValueError(PROFILE_ERROR)
+    resolved = checked.resolve(strict=True)
+    engine = resolved.parents[1]
+    if resolved == engine / 'store/manage_store.py' and (engine / 'store/system.py').is_file():
+        native = engine / 'store/system.py'
+        if is_reparse_or_symlink(native):
+            raise ValueError(f'Native engine entry must not be a symlink or reparse point: {native}')
+        roots = (engine / 'deployment', engine / 'core', engine / 'store')
+        programs = _scan_ordinary_programs(engine, roots, exclude_tests=True)
+        return native, programs, 'canonical'
+    if resolved == engine / 'runtime/manage_store.py' and (engine / 'runtime/native/system.py').is_file():
+        native = engine / 'runtime/native/system.py'
+        if is_reparse_or_symlink(native):
+            raise ValueError(f'Native engine entry must not be a symlink or reparse point: {native}')
+        roots = (engine / 'runtime',)
+        programs = _scan_ordinary_programs(engine, roots, exclude_tests=False)
+        return native, programs, 'legacy'
+    raise ValueError(PROFILE_ERROR)
+
+
 def native_sources(entry: Path):
     """Collect the exact executable native engine source map for profile qualification.
 
-    Wave 4 canonical engines hash only engine/{deployment,core,store} non-test modules.
+    Canonical engines hash only engine/{deployment,core,store} non-test modules.
     Pre-Wave-4 historical engines hash engine/runtime/ to preserve historical profile pins.
     """
-    entry = entry.resolve(strict=True)
-    engine = entry.parents[1]
-    if entry == engine / 'store/manage_store.py' and (engine / 'store/system.py').is_file():
-        roots = (engine / 'deployment', engine / 'core', engine / 'store')
-        base = engine
-        native = engine / 'store/system.py'
-        exclude_tests = True
-    elif entry == engine / 'runtime/manage_store.py' and (engine / 'runtime/native/system.py').is_file():
-        roots = (engine / 'runtime',)
-        base = engine
-        native = engine / 'runtime/native/system.py'
-        exclude_tests = False
-    else:
-        raise ValueError(PROFILE_ERROR)
-    programs = {}
-    for folder in roots:
-        if not folder.is_dir():
-            continue
-        for p in folder.rglob('*.py'):
-            if '__pycache__' in p.parts:
-                continue
-            if exclude_tests and ('tests' in p.relative_to(base).parts or _is_test_module(p.name)):
-                continue
-            programs[p.relative_to(base).as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()
+    native, programs, _ = _native_sources_with_layout(entry)
     return native, programs
 
 
-def reviewed_engine(engine: Path):
-    """Verify the selected native implementation before loading it."""
-    path, programs = native_sources(engine)
-    profile = hashlib.sha256(json.dumps(programs, sort_keys=True,
-                                       separators=(',', ':')).encode()).hexdigest()
-    if profile not in ADMITTED_NATIVE_PROFILES:
-        raise ValueError(PROFILE_ERROR)
-    engine_root = str(path.parents[1])
-    if path.parent.name == 'store' and engine_root not in sys.path:
-        sys.path.insert(0, engine_root)
+def _engine_code_identity(engine_root: Path) -> str:
+    """Compute engine/deployment/controller.py:code_identity() without importing external engine code."""
+    engine = check_unfollowed_ancestors(engine_root, 'Deployment pinned engine', include_target=True).resolve(strict=True)
+    if not engine.is_dir():
+        raise ValueError(f'ordinary shared engine directory required: {engine}')
+    paths: list[Path] = []
+    pending: list[tuple[Path, bool]] = [(engine, False)]
+    while pending:
+        directory, in_cache = pending.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                path = directory / entry.name
+                info = entry.stat(follow_symlinks=False)
+                if is_reparse_or_symlink(path):
+                    raise ValueError(f'shared engine may not use symbolic links or reparse points: {path}')
+                mode = info.st_mode
+                if stat.S_ISDIR(mode):
+                    if entry.name.casefold() in _CODE_ID_EXCLUDED_DIRS:
+                        continue
+                    pending.append((path, in_cache or entry.name.casefold() == '__pycache__'))
+                elif not stat.S_ISREG(mode):
+                    raise ValueError(f'ordinary shared engine file or directory required: {path}')
+                elif in_cache:
+                    if path.suffix.lower() != '.pyc':
+                        raise ValueError(f'ordinary bytecode cache files required below __pycache__: {path}')
+                elif path.name.lower().endswith(_NON_SOURCE_SUFFIXES):
+                    raise ValueError(f'shared engine requires Python source for executable modules: {path}')
+                elif path.match('*.py') and not _is_test_module(entry.name):
+                    paths.append(path)
+    native_entry = Path('store/system.py')
+    native_contract = Path('store/selection/domain_selection.py')
+    declaration_paths = {native_entry, native_contract}
+    rows = []
+    declarations: dict[Path, bytes] = {}
+    for path in sorted(paths):
+        relative = path.relative_to(engine)
+        raw = path.read_bytes()
+        rows.append({'path': relative.as_posix(), 'sha256': hashlib.sha256(raw).hexdigest()})
+        if relative in declaration_paths:
+            declarations[relative] = raw
+    if declaration_paths != declarations.keys():
+        raise ValueError('select the current engine root containing its native entry and API declarations')
+
+    def declared(rel: Path) -> dict:
+        result = {}
+        try:
+            tree = ast.parse(declarations[rel], filename=str(engine / rel))
+        except SyntaxError as exc:
+            raise ValueError(f'invalid engine API declaration in {engine / rel}: {exc.msg}') from exc
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                try:
+                    result[node.targets[0].id] = ast.literal_eval(node.value)
+                except (ValueError, TypeError):
+                    pass
+        return result
+
+    contract = declared(native_contract)
+    if (contract.get('ENGINE_API') != EXPECTED_ENGINE_API
+            or contract.get('STORE_SCHEMA') != EXPECTED_STORE_SCHEMA
+            or declared(native_entry).get('DEPLOYMENT_API') != EXPECTED_DEPLOYMENT_API):
+        raise ValueError('selected engine declares incompatible storage/deployment APIs')
+    encoded_rows = (json.dumps(rows, sort_keys=True, ensure_ascii=False, indent=2, allow_nan=False) + '\n').encode('utf-8')
+    return hashlib.sha256(encoded_rows).hexdigest()
+
+
+def _verify_deployment_pin(deployment_dir: Path, expected_engine_root: Path) -> None:
+    dep_root = check_unfollowed_ancestors(deployment_dir, 'Deployment directory', include_target=True).resolve(strict=True)
+    if not dep_root.is_dir():
+        raise ValueError(f'Deployment directory does not exist: {dep_root}')
+    descriptor_path = check_unfollowed_ancestors(dep_root / 'deployment.json', 'Deployment descriptor', include_target=True)
+    if not descriptor_path.is_file():
+        raise ValueError(f'Deployment descriptor is missing: {descriptor_path}')
+    doc = loads_strict(descriptor_path.read_bytes())
+    if not isinstance(doc, dict) or doc.get('format') != EXPECTED_DEPLOYMENT_API:
+        raise ValueError('Deployment descriptor format is incompatible')
+    engine_spec = doc.get('engine')
+    if (not isinstance(engine_spec, dict)
+            or not isinstance(engine_spec.get('path'), str)
+            or not isinstance(engine_spec.get('code_sha256'), str)
+            or engine_spec.get('engine_api') != EXPECTED_ENGINE_API):
+        raise ValueError('Deployment descriptor lacks a valid engine pin')
+    pinned_engine = check_unfollowed_ancestors(dep_root / engine_spec['path'], 'Deployment pinned engine', include_target=True)
+    if pinned_engine.resolve(strict=True) != expected_engine_root.resolve(strict=True):
+        raise ValueError('Selected native engine path differs from verified deployment pin')
+    if _engine_code_identity(pinned_engine) != engine_spec['code_sha256']:
+        raise ValueError('Selected native engine code differs from verified deployment pin')
+
+
+def _git_head_commit(engine_root: Path) -> str | None:
+    """Best-effort read of Git HEAD commit SHA without spawning subprocesses."""
+    cur = engine_root.resolve()
+    git_entry = None
+    for candidate in (cur, *cur.parents[:4]):
+        probe = candidate / '.git'
+        if probe.exists():
+            git_entry = probe
+            break
+    if git_entry is None:
+        return None
+    try:
+        if git_entry.is_file():
+            first = git_entry.read_text(encoding='utf-8').strip()
+            if not first.startswith('gitdir:'):
+                return None
+            raw_dir = first.split(':', 1)[1].strip()
+            git_dir = Path(raw_dir)
+            if not git_dir.is_absolute():
+                git_dir = (git_entry.parent / git_dir).resolve()
+        elif git_entry.is_dir():
+            git_dir = git_entry
+        else:
+            return None
+        head_text = (git_dir / 'HEAD').read_text(encoding='utf-8').strip()
+        if re.fullmatch(r'[0-9a-f]{40}', head_text):
+            return head_text
+        if not head_text.startswith('ref:'):
+            return None
+        ref_name = head_text.split(':', 1)[1].strip()
+        search_dirs = [git_dir]
+        commondir_file = git_dir / 'commondir'
+        if commondir_file.is_file():
+            common_raw = commondir_file.read_text(encoding='utf-8').strip()
+            common_dir = Path(common_raw)
+            if not common_dir.is_absolute():
+                common_dir = (git_dir / common_dir).resolve()
+            search_dirs.append(common_dir)
+        for base in search_dirs:
+            ref_file = base / ref_name
+            if ref_file.is_file():
+                commit = ref_file.read_text(encoding='utf-8').strip()
+                if re.fullmatch(r'[0-9a-f]{40}', commit):
+                    return commit
+            packed = base / 'packed-refs'
+            if packed.is_file():
+                for line in packed.read_text(encoding='utf-8').splitlines():
+                    if not line or line.startswith(('#', '^')):
+                        continue
+                    parts = line.split(' ', 1)
+                    if len(parts) == 2 and parts[1].strip() == ref_name and re.fullmatch(r'[0-9a-f]{40}', parts[0]):
+                        return parts[0]
+    except OSError:
+        return None
+    return None
+
+
+def _verify_canonical_contract(module) -> None:
+    ep = getattr(module, 'ENTRYPOINT', None)
+    if (ep is None
+            or getattr(ep, 'engine_api', None) != EXPECTED_ENGINE_API
+            or getattr(ep, 'deployment_api', None) != EXPECTED_DEPLOYMENT_API):
+        raise ValueError(CONTRACT_ERROR)
+    system_cls = getattr(module, 'System', None)
+    attention_cls = getattr(module, 'Attention', None)
+    exchange_cls = getattr(module, 'Exchange', None)
+    if (system_cls is None or attention_cls is None or exchange_cls is None
+            or not callable(getattr(system_cls, 'assess', None))
+            or not callable(getattr(attention_cls, 'inspect_receipt', None))
+            or not callable(getattr(exchange_cls, 'packet_summary', None))):
+        raise ValueError(CONTRACT_ERROR)
+
+
+def _is_colocated_engine(resolved_entry: Path) -> bool:
+    if not COLOCATED_ENGINE_ENTRY.is_file():
+        return False
+    try:
+        checked = check_unfollowed_ancestors(COLOCATED_ENGINE_ENTRY, 'Co-located engine', include_target=True)
+    except ValueError:
+        return False
+    return resolved_entry == checked.resolve(strict=True)
+
+
+def qualify_engine(engine: Path, *, expected_profile: str | None = None,
+                   deployment: Path | None = None) -> tuple[object, dict]:
+    """Qualify and load a native implementation; refuse unqualified external engines before exec."""
+    path, programs, layout = _native_sources_with_layout(engine)
+    profile = _profile_digest(programs)
+    resolved_entry = Path(engine).resolve(strict=True)
+    engine_root = path.parents[1]
+
+    if expected_profile is not None:
+        if not isinstance(expected_profile, str) or not _SHA256_RE.fullmatch(expected_profile):
+            raise ValueError('expected_profile must be a 64-character lowercase SHA-256 hex digest')
+
+    if layout == 'legacy':
+        if profile not in LEGACY_NATIVE_PROFILES:
+            raise ValueError(PROFILE_ERROR)
+        if expected_profile is not None and profile != expected_profile:
+            raise ValueError(PROFILE_ERROR)
+        if deployment is not None:
+            raise ValueError('Historical engine/runtime/ cannot use --deployment qualification')
+        admission = 'legacy-pinned'
+    else:
+        admission_modes = []
+        if expected_profile is not None:
+            if profile != expected_profile:
+                raise ValueError(PROFILE_ERROR)
+            admission_modes.append('expected-profile')
+        if deployment is not None:
+            _verify_deployment_pin(deployment, engine_root)
+            admission_modes.append('deployment-pin')
+        if admission_modes:
+            admission = '+'.join(admission_modes)
+        elif _is_colocated_engine(resolved_entry):
+            admission = 'colocated'
+        else:
+            raise ValueError(EXTERNAL_PROFILE_ERROR)
+
+    engine_root_str = str(engine_root)
+    if path.parent.name == 'store':
+        if engine_root_str in sys.path:
+            sys.path.remove(engine_root_str)
+        sys.path.insert(0, engine_root_str)
+        # Drop cached core/store/deployment modules loaded from a different engine root.
+        for mod_name in list(sys.modules):
+            if mod_name in ('core', 'store', 'deployment') or mod_name.startswith(('core.', 'store.', 'deployment.')):
+                mod = sys.modules.get(mod_name)
+                mod_file = getattr(mod, '__file__', None)
+                if mod_file:
+                    try:
+                        if not Path(mod_file).resolve().is_relative_to(engine_root.resolve()):
+                            sys.modules.pop(mod_name, None)
+                    except OSError:
+                        pass
+                else:
+                    sys.modules.pop(mod_name, None)
     spec = importlib.util.spec_from_file_location('reviewed_capture_engine', path)
     if spec is None or spec.loader is None:
         raise ValueError(PROFILE_ERROR)
@@ -124,7 +387,23 @@ def reviewed_engine(engine: Path):
             sys.modules.pop(spec.name, None)
         else:
             sys.modules[spec.name] = previous
-    return module, profile
+
+    if layout == 'canonical':
+        _verify_canonical_contract(module)
+
+    info = {
+        'profile': profile,
+        'admission': admission,
+        'git_head_commit': _git_head_commit(engine_root),
+    }
+    return module, info
+
+
+def reviewed_engine(engine: Path, *, expected_profile: str | None = None,
+                    deployment: Path | None = None):
+    """Verify the selected native implementation before loading it."""
+    module, info = qualify_engine(engine, expected_profile=expected_profile, deployment=deployment)
+    return module, info['profile']
 
 
 def legacy_packet_summary(exchange, directory, consumer, publications, returned, outcome):
@@ -223,6 +502,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--engine', required=True, type=Path)
     parser.add_argument('--root', required=True, type=Path)
+    parser.add_argument('--expected-profile', default=None,
+                        help='Explicit 64-hex SHA-256 profile pin for an external native engine')
+    parser.add_argument('--deployment', default=None, type=Path,
+                        help='Verified deployment directory whose deployment.json pins the external engine')
     commands = parser.add_subparsers(dest='action', required=True)
     capture = commands.add_parser('assess', allow_abbrev=False)
     capture.add_argument('turn')
@@ -237,7 +520,11 @@ def main():
     inspect.add_argument('turn')
     args = parser.parse_args()
     try:
-        native, profile = reviewed_engine(args.engine)
+        native, info = qualify_engine(
+            args.engine,
+            expected_profile=args.expected_profile,
+            deployment=args.deployment,
+        )
         root, exchange_root = _exchange_root(native, args.root)
         with native.exclusive(exchange_root / 'owner.lock'):
             system = native.System(root)
@@ -258,9 +545,14 @@ def main():
                 attention = system.assess(args.turn, args.receipt, args.producer)
                 result = {'attention': attention,
                           'status': {'turns': [turn_summary(system, args.turn, observed)]}}
-            result['capture_adapter'] = {
-                'native_profile_sha256': profile,
-                'scope': 'Selected native assessment and turn only; no global status computation.'}
+            adapter_meta = {
+                'native_profile_sha256': info['profile'],
+                'admission': info['admission'],
+                'scope': 'Selected native assessment and turn only; no global status computation.',
+            }
+            if info.get('git_head_commit') is not None:
+                adapter_meta['git_head_commit'] = info['git_head_commit']
+            result['capture_adapter'] = adapter_meta
         print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         print(json.dumps({'status': 'unresolved', 'operation': args.action,

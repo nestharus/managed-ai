@@ -493,11 +493,11 @@ def run(config):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     commands = parser.add_subparsers(dest="command", required=True)
-    start = commands.add_parser("run")
+    start = commands.add_parser("run", allow_abbrev=False)
     start.add_argument("--config", required=True)
-    response = commands.add_parser("respond")
+    response = commands.add_parser("respond", allow_abbrev=False)
     response.add_argument("--mailbox", required=True)
     response.add_argument("--step", required=True, type=int)
     response.add_argument("--action", required=True, help="Path to the actual model-produced action JSON")
