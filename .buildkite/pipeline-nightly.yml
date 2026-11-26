@@ -1,0 +1,51 @@
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  IMAGE_REGISTRY: "ghcr.io/nestharus"
+  IMAGE_NAME: "managed-ai"
+  KEEP_MAIN_IMAGES: "5"
+  PR_IMAGE_TTL_DAYS: "7"
+
+steps:
+  - label: ":moon: Nightly full test suite"
+    key: "nightly-full-tests"
+    command: "python3 -B -m unittest discover -s tests -v"
+
+  - label: ":package: Nightly release & wheel qualification"
+    key: "nightly-release-wheel"
+    command: |
+      set -euo pipefail
+      python3 -B scripts/release/check_current.py
+      python3 -B -m unittest tests/release/test_package_wheel.py
+
+  - label: ":floppy_disk: Nightly store pack & restore drill"
+    key: "nightly-store-drill"
+    command: |
+      set -euo pipefail
+      DRILL_DIR="$(mktemp -d)"
+      trap 'rm -rf "$DRILL_DIR"' EXIT
+      python3 -B src/managed_ai/store/manage_store.py --root "$DRILL_DIR/store" init \
+        --instance-id nightly-drill --goal-text "Nightly pack and readback qualification"
+      python3 -B src/managed_ai/store/manage_store.py --root "$DRILL_DIR/store" reindex
+      python3 -B src/managed_ai/store/manage_store.py --root "$DRILL_DIR/store" pack-objects --apply
+      python3 -B src/managed_ai/store/manage_store.py --root "$DRILL_DIR/store" status --summary
+
+  - wait
+
+  - label: ":broom: Nightly registry GC dry-run plan"
+    key: "nightly-registry-gc"
+    command: |
+      set -euo pipefail
+      CATALOG_PATH="${REGISTRY_CATALOG_PATH:-registry-catalog.json}"
+      if [ ! -f "$CATALOG_PATH" ]; then
+        printf '{"format":"managed-ai-registry-catalog/1","repository":"%s/%s","manifests":[]}\n' \
+          "$IMAGE_REGISTRY" "$IMAGE_NAME" > "$CATALOG_PATH"
+      fi
+      python3 -B scripts/ci/image_lifecycle.py plan-gc \
+        --catalog "$CATALOG_PATH" \
+        --gitops-dir gitops \
+        --keep-main "$KEEP_MAIN_IMAGES" \
+        --pr-ttl-days "$PR_IMAGE_TTL_DAYS" \
+        > registry-gc-plan.json
+      cat registry-gc-plan.json
+    artifact_paths:
+      - "registry-gc-plan.json"

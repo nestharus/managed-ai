@@ -4,7 +4,8 @@ Choose the package scope needed by the receiver:
 
 | Release | Contents |
 | --- | --- |
-| Python wheel / sdist | Standard PEP-517 package built from `pyproject.toml` and `src/managed_ai/` (excluding repo-local `scripts/`) |
+| Python wheel / sdist | Standard PEP-517 package built from `pyproject.toml` and `src/managed_ai/` (excluding repo-local `scripts/`, `containers/`, `deploy/`, `infra/`, `gitops/`, `.buildkite/`) |
+| Container image | Multi-stage non-root image built from `containers/Containerfile`, tagged immutably (`sha-<12>`, `v<semver>`; never `:latest`) and promoted across `gitops/` channels by `@sha256` digest |
 | Software bundle | Clean export of `src/managed_ai/`, `docs/`, `examples/`, `pyproject.toml`, `LICENSE`, plus optional initialized stores and deployments |
 | External domain | One external domain repository's `domain.json`, `catalogue.json`, sources, and tools exported at an exact Git commit |
 
@@ -61,3 +62,19 @@ python -B src/managed_ai/deployment/select_deployment.py --deployment deployment
 ```
 
 Record the archive SHA-256, Git commit, engine `code_sha256`, and store/domain digests alongside the receiving verification result. See [docs/engine/release/README.md](docs/engine/release/README.md) for core guidance pin refresh details.
+
+## 5. Container promotion & registry garbage collection
+
+Buildkite (`.buildkite/pipeline.yml`) gates container builds behind all fast checks (`- wait`), hashes build inputs (`scripts/ci/image_lifecycle.py context-hash`) to skip redundant rebuilds, and plans immutable tags (`tag-plan --channel release --version X.Y.Z --git-sha <sha>`). Promote releases across `gitops/` channels by pinning the emitted `@sha256` digest—never `:latest`.
+
+Run dry-run registry garbage collection planning regularly (automated in `.buildkite/pipeline-nightly.yml`):
+
+```sh
+python -B scripts/ci/image_lifecycle.py plan-gc \
+  --catalog /path/to/registry-catalog.json \
+  --gitops-dir gitops \
+  --keep-main 5 \
+  --pr-ttl-days 7
+```
+
+`plan-gc` protects every `@sha256` digest pinned in `gitops/`, every SemVer `vX.Y.Z` tag, the newest `keep-main` `sha-*` tags, and unexpired `pr-*` tags, and never deletes a digest shared by any protected tag or pin.
