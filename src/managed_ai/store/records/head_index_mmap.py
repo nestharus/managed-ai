@@ -1,13 +1,15 @@
-"""Zero-copy read-only mmap view, CSR graph queries, and generation pointer helpers for HeadIndex v3."""
-from __future__ import annotations
+"""Zero-copy read-only mmap view, CSR graph queries, and generation helpers for HeadIndex v3."""
 
+import contextlib
 import hmac
 import mmap
 import os
-from pathlib import Path
 import stat
 import struct
-from typing import Iterator
+from collections.abc import Iterator
+from pathlib import Path
+from types import TracebackType
+from typing import Any, BinaryIO
 
 from managed_ai.core.storage import (
     _OPEN_RO_NOFOLLOW,
@@ -18,17 +20,6 @@ from managed_ai.core.storage import (
 from managed_ai.platform import strict_json_loads
 
 from .head_index_codec import (
-    BINARY_INDEX_DOMAIN,
-    FLAG_ACTIVE,
-    FLAG_EXACT_REFS_TRUNCATED,
-    FLAG_HAS_BASIS,
-    FLAG_HAS_CONTENT_FORMAT,
-    FLAG_HAS_CONTENT_LINKS,
-    FLAG_HAS_DUP_RELS,
-    FLAG_HAS_QUESTION_NORM,
-    FLAG_TOKENS_TRUNCATED,
-    HEAD_INDEX_FORMAT_V3,
-    MAP_FLAG_OPEN_QUESTION,
     _BASIS_HEAD_STRUCT,
     _EXT_REV_EDGE_STRUCT,
     _FWD_EDGE_STRUCT,
@@ -55,6 +46,17 @@ from .head_index_codec import (
     _U16_STRUCT,
     _U32_STRUCT,
     _U64_STRUCT,
+    BINARY_INDEX_DOMAIN,
+    FLAG_ACTIVE,
+    FLAG_EXACT_REFS_TRUNCATED,
+    FLAG_HAS_BASIS,
+    FLAG_HAS_CONTENT_FORMAT,
+    FLAG_HAS_CONTENT_LINKS,
+    FLAG_HAS_DUP_RELS,
+    FLAG_HAS_QUESTION_NORM,
+    FLAG_TOKENS_TRUNCATED,
+    HEAD_INDEX_FORMAT_V3,
+    MAP_FLAG_OPEN_QUESTION,
     _validate_header_bounds,
 )
 
@@ -71,25 +73,25 @@ def _parse_pointer(pointer_path: Path) -> dict | None:
     try:
         raw = pointer_path.read_bytes()
         doc = strict_json_loads(raw, pointer_path, require_object=True)
-    except (OSError, UnicodeDecodeError, ValueError):
+    except OSError, UnicodeDecodeError, ValueError:
         return None
 
-    if doc.get('format') != HEAD_INDEX_FORMAT_V3:
+    if doc.get("format") != HEAD_INDEX_FORMAT_V3:
         return None
 
-    gen = doc.get('generation')
+    gen = doc.get("generation")
     if type(gen) is not int or gen < 1:
         return None
 
-    expected_name = f'head-index.gen{gen}.bin'
-    if doc.get('file') != expected_name:
+    expected_name = f"head-index.gen{gen}.bin"
+    if doc.get("file") != expected_name:
         return None
 
-    tag = doc.get('hmac')
+    tag = doc.get("hmac")
     if not isinstance(tag, str) or not _HEX64_RE.fullmatch(tag):
         return None
 
-    if not isinstance(doc.get('record_format'), str) or not doc['record_format']:
+    if not isinstance(doc.get("record_format"), str) or not doc["record_format"]:
         return None
 
     return doc
@@ -97,7 +99,7 @@ def _parse_pointer(pointer_path: Path) -> dict | None:
 
 def read_current_pointer(directory: Path) -> dict | None:
     """Read and validate the tiny atomic head-index.current.json pointer if present."""
-    return _parse_pointer(directory / 'head-index.current.json')
+    return _parse_pointer(directory / "head-index.current.json")
 
 
 def active_binary_path(directory: Path) -> Path | None:
@@ -106,7 +108,7 @@ def active_binary_path(directory: Path) -> Path | None:
     if doc is None:
         return None
 
-    candidate = directory / doc['file']
+    candidate = directory / doc["file"]
     return candidate if has_ordinary_file(candidate) else None
 
 
@@ -114,7 +116,7 @@ def _next_generation(directory: Path) -> int:
     highest = 0
     doc = read_current_pointer(directory)
     if doc is not None:
-        highest = max(highest, doc['generation'])
+        highest = max(highest, doc["generation"])
 
     if directory.is_dir():
         try:
@@ -156,14 +158,12 @@ def _prune_old_generations(directory: Path, keep_name: str) -> None:
             continue
 
     if removed_any:
-        try:
+        with contextlib.suppress(OSError):
             sync_dir(directory)
-        except OSError:
-            pass
 
 
-def _open_readonly_ordinary(path: Path):
-    if hasattr(os, 'O_NOFOLLOW'):
+def _open_readonly_ordinary(path: Path) -> tuple[BinaryIO, int] | None:
+    if hasattr(os, "O_NOFOLLOW"):
         try:
             fd = os.open(path, _OPEN_RO_NOFOLLOW)
         except OSError:
@@ -174,7 +174,7 @@ def _open_readonly_ordinary(path: Path):
             if not stat.S_ISREG(info.st_mode):
                 os.close(fd)
                 return None
-            return os.fdopen(fd, 'rb'), info.st_size
+            return os.fdopen(fd, "rb"), info.st_size
         except BaseException:
             os.close(fd)
             raise
@@ -188,30 +188,30 @@ def _open_readonly_ordinary(path: Path):
         return None
 
     try:
-        return path.open('rb'), info.st_size
+        return path.open("rb"), info.st_size
     except OSError:
         return None
 
 
 class HeadIndexView:
-    """Zero-copy read-only mmap view over an HMAC-verified HeadIndex v3 generation (+ optional delta overlay)."""
+    """Zero-copy read-only mmap view over an HMAC-verified HeadIndex v3 (+ delta overlay)."""
 
     format = HEAD_INDEX_FORMAT_V3
 
     def __init__(
         self,
         path: Path,
-        stream,
+        stream: BinaryIO,
         mm: mmap.mmap,
-        header_fields: tuple,
+        header_fields: tuple[Any, ...],
         hmac_hex: str,
         generation: int,
-        delta_puts: dict[str, dict] | None = None,
+        delta_puts: dict[str, dict[str, Any]] | None = None,
         delta_dels: set[str] | None = None,
     ) -> None:
         self.path = path
-        self._stream = stream
-        self._mm = mm
+        self._stream: BinaryIO | None = stream
+        self._mm: mmap.mmap | None = mm
         self._closed = False
         self.hmac_hex = hmac_hex
         self.generation = generation
@@ -261,29 +261,30 @@ class HeadIndexView:
     def __enter__(self) -> HeadIndexView:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         self.close()
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        mm = getattr(self, '_mm', None)
-        stream = getattr(self, '_stream', None)
+        mm = getattr(self, "_mm", None)
+        stream = getattr(self, "_stream", None)
         self._mm = None
         self._stream = None
 
         if mm is not None:
-            try:
+            with contextlib.suppress(BufferError, ValueError, OSError):
                 mm.close()
-            except (BufferError, ValueError, OSError):
-                pass
 
         if stream is not None:
-            try:
+            with contextlib.suppress(OSError):
                 stream.close()
-            except OSError:
-                pass
 
     def __del__(self) -> None:
         self.close()
@@ -291,18 +292,18 @@ class HeadIndexView:
     def _check_open(self) -> mmap.mmap:
         mm = self._mm
         if self._closed or mm is None:
-            raise ValueError('HeadIndexView is closed')
+            raise ValueError("HeadIndexView is closed")
         return mm
 
     def _str_bytes(self, off: int, length: int) -> bytes:
         mm = self._check_open()
         start = self._string_pool_off + off
-        return mm[start:start + length]
+        return mm[start : start + length]
 
     def _str(self, off: int, length: int) -> str:
         if length == 0:
-            return ''
-        return self._str_bytes(off, length).decode('utf-8')
+            return ""
+        return self._str_bytes(off, length).decode("utf-8")
 
     def kind_names(self) -> list[str]:
         if self._kind_cache is None:
@@ -333,7 +334,7 @@ class HeadIndexView:
         """Count active records in base generation via C-speed columnar bytemap scan."""
         mm = self._check_open()
         start = self._active_map_off
-        return mm[start:start + self.record_count].count(1)
+        return mm[start : start + self.record_count].count(1)
 
     def rel_labels(self) -> list[str]:
         if self._rel_cache is None:
@@ -352,14 +353,14 @@ class HeadIndexView:
         mm = self._check_open()
         id_off, id_len = _SLOT_ID_STRUCT.unpack_from(mm, self._slot_table_off + slot * _SLOT_SIZE)
         start = self._string_pool_off + id_off
-        return mm[start:start + id_len]
+        return mm[start : start + id_len]
 
     def slot_id(self, slot: int) -> str:
-        return self.slot_id_bytes(slot).decode('utf-8')
+        return self.slot_id_bytes(slot).decode("utf-8")
 
     def lower_bound(self, ident: str) -> int:
-        """O(log N) lower bound in sorted 128B slots: first slot whose ID >= ident (or record_count)."""
-        target = ident.encode('utf-8')
+        """O(log N) lower bound in sorted 128B slots: first slot with ID >= ident."""
+        target = ident.encode("utf-8")
         lo = 0
         hi = self.record_count
         mm = self._check_open()
@@ -370,7 +371,7 @@ class HeadIndexView:
             mid = (lo + hi) >> 1
             id_off, id_len = _SLOT_ID_STRUCT.unpack_from(mm, slot_base + mid * _SLOT_SIZE)
             start = str_base + id_off
-            if mm[start:start + id_len] < target:
+            if mm[start : start + id_len] < target:
                 lo = mid + 1
             else:
                 hi = mid
@@ -378,7 +379,7 @@ class HeadIndexView:
 
     def slot_for_id(self, ident: str) -> int:
         """O(log N) binary search over sorted 128B slots directly in mmap (-1 if absent)."""
-        target = ident.encode('utf-8')
+        target = ident.encode("utf-8")
         lo = 0
         hi = self.record_count
         mm = self._check_open()
@@ -389,7 +390,7 @@ class HeadIndexView:
             mid = (lo + hi) >> 1
             id_off, id_len = _SLOT_ID_STRUCT.unpack_from(mm, slot_base + mid * _SLOT_SIZE)
             start = str_base + id_off
-            cur = mm[start:start + id_len]
+            cur = mm[start : start + id_len]
             if cur < target:
                 lo = mid + 1
             elif cur > target:
@@ -403,7 +404,7 @@ class HeadIndexView:
         return _SLOT_STRUCT.unpack_from(mm, self._slot_table_off + slot * _SLOT_SIZE)
 
     def slot_stat_fast(self, slot: int) -> tuple[int, int, int, int]:
-        """Unpack only (size, mtime_ns, ino, slot_flags) without decoding the full 128B slot or digests."""
+        """Unpack (size, mtime_ns, ino, slot_flags) without decoding the full 128B slot."""
         mm = self._check_open()
         base = self._slot_table_off + slot * _SLOT_SIZE
         size_val, mtime_ns, ino_val = _SLOT_STAT_STRUCT.unpack_from(mm, base + _SLOT_STAT_OFFSET)
@@ -414,19 +415,19 @@ class HeadIndexView:
         """Decode platform key ('posix', 'nt', or custom aux string) from slot_flags."""
         plat_code = (slot_flags & _PLATFORM_MASK) >> _PLATFORM_SHIFT
         if plat_code == _PLATFORM_POSIX:
-            return 'posix'
+            return "posix"
         if plat_code == _PLATFORM_NT:
-            return 'nt'
-        return self._decode_aux(slot, slot_flags, only_platform=True)['platform']
+            return "nt"
+        return self._decode_aux(slot, slot_flags, only_platform=True)["platform"]
 
     def slot_raw_sha_bin(self, slot: int) -> bytes:
         """Read 32-byte raw_sha256 digest slice directly from slot (slow path only)."""
         mm = self._check_open()
         start = self._slot_table_off + slot * _SLOT_SIZE + _SLOT_RAW_SHA_OFFSET
-        return mm[start:start + 32]
+        return mm[start : start + 32]
 
     def slot_stat_meta(self, slot: int) -> tuple[int, int, int, str, bytes]:
-        """Return (size, mtime_ns, ino, platform, raw_sha256_bin) from slot without decoding full entry."""
+        """Return (size, mtime_ns, ino, platform, raw_sha256_bin) without full decode."""
         size_val, mtime_ns, ino_val, slot_flags = self.slot_stat_fast(slot)
         plat = self.slot_platform(slot, slot_flags)
         return size_val, mtime_ns, ino_val, plat, self.slot_raw_sha_bin(slot)
@@ -436,11 +437,11 @@ class HeadIndexView:
         tup = self.slot_tuple(slot)
         kinds = self.kind_names()
         return {
-            'id': self._str(tup[0], tup[1]),
-            'kind': kinds[tup[7]],
-            'revision': tup[9],
-            'sha256': tup[18].hex(),
-            'active': bool(tup[8] & FLAG_ACTIVE),
+            "id": self._str(tup[0], tup[1]),
+            "kind": kinds[tup[7]],
+            "revision": tup[9],
+            "sha256": tup[18].hex(),
+            "active": bool(tup[8] & FLAG_ACTIVE),
         }
 
     def slot_kind_name(self, slot: int) -> str:
@@ -461,7 +462,8 @@ class HeadIndexView:
         lo_byte = target_kid & 0xFF
         hi_byte = (target_kid >> 8) & 0xFF
         return [
-            slot for slot in range(self.record_count)
+            slot
+            for slot in range(self.record_count)
             if mm[base + slot * 2] == lo_byte and mm[base + slot * 2 + 1] == hi_byte
         ]
 
@@ -473,20 +475,20 @@ class HeadIndexView:
         mm = self._check_open()
         return mm[self._flags_map_off + slot]
 
-    def slot_summary_fields(self, slot: int) -> dict:
-        """Return lightweight status/scope summary fields from slot + basis without decoding search/relations."""
+    def slot_summary_fields(self, slot: int) -> dict[str, Any]:
+        """Return lightweight status/scope summary fields from slot + basis only."""
         tup = self.slot_tuple(slot)
         slot_flags = tup[8]
         kinds = self.kind_names()
         basis = self.slot_basis(slot, slot_flags) if (slot_flags & FLAG_HAS_BASIS) else []
         return {
-            'format': self.record_format,
-            'id': self._str(tup[0], tup[1]),
-            'kind': kinds[tup[7]],
-            'sha256': tup[18].hex(),
-            'revision': tup[9],
-            'basis': basis,
-            'active': bool(slot_flags & FLAG_ACTIVE),
+            "format": self.record_format,
+            "id": self._str(tup[0], tup[1]),
+            "kind": kinds[tup[7]],
+            "sha256": tup[18].hex(),
+            "revision": tup[9],
+            "basis": basis,
+            "active": bool(slot_flags & FLAG_ACTIVE),
         }
 
     def _read_aux_basis(self, mm: mmap.mmap, pos: int, *, skip: bool) -> tuple[list[dict], int]:
@@ -498,18 +500,20 @@ class HeadIndexView:
             p_off, p_len, has_sha = _BASIS_HEAD_STRUCT.unpack_from(mm, pos)
             pos += _BASIS_HEAD_STRUCT.size
             if has_sha:
-                sha_hex: str | None = None if skip else mm[pos:pos + 32].hex()
+                sha_hex: str | None = None if skip else mm[pos : pos + 32].hex()
                 pos += 32
             else:
                 sha_hex = None
             b_len = _U64_STRUCT.unpack_from(mm, pos)[0]
             pos += 8
             if not skip:
-                basis.append({'path': self._str(p_off, p_len), 'sha256': sha_hex, 'bytes': b_len})
+                basis.append({"path": self._str(p_off, p_len), "sha256": sha_hex, "bytes": b_len})
 
         return basis, pos
 
-    def _read_aux_content_links(self, mm: mmap.mmap, pos: int, *, skip: bool) -> tuple[dict[str, list[str]], int]:
+    def _read_aux_content_links(
+        self, mm: mmap.mmap, pos: int, *, skip: bool
+    ) -> tuple[dict[str, list[str]], int]:
         field_count = _U32_STRUCT.unpack_from(mm, pos)[0]
         pos += 4
         clinks: dict[str, list[str]] = {}
@@ -531,7 +535,9 @@ class HeadIndexView:
 
         return clinks, pos
 
-    def _read_aux_dup_rels(self, mm: mmap.mmap, pos: int, *, skip: bool) -> tuple[list[list[str]] | None, int]:
+    def _read_aux_dup_rels(
+        self, mm: mmap.mmap, pos: int, *, skip: bool
+    ) -> tuple[list[list[str]] | None, int]:
         dup_count = _U32_STRUCT.unpack_from(mm, pos)[0]
         pos += 4
         if skip:
@@ -540,7 +546,7 @@ class HeadIndexView:
         labels = self.rel_labels()
         dups: list[list[str]] = []
         for _ in range(dup_count):
-            rid, t_off, t_len = struct.unpack_from('<III', mm, pos)
+            rid, t_off, t_len = struct.unpack_from("<III", mm, pos)
             pos += 12
             dups.append([labels[rid], self._str(t_off, t_len)])
 
@@ -566,48 +572,48 @@ class HeadIndexView:
         pos = self._aux_pool_off + a_start
         end_pos = self._aux_pool_off + a_end
         result: dict = {
-            'basis': [],
-            'content_links': {},
-            'duplicate_relations': None,
-            'question_norm': None,
-            'content_format': None,
-            'platform': None,
+            "basis": [],
+            "content_links": {},
+            "duplicate_relations": None,
+            "question_norm": None,
+            "content_format": None,
+            "platform": None,
         }
         if pos >= end_pos:
             return result
 
         if slot_flags & FLAG_HAS_BASIS:
-            result['basis'], pos = self._read_aux_basis(mm, pos, skip=only_platform)
+            result["basis"], pos = self._read_aux_basis(mm, pos, skip=only_platform)
 
         if slot_flags & FLAG_HAS_CONTENT_LINKS:
-            result['content_links'], pos = self._read_aux_content_links(mm, pos, skip=only_platform)
+            result["content_links"], pos = self._read_aux_content_links(mm, pos, skip=only_platform)
 
         if slot_flags & FLAG_HAS_DUP_RELS:
             dups, pos = self._read_aux_dup_rels(mm, pos, skip=only_platform)
             if not only_platform:
-                result['duplicate_relations'] = dups
+                result["duplicate_relations"] = dups
 
         if slot_flags & FLAG_HAS_QUESTION_NORM:
             q_off, q_len = _PAIR_U32_STRUCT.unpack_from(mm, pos)
             pos += 8
             if not only_platform:
-                result['question_norm'] = self._str(q_off, q_len)
+                result["question_norm"] = self._str(q_off, q_len)
 
         if slot_flags & FLAG_HAS_CONTENT_FORMAT:
             c_off, c_len = _PAIR_U32_STRUCT.unpack_from(mm, pos)
             pos += 8
             if not only_platform:
-                result['content_format'] = self._str(c_off, c_len)
+                result["content_format"] = self._str(c_off, c_len)
 
         plat_code = (slot_flags & _PLATFORM_MASK) >> _PLATFORM_SHIFT
         if plat_code == _PLATFORM_CUSTOM and pos + 8 <= end_pos:
             pl_off, pl_len = _PAIR_U32_STRUCT.unpack_from(mm, pos)
-            result['platform'] = self._str(pl_off, pl_len)
+            result["platform"] = self._str(pl_off, pl_len)
 
         return result
 
-    def slot_graph_aux(self, slot: int, slot_flags: int | None = None) -> dict:
-        """Decode only graph-relevant aux fields (content_links, duplicate_relations, question_norm)."""
+    def slot_graph_aux(self, slot: int, slot_flags: int | None = None) -> dict[str, Any]:
+        """Decode graph-relevant aux fields (content_links, duplicate_relations, question_norm)."""
         if slot_flags is None:
             slot_flags = self.slot_tuple(slot)[8]
         return self._decode_aux(slot, slot_flags, only_platform=False)
@@ -637,7 +643,7 @@ class HeadIndexView:
         return refs, toks
 
     def fwd_edges_raw(self, slot: int) -> list[tuple[int, int, int, int]]:
-        """Return forward CSR tuples (rel_id, target_slot, target_str_off, target_str_len) in authored order."""
+        """Return forward CSR tuples (rel_id, target_slot, str_off, str_len) in order."""
         mm = self._check_open()
         e_start, e_end = _PAIR_U32_STRUCT.unpack_from(mm, self._fwd_csr_offsets_off + slot * 4)
         if e_start >= e_end:
@@ -681,7 +687,7 @@ class HeadIndexView:
             return []
 
         mm = self._check_open()
-        target_bytes = target.encode('utf-8')
+        target_bytes = target.encode("utf-8")
         base = self._ext_rev_edges_off
         str_base = self._string_pool_off
 
@@ -690,7 +696,7 @@ class HeadIndexView:
         while lo < hi:
             mid = (lo + hi) >> 1
             t_off, t_len, _, _ = _EXT_REV_EDGE_STRUCT.unpack_from(mm, base + mid * 16)
-            if mm[str_base + t_off:str_base + t_off + t_len] < target_bytes:
+            if mm[str_base + t_off : str_base + t_off + t_len] < target_bytes:
                 lo = mid + 1
             else:
                 hi = mid
@@ -700,7 +706,7 @@ class HeadIndexView:
         idx = lo
         while idx < count:
             t_off, t_len, rid, src_slot = _EXT_REV_EDGE_STRUCT.unpack_from(mm, base + idx * 16)
-            if mm[str_base + t_off:str_base + t_off + t_len] != target_bytes:
+            if mm[str_base + t_off : str_base + t_off + t_len] != target_bytes:
                 break
             out.append((labels[rid], src_slot))
             idx += 1
@@ -711,7 +717,9 @@ class HeadIndexView:
         """Fast scan over the columnar flags_map to collect open-question slot indices."""
         mm = self._check_open()
         f_off = self._flags_map_off
-        return [slot for slot in range(self.record_count) if mm[f_off + slot] & MAP_FLAG_OPEN_QUESTION]
+        return [
+            slot for slot in range(self.record_count) if mm[f_off + slot] & MAP_FLAG_OPEN_QUESTION
+        ]
 
     def decode_slot_entry(self, slot: int) -> dict:
         """Materialize one full HeadIndex v2-compatible entry dict for slot."""
@@ -745,46 +753,46 @@ class HeadIndexView:
 
         plat_code = (slot_flags & _PLATFORM_MASK) >> _PLATFORM_SHIFT
         if plat_code == _PLATFORM_POSIX:
-            plat = 'posix'
+            plat = "posix"
         elif plat_code == _PLATFORM_NT:
-            plat = 'nt'
+            plat = "nt"
         else:
-            plat = aux['platform'] or ''
+            plat = aux["platform"] or ""
 
         graph: dict = {
-            'relations': relations,
-            'content_links': aux['content_links'],
-            'title': self._str(title_off, title_len),
-            'selection_state': self._str(state_off, state_len),
+            "relations": relations,
+            "content_links": aux["content_links"],
+            "title": self._str(title_off, title_len),
+            "selection_state": self._str(state_off, state_len),
         }
-        if aux['duplicate_relations']:
-            graph['duplicate_relations'] = aux['duplicate_relations']
-        if aux['question_norm'] is not None:
-            graph['question_norm'] = aux['question_norm']
-        if aux['content_format'] is not None:
-            graph['content_format'] = aux['content_format']
+        if aux["duplicate_relations"]:
+            graph["duplicate_relations"] = aux["duplicate_relations"]
+        if aux["question_norm"] is not None:
+            graph["question_norm"] = aux["question_norm"]
+        if aux["content_format"] is not None:
+            graph["content_format"] = aux["content_format"]
 
         entry: dict = {
-            'format': self.record_format,
-            'id': ident,
-            'kind': self.kind_names()[kid],
-            'revision': revision,
-            'sha256': sha_bin.hex(),
-            'active': bool(slot_flags & FLAG_ACTIVE),
-            'basis': aux['basis'],
-            'raw_sha256': raw_sha_bin.hex(),
-            'size': size_val,
-            'mtime_ns': mtime_ns,
-            'ino': ino_val,
-            'platform': plat,
-            'exact_refs': exact_refs,
-            'tokens': tokens,
-            'graph': graph,
+            "format": self.record_format,
+            "id": ident,
+            "kind": self.kind_names()[kid],
+            "revision": revision,
+            "sha256": sha_bin.hex(),
+            "active": bool(slot_flags & FLAG_ACTIVE),
+            "basis": aux["basis"],
+            "raw_sha256": raw_sha_bin.hex(),
+            "size": size_val,
+            "mtime_ns": mtime_ns,
+            "ino": ino_val,
+            "platform": plat,
+            "exact_refs": exact_refs,
+            "tokens": tokens,
+            "graph": graph,
         }
         if slot_flags & FLAG_TOKENS_TRUNCATED:
-            entry['tokens_truncated'] = True
+            entry["tokens_truncated"] = True
         if slot_flags & FLAG_EXACT_REFS_TRUNCATED:
-            entry['exact_refs_truncated'] = True
+            entry["exact_refs_truncated"] = True
         return entry
 
     def get_entry(self, ident: str) -> dict | None:
@@ -801,7 +809,7 @@ class HeadIndexView:
     def get_raw_sha256(self, ident: str) -> str | None:
         """O(log N) lookup of raw_sha256 hex digest without decoding full entry."""
         if ident in self.delta_puts:
-            raw_sha = self.delta_puts[ident].get('raw_sha256')
+            raw_sha = self.delta_puts[ident].get("raw_sha256")
             return raw_sha if isinstance(raw_sha, str) else None
         if ident in self.delta_dels:
             return None
@@ -847,12 +855,12 @@ def open_binary_view(
     key: bytes,
     record_format: str,
 ) -> HeadIndexView | None:
-    """Open, zero-copy HMAC-verify, and return a HeadIndexView, or None on missing/invalid/tampered index."""
+    """Open, zero-copy HMAC-verify, and return HeadIndexView, or None if missing/tampered."""
     pointer = read_current_pointer(directory)
-    if pointer is None or pointer.get('record_format') != record_format:
+    if pointer is None or pointer.get("record_format") != record_format:
         return None
 
-    bin_path = directory / pointer['file']
+    bin_path = directory / pointer["file"]
     opened = _open_readonly_ordinary(bin_path)
     if opened is None:
         return None
@@ -874,10 +882,10 @@ def open_binary_view(
         hmac_off = fields[-1]
         mv = memoryview(mm)
         try:
-            mac = hmac.new(key, BINARY_INDEX_DOMAIN, 'sha256')
+            mac = hmac.new(key, BINARY_INDEX_DOMAIN, "sha256")
             mac.update(mv[:hmac_off])
             computed = mac.digest()
-            footer = bytes(mv[hmac_off:hmac_off + 32])
+            footer = bytes(mv[hmac_off : hmac_off + 32])
         finally:
             mv.release()
 
@@ -887,24 +895,20 @@ def open_binary_view(
             return None
 
         hmac_hex = footer.hex()
-        if not hmac.compare_digest(hmac_hex, pointer['hmac']):
+        if not hmac.compare_digest(hmac_hex, pointer["hmac"]):
             mm.close()
             stream.close()
             return None
 
-        view = HeadIndexView(bin_path, stream, mm, fields, hmac_hex, pointer['generation'])
+        view = HeadIndexView(bin_path, stream, mm, fields, hmac_hex, pointer["generation"])
         if view.record_format != record_format:
             view.close()
             return None
         return view
-    except (OSError, ValueError, struct.error, UnicodeDecodeError):
+    except OSError, ValueError, struct.error, UnicodeDecodeError:
         if mm is not None:
-            try:
+            with contextlib.suppress(BufferError, ValueError, OSError):
                 mm.close()
-            except (BufferError, ValueError, OSError):
-                pass
-        try:
+        with contextlib.suppress(OSError):
             stream.close()
-        except OSError:
-            pass
         return None

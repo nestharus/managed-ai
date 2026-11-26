@@ -4,12 +4,11 @@ The caller supplies meaning and authority. This module supplies byte-bound
 transport and optional publication, not a cognitive schema or semantic selector.
 Trusted local use only; it is not a filesystem or process sandbox.
 """
-from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 if __name__ == "__main__":
     sys.dont_write_bytecode = True
@@ -19,7 +18,13 @@ if __name__ == "__main__":
 
 from managed_ai.core.exchange.api import Exchange
 from managed_ai.core.ownership import external_root
-from managed_ai.core.storage import AdmissionContended, admission_deadline, exclusive, owner_admission, shared
+from managed_ai.core.storage import (
+    AdmissionContended,
+    admission_deadline,
+    exclusive,
+    owner_admission,
+    shared,
+)
 
 _READONLY_ACTIONS = frozenset({"list", "inspect", "context", "recover_transport"})
 
@@ -65,7 +70,9 @@ def _build_parser() -> argparse.ArgumentParser:
     ins = sub.add_parser("inspect", allow_abbrev=False)
     ins.add_argument("packet")
 
-    context = sub.add_parser("context", allow_abbrev=False, help="read the validated originating context")
+    context = sub.add_parser(
+        "context", allow_abbrev=False, help="read the validated originating context"
+    )
     context.add_argument("packet")
     context.add_argument("--text", action="store_true")
 
@@ -125,7 +132,9 @@ def main() -> None:
             lock_path = resolved / "owner.lock"
 
             with owner_admission(
-                lambda guards: guards.enter_context(guard(lock_path, allow_readonly_open=read_only)),
+                lambda guards: guards.enter_context(
+                    guard(lock_path, allow_readonly_open=read_only)
+                ),
                 deadline=deadline,
             ):
                 ex = Exchange(resolved)
@@ -142,10 +151,10 @@ def main() -> None:
             print(json.dumps(result, ensure_ascii=False, indent=2))
     except AdmissionContended as exc:
         print(json.dumps(exc.result(action)), file=sys.stderr)
-        raise SystemExit(75)
+        raise SystemExit(75) from None
     except (OSError, ValueError, KeyError, RuntimeError, StopIteration) as exc:
         print(json.dumps({"error": str(exc), "operation": action}), file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(2) from None
 
 
 if __name__ == "__main__":
