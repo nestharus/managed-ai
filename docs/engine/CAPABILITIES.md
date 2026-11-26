@@ -3,7 +3,7 @@
 | Contribution | Route | Boundary |
 | --- | --- | --- |
 | Capture goals, source context, proposals and acceptance | `src/managed_ai/store/manage_store.py` and [native contract](store/README.md) | Capable participants supply interpretation and permission. |
-| Coordinate independent source-bound contributions | `src/managed_ai/collective/store/cli.py` and [Collective contract](../collective/README.md) | Registered source and receiving-owner guards; no mandatory semantic supervisor. |
+| Coordinate independent source-bound contributions | `src/managed_ai/collective/__main__.py` (`python -B -m managed_ai.collective`) and [Collective contract](../collective/README.md) | Registered source and receiving-owner guards; no mandatory semantic supervisor. |
 | Acquire complete selected knowledge | `src/managed_ai/library/cli.py show ID --text` and [source selection](../../scripts/release/current_sources.json) | Exact source bodies; acquisition does not establish applicability. |
 | Discover and select sources | `src/managed_ai/library/cli.py discover --query TEXT`, native `discover` | Bounded lexical nominations; no semantic completeness guarantee. |
 | Maintain continuing commissioned work | [host](host/README.md), `src/managed_ai/host/continuing_work/continuing_work.py` | Duties, actual captured turns, reminders and guarded receiving. |

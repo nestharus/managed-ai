@@ -4,7 +4,7 @@ Standalone standard-library examples demonstrating Managed AI receiving, feedbac
 
 ## Receiving example (`receiving_example.py`)
 
-Drives `src/managed_ai/collective/store/cli.py` (`Python 3.11+` / `SQLite 3.38+`) through three operations without embedding model inference or automatic retries:
+Drives `src/managed_ai/collective/__main__.py` (`Python 3.11+` / `SQLite 3.38+`) through three operations without embedding model inference or automatic retries:
 
 - **Prepare:** creates distinct `producer` candidate and `receiver` observation/approval records under a unique `namespace`, capturing declared `sources` and `reconsider_from` actors (`g60-receiver-use/1`).
   ```sh

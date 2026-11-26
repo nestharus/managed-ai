@@ -55,11 +55,9 @@ class _CLI:
         self.db = Path(db).expanduser().resolve()
         if self.db.is_relative_to(self.engine):
             raise ValueError("database and request files must be outside the engine directory")
-        entry = self.engine / "store" / "cli.py"
+        entry = self.engine / "__main__.py"
         if not entry.is_file():
-            entry = self.engine / "__main__.py"
-        if not entry.is_file():
-            raise ValueError("engine must contain store/cli.py or __main__.py")
+            raise ValueError("engine must contain __main__.py")
         self.entry = entry
         self.files = self.db.with_name(self.db.name + ".receiving-example")
         self.files.mkdir(parents=True, exist_ok=True)

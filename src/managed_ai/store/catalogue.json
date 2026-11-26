@@ -3,7 +3,7 @@
   "source_root": "managed-ai-shared-engine-1",
   "snapshot": {
     "edition": "managed-ai-shared-engine-1",
-    "selection_sha256": "01d1de0f6df73b6cfcfdec95ff5623dda22a2a529b79c5a983c74f2819b7f099",
+    "selection_sha256": "f1f8fafe6e23602b6650d89de9a63228e48ad00b57bf8ebc7110e9d087cc1bdf",
     "relationship": "References to one canonical source body; domain sources are selected per store."
   },
   "entries": [
@@ -94,11 +94,11 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "prototype/collective-work/README.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:53cb9f67e849aed9cc5956eb1f52f105d5db3d421259b8562b91b62fe4dab663",
+      "body_id": "sha256:06231fd96f35c9ee30a09755aab89f15b66e787349287da63bf1f98d0f2e9347",
       "body_path": "docs/collective/README.md",
-      "sha256": "53cb9f67e849aed9cc5956eb1f52f105d5db3d421259b8562b91b62fe4dab663",
-      "source_sha256": "53cb9f67e849aed9cc5956eb1f52f105d5db3d421259b8562b91b62fe4dab663",
-      "bytes": 34073,
+      "sha256": "06231fd96f35c9ee30a09755aab89f15b66e787349287da63bf1f98d0f2e9347",
+      "source_sha256": "06231fd96f35c9ee30a09755aab89f15b66e787349287da63bf1f98d0f2e9347",
+      "bytes": 34067,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "This small Python component retains source-qualified contributions, selective peer handoffs and the conditions for each local acceptance. Several participants can prepare different contributions while a new interpretation reopens one receiving use. The participants choose what matters, construct the relation and judge the return; the component makes those declared relationships durable and consequential.",
