@@ -1,9 +1,11 @@
 from pathlib import Path
 import copy
+import importlib.util
 import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 sys.dont_write_bytecode = True
@@ -11,8 +13,28 @@ _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 from tests._paths import ENGINE, SRC
+from managed_ai.library.config import LibraryConfig
+from managed_ai.library.contract import LibraryReader, SearchBackend, SourceProducerService
+from managed_ai.library.index import SearchIndex
+from managed_ai.library.lexical import search_query
+from managed_ai.library.producer import Producer
 from managed_ai.library.reader import knowledge
-from managed_ai.library.bundles import publish
+
+
+def _load_publish_module():
+    """Load scripts/publish_library.py when moved in Stage 7.3, else fallback to library.bundles.publish."""
+    script = _REPO / 'scripts' / 'publish_library.py'
+    if script.is_file():
+        spec = importlib.util.spec_from_file_location('publish_library_script', str(script))
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    from managed_ai.library.bundles import publish as legacy_publish
+    return legacy_publish
+
+
+publish = _load_publish_module()
 
 
 class KnowledgeTest(unittest.TestCase):
@@ -135,6 +157,129 @@ class KnowledgeTest(unittest.TestCase):
         self.assertEqual(audit['status'], 'different')
         self.assertEqual(audit['current_inventory']['missing_current_bodies'], ['current/new.md'])
         with self.assertRaises(ValueError): publish.publish(project, None, spec, 'current', output)
+
+    def test_library_config_overrides_and_env(self):
+        cfg = LibraryConfig.from_dict({
+            'limits': {'max_bodies': 500},
+            'search': {'default_limit': 7, 'max_retained_catalogues': 3},
+        })
+        self.assertEqual(cfg.limits.max_bodies, 500)
+        self.assertEqual(cfg.search.default_limit, 7)
+        self.assertEqual(cfg.search.max_retained_catalogues, 3)
+
+        cfg_path = self.root / 'lib-config.json'
+        cfg_path.write_text(
+            json.dumps({'search': {'max_retained_catalogues': 2}}),
+            encoding='utf-8',
+        )
+        from_file = LibraryConfig.from_json(cfg_path)
+        self.assertEqual(from_file.search.max_retained_catalogues, 2)
+
+        from_env = LibraryConfig.from_env({'MANAGED_AI_LIBRARY_MAX_RETAINED_CATALOGUES': '4'})
+        self.assertEqual(from_env.search.max_retained_catalogues, 4)
+
+        with self.assertRaises(ValueError):
+            LibraryConfig.from_dict({'unknown_section': {}})
+        with self.assertRaises(ValueError):
+            LibraryConfig.from_dict({'search': {'max_retained_catalogues': 0}})
+
+    def test_producer_lru_eviction_closes_old_catalogues_and_skips_reparse(self):
+        lib_dir = self.library.directory
+        manifest_path = lib_dir / 'catalogue.json'
+
+        def rewrite_edition(edition_name: str) -> str:
+            manifest = copy.deepcopy(self.library.catalogue)
+            manifest['edition'] = edition_name
+            raw = knowledge.encoded(manifest)
+            manifest_path.write_bytes(raw)
+            return knowledge.digest(raw)
+
+        with Producer(lib_dir, max_retained_catalogues=2) as producer:
+            self.assertIsInstance(producer, SourceProducerService)
+            sha1 = self.library.sha256
+
+            # Unchanged current observation must hit SHA-256 fast-path without reparsing manifest.
+            with patch('managed_ai.library.format.check_manifest', side_effect=AssertionError('should not reparse')):
+                desc = producer.handle({'operation': 'describe'})
+            self.assertEqual(desc['status'], 'ok')
+            self.assertEqual(desc['library_sha256'], sha1)
+
+            # Prepare retained index on edition 1 so eviction has an open search handle to close.
+            disc1 = producer.handle({
+                'operation': 'discover',
+                'query': 'complete',
+                'library_sha256': sha1,
+                'use': 'current',
+            })
+            self.assertEqual(disc1['status'], 'ok')
+            evicted_lib = producer._libraries[sha1]
+            self.assertIsNotNone(evicted_lib.prepared_scope)
+
+            sha2 = rewrite_edition('second-edition')
+            desc2 = producer.handle({'operation': 'describe'})
+            self.assertEqual(desc2['library_sha256'], sha2)
+
+            sha3 = rewrite_edition('third-edition')
+            desc3 = producer.handle({'operation': 'describe'})
+            self.assertEqual(desc3['library_sha256'], sha3)
+
+            # Cap=2 must have evicted edition 1 and closed its retained SQLite connection.
+            self.assertEqual(len(producer._libraries), 2)
+            self.assertNotIn(sha1, producer._libraries)
+            self.assertIsNone(evicted_lib.prepared_scope)
+
+            refused = producer.handle({
+                'operation': 'show',
+                'id': 'meaning/a.md',
+                'library_sha256': sha1,
+                'use': 'historical',
+            })
+            self.assertEqual(refused['status'], 'refused')
+
+    def test_search_index_lazy_phrase_surfaces_and_protocol_conformance(self):
+        rows = [
+            {'id': 'a.md', 'title': 'Alpha', 'summary': 'first note', 'text': 'hello world exact phrase here'},
+            {'id': 'b.md', 'title': 'Beta', 'summary': 'second note', 'text': 'hello there other words'},
+        ]
+        index = SearchIndex(rows, 'bm25')
+        self.assertIsInstance(index, SearchBackend)
+        self.assertIsInstance(self.library, LibraryReader)
+
+        # P7-12: BM25 term search must NOT materialize duplicated phrase surfaces.
+        term_hits = index.search(search_query('hello', 'bm25'))
+        self.assertEqual(set(term_hits), {'a.md', 'b.md'})
+        self.assertIsNone(index._fields)
+
+        # Quoted phrase search materializes surfaces lazily and matches accurately.
+        phrase_hits = index.search(search_query('"exact phrase"', 'bm25'))
+        self.assertEqual(set(phrase_hits), {'a.md'})
+        self.assertIsNotNone(index._fields)
+
+        # P7-12: Library precomputes module pins on initialization.
+        self.assertIn('base', self.library._module_pins)
+        self.assertEqual(
+            self.library.pin(self.library.modules['base'], 'module'),
+            self.library._module_pins['base'],
+        )
+
+    def test_c48_1_library_cli_main_handles_store_mode_errors_cleanly(self):
+        import io
+        from contextlib import redirect_stderr
+        from managed_ai.library import cli as lib_cli
+
+        for argv in (
+            ['show', 'nonexistent-item-xyz'],
+            ['--store', str(self.root / 'missing-store'), 'verify'],
+            ['discover', '--limit', '0'],
+        ):
+            buf = io.StringIO()
+            with self.subTest(argv=argv), redirect_stderr(buf):
+                with self.assertRaises(SystemExit) as ctx:
+                    lib_cli.main(argv)
+            self.assertEqual(ctx.exception.code, 2)
+            payload = json.loads(buf.getvalue())
+            self.assertEqual(payload['status'], 'unresolved')
+            self.assertTrue(payload['error'])
 
 
 if __name__ == '__main__':

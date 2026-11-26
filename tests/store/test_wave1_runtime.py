@@ -113,8 +113,8 @@ class Wave1RuntimeTests(unittest.TestCase):
             "import sys\n"
             "from pathlib import Path\n"
             "from unittest.mock import patch\n"
-            "from deployment import controller\n"
-            "from core.storage import OwnerBusy, exclusive\n"
+            "from managed_ai.deployment import controller\n"
+            "from managed_ai.core.storage import OwnerBusy, exclusive\n"
             "calls = 0\n"
             "locked_during_hash = []\n"
             "owner_lock = Path(sys.argv[1])\n"
@@ -136,7 +136,7 @@ class Wave1RuntimeTests(unittest.TestCase):
         owner_lock = self.store / 'exchange/owner.lock'
         owner_lock.touch()
         env = os.environ.copy()
-        env['PYTHONPATH'] = str(ENGINE)
+        env['PYTHONPATH'] = str(ENGINE.parent)
         for subcmd in (['status'], ['verify'], ['system', 'show', 'goal'], ['system', 'status']):
             with self.subTest(subcmd=subcmd):
                 proc = self.run_cli([sys.executable, '-B', '-c', probe, str(owner_lock),

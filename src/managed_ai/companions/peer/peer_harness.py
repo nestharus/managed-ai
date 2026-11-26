@@ -12,136 +12,90 @@ import os
 from pathlib import Path
 import queue
 import signal
-import subprocess
 import sys
-import threading
 import time
+from typing import Any
 
-try:
-    import resource
-except ImportError:
-    resource = None
+if __package__ in (None, ""):
+    _src_root = str(Path(__file__).resolve().parents[3])
+    if _src_root not in sys.path:
+        sys.path.insert(0, _src_root)
 
-try:
-    from .peer_protocol import (
-        HARNESS_CONFIG_SCHEMA,
-        HARNESS_RESULT_SCHEMA,
-        OWNER_STATUSES,
-        PEER_ENTRY_FIELDS,
-        PROCESS_SCHEMA,
-        REQUEST_SCHEMA,
-        RETURN_SCHEMA,
-        atomic_write_bytes,
-        atomic_write_json,
-        canonical,
-        digest,
-        fields,
-        identifier,
-        loads_strict as load_json,
-        path_conflicts,
-        positive_number,
-        target_path,
-    )
-except ImportError:
-    _src_root = Path(__file__).resolve().parents[3]
-    if str(_src_root) not in sys.path:
-        sys.path.insert(0, str(_src_root))
-    from managed_ai.companions.peer.peer_protocol import (
-        HARNESS_CONFIG_SCHEMA,
-        HARNESS_RESULT_SCHEMA,
-        OWNER_STATUSES,
-        PEER_ENTRY_FIELDS,
-        PROCESS_SCHEMA,
-        REQUEST_SCHEMA,
-        RETURN_SCHEMA,
-        atomic_write_bytes,
-        atomic_write_json,
-        canonical,
-        digest,
-        fields,
-        identifier,
-        loads_strict as load_json,
-        path_conflicts,
-        positive_number,
-        target_path,
-    )
-
+from managed_ai.companions.peer.peer_process import (
+    PLATFORM,
+    child_cpu_times as _child_cpu_times,
+    env_policy_description as _env_policy_description,
+    finish_worker_process,
+    group_exists as _group_exists,
+    pipe_reader as _pipe_reader,
+    signal_group as _signal_group,
+    spawn_worker_process,
+    worker_environment as _worker_environment,
+)
+from managed_ai.companions.peer.peer_protocol import (
+    HARNESS_CONFIG_SCHEMA,
+    HARNESS_RESULT_SCHEMA,
+    OWNER_STATUSES,
+    PEER_ENTRY_FIELDS,
+    PROCESS_SCHEMA,
+    REQUEST_SCHEMA,
+    RETURN_SCHEMA,
+    atomic_write_bytes,
+    atomic_write_json,
+    canonical,
+    digest,
+    fields,
+    identifier,
+    loads_strict as load_json,
+    path_conflicts,
+    positive_number,
+    target_path,
+)
 
 VERSION = "study83-peer-harness/1"
-_WIN_MINIMAL_ENV_KEYS = ("SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP", "PATH")
 
 
 class Rejection(Exception):
-    def __init__(self, reason, message):
+    """Structured protocol or resource rejection that cleanly terminates a harness run."""
+
+    def __init__(self, reason: str, message: str) -> None:
         super().__init__(message)
         self.reason = reason
 
 
-def utc():
+def utc() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
 
-def write_json(path, value):
+def write_json(path: Path | str, value: Any) -> None:
     atomic_write_json(path, value, indent=2)
 
 
-def _child_cpu_times():
-    if resource is None:
-        return 0.0, 0.0
-    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
-    return float(usage.ru_utime), float(usage.ru_stime)
-
-
-def _worker_environment(extra_env):
-    if os.name == "nt":
-        env = {key: os.environ[key] for key in _WIN_MINIMAL_ENV_KEYS if key in os.environ}
-        env.setdefault("PATH", os.defpath)
-        env["PYTHONUTF8"] = "1"
-        env["PYTHONIOENCODING"] = "utf-8"
-        env.update(extra_env)
-        return env
-    return {"PATH": os.defpath, "LANG": "C.UTF-8", **extra_env}
-
-
-def _env_policy_description():
-    if os.name == "nt":
-        return "Minimal Windows OS keys + PYTHONUTF8=1; explicit worker env only"
-    return "PATH=os.defpath; LANG=C.UTF-8; explicit worker env only"
-
-
-def _pipe_reader(item, channel, stream, events):
-    fd = stream.fileno()
-    try:
-        while True:
-            try:
-                chunk = os.read(fd, 65536)
-            except OSError:
-                break
-            if not chunk:
-                break
-            events.put((item, channel, chunk))
-    finally:
-        events.put((item, channel, None))
-
-
-def validate_config(config):
+def validate_config(config: Any) -> None:
+    """Validate harness configuration schema, worker definitions, and positive bounds."""
     fields(config, ("schema", "run_id", "brief", "workers", "limits"))
     if config["schema"] != HARNESS_CONFIG_SCHEMA or not isinstance(config["run_id"], str) or not config["run_id"]:
         raise ValueError("Invalid schema or run_id")
     if not isinstance(config["workers"], list) or not config["workers"]:
         raise ValueError("workers must be a nonempty array")
-    names = set()
+
+    names: set[str] = set()
     for worker in config["workers"]:
         fields(worker, ("owner", "command", "input"), ("env",))
         if not identifier(worker["owner"]) or worker["owner"] in names:
             raise ValueError("Invalid or duplicate owner")
         names.add(worker["owner"])
+
         command = worker["command"]
         if not isinstance(command, list) or not command or any(not isinstance(x, str) or not x for x in command):
             raise ValueError("command must be a nonempty string array")
+
         environment = worker.get("env", {})
-        if not isinstance(environment, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in environment.items()):
+        if not isinstance(environment, dict) or any(
+            not isinstance(k, str) or not isinstance(v, str) for k, v in environment.items()
+        ):
             raise ValueError("env must map strings to strings")
+
     integers = ("parallelism", "max_turns", "max_output_bytes", "max_artifact_bytes")
     numbers = ("wall_seconds", "turn_seconds", "terminate_grace_seconds")
     fields(config["limits"], integers + numbers)
@@ -152,74 +106,101 @@ def validate_config(config):
 
 
 class Harness:
-    def __init__(self, config, config_bytes, root):
-        self.config, self.limits, self.root = config, config["limits"], Path(root).resolve()
+    """Bounded cooperative subprocess/inbox/checkpoint peer coordinator."""
+
+    def __init__(self, config: dict[str, Any], config_bytes: bytes, root: Path | str) -> None:
+        self.config = config
+        self.limits = config["limits"]
+        self.root = Path(root).resolve()
         self.start = time.monotonic()
         self.cpu_start = _child_cpu_times()
         self.deadline = self.start + self.limits["wall_seconds"]
         self.cancel_requested = False
-        self.reason = self.error = None
-        self.artifact = None
+        self.reason: str | None = None
+        self.error: str | None = None
+        self.artifact: dict[str, Any] | None = None
         self.turn_count = 0
-        self.pipe_events = queue.Queue()
-        self.active, self.messages = {}, {}
-        self.process_records = []
-        self.ready, self.queued = deque(), set()
-        self.owners = {}
-        self.events = (self.root / "events.jsonl").open("a", encoding="utf-8", newline="\n")
-        atomic_write_bytes(self.root / "config.json", config_bytes, exclusive=True)
-        for directory in ("turns", "returns", "workspaces"):
-            (self.root / directory).mkdir()
-        self.identity = {
-            "name": VERSION,
-            "source_sha256": digest(Path(__file__).read_bytes()),
-            "config_sha256": digest(config_bytes),
-            "python": sys.version.split()[0],
-            "platform": sys.platform,
-            "environment": _env_policy_description(),
-        }
-        write_json(self.root / "harness-identity.json", self.identity)
-        for worker in config["workers"]:
-            owner = worker["owner"]
-            (self.root / "workspaces" / owner).mkdir()
-            (self.root / "returns" / owner).mkdir()
-            self.owners[owner] = {
-                "worker": worker, "revision": 0, "status": "continue", "state": None,
-                "obligations": [], "pending": [], "return_path": None,
-                "manifest_path": None, "artifacts_dir": None, "files": {},
-            }
-            self.enqueue(owner)
-        self.event("run_started", roster=list(self.owners))
+        self.pipe_events: queue.Queue[Any] = queue.Queue()
+        self.active: dict[str, dict[str, Any]] = {}
+        self.messages: dict[str, dict[str, Any]] = {}
+        self.process_records: list[dict[str, Any]] = []
+        self.ready: deque[str] = deque()
+        self.queued: set[str] = set()
+        self.owners: dict[str, dict[str, Any]] = {}
+        self.events: Any = None
 
-    def event(self, event, **values):
+        try:
+            atomic_write_bytes(self.root / "config.json", config_bytes, exclusive=True)
+            for directory in ("turns", "returns", "workspaces"):
+                (self.root / directory).mkdir()
+
+            self.identity = {
+                "name": VERSION,
+                "source_sha256": digest(Path(__file__).read_bytes()),
+                "config_sha256": digest(config_bytes),
+                "python": sys.version.split()[0],
+                "platform": PLATFORM.platform_key,
+                "environment": _env_policy_description(),
+            }
+            write_json(self.root / "harness-identity.json", self.identity)
+
+            for worker in config["workers"]:
+                owner = worker["owner"]
+                (self.root / "workspaces" / owner).mkdir()
+                (self.root / "returns" / owner).mkdir()
+                self.owners[owner] = {
+                    "worker": worker,
+                    "revision": 0,
+                    "status": "continue",
+                    "state": None,
+                    "obligations": [],
+                    "pending": [],
+                    "return_path": None,
+                    "manifest_path": None,
+                    "artifacts_dir": None,
+                    "files": {},
+                }
+                self.enqueue(owner)
+
+            self.events = (self.root / "events.jsonl").open("a", encoding="utf-8", newline="\n")
+            self.event("run_started", roster=list(self.owners))
+        except BaseException:
+            if self.events is not None:
+                self.events.close()
+                self.events = None
+            raise
+
+    def event(self, event: str, **values: Any) -> None:
         self.events.write(canonical({"event": event, "at_utc": utc(), **values}).decode("utf-8") + "\n")
         self.events.flush()
         os.fsync(self.events.fileno())
 
-    def fail(self, reason, error):
+    def fail(self, reason: str, error: Any) -> None:
         if self.reason is None:
-            self.reason, self.error = reason, str(error)
+            self.reason = reason
+            self.error = str(error)
             self.event("run_stopping", reason=reason, error=str(error))
 
-    def enqueue(self, owner):
+    def enqueue(self, owner: str) -> None:
         if owner not in self.queued and owner not in self.active:
             self.ready.append(owner)
             self.queued.add(owner)
 
-    def peers(self, owner):
+    def peers(self, owner: str) -> dict[str, dict[str, Any]]:
         return {
             name: {key: value[key] for key in PEER_ENTRY_FIELDS}
             for name, value in self.owners.items()
             if name != owner
         }
 
-    def launch(self, owner):
+    def launch(self, owner: str) -> None:
         state = self.owners[owner]
         self.turn_count += 1
         turn = self.turn_count
         directory = self.root / "turns" / f"{turn:06d}-{owner}"
         directory.mkdir()
         workspace = self.root / "workspaces" / owner
+
         request = {
             "schema": REQUEST_SCHEMA,
             "run_id": self.config["run_id"],
@@ -241,52 +222,52 @@ class Harness:
                 **{key: self.limits[key] for key in ("turn_seconds", "max_output_bytes", "max_artifact_bytes")},
             },
         }
-        write_json(directory / "request.json", request)
-        item = {
-            "owner": owner, "turn": turn, "request": request, "directory": directory,
-            "started": time.monotonic(), "started_at_utc": utc(), "process": None,
-            "streams": {}, "threads": [], "captures": {},
-            "sizes": {"stdout": 0, "stderr": 0}, "observed": 0, "truncated": False,
+        request_path = directory / "request.json"
+        write_json(request_path, request)
+
+        item: dict[str, Any] = {
+            "owner": owner,
+            "turn": turn,
+            "request": request,
+            "directory": directory,
+            "started": time.monotonic(),
+            "started_at_utc": utc(),
+            "process": None,
+            "streams": {},
+            "threads": [],
+            "captures": {},
+            "sizes": {"stdout": 0, "stderr": 0},
+            "observed": 0,
+            "truncated": False,
             "cleanup": {"term_sent": False, "kill_sent": False, "streams_closed_by_host": False},
         }
         item["deadline"] = item["started"] + self.limits["turn_seconds"]
         for channel in ("stdout", "stderr"):
             item["captures"][channel] = (directory / (channel + ".bin")).open("wb")
-        environment = _worker_environment(state["worker"].get("env", {}))
-        popen_kwargs = {
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.PIPE,
-            "cwd": workspace,
-            "env": environment,
-        }
-        if os.name == "nt":
-            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-        else:
-            popen_kwargs["start_new_session"] = True
+
         try:
-            with (directory / "request.json").open("rb") as incoming:
-                process = subprocess.Popen(state["worker"]["command"], stdin=incoming, **popen_kwargs)
-            item["process"] = process
-            for channel in ("stdout", "stderr"):
-                stream = getattr(process, channel)
-                item["streams"][channel] = stream
-                reader = threading.Thread(
-                    target=_pipe_reader,
-                    args=(item, channel, stream, self.pipe_events),
-                    daemon=True,
-                )
-                reader.start()
-                item["threads"].append(reader)
+            process = spawn_worker_process(
+                state["worker"]["command"],
+                request_path,
+                workspace,
+                state["worker"].get("env", {}),
+                item,
+                self.pipe_events,
+            )
             self.active[owner] = item
             self.event(
-                "turn_launched", owner=owner, turn=turn, revision=request["revision"],
-                pid=process.pid, delivered=[message["id"] for message in request["inbox"]],
+                "turn_launched",
+                owner=owner,
+                turn=turn,
+                revision=request["revision"],
+                pid=process.pid,
+                delivered=[message["id"] for message in request["inbox"]],
             )
         except OSError as exc:
             self.record_process(item, "launch_error", str(exc))
             self.fail("launch_error", f"{owner}: {exc}")
 
-    def close_channel(self, item, channel):
+    def close_channel(self, item: dict[str, Any], channel: str) -> None:
         stream = item["streams"].pop(channel, None)
         if stream is not None:
             try:
@@ -294,12 +275,13 @@ class Harness:
             except OSError:
                 pass
 
-    def _consume_pipe_event(self, item, channel, data):
+    def _consume_pipe_event(self, item: dict[str, Any], channel: str, data: bytes | None) -> None:
         if data is None:
             self.close_channel(item, channel)
             return
         if channel not in item["streams"]:
             return
+
         item["observed"] += len(data)
         room = max(0, self.limits["max_output_bytes"] - sum(item["sizes"].values()))
         kept = data[:room]
@@ -308,9 +290,12 @@ class Harness:
             item["sizes"][channel] += len(kept)
         if len(kept) != len(data):
             item["truncated"] = True
-            self.fail("output_limit", f"{item['owner']} turn {item['turn']} exceeded retained output bound")
+            self.fail(
+                "output_limit",
+                f"{item['owner']} turn {item['turn']} exceeded retained output bound",
+            )
 
-    def pump(self, timeout=0.0):
+    def pump(self, timeout: float = 0.0) -> None:
         try:
             if timeout > 0:
                 event = self.pipe_events.get(timeout=timeout)
@@ -318,6 +303,7 @@ class Harness:
                 event = self.pipe_events.get_nowait()
         except queue.Empty:
             return
+
         self._consume_pipe_event(*event)
         while True:
             try:
@@ -327,93 +313,22 @@ class Harness:
             self._consume_pipe_event(*event)
 
     @staticmethod
-    def group_exists(item):
-        process = item["process"]
-        if process is None:
-            return False
-        if os.name == "nt":
-            return process.poll() is None
-        try:
-            os.killpg(process.pid, 0)
-            return True
-        except ProcessLookupError:
-            return False
+    def group_exists(item: dict[str, Any]) -> bool:
+        return _group_exists(item)
 
     @staticmethod
-    def signal_group(item, kind):
-        process = item["process"]
-        if process is None:
-            return
-        if os.name == "nt":
-            if kind == "term":
-                if process.poll() is None:
-                    try:
-                        process.terminate()
-                        item["cleanup"]["term_sent"] = True
-                    except OSError:
-                        pass
-            else:
-                subprocess.run(
-                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                )
-                if process.poll() is None:
-                    try:
-                        process.kill()
-                    except OSError:
-                        pass
-                item["cleanup"]["kill_sent"] = True
-            return
-        sig = signal.SIGTERM if kind == "term" else signal.SIGKILL
-        try:
-            os.killpg(process.pid, sig)
-            item["cleanup"]["term_sent" if kind == "term" else "kill_sent"] = True
-        except ProcessLookupError:
-            pass
+    def signal_group(item: dict[str, Any], kind: str) -> None:
+        _signal_group(item, kind)
 
-    def finish_process(self, item, reason):
-        process = item["process"]
-        if os.name == "nt":
-            if reason != "completed" or process.poll() is None:
-                self.signal_group(item, "term")
-        else:
-            # Cleanup occurs even after normal leader exit: descendants may retain pipes.
-            self.signal_group(item, "term")
-        until = time.monotonic() + self.limits["terminate_grace_seconds"]
-        while time.monotonic() < until:
-            self.pump(0)
-            process.poll()
-            if not self.group_exists(item) and not item["streams"]:
-                break
-            self.pump(min(0.01, max(0.0, until - time.monotonic())))
-        if self.group_exists(item) or (os.name == "nt" and item["streams"]):
-            self.signal_group(item, "kill")
-        try:
-            process.wait(timeout=self.limits["terminate_grace_seconds"])
-        except subprocess.TimeoutExpired:
-            self.fail("harness_error", "Local process did not reap after forced termination")
-        drain_until = time.monotonic() + min(0.15, self.limits["terminate_grace_seconds"])
-        while item["streams"] and time.monotonic() < drain_until:
-            self.pump(0.005)
-        if item["streams"]:
-            item["cleanup"]["streams_closed_by_host"] = True
-            item["truncated"] = True
-            for channel in list(item["streams"]):
-                self.close_channel(item, channel)
-        for reader in item["threads"]:
-            reader.join(timeout=0.05)
-        if reason == "completed" and item["truncated"]:
-            reason = "output_limit"
-            self.fail("output_limit", "Worker output was truncated during process cleanup")
-        self.record_process(item, reason)
+    def finish_process(self, item: dict[str, Any], reason: str) -> None:
+        finish_worker_process(self, item, reason)
 
-    def record_process(self, item, reason, error=None):
+    def record_process(self, item: dict[str, Any], reason: str, error: str | None = None) -> None:
         for capture in item["captures"].values():
             capture.flush()
             os.fsync(capture.fileno())
             capture.close()
+
         process = item["process"]
         record = {
             "schema": PROCESS_SCHEMA,
@@ -437,51 +352,64 @@ class Harness:
         write_json(item["directory"] / "process.json", record)
         self.process_records.append(record)
         self.event(
-            "turn_exited", owner=item["owner"], turn=item["turn"],
-            reason=reason, returncode=record["returncode"],
+            "turn_exited",
+            owner=item["owner"],
+            turn=item["turn"],
+            reason=reason,
+            returncode=record["returncode"],
         )
 
-    def _validate_return_messages(self, item, response):
+    def _validate_return_messages(self, item: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
         ack = response["ack"]
         if not isinstance(ack, list) or any(not isinstance(x, str) for x in ack) or len(ack) != len(set(ack)):
             raise ValueError("ack must be a unique string array")
+
         exposed = {message["id"] for message in item["request"]["inbox"]}
         if set(ack) - exposed:
             raise ValueError("Acknowledgement names a message absent from this request")
         if not isinstance(response["send"], list):
             raise ValueError("send must be an array")
-        sends = {}
+
+        sends: dict[str, dict[str, Any]] = {}
         for message in response["send"]:
             fields(message, ("id", "to", "payload"))
             if not identifier(message["id"]) or message["to"] not in self.owners:
                 raise ValueError("Invalid message ID or recipient")
+
             mid = item["owner"] + ":" + message["id"]
             identity = canonical({"to": message["to"], "payload": message["payload"]})
             existing = sends.get(mid, self.messages.get(mid))
             if existing is not None and existing["identity"] != identity:
                 raise ValueError("Sender-local message ID reused with changed recipient/payload")
+
             sends[mid] = {
-                "id": mid, "from": item["owner"], "to": message["to"],
-                "payload": message["payload"], "identity": identity, "acknowledged": False,
+                "id": mid,
+                "from": item["owner"],
+                "to": message["to"],
+                "payload": message["payload"],
+                "identity": identity,
+                "acknowledged": False,
             }
         return sends
 
-    def _validate_return_files(self, response):
+    def _validate_return_files(self, response: dict[str, Any]) -> dict[str, bytes]:
         if not isinstance(response["files"], dict):
             raise ValueError("files must be an object")
-        captured = {}
+
+        captured: dict[str, bytes] = {}
         for path, encoded in response["files"].items():
             target_path(path)
             if not isinstance(encoded, str):
                 raise ValueError("File contents must be base64 strings")
             captured[path] = base64.b64decode(encoded, validate=True)
+
         if path_conflicts(captured):
             raise ValueError("Owner return contains a file/directory path conflict")
         if sum(len(value) for value in captured.values()) > self.limits["max_artifact_bytes"]:
             raise Rejection("artifact_limit", "Owner checkpoint exceeds artifact byte limit")
         return captured
 
-    def validate_return(self, item):
+    def validate_return(self, item: dict[str, Any]) -> tuple[bytes, dict[str, Any], dict[str, Any], dict[str, bytes]]:
         raw = (item["directory"] / "stdout.bin").read_bytes()
         try:
             response = load_json(raw)
@@ -500,13 +428,14 @@ class Harness:
                 raise ValueError("obligations must be an array")
             if response["status"] == "complete" and response["obligations"]:
                 raise ValueError("A complete owner cannot retain declared obligations")
+
             sends = self._validate_return_messages(item, response)
             captured = self._validate_return_files(response)
             return raw, response, sends, captured
         except (ValueError, TypeError, KeyError, UnicodeError, binascii.Error) as exc:
             raise Rejection("protocol_error", f"{item['owner']} turn {item['turn']}: {exc}") from exc
 
-    def accept_return(self, item):
+    def accept_return(self, item: dict[str, Any]) -> None:
         raw, response, sends, captured = self.validate_return(item)
         owner = item["owner"]
         state = self.owners[owner]
@@ -515,22 +444,28 @@ class Harness:
         checkpoint.mkdir()
         file_root = checkpoint / "files"
         file_root.mkdir()
+
         atomic_write_bytes(checkpoint / "response.json", raw, exclusive=True)
-        manifest = []
+        manifest: list[dict[str, Any]] = []
         file_root_resolved = file_root.resolve()
         for path, value in sorted(captured.items()):
             destination = file_root.joinpath(*target_path(path))
             if not destination.resolve().is_relative_to(file_root_resolved):
                 raise Rejection("protocol_error", "Target path escapes checkpoint directory: " + path)
             atomic_write_bytes(destination, value, exclusive=True)
-            manifest.append({
-                "path": path, "bytes": len(value), "sha256": digest(value),
-                "owner": owner, "revision": revision,
-            })
+            manifest.append(
+                {
+                    "path": path,
+                    "bytes": len(value),
+                    "sha256": digest(value),
+                    "owner": owner,
+                    "revision": revision,
+                },
+            )
+
         manifest_path = checkpoint / "manifest.json"
         write_json(manifest_path, manifest)
-        # The accepted bytes are retained in host memory; later peer filesystem
-        # mutation cannot silently change the bytes selected for submission.
+
         for key in ("revision", "status", "state", "obligations"):
             state[key] = response[key]
         state.update(
@@ -539,12 +474,12 @@ class Harness:
             artifacts_dir=str(file_root),
             files=captured,
         )
+
         for mid in response["ack"]:
             state["pending"].remove(mid)
             self.messages[mid]["acknowledged"] = True
             self.event("message_acknowledged", id=mid, owner=owner, turn=item["turn"])
-        # No scheduling/closure check occurs between discharging the return and
-        # registering all descendants in its fully validated outbound array.
+
         for mid, message in sends.items():
             if mid in self.messages:
                 self.event("duplicate_send", id=mid, owner=owner, turn=item["turn"])
@@ -553,50 +488,72 @@ class Harness:
             recipient = message["to"]
             self.owners[recipient]["pending"].append(mid)
             self.enqueue(recipient)
-            self.event("message_admitted", id=mid, sender=owner, recipient=recipient, turn=item["turn"])
+            self.event(
+                "message_admitted",
+                id=mid,
+                sender=owner,
+                recipient=recipient,
+                turn=item["turn"],
+            )
+
         self.event(
-            "return_accepted", owner=owner, turn=item["turn"], revision=revision,
-            status=state["status"], obligations=len(state["obligations"]), checkpoint=str(checkpoint),
+            "return_accepted",
+            owner=owner,
+            turn=item["turn"],
+            revision=revision,
+            status=state["status"],
+            obligations=len(state["obligations"]),
+            checkpoint=str(checkpoint),
         )
         if state["status"] == "continue" or state["pending"]:
             self.enqueue(owner)
 
-    def complete(self):
-        return (
-            not self.active
-            and all(
-                state["revision"] > 0
-                and state["status"] == "complete"
-                and not state["pending"]
-                and not state["obligations"]
-                for state in self.owners.values()
-            )
+    def complete(self) -> bool:
+        return not self.active and all(
+            state["revision"] > 0
+            and state["status"] == "complete"
+            and not state["pending"]
+            and not state["obligations"]
+            for state in self.owners.values()
         )
 
-    def submit(self):
-        files, manifest = {}, []
+    def submit(self) -> None:
+        files: dict[str, bytes] = {}
+        manifest: list[dict[str, Any]] = []
         for owner, state in self.owners.items():
             for path, value in state["files"].items():
                 if path in files:
                     raise Rejection("artifact_conflict", "Multiple owners claim target path: " + path)
                 files[path] = value
-                manifest.append({
-                    "path": path, "bytes": len(value), "sha256": digest(value),
-                    "owner": owner, "revision": state["revision"],
-                })
+                manifest.append(
+                    {
+                        "path": path,
+                        "bytes": len(value),
+                        "sha256": digest(value),
+                        "owner": owner,
+                        "revision": state["revision"],
+                    },
+                )
+
         if path_conflicts(files):
             raise Rejection("artifact_conflict", "Cross-owner file/directory target conflict")
         if sum(len(value) for value in files.values()) > self.limits["max_artifact_bytes"]:
             raise Rejection("artifact_limit", "Combined submission exceeds artifact byte limit")
-        self.event("epoch_closed", revisions={owner: state["revision"] for owner, state in self.owners.items()})
+
+        self.event(
+            "epoch_closed",
+            revisions={owner: state["revision"] for owner, state in self.owners.items()},
+        )
         staging = self.root / "submission-staging"
         staging.mkdir()
         staging_resolved = staging.resolve()
+
         for path, value in sorted(files.items()):
             destination = staging.joinpath(*target_path(path))
             if not destination.resolve().is_relative_to(staging_resolved):
                 raise Rejection("protocol_error", "Target path escapes submission staging directory: " + path)
             atomic_write_bytes(destination, value, exclusive=True)
+
         destination = self.root / "submitted"
         staging.rename(destination)
         manifest.sort(key=lambda entry: entry["path"])
@@ -608,7 +565,7 @@ class Harness:
         }
         self.reason = "submitted"
 
-    def _poll_active_workers(self):
+    def _poll_active_workers(self) -> None:
         for owner, item in list(self.active.items()):
             if self.reason is not None:
                 break
@@ -617,9 +574,11 @@ class Harness:
                 break
             if item["process"].poll() is None:
                 continue
+
             reason = "completed" if item["process"].returncode == 0 else "worker_failed"
             self.finish_process(item, reason)
             del self.active[owner]
+
             if self.reason is None and time.monotonic() >= self.deadline:
                 self.fail("wall_limit", "Run deadline reached before return admission")
             elif self.reason is None and time.monotonic() >= item["deadline"]:
@@ -630,7 +589,7 @@ class Harness:
                 else:
                     self.accept_return(item)
 
-    def _build_run_result(self):
+    def _build_run_result(self) -> dict[str, Any]:
         cpu_user, cpu_sys = _child_cpu_times()
         return {
             "schema": HARNESS_RESULT_SCHEMA,
@@ -666,14 +625,16 @@ class Harness:
             },
         }
 
-    def run(self):
-        old_signals = {}
+    def run(self) -> dict[str, Any]:
+        """Run the cooperative peer scheduling loop until submission or structured termination."""
+        old_signals: dict[Any, Any] = {}
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
                 old_signals[sig] = signal.getsignal(sig)
                 signal.signal(sig, lambda *_: setattr(self, "cancel_requested", True))
             except (OSError, ValueError):
                 pass
+
         try:
             while self.reason is None:
                 if self.cancel_requested or (self.root / "CANCEL").exists():
@@ -682,6 +643,7 @@ class Harness:
                 if time.monotonic() >= self.deadline:
                     self.fail("wall_limit", "Run wall-clock allowance exhausted")
                     break
+
                 self.pump()
                 self._poll_active_workers()
                 if self.reason is not None:
@@ -689,6 +651,7 @@ class Harness:
                 if self.complete():
                     self.submit()
                     break
+
                 while self.ready and len(self.active) < self.limits["parallelism"] and self.reason is None:
                     if self.turn_count >= self.limits["max_turns"]:
                         self.fail("turn_limit", "Total invocation allowance exhausted")
@@ -696,6 +659,7 @@ class Harness:
                     owner = self.ready.popleft()
                     self.queued.remove(owner)
                     self.launch(owner)
+
                 if self.reason is None and not self.active and not self.ready:
                     self.fail("stalled", "No runnable owner; selected completion obligations remain")
                 if self.reason is None:
@@ -715,18 +679,25 @@ class Harness:
                     signal.signal(sig, handler)
                 except (OSError, ValueError):
                     pass
+
         result = self._build_run_result()
         write_json(self.root / "result.json", result)
-        self.event("run_finished", reason=self.reason, submitted=result["submitted"], total_turns=self.turn_count)
+        self.event(
+            "run_finished",
+            reason=self.reason,
+            submitted=result["submitted"],
+            total_turns=self.turn_count,
+        )
         self.events.close()
         return result
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--config", required=True)
     parser.add_argument("--run-dir", required=True)
     args = parser.parse_args(argv)
+
     try:
         config_bytes = Path(args.config).read_bytes()
         config = load_json(config_bytes)
@@ -735,14 +706,23 @@ def main(argv=None):
         root.mkdir(parents=True, exist_ok=False)
         harness = Harness(config, config_bytes, root)
     except (OSError, ValueError, TypeError, UnicodeError) as exc:
-        print(json.dumps({"done_reason": "setup_rejection", "error": str(exc)}, allow_nan=False), file=sys.stderr)
+        print(
+            json.dumps({"done_reason": "setup_rejection", "error": str(exc)}, allow_nan=False),
+            file=sys.stderr,
+        )
         return 2
+
     result = harness.run()
-    print(json.dumps({
-        "result": str(root / "result.json"),
-        "submitted": result["submitted"],
-        "done_reason": result["done_reason"],
-    }, allow_nan=False))
+    print(
+        json.dumps(
+            {
+                "result": str(root / "result.json"),
+                "submitted": result["submitted"],
+                "done_reason": result["done_reason"],
+            },
+            allow_nan=False,
+        ),
+    )
     return 0 if result["submitted"] else 1
 
 

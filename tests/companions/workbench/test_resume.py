@@ -53,18 +53,17 @@ class SourceReplay(unittest.TestCase):
             binding = json.loads(manifest_bytes)['contract']['binding']
             self.assertEqual(set(binding['source_search_code']),
                              {str(runtime / rel) for rel in (
-                                 'reader/knowledge.py', 'reader/library_format.py',
-                                 'search/lexical_search.py', 'bundles/product_bundle.py',
+                                 'lexical.py', 'config.py',
                              )})
             self.assertIn('tokenizer', binding['source_search_analyzer'])
-            predecessor = change_query_parser(runtime / 'search/lexical_search.py')
+            predecessor = change_query_parser(runtime / 'lexical.py')
             drift = resumable_workbench.run_workbench(self.config, resume=True, model=model)
             self.assertEqual(drift['status'], 'binding_mismatch', drift)
             self.assertEqual(steps, [1, 2])
             self.assertEqual(receipts.read_bytes(), receipt_bytes)
             self.assertEqual(manifest_file.read_bytes(), manifest_bytes)
 
-            (runtime / 'search/lexical_search.py').write_bytes(predecessor)
+            (runtime / 'lexical.py').write_bytes(predecessor)
             resumed = resumable_workbench.run_workbench(self.config, resume=True, model=model)
             self.assertEqual(resumed['status'], 'complete', resumed)
             self.assertEqual(steps, [1, 2])

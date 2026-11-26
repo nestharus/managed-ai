@@ -9,7 +9,8 @@ import unittest
 
 
 REPO = Path(__file__).resolve().parents[2]
-RELEASE = REPO / "src/managed_ai/release"
+ENGINE = REPO / "src/managed_ai"
+RELEASE = REPO / "scripts/release"
 package = runpy.run_path(str(RELEASE / "package.py"))
 
 
@@ -57,7 +58,7 @@ class CompressedPayloadTest(unittest.TestCase):
             root = Path(directory)
             (root / "sample.gz").write_bytes(gzip.compress(b"valid text"))
             with self.assertRaisesRegex(ValueError, "Select extracted useful source instead of nested transport"):
-                package["members"](root, RELEASE.parent)
+                package["members"](root, ENGINE)
 
 
 if __name__ == "__main__":

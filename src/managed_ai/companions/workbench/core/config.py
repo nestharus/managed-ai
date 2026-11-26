@@ -6,15 +6,9 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
 import sys
 from types import ModuleType
+from typing import Any
 
-try:
-    from .io_utils import canonical_bytes, loads_strict, pin_file, sha256_bytes
-except ImportError:
-    _src_root = Path(__file__).resolve().parents[4]
-    if str(_src_root) not in sys.path:
-        sys.path.insert(0, str(_src_root))
-    from managed_ai.companions.workbench.core.io_utils import canonical_bytes, loads_strict, pin_file, sha256_bytes
-
+from .io_utils import canonical_bytes, loads_strict, pin_file, sha256_bytes
 
 CORE_DIR = Path(__file__).resolve().parent
 WORKBENCH_ROOT = CORE_DIR.parent
@@ -30,8 +24,12 @@ CORE_MODULES = (
     "resumable_workbench.py",
 )
 
-BUNDLED_SEARCH_ENTRY = Path("library/reader/knowledge.py")
+BUNDLED_SEARCH_ENTRY = Path("library/lexical.py")
 BUNDLED_SEARCH_DEPS = (
+    Path("library/config.py"),
+)
+_COMPAT_SEARCH_ENTRY = Path("library/reader/knowledge.py")
+_COMPAT_SEARCH_DEPS = (
     Path("library/reader/library_format.py"),
     Path("library/search/lexical_search.py"),
     Path("library/bundles/product_bundle.py"),
@@ -43,22 +41,26 @@ _LEGACY_SEARCH_DEPS = (
     Path("runtime/source_library/product_bundle.py"),
 )
 
-RESOLVE_FIELDS = frozenset({
-    "operation_id",
-    "value",
-    "checkpoint",
-    "evidence",
-    "expected_contract_sha256",
-})
+RESOLVE_FIELDS = frozenset(
+    {
+        "operation_id",
+        "value",
+        "checkpoint",
+        "evidence",
+        "expected_contract_sha256",
+    },
+)
 
 
-def default_search_paths(repo_root=None):
+def default_search_paths(repo_root: Path | str | None = None) -> tuple[Path, list[Path]]:
     """Return (entry_path, dependency_paths) for the bundled lexical search library."""
     if repo_root is None:
         engine = CORE_DIR.parents[2]
         candidates = (
             (engine, BUNDLED_SEARCH_ENTRY, BUNDLED_SEARCH_DEPS),
             (engine / "engine", BUNDLED_SEARCH_ENTRY, BUNDLED_SEARCH_DEPS),
+            (engine, _COMPAT_SEARCH_ENTRY, _COMPAT_SEARCH_DEPS),
+            (engine / "engine", _COMPAT_SEARCH_ENTRY, _COMPAT_SEARCH_DEPS),
             (engine / "engine", _LEGACY_SEARCH_ENTRY, _LEGACY_SEARCH_DEPS),
         )
     else:
@@ -67,17 +69,23 @@ def default_search_paths(repo_root=None):
             (base / "src/managed_ai", BUNDLED_SEARCH_ENTRY, BUNDLED_SEARCH_DEPS),
             (base, BUNDLED_SEARCH_ENTRY, BUNDLED_SEARCH_DEPS),
             (base / "engine", BUNDLED_SEARCH_ENTRY, BUNDLED_SEARCH_DEPS),
+            (base / "src/managed_ai", _COMPAT_SEARCH_ENTRY, _COMPAT_SEARCH_DEPS),
+            (base, _COMPAT_SEARCH_ENTRY, _COMPAT_SEARCH_DEPS),
+            (base / "engine", _COMPAT_SEARCH_ENTRY, _COMPAT_SEARCH_DEPS),
             (base / "engine", _LEGACY_SEARCH_ENTRY, _LEGACY_SEARCH_DEPS),
         )
+
     for root, entry_rel, dep_rels in candidates:
         candidate = root / entry_rel
         if candidate.exists() or candidate.is_symlink():
             return candidate, [root / rel for rel in dep_rels]
+
     default_root, default_entry, default_deps = candidates[0]
     return default_root / default_entry, [default_root / rel for rel in default_deps]
 
 
-def is_clean_relative_posix(value):
+def is_clean_relative_posix(value: Any) -> bool:
+    """Return True when value is a clean relative POSIX path without drives or traversal."""
     if (
         not isinstance(value, str)
         or not value
@@ -88,6 +96,7 @@ def is_clean_relative_posix(value):
         or PurePosixPath(value).is_absolute()
     ):
         return False
+
     parts = value.split("/")
     return all(
         part not in ("", ".", "..")
@@ -97,23 +106,32 @@ def is_clean_relative_posix(value):
     )
 
 
-def paths_overlap(a, b):
+def paths_overlap(a: Path, b: Path) -> bool:
     return a == b or a.is_relative_to(b) or b.is_relative_to(a)
 
 
-def pin_files(paths):
+def pin_files(paths: list[Path | str]) -> dict[str, dict[str, Any]]:
     return {str(Path(path).resolve()): pin_file(Path(path).resolve()) for path in paths}
 
 
-def parse_command_targets(command, *, cwd=None, allow_placeholders=False):
+def parse_command_targets(
+    command: list[str],
+    *,
+    cwd: Path | str | None = None,
+    allow_placeholders: bool = False,
+) -> tuple[str, str | None]:
     """Identify the executable and directly named Python script target for a command argv."""
-    if not isinstance(command, list) or not command or any(not isinstance(x, str) or "\x00" in x for x in command):
+    if not isinstance(command, list) or not command or any(
+        not isinstance(x, str) or "\x00" in x for x in command
+    ):
         raise ValueError("argv must be a nonempty list of strings without NUL characters")
+
     first = command[0]
     if not first:
         raise ValueError("command executable cannot be empty")
     if "{workspace}" in first or "{receiving_dir}" in first:
         raise ValueError("command executable cannot contain runtime placeholders")
+
     base = Path(cwd or Path.cwd())
     if "/" in first or "\\" in first:
         executable = str((base / first).resolve())
@@ -124,6 +142,7 @@ def parse_command_targets(command, *, cwd=None, allow_placeholders=False):
             raise ValueError("Configured command executable is unavailable: " + first)
         executable = str(Path(located).resolve())
         executable_name = Path(located).name
+
     script = None
     if executable_name.lower().startswith("python"):
         for index, argument in enumerate(command[1:], 1):
@@ -133,37 +152,41 @@ def parse_command_targets(command, *, cwd=None, allow_placeholders=False):
                 break
             if argument.startswith("-"):
                 continue
-            if allow_placeholders and ("{workspace}" in argument or "{receiving_dir}" in argument):
-                break
-            if not allow_placeholders and ("{workspace}" in argument or "{receiving_dir}" in argument):
+            if "{workspace}" in argument or "{receiving_dir}" in argument:
                 break
             script = str((base / argument).resolve())
             break
+
     return executable, script
 
 
-def command_code(command, cwd=None):
+def command_code(command: list[str], cwd: Path | str | None = None) -> dict[str, dict[str, Any]]:
     """Bind the executable and a directly named Python script, not output paths."""
     if not command:
         return {}
     executable, script = parse_command_targets(command, cwd=cwd, allow_placeholders=True)
-    paths = [executable]
+    paths: list[Path | str] = [executable]
     if script is not None:
         paths.append(script)
     return pin_files(paths)
 
 
-def normalize_config(config):
+def normalize_config(config: Any) -> dict[str, Any]:
     """Return a detached, path-normalized copy of a resumable workbench configuration."""
     result = loads_strict(canonical_bytes(config))
     if not isinstance(result, dict):
         raise ValueError("Workbench configuration must be a JSON object")
+
     for name in ("state_dir", "workspace", "corpus_root"):
         result[name] = str(Path(result[name]).resolve())
-    result["controller_dir"] = str(Path(result.get(
-        "controller_dir", DEFAULT_CONTROLLER_DIR)).resolve())
-    result["source_state_dir"] = str(Path(result.get(
-        "source_state_dir", Path(result["state_dir"]) / "source-service")).resolve())
+
+    result["controller_dir"] = str(
+        Path(result.get("controller_dir", DEFAULT_CONTROLLER_DIR)).resolve(),
+    )
+    result["source_state_dir"] = str(
+        Path(result.get("source_state_dir", Path(result["state_dir"]) / "source-service")).resolve(),
+    )
+
     model = result.get("model")
     if not isinstance(model, dict):
         raise ValueError("A model transport configuration is required")
@@ -171,21 +194,17 @@ def normalize_config(config):
         model["directory"] = str(Path(model["directory"]).resolve())
     if model.get("cwd") is not None:
         model["cwd"] = str(Path(model["cwd"]).resolve())
+
     return result
 
 
-def build_model_transport(model_config):
+def build_model_transport(model_config: Any) -> Any:
     """Construct the configured caller-mediated transport (mailbox or command)."""
-    try:
-        from .model_bridges import CommandModel, MailboxModel
-    except ImportError:
-        _src_root = Path(__file__).resolve().parents[4]
-        if str(_src_root) not in sys.path:
-            sys.path.insert(0, str(_src_root))
-        from managed_ai.companions.workbench.core.model_bridges import CommandModel, MailboxModel
+    from .model_bridges import CommandModel, MailboxModel
 
     if not isinstance(model_config, dict):
         raise ValueError("model configuration must be an object")
+
     kind = model_config.get("kind")
     timeout = model_config.get("timeout_seconds", 900)
     if kind == "mailbox":
@@ -200,23 +219,28 @@ def build_model_transport(model_config):
     raise ValueError("model.kind must be mailbox or command")
 
 
-def validate_resolution_payload(payload):
+def validate_resolution_payload(payload: Any) -> dict[str, Any]:
     """Validate an explicit resolve-command JSON object without blind kwarg splatting."""
     if not isinstance(payload, dict):
         raise ValueError("Resolution payload must be a JSON object")
+
     keys = set(payload.keys())
     missing = sorted(RESOLVE_FIELDS - keys)
     extra = sorted(keys - RESOLVE_FIELDS)
     if missing or extra:
         raise ValueError(
-            f"Resolution payload has invalid fields; missing={missing}, extra={extra}"
+            f"Resolution payload has invalid fields; missing={missing}, extra={extra}",
         )
     if not isinstance(payload["operation_id"], str) or not payload["operation_id"]:
         raise ValueError("Resolution operation_id must be a nonempty string")
     if not isinstance(payload["evidence"], str) or not payload["evidence"].strip():
         raise ValueError("Resolution evidence must be a nonempty string")
-    if not isinstance(payload["expected_contract_sha256"], str) or not payload["expected_contract_sha256"]:
+    if (
+        not isinstance(payload["expected_contract_sha256"], str)
+        or not payload["expected_contract_sha256"]
+    ):
         raise ValueError("Resolution expected_contract_sha256 must be a nonempty string")
+
     return {
         "operation_id": payload["operation_id"],
         "value": payload["value"],
@@ -226,7 +250,7 @@ def validate_resolution_payload(payload):
     }
 
 
-def load_controller(controller_dir=None):
+def load_controller(controller_dir: Path | str | None = None) -> tuple[Any, dict[str, str]]:
     """Load agent_runtime.run_agent cleanly in an isolated package namespace."""
     root = Path(controller_dir or DEFAULT_CONTROLLER_DIR).resolve()
     support_path = root / "evidence_support.py"
@@ -235,6 +259,7 @@ def load_controller(controller_dir=None):
         "agent_runtime.py": sha256_bytes(controller_path.read_bytes()),
         "evidence_support.py": sha256_bytes(support_path.read_bytes()),
     }
+
     pkg_name = "_g60_controller_" + sha256_bytes(str(root).encode("utf-8"))[:16]
     support_name = pkg_name + ".evidence_support"
     controller_name = pkg_name + ".agent_runtime"
@@ -262,4 +287,5 @@ def load_controller(controller_dir=None):
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = old
+
     return controller.run_agent, identities

@@ -160,6 +160,7 @@ class Integrity(unittest.TestCase):
     def test_f07_placement_checks_effective_argv(self):
         product=self.base/'product'/'src'/'managed_ai';product.mkdir(parents=True)
         shutil.copy2(PRODUCT/'__init__.py',product/'__init__.py')
+        shutil.copytree(PRODUCT/'platform',product/'platform')
         shutil.copytree(PRODUCT/'core',product/'core')
         shutil.copy2(PRODUCT/'CURRENT-RELEASE.json',product/'CURRENT-RELEASE.json')
         cli=product/'core'/'cli'/'collect_returns.py'

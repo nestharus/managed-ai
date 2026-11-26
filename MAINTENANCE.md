@@ -6,7 +6,7 @@ Edit the responsible engine, domain, or store owner. Reconcile overlapping mater
 
 1. Identify the producing component and the records or downstream uses that depend on it.
 2. Update the canonical owner and run the relevant verification suites (`python -B -m unittest discover -s tests`). Retain minimal adverse witnesses where they constrain the repaired invariant.
-3. Refresh affected source pins (`python -B src/managed_ai/release/refresh_guidance.py` for core guidance; update `catalogue.json` and `domain.json` in the owning external domain repository). Never discard a pin guard to bypass a mismatch.
+3. Refresh affected source pins (`python -B scripts/release/refresh_guidance.py` for core guidance; update `catalogue.json` and `domain.json` in the owning external domain repository). Never discard a pin guard to bypass a mismatch.
 4. Qualify and activate the updated shared engine on affected deployments (`stage` and `activate` in `src/managed_ai/deployment/select_deployment.py`).
 5. Update affected stores via native `configure` with the expected `system.json` SHA-256, preserving or explicitly migrating typed records when schemas change. See [docs/engine/INSTANCES.md](docs/engine/INSTANCES.md).
 
@@ -20,11 +20,11 @@ Completed turns can leave working materializations under `work/.system/turns/`. 
 
 ## Verification and packaging
 
-After finalizing owners and running native `configure`, run the verification suite and (when external domain verifiers are installed) the read-only selected-source gate before packaging:
+After finalizing owners and running native `configure`, run the acceptance gate and (when external domain verifiers are installed) the read-only selected-source gate before packaging:
 
 ```sh
-python -B src/managed_ai/release/check_current.py
-python -B src/managed_ai/release/package.py --root /path/to/clean-export --output /path/to/managed-ai.zip --replace
+python -B scripts/release/check_current.py
+python -B scripts/release/package.py --root /path/to/clean-export --output /path/to/managed-ai.zip --replace
 ```
 
-`package.py` verifies source and component identities (`src/managed_ai/store/catalogue.json`, `src/managed_ai/CURRENT-RELEASE.json`, `src/managed_ai/companions/peer/COMPONENTS.json`), store schemas, and deployment bindings, stamps package-time manifests and `src/managed_ai/SOURCES.md`, and checks ZIP CRCs and member hashes before atomic replacement.
+`scripts/release/package.py` verifies source and component identities (`src/managed_ai/store/catalogue.json`, `src/managed_ai/CURRENT-RELEASE.json`, `src/managed_ai/companions/peer/COMPONENTS.json`), store schemas, and deployment bindings, stamps package-time manifests and `src/managed_ai/SOURCES.md`, and checks ZIP CRCs and member hashes before atomic replacement.

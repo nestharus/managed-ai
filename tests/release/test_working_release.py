@@ -18,7 +18,7 @@ import zipfile
 
 REPO = Path(__file__).resolve().parents[2]
 ENGINE = REPO / "src/managed_ai"
-RELEASE = ENGINE / "release"
+RELEASE = REPO / "scripts/release"
 PACKAGE = runpy.run_path(str(RELEASE / "package.py"))
 REFRESH = runpy.run_path(str(RELEASE / "refresh_guidance.py"))
 
@@ -574,7 +574,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             st_reparse_tag=0xA0000003,
             st_file_attributes=getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400),
         )
-        self.assertTrue(REFRESH["_is_reparse_or_symlink"](fake_reparse))
+        self.assertTrue(REFRESH["is_reparse_or_symlink_stat"](fake_reparse))
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             core = _build_minimal_bundle(bundle)

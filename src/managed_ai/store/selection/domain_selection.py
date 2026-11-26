@@ -56,9 +56,11 @@ def _read_ordinary_under(root: Path, name: str, *, byte_limit: int | None = None
     """Read an ordinary non-symlink file relative to root using O_NOFOLLOW dir-FD or Windows lstat."""
     if not _is_safe_member_relpath(name):
         raise ValueError('invalid selected member path: ' + str(name))
+
     parts = [part for part in name.split('/') if part not in ('', '.')]
     if not parts:
         raise ValueError('invalid selected member path: ' + str(name))
+
     display = root.joinpath(*parts)
     if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
         opened_fds: list[int] = []
@@ -75,6 +77,7 @@ def _read_ordinary_under(root: Path, name: str, *, byte_limit: int | None = None
                         raise ValueError('ordinary selected source required: ' + str(display)) from None
                     raise
                 opened_fds.append(cur)
+
             for segment in parts[:-1]:
                 try:
                     nxt = open_directory(segment, dir_fd=cur)
@@ -84,12 +87,14 @@ def _read_ordinary_under(root: Path, name: str, *, byte_limit: int | None = None
                     raise
                 opened_fds.append(nxt)
                 cur = nxt
+
             try:
                 leaf_fd = os.open(parts[-1], _OPEN_RO_NOFOLLOW, dir_fd=cur)
             except OSError as exc:
                 if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
                     raise ValueError('ordinary selected source required: ' + str(display)) from None
                 raise
+
             try:
                 info = os.fstat(leaf_fd)
                 if not stat.S_ISREG(info.st_mode):
@@ -100,6 +105,7 @@ def _read_ordinary_under(root: Path, name: str, *, byte_limit: int | None = None
             except BaseException:
                 os.close(leaf_fd)
                 raise
+
             with stream:
                 if byte_limit is not None:
                     raw = stream.read(byte_limit + 1)
@@ -110,8 +116,10 @@ def _read_ordinary_under(root: Path, name: str, *, byte_limit: int | None = None
         finally:
             for fd in reversed(opened_fds):
                 os.close(fd)
+
     if not validated_root:
         _verify_ordinary_dir(root)
+
     cur_str = str(root)
     for segment in parts[:-1]:
         cur_str = cur_str + os.sep + segment
@@ -121,15 +129,18 @@ def _read_ordinary_under(root: Path, name: str, *, byte_limit: int | None = None
             raise ValueError('ordinary selected source required: ' + str(display)) from None
         if not is_ordinary_dir_stat(seg_info):
             raise ValueError('ordinary selected source required: ' + str(display))
+
     leaf_str = cur_str + os.sep + parts[-1]
     try:
         leaf_info = os.lstat(leaf_str)
     except OSError:
         raise ValueError('ordinary selected source required: ' + str(display)) from None
+
     if not is_ordinary_file_stat(leaf_info):
         raise ValueError('ordinary selected source required: ' + str(display))
     if byte_limit is not None and leaf_info.st_size > byte_limit:
         raise ValueError('source body exceeds the requested acquisition bound')
+
     with open(leaf_str, 'rb') as stream:
         if byte_limit is not None:
             raw = stream.read(byte_limit + 1)
@@ -222,18 +233,22 @@ def _schema_children(schema, document):
         if (not isinstance(names, list) or not names or
                 any(not isinstance(name, str) or name not in PAYLOAD_TYPES for name in names)):
             raise ValueError(f'unsupported payload type declaration: {declared!r}')
+
     for key in ('minLength', 'maxLength', 'minItems', 'maxItems'):
         if key in schema and (type(schema[key]) is not int or schema[key] < 0):
             raise ValueError(f'schema keyword {key} must be a nonnegative integer')
+
     if 'minLength' in schema and 'maxLength' in schema and schema['minLength'] > schema['maxLength']:
         raise ValueError('schema minLength exceeds maxLength')
     if 'minItems' in schema and 'maxItems' in schema and schema['minItems'] > schema['maxItems']:
         raise ValueError('schema minItems exceeds maxItems')
+
     for key in ('minimum', 'maximum'):
         if key in schema and (type(schema[key]) not in (int, float) or not math.isfinite(schema[key])):
             raise ValueError(f'schema keyword {key} must be a finite number')
     if 'minimum' in schema and 'maximum' in schema and schema['minimum'] > schema['maximum']:
         raise ValueError('schema minimum exceeds maximum')
+
     if 'pattern' in schema:
         if not isinstance(schema['pattern'], str):
             raise ValueError('schema pattern must be a string')
@@ -241,25 +256,31 @@ def _schema_children(schema, document):
             re.compile(schema['pattern'])
         except re.error as exc:
             raise ValueError(f'invalid schema pattern regex: {exc}') from None
+
     if 'required' in schema:
         req = schema['required']
         if not isinstance(req, list) or any(not isinstance(item, str) for item in req):
             raise ValueError('schema required must be a list of strings')
+
     if 'enum' in schema and (not isinstance(schema['enum'], list) or not schema['enum']):
         raise ValueError('schema enum must be a nonempty list')
+
     for group in ('properties', '$defs', 'definitions'):
         if group in schema:
             if not isinstance(schema[group], dict):
                 raise ValueError(f'schema {group} must be an object')
             yield from schema[group].values()
+
     for group in ('anyOf', 'allOf', 'oneOf'):
         if group in schema:
             if not isinstance(schema[group], list) or not schema[group]:
                 raise ValueError(f'schema {group} must be a nonempty list')
             yield from schema[group]
+
     for key in ('items', 'additionalProperties'):
         if key in schema:
             yield schema[key]
+
     if '$ref' in schema:
         yield _local_schema_target(document, schema['$ref'])
 
@@ -270,20 +291,24 @@ def validate_payload(value, schema, *, at='content', document=None, _references=
         return
     if schema is False:
         raise ValueError(at + ': prohibited by schema')
+
     if '$ref' in schema:
         target = _local_schema_target(document, schema['$ref'])
         if id(target) in _references:
             raise ValueError(at + ': cyclic schema reference at the same payload location')
         validate_payload(value, target, at=at, document=document, _references=_references | {id(target)})
+
     wanted = schema.get('type')
     if wanted is not None:
         wanted = [wanted] if isinstance(wanted, str) else wanted
         if not any(PAYLOAD_TYPES[k](value) for k in wanted):
             raise ValueError(at + ': wrong payload type')
+
     if 'enum' in schema and not any(same_literal(value, item) for item in schema['enum']):
         raise ValueError(at + ': value is outside schema enum')
     if 'const' in schema and not same_literal(value, schema['const']):
         raise ValueError(at + ': value differs from schema constant')
+
     for group in ('allOf', 'anyOf', 'oneOf'):
         if group in schema:
             valid = 0
@@ -296,6 +321,7 @@ def validate_payload(value, schema, *, at='content', document=None, _references=
             expected = len(schema[group]) if group == 'allOf' else 1
             if (valid != expected if group != 'anyOf' else valid < 1):
                 raise ValueError(at + ': schema alternatives do not match')
+
     if isinstance(value, dict):
         missing = set(schema.get('required', [])) - set(value)
         if missing:
@@ -304,9 +330,15 @@ def validate_payload(value, schema, *, at='content', document=None, _references=
         for key, item in value.items():
             validate_payload(item, props.get(key, schema.get('additionalProperties', True)),
                              at=at + '.' + key, document=document)
+
     if isinstance(value, list):
         for index, item in enumerate(value):
             validate_payload(item, schema.get('items', True), at=at + '[' + str(index) + ']', document=document)
+        if 'minItems' in schema and len(value) < schema['minItems']:
+            raise ValueError(at + ': minItems violated')
+        if 'maxItems' in schema and len(value) > schema['maxItems']:
+            raise ValueError(at + ': maxItems violated')
+
     if isinstance(value, str):
         if 'minLength' in schema and len(value) < schema['minLength']:
             raise ValueError(at + ': minLength violated')
@@ -314,11 +346,7 @@ def validate_payload(value, schema, *, at='content', document=None, _references=
             raise ValueError(at + ': maxLength violated')
         if 'pattern' in schema and re.search(schema['pattern'], value) is None:
             raise ValueError(at + ': pattern differs')
-    if isinstance(value, list):
-        if 'minItems' in schema and len(value) < schema['minItems']:
-            raise ValueError(at + ': minItems violated')
-        if 'maxItems' in schema and len(value) > schema['maxItems']:
-            raise ValueError(at + ': maxItems violated')
+
     if type(value) in (int, float):
         if not math.isfinite(value):
             raise ValueError(at + ': nonfinite numeric value prohibited')
@@ -447,28 +475,33 @@ class DomainSelection:
             raise ValueError('unsupported store schema; explicit migration required')
         if descriptor.get('engine_api', ENGINE_API) != ENGINE_API:
             raise ValueError('store requires a different engine API')
+
         for binding in descriptor.get('domains', []):
             path = self.root / binding['path']
             domain = load_json(path, binding['sha256'])
             _validate_domain_manifest(domain, path)
             if domain['id'] in self.domains:
                 raise ValueError('duplicate selected domain identity')
+
             self.domains.append(domain['id'])
             required_domains.update(domain.get('requires_domains', []))
             protected_record_ids.update(domain.get('protected_record_ids', ()))
             for pref in domain.get('content_addressed_basis_prefixes', ()):
                 if pref not in basis_prefixes:
                     basis_prefixes.append(pref)
+
             if 'relation_vocabulary' in domain:
                 vocab = _validate_relation_vocabulary(domain['relation_vocabulary'], domain['id'])
                 relation_predicates.update(vocab['predicates'])
                 provenance_self_loops.update(vocab['provenance_self_loop_relations'])
+
             for kind, schema in domain.get('schemas', {}).items():
                 owner = domain['id']
                 try:
                     validate_schema(schema)
                 except ValueError as exc:
                     raise ValueError(f'{owner} schema for {kind}: {exc}') from exc
+
                 binding = sha(encode(schema))
                 if kind in self.schema_bindings:
                     if self.schema_bindings[kind] != binding:
@@ -477,14 +510,17 @@ class DomainSelection:
                 declaring_domain[kind] = owner
                 self.schemas[kind] = schema
                 self.schema_bindings[kind] = binding
+
             self.entry_sources.extend(domain.get('entry_sources', []))
             self.tools.extend(dict(tool, domain=domain['id']) for tool in domain.get('tools', []))
             if domain.get('catalogue'):
                 cat = domain['catalogue']
                 self.add_catalogue(path.parent / cat['path'], cat['sha256'],
                                    source_root=(path.parent / domain.get('source_root', '.')).resolve())
+
         for binding in descriptor.get('catalogues', []):
             self.add_catalogue(self.root / binding['path'], binding['sha256'])
+
         seen_ids: set[str] = set()
         collisions: list[str] = []
         for entry in self.entries:
@@ -492,15 +528,18 @@ class DomainSelection:
             if ident in seen_ids and ident not in collisions:
                 collisions.append(ident)
             seen_ids.add(ident)
+
         if collisions:
             sample = ', '.join(sorted(collisions)[:5])
             suffix = f' (+{len(collisions) - 5} more)' if len(collisions) > 5 else ''
             hint = ' (note: selected domain manifests auto-load their declared catalogues; omit duplicate --catalogue flags)' if descriptor.get('catalogues') else ''
             raise ValueError(f'selected source identity collision: {sample}{suffix}{hint}')
+
         if required_domains - set(self.domains):
             raise ValueError('required domains are not selected: ' + ', '.join(sorted(required_domains - set(self.domains))))
         if len({tool['id'] for tool in self.tools}) != len(self.tools):
             raise ValueError('selected domain tool identity collision')
+
         self.relation_predicates = sorted(relation_predicates)
         self.provenance_self_loop_relations = sorted(provenance_self_loops)
         self.relation_vocabulary = {

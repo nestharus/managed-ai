@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -17,9 +18,25 @@ if __package__:
 else:
     from native_test_paths import APP, ENGINE
 
-from managed_ai.core.storage import encode, exclusive, sha, shared
+from managed_ai.core.storage import encode, exclusive, sha, shared, sync_dir
 from managed_ai.deployment.controller import Deployment, DeploymentSelection, code_identity
-from managed_ai.library.bundles import product_bundle, publish
+from managed_ai.library.bundles import product_bundle
+
+
+def _load_publish_module():
+    """Load scripts/publish_library.py when moved in Stage 7.3, else fallback to library.bundles.publish."""
+    script = ENGINE.parents[1] / 'scripts' / 'publish_library.py'
+    if script.is_file():
+        spec = importlib.util.spec_from_file_location('publish_library_script', str(script))
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    from managed_ai.library.bundles import publish as legacy_publish
+    return legacy_publish
+
+
+publish = _load_publish_module()
 from managed_ai.library.reader import library_format
 from managed_ai.library.reader.knowledge import Library
 from managed_ai.store.composition import composition_boundary
@@ -224,7 +241,7 @@ class Wave5CoreTests(unittest.TestCase):
         }
         pub_out = self.base / 'published-lib'
         publish.publish(src_root, None, spec, 'ed-1', pub_out)
-        publish._sync_dir(pub_out)
+        getattr(publish, '_sync_dir', sync_dir)(pub_out)
         self.assertTrue((pub_out / 'catalogue.json').is_file())
         self.assertEqual([p.name for p in self.base.glob('.published-lib*')], [])
 
@@ -521,7 +538,7 @@ class Wave5CoreTests(unittest.TestCase):
             dest.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ENGINE / '__init__.py', dest / '__init__.py')
             ignore = shutil.ignore_patterns('__pycache__', '*.pyc')
-            for sub in ('core', 'deployment', 'store', 'library'):
+            for sub in ('core', 'deployment', 'store', 'library', 'platform'):
                 shutil.copytree(ENGINE / sub, dest / sub, ignore=ignore)
             (dest / 'store' / 'ext_tag.py').write_text(f'LABEL = {label!r}\n', encoding='utf-8')
             sys_file = dest / 'store' / 'system.py'

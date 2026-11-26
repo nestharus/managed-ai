@@ -30,6 +30,7 @@ class Wave4HostArchitectureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             engine = Path(tmp) / 'src/managed_ai'
             included = (
+                'platform/files.py',
                 'deployment/select_deployment.py',
                 'core/attention.py',
                 'store/manage_store.py',
@@ -40,7 +41,7 @@ class Wave4HostArchitectureTests(unittest.TestCase):
                 'library/reader/knowledge.py',
                 'tools/collect_returns.py',
                 'host/continuing_work/continuing_work.py',
-                'release/package.py',
+                'release/__init__.py',
                 'companions/peer/peer_harness.py',
                 'optional/collective/collective.py',
             )
@@ -150,6 +151,7 @@ class Wave4HostArchitectureTests(unittest.TestCase):
     def test_repair_custody_overlap_limit_message_has_no_typo(self):
         combined = (
             (HOST_DIR / 'continuing_work.py').read_text(encoding='utf-8')
+            + (HOST_DIR / 'scope_prepare.py').read_text(encoding='utf-8')
             + (HOST_DIR / 'scope_lifecycle.py').read_text(encoding='utf-8')
         )
         self.assertNotIn('1 through 2000', combined)
@@ -292,7 +294,7 @@ class Wave4HostArchitectureTests(unittest.TestCase):
             ext_engine = root / 'ext_engine'
             ext_engine.mkdir()
             shutil.copy2(SRC_ROOT / 'managed_ai/__init__.py', ext_engine / '__init__.py')
-            for subdir in ('deployment', 'core', 'store'):
+            for subdir in ('deployment', 'core', 'store', 'platform'):
                 shutil.copytree(
                     SRC_ROOT / 'managed_ai' / subdir,
                     ext_engine / subdir,

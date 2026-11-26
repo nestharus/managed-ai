@@ -12,10 +12,21 @@ import unittest
 from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-IMPL = REPO_ROOT / "src/managed_ai/host/material_retention/managed_material.py"
-spec = importlib.util.spec_from_file_location("managed_material_lock_test", IMPL)
-material = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(material)
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from managed_ai.host.material_retention import managed_material as material
+
+IMPL_MODULE = "managed_ai.host.material_retention"
+
+
+def _subproc_env() -> dict[str, str]:
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(SRC_ROOT) if not existing else str(SRC_ROOT) + os.pathsep + existing
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    return env
 
 
 class MaterialRetentionHardening(unittest.TestCase):
@@ -50,19 +61,19 @@ class MaterialRetentionHardening(unittest.TestCase):
         with self.assertRaises(ValueError):
             material.js({"bad": -math.inf})
 
-        with self.assertRaisesRegex(ValueError, "Duplicate JSON key"):
+        with self.assertRaisesRegex(ValueError, "(?i)duplicate JSON key"):
             material.loads_json(b'{"a":1,"a":2}')
-        with self.assertRaisesRegex(ValueError, "Nonfinite JSON"):
+        with self.assertRaisesRegex(ValueError, "(?i)nonfinite JSON"):
             material.loads_json(b'{"a":NaN}')
 
         bad_spec = self.root / "bad-spec.json"
         bad_spec.write_text('{"format":"managed-material-selection/1","id":"bad","id":"dup","roots":[]}')
-        with self.assertRaisesRegex(ValueError, "Duplicate JSON key"):
+        with self.assertRaisesRegex(ValueError, "(?i)duplicate JSON key"):
             material.snapshot(self.store, bad_spec)
 
         nan_spec = self.root / "nan-spec.json"
         nan_spec.write_text('{"format":"managed-material-selection/1","id":"bad","score":NaN,"roots":[]}')
-        with self.assertRaisesRegex(ValueError, "Nonfinite JSON"):
+        with self.assertRaisesRegex(ValueError, "(?i)nonfinite JSON"):
             material.snapshot(self.store, nan_spec)
 
     # --- SO2(1): Cooperative file locking prevents lost updates across concurrent snapshots ---
@@ -74,8 +85,8 @@ class MaterialRetentionHardening(unittest.TestCase):
         specs = [self.make_spec(f"worker-{i}", f"payload-{i}-unique-body\n".encode()) for i in range(4)]
         procs = [
             subprocess.Popen(
-                [sys.executable, "-B", str(IMPL), "snapshot", "--store", str(self.store_dir), "--spec", str(sp)],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                [sys.executable, "-B", "-m", IMPL_MODULE, "snapshot", "--store", str(self.store_dir), "--spec", str(sp)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_subproc_env(),
             )
             for sp in specs
         ]
@@ -100,21 +111,19 @@ class MaterialRetentionHardening(unittest.TestCase):
         ready = self.root / "locked.flag"
         release = self.root / "release.flag"
         holder_code = "\n".join([
-            "import importlib.util, sys, time",
+            "import sys, time",
             "from pathlib import Path",
-            "spec = importlib.util.spec_from_file_location('mm', sys.argv[1])",
-            "mm = importlib.util.module_from_spec(spec)",
-            "spec.loader.exec_module(mm)",
-            "with mm.store_lock(Path(sys.argv[2])):",
-            "    Path(sys.argv[3]).write_text('ready')",
+            "from managed_ai.host.material_retention import managed_material as mm",
+            "with mm.store_lock(Path(sys.argv[1])):",
+            "    Path(sys.argv[2]).write_text('ready')",
             "    deadline = time.monotonic() + 15",
-            "    while not Path(sys.argv[4]).exists() and time.monotonic() < deadline:",
+            "    while not Path(sys.argv[3]).exists() and time.monotonic() < deadline:",
             "        time.sleep(0.05)",
         ])
         proc = subprocess.Popen(
-            [sys.executable, "-B", "-c", holder_code, str(IMPL),
+            [sys.executable, "-B", "-c", holder_code,
              str(self.store_dir), str(ready), str(release)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_subproc_env(),
         )
         try:
             deadline = time.monotonic() + 15
@@ -325,21 +334,19 @@ class MaterialRetentionHardening(unittest.TestCase):
         ready = self.root / "shared.ready"
         release = self.root / "shared.release"
         holder_code = "\n".join([
-            "import importlib.util, sys, time",
+            "import sys, time",
             "from pathlib import Path",
-            "spec = importlib.util.spec_from_file_location('mm_sh', sys.argv[1])",
-            "mm = importlib.util.module_from_spec(spec)",
-            "spec.loader.exec_module(mm)",
-            "with mm.store_lock(Path(sys.argv[2]), shared=True):",
-            "    Path(sys.argv[3]).write_text('ready', encoding='utf-8')",
+            "from managed_ai.host.material_retention import managed_material as mm",
+            "with mm.store_lock(Path(sys.argv[1]), shared=True):",
+            "    Path(sys.argv[2]).write_text('ready', encoding='utf-8')",
             "    deadline = time.monotonic() + 15",
-            "    while not Path(sys.argv[4]).exists() and time.monotonic() < deadline:",
+            "    while not Path(sys.argv[3]).exists() and time.monotonic() < deadline:",
             "        time.sleep(0.05)",
         ])
         proc = subprocess.Popen(
-            [sys.executable, "-B", "-c", holder_code, str(IMPL),
+            [sys.executable, "-B", "-c", holder_code,
              str(self.store_dir), str(ready), str(release)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_subproc_env(),
         )
         try:
             deadline = time.monotonic() + 15
@@ -365,21 +372,19 @@ class MaterialRetentionHardening(unittest.TestCase):
         ready = self.root / "rebuild-lock.ready"
         release = self.root / "rebuild-lock.release"
         holder_code = "\n".join([
-            "import importlib.util, sys, time",
+            "import sys, time",
             "from pathlib import Path",
-            "spec = importlib.util.spec_from_file_location('mm_rb', sys.argv[1])",
-            "mm = importlib.util.module_from_spec(spec)",
-            "spec.loader.exec_module(mm)",
-            "with mm.store_lock(Path(sys.argv[2]), shared=False):",
-            "    Path(sys.argv[3]).write_text('ready', encoding='utf-8')",
+            "from managed_ai.host.material_retention import managed_material as mm",
+            "with mm.store_lock(Path(sys.argv[1]), shared=False):",
+            "    Path(sys.argv[2]).write_text('ready', encoding='utf-8')",
             "    deadline = time.monotonic() + 15",
-            "    while not Path(sys.argv[4]).exists() and time.monotonic() < deadline:",
+            "    while not Path(sys.argv[3]).exists() and time.monotonic() < deadline:",
             "        time.sleep(0.05)",
         ])
         proc = subprocess.Popen(
-            [sys.executable, "-B", "-c", holder_code, str(IMPL),
+            [sys.executable, "-B", "-c", holder_code,
              str(self.store_dir), str(ready), str(release)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_subproc_env(),
         )
         rebuilt_dir = self.root / "rebuilt-store"
         rebuild_proc = None
@@ -389,13 +394,13 @@ class MaterialRetentionHardening(unittest.TestCase):
                 time.sleep(0.05)
             self.assertTrue(ready.exists())
             rebuild_proc = subprocess.Popen(
-                [sys.executable, "-B", str(IMPL), "rebuild",
+                [sys.executable, "-B", "-m", IMPL_MODULE, "rebuild",
                  "--source-store", str(self.store_dir),
                  "--output", str(rebuilt_dir),
                  "--expected-index", expected_index,
                  "--expected-selection", seed_res["selection"],
                  "--account", "Verify rebuild shared lock waits for exclusive writer."],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_subproc_env(),
             )
             # While exclusive lock is held, rebuild must wait rather than read a torn store.
             time.sleep(0.35)
@@ -531,7 +536,7 @@ class MaterialRetentionHardening(unittest.TestCase):
                 )
             self.assertTrue(precious.is_file())
 
-    # --- W5-R2: Decomposed export ZIP bundles all 6 modules and runs under python -I ---
+    # --- W5-R2 / W7: Decomposed export ZIP bundles miniature package + vendored _platform under python -I ---
     def test_decomposed_export_zip_bundles_all_modules_and_runs_isolated(self):
         import zipfile as _zipfile
         spec = self.make_spec("portable-w5", b"portable wave5 payload\n")
@@ -540,11 +545,23 @@ class MaterialRetentionHardening(unittest.TestCase):
         material.export(self.store, archive)
         expected_modules = {
             "managed_material.py",
-            "store_io.py",
-            "retention_closures.py",
-            "store_core.py",
-            "material_ops.py",
-            "retirement.py",
+            "material_retention/__init__.py",
+            "material_retention/__main__.py",
+            "material_retention/_platform_bridge.py",
+            "material_retention/config.py",
+            "material_retention/store_io.py",
+            "material_retention/retention_closures.py",
+            "material_retention/store_core.py",
+            "material_retention/snapshot_ops.py",
+            "material_retention/transfer_ops.py",
+            "material_retention/material_ops.py",
+            "material_retention/retirement.py",
+            "material_retention/managed_material.py",
+            "material_retention/_platform/__init__.py",
+            "material_retention/_platform/adapter.py",
+            "material_retention/_platform/_common.py",
+            "material_retention/_platform/_posix.py",
+            "material_retention/_platform/_windows.py",
         }
         with _zipfile.ZipFile(archive) as zf:
             names = set(zf.namelist())
@@ -556,6 +573,12 @@ class MaterialRetentionHardening(unittest.TestCase):
             cwd=extracted, capture_output=True, text=True,
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        proc_mod = subprocess.run(
+            [sys.executable, "-B", "-m", "material_retention", "verify", "--store", "."],
+            cwd=extracted, capture_output=True, text=True,
+            env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"},
+        )
+        self.assertEqual(proc_mod.returncode, 0, proc_mod.stderr)
         restored = self.root / "extracted-restored"
         proc_restore = subprocess.run(
             [sys.executable, "-I", str(extracted / "managed_material.py"), "restore",
@@ -564,6 +587,15 @@ class MaterialRetentionHardening(unittest.TestCase):
         )
         self.assertEqual(proc_restore.returncode, 0, proc_restore.stderr)
         self.assertEqual((restored / "selected").read_bytes(), b"portable wave5 payload\n")
+        # Re-exporting from inside the extracted standalone recovery archive must also stay self-contained.
+        reexport = self.root / "reexported.zip"
+        proc_reexport = subprocess.run(
+            [sys.executable, "-I", str(extracted / "managed_material.py"), "export",
+             "--store", ".", "--output", str(reexport)],
+            cwd=extracted, capture_output=True, text=True,
+        )
+        self.assertEqual(proc_reexport.returncode, 0, proc_reexport.stderr)
+        self.assertTrue(reexport.is_file())
 
 
 if __name__ == "__main__":

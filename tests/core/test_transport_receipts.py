@@ -208,7 +208,18 @@ class TransportReceiptTests(unittest.TestCase):
         original_record = (self.ex.directory('one') / 'return.json').read_bytes()
         for key in (captured['origin_request']['origin_brief']['sha256'], captured['streams']['stderr']['sha256']):
             (self.root / 'objects' / key).unlink()
-        shutil.rmtree(self.root / 'carrier')
+        jobs_dir = self.root / 'carrier' / 'jobs'
+        if jobs_dir.is_dir():
+            until(lambda: all(not worker_active(j) for j in jobs_dir.iterdir() if j.is_dir()))
+        deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                shutil.rmtree(self.root / 'carrier')
+                break
+            except PermissionError:
+                if os.name != 'nt' or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.02)
         self.assertEqual(Exchange(self.root).recover_transport('one'), captured)
         self.assertEqual(self.ex.inspect('one')['return'], record)
         self.assertEqual((self.ex.directory('one') / 'return.json').read_bytes(), original_record)

@@ -59,8 +59,8 @@
       "link_base": "../../docs/engine/library/README.md",
       "presentation": "../../docs/engine/library/README.md",
       "kind": "guide",
-      "sha256": "24405768436ce6be4a0eadaee3e75f9bd389127ea9d61055702ea5269ce63b71",
-      "bytes": 8924,
+      "sha256": "132d3c11918f640567c6064e73a5726b2f60b84e1397aa71fcf2a36c901de1fa",
+      "bytes": 8917,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -79,8 +79,8 @@
       "link_base": "../../docs/engine/library/MIGRATION.md",
       "presentation": "../../docs/engine/library/MIGRATION.md",
       "kind": "guide",
-      "sha256": "a3135827560c144858dde12c4df1deca61eac74347f304a22ebeb031b3f1a097",
-      "bytes": 6389,
+      "sha256": "31754d8cfa0ecbf4e6feef860fb1234dac374e3bb1be3a2c81c3eefa064c0c29",
+      "bytes": 6375,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {

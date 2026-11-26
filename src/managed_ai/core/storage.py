@@ -15,6 +15,8 @@ from typing import Any, Iterator
 import uuid
 import zlib
 
+from managed_ai.platform import atomic_bytes as _platform_atomic_bytes
+
 from ._platform import (
     OPEN_DIR_NOFOLLOW as _OPEN_DIR_NOFOLLOW,
     OPEN_RO_NOFOLLOW as _OPEN_RO_NOFOLLOW,
@@ -48,17 +50,8 @@ def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def atomic_bytes(path: Path, data: bytes) -> None:
-    temp = path.with_name('.' + path.name + '.' + uuid.uuid4().hex)
-    try:
-        with temp.open('xb') as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temp, path)
-        sync_dir(path.parent)
-    finally:
-        temp.unlink(missing_ok=True)
+def atomic_bytes(path: Path, data: Any) -> None:
+    _platform_atomic_bytes(path, data)
 
 
 def write_json(path: Path, value: Any) -> None:

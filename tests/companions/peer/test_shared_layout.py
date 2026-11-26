@@ -41,23 +41,31 @@ class SharedLayout(unittest.TestCase):
                     self.assertEqual(direct.inventory(), inventory)
                     recorded = inventory['selector']['search_code']
                     expected_files = {
-                        'knowledge.py': library / 'reader/knowledge.py',
-                        'library_format.py': library / 'reader/library_format.py',
-                        'lexical_search.py': library / 'search/lexical_search.py',
-                        'product_bundle.py': library / 'bundles/product_bundle.py',
+                        'lexical.py': library / 'lexical.py',
+                        'config.py': library / 'config.py',
                     }
                     for name, path in expected_files.items():
                         data = path.read_bytes()
                         self.assertEqual(recorded[name], {'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()})
-                    self.assertEqual(inventory['selector']['acquired_search_sha256'], recorded['knowledge.py']['sha256'])
+                    self.assertEqual(inventory['selector']['acquired_search_sha256'], recorded['lexical.py']['sha256'])
                     self.assertEqual(inventory['selector_id'], identity(inventory['selector']))
-                    change_query_parser(library / 'search/lexical_search.py')
+
+                    # Mutate transitive dependency (config.py) first: entry digest stays identical while selector_id drifts.
+                    cfg_path = library / 'config.py'
+                    original_cfg = cfg_path.read_bytes()
+                    cfg_path.write_bytes(original_cfg + b'\n# transitive config drift check\n')
                     self.assertEqual(direct.discover('the example')['query_interpretation']['terms'], ['example'])
 
+                with SourceService(corpus, root / 'direct') as cfg_drifted:
+                    self.assertNotEqual(cfg_drifted.selector_id, inventory['selector_id'])
+                    self.assertEqual(cfg_drifted.selector['acquired_search_sha256'], recorded['lexical.py']['sha256'])
+                    self.assertIn(inventory['receipt_id'], cfg_drifted.receipts()['inventories'])
+
+                cfg_path.write_bytes(original_cfg)
+                change_query_parser(library / 'lexical.py')
                 with SourceService(corpus, root / 'direct') as changed:
                     self.assertEqual(changed.discover('the example')['query_interpretation']['terms'], ['changed'])
                     self.assertNotEqual(changed.selector_id, inventory['selector_id'])
-                    self.assertEqual(changed.selector['acquired_search_sha256'], recorded['knowledge.py']['sha256'])
                     self.assertIn(inventory['receipt_id'], changed.receipts()['inventories'])
 
     def test_unknown_delegation_and_oversized_dependency_are_refused(self):
@@ -65,10 +73,10 @@ class SharedLayout(unittest.TestCase):
             root = Path(directory)
             library, entry = search_layout(root)
             delegator = root / 'unrecognized_delegator.py'
-            delegator.write_text('import runpy\nrunpy.run_path("knowledge.py")\n', encoding='utf-8', newline='\n')
+            delegator.write_text('import runpy\nrunpy.run_path("lexical.py")\n', encoding='utf-8', newline='\n')
             with self.assertRaisesRegex(ValueError, 'supported entrance'):
                 SearchImplementation(delegator)
-            (library / 'search/lexical_search.py').write_bytes(b'#' * (256 * 1024 + 1))
+            (library / 'config.py').write_bytes(b'#' * (256 * 1024 + 1))
             with self.assertRaisesRegex(ValueError, 'exceeds byte bound'):
                 SearchImplementation(entry)
 

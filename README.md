@@ -6,10 +6,11 @@ A domain-neutral, standard-library Python 3.11+ engine for persistent goals, sch
 
 | Path | Responsibility |
 | --- | --- |
-| [`src/managed_ai/`](docs/engine/README.md) | Installable Python package: `deployment/`, `core/`, `store/`, `library/`, `host/`, `tools/`, `release/`, `companions/`, and `optional/collective/`. |
+| [`src/managed_ai/`](docs/engine/README.md) | Installable Python runtime package: `platform/`, `deployment/`, `core/`, `store/`, `library/`, `host/`, `tools/`, `companions/`, `optional/collective/`, and runtime `release/*.json` assets. |
+| [`scripts/`](docs/engine/release/README.md) | Maintainer and CI/CD tooling (not shipped in wheels): `scripts/release/{package,check_current,refresh_guidance}.py` and `scripts/publish_library.py`. |
 | [`docs/`](docs/engine/README.md) | Engine, companion, collective, and continuous-consolidation documentation. |
 | [`examples/`](examples/README.md) | Runnable feedback, receiving, continuing-state, and canary examples. |
-| `tests/` | Unified unit and integration suites mirroring `src/managed_ai/`. |
+| `tests/` | Unified unit and integration suites mirroring `src/managed_ai/` and `scripts/`. |
 | `pyproject.toml` | Standard PEP-517 build configuration (zero runtime dependencies, MIT). |
 
 ## Quickstart (Windows and POSIX)
@@ -58,7 +59,7 @@ python -B -m unittest discover -s tests
 
 ## Documentation
 
-- [Architecture](ARCHITECTURE.md) — component ownership, schemas, records, and guarded recomposition.
+- [Architecture](ARCHITECTURE.md) — domain-native ownership, `platform/` leaf boundary, schemas, records, and guarded recomposition.
 - [Engine overview](docs/engine/README.md), [Capabilities](docs/engine/CAPABILITIES.md), and [Instances & domains](docs/engine/INSTANCES.md).
 - [CLI field reference](docs/engine/CLI-FIELD-REFERENCE.md) and [Native store contract](docs/engine/store/README.md).
 - [Companions](docs/companions/README.md), [Collective coordination](docs/collective/README.md), and [Examples](examples/README.md).

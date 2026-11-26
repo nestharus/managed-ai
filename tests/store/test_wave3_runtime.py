@@ -224,7 +224,7 @@ class Wave3RuntimeTests(unittest.TestCase):
         dest.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ENGINE / '__init__.py', dest / '__init__.py')
         ignore = shutil.ignore_patterns('tests', '__pycache__', '*.pyc')
-        for sub in ('core', 'deployment', 'store', 'library'):
+        for sub in ('core', 'deployment', 'store', 'library', 'platform'):
             shutil.copytree(ENGINE / sub, dest / sub, ignore=ignore)
         return dest
 
@@ -277,7 +277,7 @@ class Wave3RuntimeTests(unittest.TestCase):
         probe = (
             "import sys\n"
             "from unittest.mock import patch\n"
-            "from deployment import controller\n"
+            "from managed_ai.deployment import controller\n"
             "calls = 0\n"
             "orig = controller.code_identity\n"
             "def counted(engine):\n"
@@ -289,7 +289,7 @@ class Wave3RuntimeTests(unittest.TestCase):
             "    controller.main()\n"
             "print(f'CALLS={calls}', file=sys.stderr)\n"
         )
-        env = dict(os.environ, PYTHONPATH=str(ENGINE))
+        env = dict(os.environ, PYTHONPATH=str(ENGINE.parent))
         proc = self.run_cli([sys.executable, '-B', '-c', probe, '--deployment', str(self.dep),
                              'system', 'explain-context', 'turn-exp'], env=env)
         self.assertIn('CALLS=1', proc.stderr)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Content-addressed material custody, exact ZIP recipes and selected exports.
+"""Content-addressed material custody, exact ZIP recipes, and selected exports.
 
 Python standard library only. This is a maintenance layer over existing byte
 identities, not a replacement host/native runtime or semantic acceptance tool.
@@ -7,194 +7,333 @@ identities, not a replacement host/native runtime or semantic acceptance tool.
 from __future__ import annotations
 
 import argparse
-import hashlib
-import importlib.util
 import json
 from pathlib import Path
 import sys
+from typing import Any
+
+if __name__ == "__main__" and not __package__:
+    _pkg_dir = Path(__file__).resolve().parent
+    if (
+        _pkg_dir.parent.name == "host"
+        and _pkg_dir.parents[1].name == "managed_ai"
+        and (_pkg_dir.parents[1] / "__init__.py").is_file()
+    ):
+        _sys_root = str(_pkg_dir.parents[2])
+        __package__ = "managed_ai.host.material_retention"
+    else:
+        _sys_root = str(_pkg_dir.parent)
+        __package__ = _pkg_dir.name
+    if _sys_root not in sys.path:
+        sys.path.insert(0, _sys_root)
+    __import__(__package__)
+
+from . import (
+    material_ops as _ops,
+    retention_closures as _closures,
+    retirement as _retirement,
+    snapshot_ops as _snapshot_ops,
+    store_core as _store_core,
+    store_io as _store_io,
+    transfer_ops as _transfer_ops,
+)
+from .config import (
+    DEFAULT_LIMITS,
+    FORMAT,
+    IMMUTABLE_RECORD_DIRS,
+    MaterialRetentionService,
+    RAW_BODY_KINDS,
+    RetentionLimits,
+)
+from .retention_closures import (
+    current_selection,
+    manifest_closure,
+    materialization_state,
+    observed_materialization_state,
+    read_manifest,
+    representation_closure,
+    selected_for_manifest,
+    selection_closure,
+    unpublished_occurrences,
+)
+from .snapshot_ops import PORTABLE_LAUNCHER_SOURCE, load_portable_bundle
+from .store_core import (
+    MAX_EXPANDED_BYTES,
+    MAX_MEMBER_BYTES,
+    MAX_ZIP_DEPTH,
+    MAX_ZIP_MEMBERS,
+    Store,
+)
+from .store_io import (
+    append_event_jsonl,
+    check_unfollowed_ancestors,
+    check_unfollowed_descendant,
+    deflate,
+    immutable,
+    immutable_below,
+    is_reparse_or_symlink,
+    js,
+    loads_json,
+    path_state,
+    replace_json,
+    require,
+    safe_relative,
+    sha,
+    sha256_file_checked,
+    sha256_stream,
+    store_lock,
+    sync_dir,
+    utc,
+)
 
 
-def _load_sibling(stem: str):
-    path = Path(__file__).resolve().with_name(stem + ".py")
-    key = f"_managed_material_{stem}_" + hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
-    module = sys.modules.get(key)
-    if module is None:
-        spec = importlib.util.spec_from_file_location(key, path)
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Unable to load managed_material sibling module: {path}")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[key] = module
-        try:
-            spec.loader.exec_module(module)
-        except BaseException:
-            sys.modules.pop(key, None)
-            raise
-    return module, path.read_bytes()
-
-
-_store_io, LOADED_STORE_IO_BYTES = _load_sibling("store_io")
-_closures, LOADED_CLOSURES_BYTES = _load_sibling("retention_closures")
-_store_core, LOADED_STORE_CORE_BYTES = _load_sibling("store_core")
-_ops, LOADED_MATERIAL_OPS_BYTES = _load_sibling("material_ops")
-_retirement, LOADED_RETIREMENT_BYTES = _load_sibling("retirement")
-
-LOADED_PRODUCER_BYTES = Path(__file__).read_bytes()
-SIBLING_MODULE_BYTES = {
-    "store_io.py": LOADED_STORE_IO_BYTES,
-    "retention_closures.py": LOADED_CLOSURES_BYTES,
-    "store_core.py": LOADED_STORE_CORE_BYTES,
-    "material_ops.py": LOADED_MATERIAL_OPS_BYTES,
-    "retirement.py": LOADED_RETIREMENT_BYTES,
-}
-
-# Re-export constants, I/O, locking, strict JSON, closures, and Store for compatibility.
-FORMAT = _store_io.FORMAT
-RAW_BODY_KINDS = _store_io.RAW_BODY_KINDS
-IMMUTABLE_RECORD_DIRS = _store_io.IMMUTABLE_RECORD_DIRS
-MAX_ZIP_DEPTH = _store_core.MAX_ZIP_DEPTH
-MAX_ZIP_MEMBERS = _store_core.MAX_ZIP_MEMBERS
-MAX_MEMBER_BYTES = _store_core.MAX_MEMBER_BYTES
-MAX_EXPANDED_BYTES = _store_core.MAX_EXPANDED_BYTES
-
-sha = _store_io.sha
-loads_json = _store_io.loads_json
-js = _store_io.js
-utc = _store_io.utc
-require = _store_io.require
-is_reparse_or_symlink = _store_io.is_reparse_or_symlink
-check_unfollowed_ancestors = _store_io.check_unfollowed_ancestors
-sync_dir = _store_io.sync_dir
-store_lock = _store_io.store_lock
-append_event_jsonl = _store_io.append_event_jsonl
-immutable = _store_io.immutable
-replace_json = _store_io.replace_json
-deflate = _store_io.deflate
-safe_relative = _store_io.safe_relative
-path_state = _store_io.path_state
-
-read_manifest = _closures.read_manifest
-manifest_closure = _closures.manifest_closure
-current_selection = _closures.current_selection
-selection_closure = _closures.selection_closure
-representation_closure = _closures.representation_closure
-observed_materialization_state = _closures.observed_materialization_state
-materialization_state = _closures.materialization_state
-selected_for_manifest = _closures.selected_for_manifest
-unpublished_occurrences = _closures.unpublished_occurrences
-
-Store = _store_core.Store
-
-
-def _hooks():
+def _hooks() -> dict[str, Any]:
+    """Build hooks lazily (no eager disk reads at import time) while honoring monkeypatches."""
+    producer_bytes, sibling_bytes, launcher_bytes = load_portable_bundle()
     return {
         "immutable": immutable,
         "replace_json": replace_json,
-        "producer_bytes": LOADED_PRODUCER_BYTES,
-        "sibling_bytes": SIBLING_MODULE_BYTES,
+        "producer_bytes": producer_bytes,
+        "sibling_bytes": sibling_bytes,
+        "launcher_bytes": launcher_bytes,
     }
 
 
-def _producer_dependencies(store):
-    return _ops._producer_dependencies(store, _hooks())
+def _producer_dependencies(store: Store) -> dict[str, str]:
+    return _snapshot_ops.producer_dependencies(store, _hooks())
 
 
-def snapshot(store, spec_path):
-    return _ops.snapshot(store, spec_path, hooks=_hooks())
+def snapshot(store: Store, spec_path: Path | str) -> dict[str, Any]:
+    return _snapshot_ops.snapshot(store, spec_path, hooks=_hooks())
 
 
-def verify(store, occurrence=None):
-    return _ops.verify(store, occurrence)
+def verify(store: Store, occurrence: str | None = None) -> dict[str, Any]:
+    return _snapshot_ops.verify(store, occurrence)
 
 
-def export(store, output, occurrence=None):
-    return _ops.export(store, output, occurrence, hooks=_hooks())
+def export(store: Store, output: Path | str, occurrence: str | None = None) -> dict[str, Any]:
+    return _transfer_ops.export(store, output, occurrence, hooks=_hooks())
 
 
-def restore(store, output, occurrence=None, prefix=None):
-    return _ops.restore(store, output, occurrence, prefix, hooks=_hooks())
+def restore(
+    store: Store,
+    output: Path | str,
+    occurrence: str | None = None,
+    prefix: str | None = None,
+) -> dict[str, Any]:
+    return _transfer_ops.restore(store, output, occurrence, prefix, hooks=_hooks())
 
 
-def retirement_plan(store, spec_path, occurrence=None):
+def retirement_plan(
+    store: Store,
+    spec_path: Path | str | dict[str, Any],
+    occurrence: str | None = None,
+) -> dict[str, Any]:
     return _retirement.retirement_plan(store, spec_path, occurrence)
 
 
-def retire(store, plan_path, expected_plan, expected_selection):
-    return _retirement.retire(store, plan_path, expected_plan, expected_selection, hooks=_hooks())
+def retire(
+    store: Store,
+    plan_path: Path | str,
+    expected_plan: str,
+    expected_selection: str,
+) -> dict[str, Any]:
+    return _retirement.retire(
+        store,
+        plan_path,
+        expected_plan,
+        expected_selection,
+        hooks=_hooks(),
+    )
 
 
-def rebuild(source_path, output, expected_index, expected_selection, account):
-    return _ops.rebuild(source_path, output, expected_index, expected_selection, account, hooks=_hooks())
+def rebuild(
+    source_path: Path | str,
+    output: Path | str,
+    expected_index: str,
+    expected_selection: str,
+    account: str,
+) -> dict[str, Any]:
+    return _transfer_ops.rebuild(
+        source_path,
+        output,
+        expected_index,
+        expected_selection,
+        account,
+        hooks=_hooks(),
+    )
 
 
-def retain_artifact(store, path, label, account):
-    return _ops.retain_artifact(store, path, label, account, hooks=_hooks())
+def retain_artifact(store: Store, path: Path | str, label: str, account: str) -> dict[str, Any]:
+    return _snapshot_ops.retain_artifact(store, path, label, account, hooks=_hooks())
 
 
-def main():
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("snapshot", "verify", "export", "restore", "get", "stats", "retirement-plan", "retire", "rebuild", "retain"):
-        p = sub.add_parser(name, allow_abbrev=False)
+    commands = (
+        "snapshot",
+        "verify",
+        "export",
+        "restore",
+        "get",
+        "stats",
+        "retirement-plan",
+        "retire",
+        "rebuild",
+        "retain",
+    )
+
+    for name in commands:
+        cmd = sub.add_parser(name, allow_abbrev=False)
         if name != "rebuild":
-            p.add_argument("--store", required=True, type=Path)
+            cmd.add_argument("--store", required=True, type=Path)
         if name in ("verify", "export", "restore", "retirement-plan"):
-            p.add_argument("--occurrence")
+            cmd.add_argument("--occurrence")
         if name in ("export", "restore", "get"):
-            p.add_argument("--output", required=True, type=Path)
+            cmd.add_argument("--output", required=True, type=Path)
         if name == "restore":
-            p.add_argument("--prefix")
+            cmd.add_argument("--prefix")
         if name == "get":
-            p.add_argument("--object", required=True)
+            cmd.add_argument("--object", required=True)
         if name in ("snapshot", "retirement-plan"):
-            p.add_argument("--spec", required=True, type=Path)
+            cmd.add_argument("--spec", required=True, type=Path)
         if name == "retire":
-            p.add_argument("--plan", required=True, type=Path)
-            p.add_argument("--expected-plan", required=True)
-            p.add_argument("--expected-selection", required=True)
+            cmd.add_argument("--plan", required=True, type=Path)
+            cmd.add_argument("--expected-plan", required=True)
+            cmd.add_argument("--expected-selection", required=True)
         if name == "rebuild":
-            p.add_argument("--source-store", required=True, type=Path)
-            p.add_argument("--output", required=True, type=Path)
-            p.add_argument("--expected-index", required=True)
-            p.add_argument("--expected-selection", required=True)
-            p.add_argument("--account", required=True)
+            cmd.add_argument("--source-store", required=True, type=Path)
+            cmd.add_argument("--output", required=True, type=Path)
+            cmd.add_argument("--expected-index", required=True)
+            cmd.add_argument("--expected-selection", required=True)
+            cmd.add_argument("--account", required=True)
         if name == "retain":
-            p.add_argument("--path", required=True, type=Path)
-            p.add_argument("--label", required=True)
-            p.add_argument("--account", required=True)
-    args = parser.parse_args()
+            cmd.add_argument("--path", required=True, type=Path)
+            cmd.add_argument("--label", required=True)
+            cmd.add_argument("--account", required=True)
+
+    return parser
+
+
+def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "rebuild":
-        result = rebuild(args.source_store, args.output, args.expected_index, args.expected_selection, args.account)
-        print(json.dumps(result, indent=2, allow_nan=False))
-        return
+        return rebuild(
+            args.source_store,
+            args.output,
+            args.expected_index,
+            args.expected_selection,
+            args.account,
+        )
+
     if args.command in ("snapshot", "retire", "retain"):
         with store_lock(args.store):
             store = Store(args.store, create=args.command == "snapshot")
             if args.command == "snapshot":
-                result = snapshot(store, args.spec)
-            elif args.command == "retire":
-                result = retire(store, args.plan, args.expected_plan, args.expected_selection)
-            else:
-                result = retain_artifact(store, args.path, args.label, args.account)
-    else:
-        with store_lock(args.store, shared=True):
-            store = Store(args.store, create=False)
-            if args.command == "verify":
-                result = verify(store, args.occurrence)
-            elif args.command == "export":
-                result = export(store, args.output, args.occurrence)
-            elif args.command == "restore":
-                result = restore(store, args.output, args.occurrence, args.prefix)
-            elif args.command == "get":
-                output = check_unfollowed_ancestors(args.output, "Output file", include_target=True)
-                require(not output.exists() and not is_reparse_or_symlink(output), "Preserve existing materialization")
-                raw = store.materialize(args.object)
-                immutable(output, raw)
-                result = {"object": args.object, "output": str(output), "bytes": len(raw), "verified": True}
-            elif args.command == "retirement-plan":
-                result = retirement_plan(store, args.spec, args.occurrence)
-            else:
-                result = store.stats()
+                return snapshot(store, args.spec)
+            if args.command == "retire":
+                return retire(store, args.plan, args.expected_plan, args.expected_selection)
+            return retain_artifact(store, args.path, args.label, args.account)
+
+    with store_lock(args.store, shared=True):
+        store = Store(args.store, create=False)
+        if args.command == "verify":
+            return verify(store, args.occurrence)
+        if args.command == "export":
+            return export(store, args.output, args.occurrence)
+        if args.command == "restore":
+            return restore(store, args.output, args.occurrence, args.prefix)
+        if args.command == "get":
+            output = check_unfollowed_ancestors(args.output, "Output file", include_target=True)
+            require(
+                not output.exists() and not is_reparse_or_symlink(output),
+                "Preserve existing materialization",
+            )
+            raw = store.materialize(args.object)
+            immutable(output, raw)
+            return {"object": args.object, "output": str(output), "bytes": len(raw), "verified": True}
+        if args.command == "retirement-plan":
+            return retirement_plan(store, args.spec, args.occurrence)
+        return store.stats()
+
+
+def main(argv: list[str] | None = None) -> None:
+    """CLI entry point with structured error handling."""
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    try:
+        result = _dispatch(args)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(
+            json.dumps(
+                {"error": str(exc), "error_type": type(exc).__name__, "command": args.command},
+                allow_nan=False,
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
     print(json.dumps(result, indent=2, allow_nan=False))
+
+
+__all__ = [
+    "DEFAULT_LIMITS",
+    "FORMAT",
+    "IMMUTABLE_RECORD_DIRS",
+    "MAX_EXPANDED_BYTES",
+    "MAX_MEMBER_BYTES",
+    "MAX_ZIP_DEPTH",
+    "MAX_ZIP_MEMBERS",
+    "MaterialRetentionService",
+    "PORTABLE_LAUNCHER_SOURCE",
+    "RAW_BODY_KINDS",
+    "RetentionLimits",
+    "Store",
+    "_closures",
+    "_ops",
+    "_retirement",
+    "_snapshot_ops",
+    "_store_core",
+    "_store_io",
+    "_transfer_ops",
+    "append_event_jsonl",
+    "check_unfollowed_ancestors",
+    "check_unfollowed_descendant",
+    "current_selection",
+    "deflate",
+    "export",
+    "immutable",
+    "immutable_below",
+    "is_reparse_or_symlink",
+    "js",
+    "load_portable_bundle",
+    "loads_json",
+    "main",
+    "manifest_closure",
+    "materialization_state",
+    "observed_materialization_state",
+    "path_state",
+    "read_manifest",
+    "rebuild",
+    "replace_json",
+    "representation_closure",
+    "require",
+    "restore",
+    "retain_artifact",
+    "retire",
+    "retirement_plan",
+    "safe_relative",
+    "selected_for_manifest",
+    "selection_closure",
+    "sha",
+    "sha256_file_checked",
+    "sha256_stream",
+    "snapshot",
+    "store_lock",
+    "sync_dir",
+    "unpublished_occurrences",
+    "utc",
+    "verify",
+]
 
 
 if __name__ == "__main__":

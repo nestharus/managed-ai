@@ -155,7 +155,7 @@ class ContinuingWorkCrossPlatformTests(unittest.TestCase):
         native_path, programs = capture_native.native_sources(ENGINE)
         if ENGINE.parent.name == 'store':
             self.assertEqual(native_path, ENGINE.parent / 'system.py')
-            self.assertTrue(all(key.startswith(('deployment/', 'core/', 'store/')) for key in programs))
+            self.assertTrue(all(key.startswith(('deployment/', 'core/', 'store/', 'platform/')) for key in programs))
         else:
             self.assertEqual(native_path, ENGINE.parent / 'native/system.py')
             self.assertTrue(all(key.startswith('runtime/') for key in programs))
@@ -546,9 +546,14 @@ class ContinuingWorkHardening(unittest.TestCase):
         self.assertTrue(res['native_programs_unchanged'])
         self.assertIn('sha256', res['host_producer'])
         self.assertIn('sha256', res['host_method'])
-        self.assertEqual(len(res['host_dependencies']), 4)
-        self.assertEqual({Path(d['path']).name for d in res['host_dependencies']},
-                         {'occurrence_files.py', 'repair_custody.py', 'native_bridge.py', 'scope_lifecycle.py'})
+        self.assertEqual(len(res['host_dependencies']), 7)
+        self.assertEqual(
+            {Path(d['path']).name for d in res['host_dependencies']},
+            {
+                'contract.py', 'occurrence_files.py', 'repair_custody.py',
+                'native_bridge.py', 'scope_prepare.py', 'scope_receive.py', 'scope_lifecycle.py',
+            },
+        )
         last_line = (self.host.root / 'EVENTS.jsonl').read_bytes().splitlines()[-1]
         self.assertLessEqual(len(last_line), MAX_EVENT_LINE_BYTES)
         parsed = json.loads(last_line)

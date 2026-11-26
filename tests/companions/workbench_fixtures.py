@@ -6,10 +6,21 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def search_layout(root):
-    """Build a src/managed_ai/library/{reader,search,bundles} fixture under root."""
+    """Build a hermetically pinned src/managed_ai/library lexical fixture under root."""
     engine = REPO_ROOT / 'src/managed_ai'
     lib = root / 'src/managed_ai/library'
-    for sub in ('reader', 'search', 'bundles'):
+    (lib / 'search').mkdir(parents=True, exist_ok=True)
+    if (engine / 'library/lexical.py').is_file():
+        copies = (
+            (engine / 'library/lexical.py', lib / 'lexical.py'),
+            (engine / 'library/config.py', lib / 'config.py'),
+            (engine / 'library/search/lexical_search.py', lib / 'search/lexical_search.py'),
+        )
+        for src, dst in copies:
+            dst.write_bytes(src.read_bytes())
+        return lib, lib / 'lexical.py'
+
+    for sub in ('reader', 'bundles'):
         (lib / sub).mkdir(parents=True, exist_ok=True)
     if (engine / 'library/reader/knowledge.py').is_file():
         copies = (

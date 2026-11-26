@@ -13,13 +13,20 @@ import zipfile
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
 IMPL = Path(os.environ.get(
     "MATERIAL_IMPLEMENTATION",
     REPO_ROOT / "src/managed_ai/host/material_retention/managed_material.py",
 ))
-spec = importlib.util.spec_from_file_location("material_under_test", IMPL)
-material = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(material)
+if os.environ.get("MATERIAL_IMPLEMENTATION"):
+    spec = importlib.util.spec_from_file_location("material_under_test", IMPL)
+    material = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(material)
+else:
+    from managed_ai.host.material_retention import managed_material as material
 
 
 class RetentionContract(unittest.TestCase):
@@ -59,7 +66,11 @@ class RetentionContract(unittest.TestCase):
         second = self.capture("second", current)
         recovered, report = self.exported_store("current")
         portable = recovered.root / "managed_material.py"
-        self.assertEqual(portable.read_bytes(), IMPL.read_bytes())
+        self.assertEqual(portable.read_bytes(), material.PORTABLE_LAUNCHER_SOURCE.encode("utf-8"))
+        self.assertEqual(
+            (recovered.root / "material_retention/managed_material.py").read_bytes(),
+            IMPL.read_bytes(),
+        )
         for args in (["verify"], ["restore", "--output", str(self.root / "portable-output")]):
             subprocess.run([sys.executable, "-I", str(portable), *args, "--store", ".", "--occurrence", "second"],
                            cwd=recovered.root, check=True, capture_output=True)

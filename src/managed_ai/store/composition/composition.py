@@ -103,8 +103,10 @@ class Composition:
         _text(body.get('purpose'), 'composition purpose')
         input_bytes = _bounded_profile_bytes(body)
         _strings(body.get('unknowns', []), 'composition unknowns')
+
         if 'coverage' in body and not isinstance(body['coverage'], (str, dict, list)):
             raise ValueError('composition coverage must be text, an object or a list')
+
         rows, references = {}, 0
         allowed = {
             'elements': {'id', 'account', 'content'},
@@ -113,19 +115,23 @@ class Composition:
             'opportunities': {'id', 'at', 'contribution', 'requires', 'disposition', 'reads',
                               'writes', 'footprint', 'conflicts', 'phase', 'account', 'content'},
         }
+
         for collection in COLLECTIONS:
             source = body.get(collection, [])
             if not isinstance(source, list):
                 raise ValueError(collection + ' must be a list')
+
             rows[collection] = {}
             for row in source:
                 _fields(row, allowed[collection], collection + ' row')
                 ident = _text(row.get('id'), collection + ' id')
                 if ident in rows[collection]:
                     raise ValueError('duplicate ' + collection + ' id: ' + ident)
+
                 rows[collection][ident] = row
                 if 'account' in row:
                     _text(row['account'], collection + ' account')
+
                 if collection == 'elements':
                     _text(row.get('account'), 'element account')
                 elif collection == 'relations':
@@ -157,6 +163,7 @@ class Composition:
                         raise ValueError('opportunity requires must be a list of alternative premise lists')
                     for group in alternatives:
                         references += len(_strings(group, 'opportunity premise alternative'))
+
         if sum(map(len, rows.values())) > MAX_ROWS:
             raise ValueError('composition exceeds the 2000 total declared-row bound')
         if references > MAX_REFERENCES:
@@ -171,14 +178,18 @@ class Composition:
         declared = record.get('basis', [])
         if not isinstance(declared, list) or len(declared) > MAX_ROWS:
             raise ValueError('record basis must be a list of at most 2000 captured paths')
+
         for row in declared:
             if not isinstance(row, dict) or not isinstance(row.get('path'), str):
                 raise ValueError('record basis must contain captured path objects')
+
             name = row['path']
             if name in captured:
                 raise ValueError('duplicate captured record basis path: ' + name)
+
             observed = {'path': name, 'captured_sha256': row.get('sha256'),
                         'current_sha256': None, 'status': 'unavailable'}
+
             try:
                 path = None if name.startswith('object:') else self.system.ex.path(name)
                 info = None
@@ -189,6 +200,7 @@ class Composition:
                             info = st
                     except OSError:
                         info = None
+
                 if info is None:
                     prefixes = getattr(getattr(self.system, 'record_store', None), 'content_addressed_basis_prefixes', ())
                     if (is_content_addressed_basis(row, prefixes=prefixes)
@@ -225,7 +237,9 @@ class Composition:
                                               else 'changed')
             except (OSError, ValueError) as exc:
                 observed['error'] = str(exc)
+
             captured[name] = observed
+
         return captured, used
 
     @staticmethod
@@ -281,6 +295,7 @@ class Composition:
         budget = _ViewBudget()
         if not budget.include(result):
             raise ValueError('interaction map header exceeds the view bound')
+
         for group in groups():
             coverage['total_groups'] += 1
             if len(result['groups']) >= limit:
@@ -289,10 +304,12 @@ class Composition:
                 result['groups'].append(group)
             else:
                 coverage['omitted_by_bytes'] += 1
+
         return result
 
     def _evaluate_premises(self, rows, basis):
         premises = {}
+
         for ident, row in rows['premises'].items():
             support = self._support(row.get('basis', []), basis)
             declared = row.get('disposition', 'unassessed')
@@ -300,10 +317,12 @@ class Composition:
             premises[ident] = dict(row, ref='premise:' + ident, disposition=declared,
                                    availability=availability, support=support,
                                    scope='Caller-supplied availability, qualified by nominated current source bindings.')
+
         return premises
 
     def _evaluate_relations(self, rows, basis, known, missing):
         relations = {}
+
         for ident, row in rows['relations'].items():
             ref = 'relation:' + ident
             endpoints = ['element:' + value for key in ('from', 'to') for value in row.get(key, [])]
@@ -312,17 +331,21 @@ class Composition:
                                     support=self._support(row.get('basis', []), basis),
                                     unresolved_refs=unknown,
                                     observation_scope='Caller-authored observation; no truth or alignment judgment inferred.')
+
         return relations
 
     def _evaluate_opportunities(self, rows, premises, known, missing):
         opportunities = {}
+
         for ident, row in rows['opportunities'].items():
             ref = 'opportunity:' + ident
             unknown = [missing(value, ref) for value in row.get('at', [])
                        if value not in known or value.partition(':')[0] not in ('element', 'relation')]
+
             for other in row.get('conflicts', []):
                 if other not in rows['opportunities']:
                     missing('opportunity:' + other, ref)
+
             alternatives = []
             for group in row.get('requires', []):
                 inputs = []
@@ -338,17 +361,20 @@ class Composition:
                 status = ('available' if all(s == 'available' for s in states) else
                           'unavailable' if 'unavailable' in states else 'unassessed')
                 alternatives.append({'premises': inputs, 'availability': status})
+
             states = [alternative['availability'] for alternative in alternatives]
             availability = ('available-under-declared-premises' if not states or 'available' in states else
                             'unavailable-under-declared-premises' if all(s == 'unavailable' for s in states) else
                             'needs-qualification')
             if unknown:
                 availability = 'needs-qualification'
+
             opportunities[ident] = dict(row, ref=ref, disposition=row.get('disposition', 'open'),
                                         phase=row.get('phase', 'unknown'), footprint=row.get('footprint', 'unknown'),
                                         availability=availability, premise_alternatives=alternatives,
                                         unresolved_refs=unknown,
                                         footprint_scope='Declared resources are partial claims; implicit context/publication dependencies are not inferred.')
+
         return opportunities
 
     @staticmethod
@@ -358,20 +384,25 @@ class Composition:
         writes_sets = [frozenset(o.get('writes', ())) for o in all_opportunities]
         conflicts_sets = [frozenset(o.get('conflicts', ())) for o in all_opportunities]
         byte_saturated = False
+
         for index, left in enumerate(all_opportunities):
             if len(pairs) >= pair_limit or byte_saturated:
                 break
+
             l_id = left['id']
             l_ref = left['ref']
             l_reads, l_writes, l_conflicts = reads_sets[index], writes_sets[index], conflicts_sets[index]
             l_unknown = left['footprint'] == 'unknown'
+
             for j in range(index + 1, len(all_opportunities)):
                 if len(pairs) >= pair_limit:
                     break
+
                 right = all_opportunities[j]
                 reasons = []
                 if right['id'] in l_conflicts or l_id in conflicts_sets[j]:
                     reasons.append({'kind': 'explicit-conflict'})
+
                 r_reads, r_writes = reads_sets[j], writes_sets[j]
                 if l_writes and r_writes:
                     common = l_writes & r_writes
@@ -385,6 +416,7 @@ class Composition:
                     common = l_reads & r_writes
                     if common:
                         reasons.append({'kind': 'left-read-right-write', 'resources': sorted(common)})
+
                 unknown = l_unknown or right['footprint'] == 'unknown'
                 pair = {'left': l_ref, 'right': right['ref'],
                         'phase_refs': [{'opportunity': l_ref, 'field': 'phase'},
@@ -394,10 +426,12 @@ class Composition:
                                    'unknown-footprint' if unknown else 'no-declared-interaction'),
                         'unknown_footprint': unknown,
                         'scope': 'No declared interaction is not actual independence; context and effect contracts still apply.'}
+
                 if not budget.include({'interactions': [pair]}):
                     byte_saturated = True
                     break
                 pairs.append(pair)
+
         return pairs, byte_saturated
 
     def inspect(self, record_id, focus=None, limit=20, pair_limit=200):

@@ -1,16 +1,19 @@
 """Shared peer harness/workbench protocol contract, strict JSON, and durable I/O."""
 from __future__ import annotations
 
-import errno
 import hashlib
 import json
 import math
-import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
-import stat
-import uuid
+from typing import Any
 
+from managed_ai.platform import (
+    atomic_bytes,
+    is_reparse_or_symlink,
+    strict_json_loads,
+    sync_dir,
+)
 
 REQUEST_SCHEMA = "peer-request/1"
 RETURN_SCHEMA = "peer-return/1"
@@ -25,7 +28,8 @@ PEER_ENTRY_FIELDS = ("revision", "status", "return_path", "manifest_path", "arti
 ID_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
 
 
-def canonical(value):
+def canonical(value: Any) -> bytes:
+    """Encode finite JSON canonically as UTF-8 bytes."""
     return json.dumps(
         value,
         ensure_ascii=False,
@@ -35,80 +39,45 @@ def canonical(value):
     ).encode("utf-8")
 
 
-def digest(body):
+def digest(body: bytes | bytearray | memoryview) -> str:
+    """Return the lowercase SHA-256 hex digest of raw bytes."""
     return hashlib.sha256(body).hexdigest()
 
 
-def identity(body):
+def identity(body: bytes | bytearray | memoryview) -> dict[str, Any]:
+    """Return byte count and SHA-256 hex digest for body."""
     return {"bytes": len(body), "sha256": digest(body)}
 
 
-def loads_strict(raw):
+def loads_strict(raw: bytes | bytearray | str) -> Any:
     """Decode strict UTF-8 JSON, rejecting duplicate object keys and nonfinite numbers."""
-    if isinstance(raw, (bytes, bytearray)):
-        text = raw.decode("utf-8")
-    elif isinstance(raw, str):
-        text = raw
-    else:
+    if not isinstance(raw, (bytes, bytearray, str)):
         raise TypeError("JSON input must be bytes or str")
-
-    def no_constant(value):
-        raise ValueError("Nonstandard JSON constant: " + value)
-
-    def unique_pairs(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError("Duplicate JSON object key: " + key)
-            result[key] = value
-        return result
-
-    value = json.loads(text, parse_constant=no_constant, object_pairs_hook=unique_pairs)
+    value = strict_json_loads(raw, label="Peer JSON", require_object=False)
     canonical(value)
     return value
 
 
-def detached(value):
+def detached(value: Any) -> Any:
+    """Return a detached strict-JSON roundtrip copy of value."""
     return loads_strict(canonical(value))
 
 
-def sync_dir(path):
-    if not hasattr(os, "O_DIRECTORY"):
-        return
-    directory = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(directory)
-    except OSError as exc:
-        if exc.errno not in (errno.EINVAL, errno.EBADF, errno.EROFS):
-            raise
-    finally:
-        os.close(directory)
-
-
-def atomic_write_bytes(path, data, *, exclusive=False):
+def atomic_write_bytes(path: Path | str, data: bytes, *, exclusive: bool = False) -> None:
     """Durably publish bytes via unique temp file, fsync, atomic install, and dir sync."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if exclusive and path.exists():
-        raise FileExistsError(str(path))
-    temporary = path.with_name(path.name + ".tmp-" + uuid.uuid4().hex)
-    try:
-        with temporary.open("xb") as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if exclusive:
-            os.link(temporary, path)
-            temporary.unlink()
-        else:
-            os.replace(temporary, path)
-        sync_dir(path.parent)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    atomic_bytes(target, data, exclusive=exclusive)
 
 
-def atomic_write_json(path, value, *, indent=None, exclusive=False):
+def atomic_write_json(
+    path: Path | str,
+    value: Any,
+    *,
+    indent: int | None = None,
+    exclusive: bool = False,
+) -> None:
+    """Durably publish strict JSON followed by a trailing newline."""
     if indent is None:
         payload = canonical(value) + b"\n"
     else:
@@ -125,12 +94,12 @@ def atomic_write_json(path, value, *, indent=None, exclusive=False):
     atomic_write_bytes(path, payload, exclusive=exclusive)
 
 
-def need(condition, message):
+def need(condition: Any, message: str) -> None:
     if not condition:
         raise ValueError(message)
 
 
-def fields(value, required, optional=()):
+def fields(value: Any, required: tuple[str, ...], optional: tuple[str, ...] = ()) -> None:
     need(isinstance(value, dict), "Expected an object")
     missing = set(required) - value.keys()
     unknown = value.keys() - set(required) - set(optional)
@@ -140,11 +109,11 @@ def fields(value, required, optional=()):
     )
 
 
-def integer(value, minimum=0):
+def integer(value: Any, minimum: int = 0) -> bool:
     return type(value) is int and value >= minimum
 
 
-def positive_number(value, integer_only=False):
+def positive_number(value: Any, integer_only: bool = False) -> bool:
     return (
         not isinstance(value, bool)
         and isinstance(value, int if integer_only else (int, float))
@@ -153,11 +122,11 @@ def positive_number(value, integer_only=False):
     )
 
 
-def identifier(value):
+def identifier(value: Any) -> bool:
     return isinstance(value, str) and ID_PATTERN.fullmatch(value) is not None and value not in (".", "..")
 
 
-def target_path(value):
+def target_path(value: Any) -> list[str]:
     need(
         isinstance(value, str) and bool(value) and "\\" not in value and "\x00" not in value,
         "Invalid target path",
@@ -169,7 +138,9 @@ def target_path(value):
     parts = value.split("/")
     need(
         not any(
-            part in ("", ".", "..") or PureWindowsPath(part).drive or (len(part) >= 2 and part[1] == ":")
+            part in ("", ".", "..")
+            or PureWindowsPath(part).drive
+            or (len(part) >= 2 and part[1] == ":")
             for part in parts
         )
         and not PurePosixPath(value).is_absolute(),
@@ -178,31 +149,32 @@ def target_path(value):
     return parts
 
 
-def path_conflicts(paths):
-    paths = set(paths)
-    for path in paths:
+def path_conflicts(paths: Any) -> bool:
+    unique = set(paths)
+    for path in unique:
         pieces = path.split("/")
-        if any("/".join(pieces[:n]) in paths for n in range(1, len(pieces))):
+        if any("/".join(pieces[:n]) in unique for n in range(1, len(pieces))):
             return True
     return False
 
 
-def is_reparse_or_symlink(path: Path) -> bool:
-    try:
-        info = path.lstat()
-    except FileNotFoundError:
-        return False
-    return bool(
-        stat.S_ISLNK(info.st_mode)
-        or (getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+def canonical_absolute(
+    value: Any,
+    label: str,
+    *,
+    directory: bool = False,
+    file: bool = False,
+) -> Path:
+    need(
+        isinstance(value, str) and bool(value) and "\x00" not in value,
+        label + " must be a nonempty path string",
     )
-
-
-def canonical_absolute(value, label, *, directory=False, file=False):
-    need(isinstance(value, str) and bool(value) and "\x00" not in value, label + " must be a nonempty path string")
     path = Path(value)
     need(path.is_absolute(), label + " must be absolute")
-    need(not any(is_reparse_or_symlink(part) for part in (path, *path.parents)), label + " cannot pass through a symlink or reparse point")
+    need(
+        not any(is_reparse_or_symlink(part) for part in (path, *path.parents)),
+        label + " cannot pass through a symlink or reparse point",
+    )
     need(path == path.resolve(), label + " must be a canonical path without symlink traversal")
     if directory:
         need(path.is_dir(), label + " must be an existing ordinary directory")
@@ -211,17 +183,23 @@ def canonical_absolute(value, label, *, directory=False, file=False):
     return path
 
 
-def scoped_file(root, name):
-    root = Path(root)
-    path = root
+def scoped_file(root: Path | str, name: str) -> Path:
+    base = Path(root)
+    path = base
     for part in target_path(name):
         path = path / part
-        need(not is_reparse_or_symlink(path), "Symlink or reparse point is outside the file contract: " + name)
-    need(path.is_file() and path.resolve().is_relative_to(root.resolve()), "Ordinary scoped file required: " + name)
+        need(
+            not is_reparse_or_symlink(path),
+            "Symlink or reparse point is outside the file contract: " + name,
+        )
+    need(
+        path.is_file() and path.resolve().is_relative_to(base.resolve()),
+        "Ordinary scoped file required: " + name,
+    )
     return path
 
 
-def validate_peer_entry(entry):
+def validate_peer_entry(entry: dict[str, Any]) -> None:
     """Validate one peer snapshot entry with explicit checkpoint paths."""
     fields(entry, PEER_ENTRY_FIELDS)
     need(
@@ -242,3 +220,36 @@ def validate_peer_entry(entry):
             and isinstance(entry["artifacts_dir"], str),
             "Returned peer requires explicit return_path, manifest_path, and artifacts_dir",
         )
+
+
+__all__ = [
+    "HARNESS_CONFIG_SCHEMA",
+    "HARNESS_RESULT_SCHEMA",
+    "ID_PATTERN",
+    "OWNER_STATUSES",
+    "PEER_ENTRY_FIELDS",
+    "PROCESS_SCHEMA",
+    "REQUEST_SCHEMA",
+    "RETURN_SCHEMA",
+    "WORKBENCH_CONFIG_SCHEMA",
+    "WORKBENCH_STATE_SCHEMA",
+    "atomic_write_bytes",
+    "atomic_write_json",
+    "canonical",
+    "canonical_absolute",
+    "detached",
+    "digest",
+    "fields",
+    "identifier",
+    "identity",
+    "integer",
+    "is_reparse_or_symlink",
+    "loads_strict",
+    "need",
+    "path_conflicts",
+    "positive_number",
+    "scoped_file",
+    "sync_dir",
+    "target_path",
+    "validate_peer_entry",
+]

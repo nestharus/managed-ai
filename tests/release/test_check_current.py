@@ -9,7 +9,7 @@ import unittest
 
 
 REPO = Path(__file__).resolve().parents[2]
-ENGINE = REPO / 'src/managed_ai'
+CHECK_SCRIPT = REPO / 'scripts/release/check_current.py'
 
 
 class ReleaseAcceptance(unittest.TestCase):
@@ -40,7 +40,7 @@ class ReleaseAcceptance(unittest.TestCase):
             standalone = subprocess.check_output([sys.executable, '-B', str(program)], env=env, text=True)
             self.assertEqual(standalone.strip(), 'inherited')
             subprocess.run(
-                [sys.executable, '-B', str(ENGINE / 'release/check_current.py'),
+                [sys.executable, '-B', str(CHECK_SCRIPT),
                  '--product', str(candidate_repo / 'src/managed_ai'), '--records', str(root)],
                 env=env,
                 check=True,
@@ -69,7 +69,7 @@ class ReleaseAcceptance(unittest.TestCase):
 
             # W5-B8b: --records pointing at an NTFS junction / POSIX symlink must be refused before writing
             res = subprocess.run(
-                [sys.executable, '-B', str(ENGINE / 'release/check_current.py'),
+                [sys.executable, '-B', str(CHECK_SCRIPT),
                  '--product', str(repo / 'src/managed_ai'), '--records', str(alias_rec)],
                 capture_output=True,
                 text=True,
@@ -80,7 +80,7 @@ class ReleaseAcceptance(unittest.TestCase):
 
             # Raw .. traversing through a junction/symlink must also be refused before lexical collapse
             res_dotdot = subprocess.run(
-                [sys.executable, '-B', str(ENGINE / 'release/check_current.py'),
+                [sys.executable, '-B', str(CHECK_SCRIPT),
                  '--product', str(repo / 'src/managed_ai'),
                  '--records', str(alias_rec) + os.sep + '..' + os.sep + 'real_records'],
                 capture_output=True,
@@ -92,7 +92,7 @@ class ReleaseAcceptance(unittest.TestCase):
 
             # W5-B11: allow_abbrev=False rejects abbreviated --rec
             abbrev = subprocess.run(
-                [sys.executable, '-B', str(ENGINE / 'release/check_current.py'),
+                [sys.executable, '-B', str(CHECK_SCRIPT),
                  '--product', str(repo / 'src/managed_ai'), '--rec', str(real_rec)],
                 capture_output=True,
                 text=True,
@@ -102,7 +102,7 @@ class ReleaseAcceptance(unittest.TestCase):
 
     def test_c41_1_ignores_stale_or_nonexistent_posix_pwd(self):
         import runpy
-        mod = runpy.run_path(str(ENGINE / 'release/check_current.py'))
+        mod = runpy.run_path(str(CHECK_SCRIPT))
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             dir_a = root / 'dir_a'

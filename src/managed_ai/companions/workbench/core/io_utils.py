@@ -2,52 +2,20 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-import errno
 import hashlib
 import json
 import math
-import os
 from pathlib import Path
-import stat
-import uuid
+from typing import Any
 
-try:
-    import fcntl
-except ImportError:
-    fcntl = None
-
-if os.name == "nt":
-    import ctypes
-    from ctypes import wintypes
-    import msvcrt
-
-    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-
-    class _OVERLAPPED(ctypes.Structure):
-        _fields_ = [
-            ("Internal", ctypes.c_void_p),
-            ("InternalHigh", ctypes.c_void_p),
-            ("Offset", wintypes.DWORD),
-            ("OffsetHigh", wintypes.DWORD),
-            ("hEvent", wintypes.HANDLE),
-        ]
-
-    _LockFileEx = _kernel32.LockFileEx
-    _LockFileEx.argtypes = [
-        wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
-        wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(_OVERLAPPED),
-    ]
-    _LockFileEx.restype = wintypes.BOOL
-    _UnlockFileEx = _kernel32.UnlockFileEx
-    _UnlockFileEx.argtypes = [
-        wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
-        wintypes.DWORD, ctypes.POINTER(_OVERLAPPED),
-    ]
-    _UnlockFileEx.restype = wintypes.BOOL
-    _LOCKFILE_FAIL_IMMEDIATELY = 0x00000001
-    _LOCKFILE_EXCLUSIVE_LOCK = 0x00000002
-    _ERROR_LOCK_VIOLATION = 33
-    _ERROR_IO_PENDING = 997
+from managed_ai.platform import (
+    atomic_bytes as _platform_atomic_bytes,
+    is_reparse_or_symlink,
+    lock_file_nonblocking,
+    strict_json_loads,
+    sync_dir,
+    unlock_file,
+)
 
 
 class OwnerLockError(OSError):
@@ -57,17 +25,17 @@ class OwnerLockError(OSError):
 class BasisMismatchError(ValueError):
     """Raised by restore hooks when a continuation would mix incompatible bases."""
 
-    def __init__(self, message, *, code="binding_mismatch", details=None):
+    def __init__(self, message: str, *, code: str = "binding_mismatch", details: Any = None) -> None:
         super().__init__(message)
         self.code = code
         self.details = details
 
 
-def detached_json(value):
+def detached_json(value: Any) -> Any:
     """Return a detached copy of finite JSON-compatible data."""
-    active = set()
+    active: set[int] = set()
 
-    def clone(item):
+    def clone(item: Any) -> Any:
         if item is None or isinstance(item, (str, bool, int)):
             return item
         if isinstance(item, float):
@@ -76,6 +44,7 @@ def detached_json(value):
             return item
         if not isinstance(item, (list, dict)):
             raise TypeError("durable value must be finite JSON")
+
         identity = id(item)
         if identity in active:
             raise ValueError("cyclic JSON value")
@@ -92,9 +61,10 @@ def detached_json(value):
     return clone(value)
 
 
-def canonical_bytes(value):
+def canonical_bytes(value: Any) -> bytes:
+    """Encode finite JSON canonically without a redundant Python deep-copy pass."""
     return json.dumps(
-        detached_json(value),
+        value,
         sort_keys=True,
         ensure_ascii=False,
         allow_nan=False,
@@ -102,137 +72,80 @@ def canonical_bytes(value):
     ).encode("utf-8")
 
 
-def sha256_bytes(data):
+def sha256_bytes(data: bytes | bytearray | memoryview) -> str:
+    """Return the lowercase SHA-256 hex digest of data."""
     return hashlib.sha256(data).hexdigest()
 
 
-def canonical_digest(value):
+def canonical_digest(value: Any) -> str:
+    """Return the SHA-256 hex digest of canonical UTF-8 JSON bytes."""
     return sha256_bytes(canonical_bytes(value))
 
 
-def pin_file(path):
+def pin_file(path: Path | str) -> dict[str, Any]:
+    """Read an existing file and return its byte count and SHA-256 hex digest."""
     data = Path(path).read_bytes()
     return {"bytes": len(data), "sha256": sha256_bytes(data)}
 
 
-def loads_strict(raw):
+def loads_strict(raw: bytes | bytearray | str) -> Any:
     """Decode strict UTF-8 JSON, refusing duplicate object keys and nonfinite numbers."""
-    if isinstance(raw, (bytes, bytearray)):
-        text = raw.decode("utf-8")
-    elif isinstance(raw, str):
-        text = raw
-    else:
+    if not isinstance(raw, (bytes, bytearray, str)):
         raise TypeError("JSON input must be bytes or str")
-
-    def unique_pairs(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError("duplicate JSON key: " + key)
-            result[key] = value
-        return result
-
-    def reject_constant(value):
-        raise ValueError("nonfinite JSON constant: " + value)
-
-    return detached_json(json.loads(
-        text,
-        object_pairs_hook=unique_pairs,
-        parse_constant=reject_constant,
-    ))
+    return strict_json_loads(raw, label="Workbench JSON", require_object=False)
 
 
-def read_json_strict(path):
+def read_json_strict(path: Path | str) -> Any:
+    """Read and strictly decode a UTF-8 JSON file."""
     return loads_strict(Path(path).read_bytes())
 
 
-def sync_dir(path):
-    if not hasattr(os, "O_DIRECTORY"):
-        return
-    directory = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(directory)
-    except OSError as exc:
-        if exc.errno not in (errno.EINVAL, errno.EBADF, errno.EROFS):
-            raise
-    finally:
-        os.close(directory)
-
-
-def atomic_bytes(path, data, *, exclusive=False):
+def atomic_bytes(path: Path | str, data: bytes, *, exclusive: bool = False) -> None:
     """Durably publish bytes via unique temp file, fsync, atomic install, and dir sync."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if exclusive and path.exists():
-        raise FileExistsError(str(path))
-    temporary = path.with_name(path.name + ".tmp-" + uuid.uuid4().hex)
-    try:
-        with temporary.open("xb") as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if exclusive:
-            os.link(temporary, path)
-            temporary.unlink()
-        else:
-            os.replace(temporary, path)
-        sync_dir(path.parent)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _platform_atomic_bytes(target, data, exclusive=exclusive)
 
 
-def atomic_json(path, value, *, exclusive=False):
+def atomic_json(path: Path | str, value: Any, *, exclusive: bool = False) -> None:
+    """Durably publish canonical JSON followed by a trailing newline."""
     atomic_bytes(path, canonical_bytes(value) + b"\n", exclusive=exclusive)
 
 
-def is_reparse_or_symlink(path: Path) -> bool:
-    try:
-        info = Path(path).lstat()
-    except FileNotFoundError:
-        return False
-    return bool(
-        stat.S_ISLNK(info.st_mode)
-        or (getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
-    )
-
-
 @contextmanager
-def exclusive_lock(lock_path):
-    """Acquire a non-blocking cooperative exclusive lock on POSIX or Windows."""
-    lock_path = Path(lock_path)
-    if is_reparse_or_symlink(lock_path):
+def exclusive_lock(lock_path: Path | str):
+    """Acquire a non-blocking cooperative exclusive lock via managed_ai.platform."""
+    target = Path(lock_path)
+    if is_reparse_or_symlink(target):
         raise OwnerLockError("owner lock must not be a symlink or reparse point")
-    with lock_path.open("a+b") as handle:
+
+    with target.open("a+b") as handle:
         locked = False
         try:
-            if fcntl is not None:
-                try:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError as exc:
-                    raise OwnerLockError("another local owner holds this occurrence") from exc
-                locked = True
-            elif os.name == "nt":
-                overlapped = _OVERLAPPED()
-                ok = _LockFileEx(
-                    msvcrt.get_osfhandle(handle.fileno()),
-                    _LOCKFILE_EXCLUSIVE_LOCK | _LOCKFILE_FAIL_IMMEDIATELY,
-                    0, 1, 0, ctypes.byref(overlapped),
-                )
-                if not ok:
-                    err = ctypes.get_last_error()
-                    if err in (_ERROR_LOCK_VIOLATION, _ERROR_IO_PENDING):
-                        raise OwnerLockError("another local owner holds this occurrence")
-                    raise ctypes.WinError(err)
-                locked = True
+            try:
+                lock_file_nonblocking(handle, exclusive=True)
+            except BlockingIOError as exc:
+                raise OwnerLockError("another local owner holds this occurrence") from exc
+            locked = True
             yield
         finally:
             if locked:
-                if fcntl is not None:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-                elif os.name == "nt":
-                    overlapped = _OVERLAPPED()
-                    _UnlockFileEx(
-                        msvcrt.get_osfhandle(handle.fileno()),
-                        0, 1, 0, ctypes.byref(overlapped),
-                    )
+                unlock_file(handle)
+
+
+__all__ = [
+    "BasisMismatchError",
+    "OwnerLockError",
+    "atomic_bytes",
+    "atomic_json",
+    "canonical_bytes",
+    "canonical_digest",
+    "detached_json",
+    "exclusive_lock",
+    "is_reparse_or_symlink",
+    "loads_strict",
+    "pin_file",
+    "read_json_strict",
+    "sha256_bytes",
+    "sync_dir",
+]

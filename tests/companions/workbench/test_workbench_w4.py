@@ -205,17 +205,29 @@ class WorkbenchWave4Tests(unittest.TestCase):
         self.assertTrue((cmd_dir / '0001.request.json').is_file())
         self.assertTrue((cmd_dir / '0001.transport.json').is_file())
 
-    # --- W4-H3: SearchImplementation supports Wave 4 engine/library level 1 & 2 and blocks escape ---
+    # --- W4-H3: SearchImplementation supports Wave 7 library level 1 & 2 and blocks escape ---
     def test_search_implementation_wave4_library_and_escape_refusal(self):
         library, entry = search_layout(self.root)
         impl = source_tools.SearchImplementation(entry)
-        self.assertEqual(len(impl.pins), 4)
+        self.assertEqual(len(impl.pins), 2)
         self.assertEqual(impl.library_root, library.resolve())
+        # Level-2 compatibility shim under library/search/ also binds cleanly inside library_root.
+        compat_impl = source_tools.SearchImplementation(library / 'search/lexical_search.py')
+        self.assertEqual(len(compat_impl.pins), 3)
+        self.assertEqual(compat_impl.library_root, library.resolve())
         # Escape attempt via level=3 must be refused.
-        bad = library / 'reader/bad_escape.py'
+        bad = library / 'search/bad_escape.py'
         bad.write_text('from ...outside import evil\n', encoding='utf-8', newline='\n')
         with self.assertRaisesRegex(ValueError, 'bounded relative'):
             source_tools.SearchImplementation(bad)
+
+        # C48-3: default_search_paths() aligns with SearchImplementation (library/lexical.py + library/config.py).
+        default_entry, default_deps = wb_config.default_search_paths()
+        self.assertEqual(default_entry.name, 'lexical.py')
+        self.assertEqual([p.name for p in default_deps], ['config.py'])
+        loaded_default = source_tools.SearchImplementation.cached(default_entry)
+        self.assertIn(str(default_entry.resolve()), loaded_default.pins)
+        self.assertIn(str(default_deps[0].resolve()), loaded_default.pins)
 
     # --- W4-H6: inspect_config aligns controller_dir default and core/ package check ---
     def test_inspect_config_defaults_controller_dir_and_validates_wave4_layout(self):

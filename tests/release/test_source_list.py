@@ -9,7 +9,7 @@ import unittest
 
 
 REPO = Path(__file__).resolve().parents[2]
-RELEASE = REPO / "src/managed_ai/release"
+RELEASE = REPO / "scripts/release"
 
 
 class SourceListTest(unittest.TestCase):

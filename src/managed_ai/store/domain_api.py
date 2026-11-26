@@ -6,7 +6,9 @@ rather than reaching into private core.* or store.* internals.
 from __future__ import annotations
 
 from managed_ai.core.formats import HEAD_INDEX_FORMAT
+
 from managed_ai.core.ownership import NativeLayout, external_root, packet_id, relative_path
+
 from managed_ai.core.storage import (
     AdmissionContended,
     MAX_BYTES,
@@ -24,6 +26,7 @@ from managed_ai.core.storage import (
     shared,
     strict_json_loads,
 )
+
 from managed_ai.deployment.controller import (
     Deployment,
     DeploymentSelection,
@@ -34,10 +37,15 @@ from managed_ai.deployment.controller import (
     report_admission,
     runtime_binding,
 )
+
 from managed_ai.store.composition.composition import Composition
+
 from managed_ai.store.composition.composition_opportunities import routes
+
 from managed_ai.store.composition.composition_revision import revise
+
 from managed_ai.store.governance.feedback import Feedback
+
 from managed_ai.store.protocol.identities import (
     digest,
     exact_fields,
@@ -47,15 +55,29 @@ from managed_ai.store.protocol.identities import (
     require,
     strict_json,
 )
+
 from managed_ai.store.protocol.inputs import strings
-from managed_ai.store.query.context_discovery import Discovery as ContextDiscovery, canonical, request as discovery_request
+
+from managed_ai.store.query.context_discovery import (
+    Discovery as ContextDiscovery,
+    canonical,
+    request as discovery_request,
+)
+
 from managed_ai.store.query.information import Information, pointer
+
 from managed_ai.store.records.record_import import import_records, read_receipt
+
 from managed_ai.store.records.record_transfer import inspect as inspect_transfer
+
 from managed_ai.store.records.records import RecordStore
+
 from managed_ai.store.selection.domain_selection import DomainSelection, source_path
+
 from managed_ai.store.selection.installed_catalogue import InstalledCatalogue
+
 from managed_ai.store.system import NativeError, System
+
 from managed_ai.store.turns.preparation_journal import TurnPreparation
 
 __all__ = [

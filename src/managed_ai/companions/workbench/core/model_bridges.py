@@ -5,33 +5,20 @@ import math
 import os
 from pathlib import Path
 import subprocess
-import sys
 import time
+from typing import Any
 
-try:
-    from .io_utils import (
-        atomic_bytes,
-        atomic_json,
-        canonical_bytes as encode,
-        loads_strict,
-        sha256_bytes,
-        sync_dir,
-    )
-except ImportError:
-    _src_root = Path(__file__).resolve().parents[4]
-    if str(_src_root) not in sys.path:
-        sys.path.insert(0, str(_src_root))
-    from managed_ai.companions.workbench.core.io_utils import (
-        atomic_bytes,
-        atomic_json,
-        canonical_bytes as encode,
-        loads_strict,
-        sha256_bytes,
-        sync_dir,
-    )
+from .io_utils import (
+    atomic_bytes,
+    atomic_json,
+    canonical_bytes as encode,
+    loads_strict,
+    sha256_bytes,
+    sync_dir,
+)
 
 
-def _positive_timeout(value):
+def _positive_timeout(value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("timeout_seconds must be a finite positive number")
     timeout = float(value)
@@ -43,23 +30,23 @@ def _positive_timeout(value):
 class MailboxModel:
     """Emit exact callback requests and wait for explicitly bound host responses."""
 
-    def __init__(self, directory, timeout_seconds=900):
+    def __init__(self, directory: Path | str, timeout_seconds: float = 900) -> None:
         self.directory = Path(directory).resolve()
         self.directory.mkdir(parents=True, exist_ok=True)
         self.timeout_seconds = _positive_timeout(timeout_seconds)
         self.calls = 0
 
-    def set_step(self, step):
+    def set_step(self, step: int) -> None:
         if type(step) is not int or step < 1:
             raise ValueError("step must be a positive integer")
         self.calls = step - 1
 
-    def resume_at(self, ordinal):
+    def resume_at(self, ordinal: int) -> None:
         if type(ordinal) is not int or ordinal < 0:
             raise ValueError("ordinal must be a nonnegative integer")
         self.calls = ordinal
 
-    def __call__(self, request):
+    def __call__(self, request: dict[str, Any]) -> dict[str, Any]:
         self.calls += 1
         stem = f"{self.calls:04d}"
         digest = sha256_bytes(encode(request))
@@ -67,6 +54,7 @@ class MailboxModel:
         response_path = self.directory / (stem + ".response.json")
         if response_path.exists():
             raise FileExistsError("Preexisting response cannot answer a new request: " + str(response_path))
+
         envelope = {
             "schema": "g60-model-mailbox-request/1",
             "request_sha256": digest,
@@ -74,32 +62,46 @@ class MailboxModel:
             "transport": "host-mediated model callback; no provider inference is implemented here",
         }
         atomic_json(request_path, envelope, exclusive=True)
+
         started = time.monotonic()
         while not response_path.exists():
             if time.monotonic() - started > self.timeout_seconds:
                 raise TimeoutError("Host response not received for " + stem)
             time.sleep(0.1)
+
         body = response_path.read_bytes()
         response = loads_strict(body)
         if not isinstance(response, dict) or response.get("request_sha256") != digest:
             raise ValueError("Model response is not bound to this exact request")
         if "action" not in response:
             raise ValueError("Model response has no action")
-        atomic_json(self.directory / (stem + ".transport.json"), {
-            "schema": "g60-model-mailbox-return/1",
-            "request_sha256": digest,
-            "response_sha256": sha256_bytes(body),
-            "response_bytes": len(body),
-            "elapsed_seconds": time.monotonic() - started,
-            "provider_inference_calls": None,
-        }, exclusive=True)
+
+        atomic_json(
+            self.directory / (stem + ".transport.json"),
+            {
+                "schema": "g60-model-mailbox-return/1",
+                "request_sha256": digest,
+                "response_sha256": sha256_bytes(body),
+                "response_bytes": len(body),
+                "elapsed_seconds": time.monotonic() - started,
+                "provider_inference_calls": None,
+            },
+            exclusive=True,
+        )
         return response["action"]
 
 
 class CommandModel:
     """Run a configured command: request JSON on stdin, action JSON on stdout."""
 
-    def __init__(self, argv, directory, *, cwd=None, timeout_seconds=900):
+    def __init__(
+        self,
+        argv: list[str],
+        directory: Path | str,
+        *,
+        cwd: Path | str | None = None,
+        timeout_seconds: float = 900,
+    ) -> None:
         if not isinstance(argv, list) or not argv or any(not isinstance(x, str) for x in argv):
             raise ValueError("argv must be a nonempty list of strings")
         self.argv = list(argv)
@@ -109,30 +111,32 @@ class CommandModel:
         self.timeout_seconds = _positive_timeout(timeout_seconds)
         self.calls = 0
 
-    def set_step(self, step):
+    def set_step(self, step: int) -> None:
         if type(step) is not int or step < 1:
             raise ValueError("step must be a positive integer")
         self.calls = step - 1
 
-    def resume_at(self, ordinal):
+    def resume_at(self, ordinal: int) -> None:
         if type(ordinal) is not int or ordinal < 0:
             raise ValueError("ordinal must be a nonnegative integer")
         self.calls = ordinal
 
-    def __call__(self, request):
+    def __call__(self, request: dict[str, Any]) -> dict[str, Any]:
         self.calls += 1
         stem = f"{self.calls:04d}"
         request_bytes = encode(request) + b"\n"
         request_path = self.directory / (stem + ".request.json")
         atomic_bytes(request_path, request_bytes, exclusive=True)
+
         stdout_path = self.directory / (stem + ".stdout")
         stderr_path = self.directory / (stem + ".stderr")
         started = time.monotonic()
-        status = {
+        status: dict[str, Any] = {
             "argv": self.argv,
             "cwd": self.cwd,
             "request_sha256": sha256_bytes(request_bytes),
         }
+
         try:
             with stdout_path.open("xb") as stdout, stderr_path.open("xb") as stderr:
                 run = subprocess.run(
@@ -148,6 +152,7 @@ class CommandModel:
                 os.fsync(stdout.fileno())
                 stderr.flush()
                 os.fsync(stderr.fileno())
+
             sync_dir(self.directory)
             status["returncode"] = run.returncode
             if run.returncode:
@@ -161,16 +166,27 @@ class CommandModel:
             atomic_json(self.directory / (stem + ".transport.json"), status, exclusive=True)
 
 
-def write_mailbox_response(directory, step, action, *, producer="host-supplied model participant"):
+def write_mailbox_response(
+    directory: Path | str,
+    step: int,
+    action: Any,
+    *,
+    producer: str = "host-supplied model participant",
+) -> None:
     """Atomically deliver a model-produced action to one exact outstanding request."""
-    directory = Path(directory).resolve()
+    root = Path(directory).resolve()
     stem = f"{int(step):04d}"
-    request = loads_strict((directory / (stem + ".request.json")).read_bytes())
+    request = loads_strict((root / (stem + ".request.json")).read_bytes())
     if sha256_bytes(encode(request["request"])) != request["request_sha256"]:
         raise ValueError("Request envelope digest mismatch")
-    atomic_json(directory / (stem + ".response.json"), {
-        "schema": "g60-model-mailbox-response/1",
-        "request_sha256": request["request_sha256"],
-        "producer": producer,
-        "action": action,
-    }, exclusive=True)
+
+    atomic_json(
+        root / (stem + ".response.json"),
+        {
+            "schema": "g60-model-mailbox-response/1",
+            "request_sha256": request["request_sha256"],
+            "producer": producer,
+            "action": action,
+        },
+        exclusive=True,
+    )

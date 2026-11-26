@@ -14,9 +14,9 @@ from typing import Any, Callable
 
 from managed_ai.core.exchange.carrier_receipts import transport_outcome
 from managed_ai.core.exchange.publication_receipts import (
-    publication_name,
     publication_inventory,
     publication_matches,
+    publication_name,
 )
 from managed_ai.core.storage import (
     MAX_BYTES,
@@ -32,9 +32,11 @@ def normalize_work_relpath(path_value: Any) -> str | None:
     """Normalize a workspace-relative path string (stripping leading ./ or work/)."""
     if not isinstance(path_value, str):
         return None
+
     raw = path_value.strip().replace('\\', '/')
     if not raw:
         return None
+
     normalized = posixpath.normpath(raw)
     while normalized.startswith('./'):
         normalized = normalized[2:]
@@ -48,6 +50,7 @@ def extract_turn_ref(path_value: Any) -> str | None:
     normalized = normalize_work_relpath(path_value)
     if normalized is None or not normalized.startswith('.system/turns/'):
         return None
+
     rest = normalized[len('.system/turns/'):]
     turn_name = rest.split('/', 1)[0]
     if turn_name and turn_name not in ('.', '..'):
@@ -60,6 +63,7 @@ def extract_hot_record_id(path_value: Any) -> str | None:
     normalized = normalize_work_relpath(path_value)
     if normalized is None:
         return None
+
     if normalized.startswith('records/') and normalized.endswith('.json'):
         leaf = normalized[len('records/'):-5]
         if leaf and '/' not in leaf and leaf not in ('.', '..'):
@@ -73,10 +77,12 @@ def packet_is_open(system, pkt_dir: Path, pkt_name: str, req: dict[str, Any]) ->
     if not ret_path.exists() and not ret_path.is_symlink():
         outcome = transport_outcome(system.ex, pkt_dir, req)
         return outcome is None
+
     ret = read_json(ret_path)
     publications, reconciliations, unreadable = publication_inventory(pkt_dir)
     if unreadable:
         return True
+
     declared_targets = {
         row['path'] for row in req.get('targets', ())
         if isinstance(row, dict) and isinstance(row.get('path'), str)
@@ -89,6 +95,7 @@ def packet_is_open(system, pkt_dir: Path, pkt_name: str, req: dict[str, Any]) ->
         rec.get('intent_sha256') for rec, _ in reconciliations.values()
         if isinstance(rec, dict) and isinstance(rec.get('intent_sha256'), str)
     }
+
     completed_targets: set[str] = set()
     for _, (pub, pub_digest) in publications.items():
         if not isinstance(pub, dict):
@@ -105,6 +112,7 @@ def packet_is_open(system, pkt_dir: Path, pkt_name: str, req: dict[str, Any]) ->
                     completed_targets.add(target)
             else:
                 return True
+
     return bool((declared_targets & proposed_targets) - completed_targets)
 
 
@@ -120,14 +128,15 @@ def scan_interpretation_refs(
     interp_dir = system.work / 'interpretations'
     if not interp_dir.exists() and not interp_dir.is_symlink():
         return refs, errors
-    info = interp_dir.lstat()
-    require(is_ordinary_dir_stat(info), 'ordinary interpretations directory required')
+
+    require(is_ordinary_dir_stat(interp_dir.lstat()), 'ordinary interpretations directory required')
+
     for path in sorted(interp_dir.iterdir(), key=lambda p: p.name):
         if path.name.startswith('.') or not path.name.endswith('.json'):
             continue
+
         try:
-            p_info = path.lstat()
-            if not is_ordinary_file_stat(p_info):
+            if not is_ordinary_file_stat(path.lstat()):
                 raise ValueError(f'symlink interpretation file: {path.name}')
             doc = strict_json(read_bytes(path, MAX_BYTES))
         except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -135,6 +144,7 @@ def scan_interpretation_refs(
                 raise
             errors.append(f'unreadable interpretation {path.name}: {exc}')
             continue
+
         evidence = doc.get('evidence', [])
         if not isinstance(evidence, list):
             msg = f'malformed evidence list in interpretation {path.name}'
@@ -142,6 +152,7 @@ def scan_interpretation_refs(
                 raise ValueError(msg)
             errors.append(msg)
             continue
+
         for ev in evidence:
             if isinstance(ev, dict):
                 ev_path = ev.get('path')
@@ -159,9 +170,11 @@ def scan_interpretation_refs(
                     raise ValueError(msg)
                 errors.append(msg)
                 continue
+
             target = extractor(ev_path)
             if target is not None:
                 refs.setdefault(target, []).append({'interpretation': path.name, 'path': ev_path})
+
     for rows in refs.values():
         rows.sort(key=lambda r: (r['interpretation'], r['path']))
     return refs, errors
@@ -182,7 +195,9 @@ def scan_packet_refs(
     packets_root = system.ex.root / 'packets'
     if not packets_root.exists() and not packets_root.is_symlink():
         return refs, committed, errors
+
     require(is_ordinary_dir_stat(packets_root.lstat()), 'ordinary packets directory required')
+
     for pkt_dir in sorted(packets_root.iterdir(), key=lambda p: p.name):
         entry_name = pkt_dir.name
         staged = False
@@ -196,13 +211,14 @@ def scan_packet_refs(
             continue
         else:
             pkt_name = entry_name
-        info = pkt_dir.lstat()
-        if not is_ordinary_dir_stat(info):
+
+        if not is_ordinary_dir_stat(pkt_dir.lstat()):
             msg = f'non-directory packet entry: {entry_name}'
             if fail_closed:
                 raise ValueError(msg)
             errors.append(msg)
             continue
+
         req_path = pkt_dir / 'request.json'
         if entry_name.startswith('.prepare-') and not req_path.exists() and not req_path.is_symlink():
             msg = f'in-flight packet staging directory present: {entry_name}'
@@ -210,6 +226,7 @@ def scan_packet_refs(
                 raise ValueError(msg)
             errors.append(msg)
             continue
+
         try:
             request = strict_json(read_bytes(req_path, MAX_BYTES))
         except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -217,20 +234,28 @@ def scan_packet_refs(
                 raise
             errors.append(f'unreadable packet request {entry_name}: {exc}')
             continue
+
         if not staged:
             committed.add(entry_name)
         elif isinstance(request.get('packet'), str) and request['packet']:
             pkt_name = request['packet']
+
         if open_only and not staged and not packet_is_open(system, pkt_dir, entry_name, request):
             continue
+
         for role in ('brief', 'methods', 'materials', 'targets'):
-            rows = [request[role]] if role == 'brief' and isinstance(request.get('brief'), dict) else request.get(role, [])
+            rows = (
+                [request[role]]
+                if role == 'brief' and isinstance(request.get('brief'), dict)
+                else request.get(role, [])
+            )
             if not isinstance(rows, list):
                 msg = f'malformed {role} in packet {entry_name}'
                 if fail_closed:
                     raise ValueError(msg)
                 errors.append(msg)
                 continue
+
             for row in rows:
                 if not isinstance(row, dict):
                     continue
@@ -242,6 +267,7 @@ def scan_packet_refs(
                         'role': role,
                         'path': raw_path,
                     })
+
     for rows in refs.values():
         rows.sort(key=lambda r: (r['packet'], r['role'], r['path']))
     return refs, committed, errors
@@ -258,11 +284,13 @@ def scan_attention_refs(
     att_index = system.ex.root / 'attention/index.json'
     if not att_index.exists() and not att_index.is_symlink():
         return refs, None
+
     try:
         state = system.attention._load()
         field_target = extractor(state.get('field'))
         if field_target is not None:
             refs.setdefault(field_target, []).append({'owner': 'attention.field', 'path': state['field']})
+
         active_items: set[str] = set()
         for item_id, obj_key in sorted(state.get('items', {}).items()):
             spec = system.attention._get(obj_key)
@@ -277,14 +305,17 @@ def scan_attention_refs(
                         'item': item_id,
                         'path': path,
                     })
+
         if active_items and state.get('receipts'):
             current = system.attention._current(state)
             receipt_cache: dict[int, dict[str, Any]] = {}
             latest_map = current.get('latest', {})
+
             for item_id in sorted(active_items):
                 bases = latest_map.get(item_id, {})
                 if not isinstance(bases, dict):
                     raise ValueError(f'malformed attention latest entries for {item_id}')
+
                 for basis_key in sorted(bases):
                     pos, offset = bases[basis_key]
                     if pos not in receipt_cache:
@@ -294,6 +325,7 @@ def scan_attention_refs(
                     products = assessment.get('products', [])
                     if not isinstance(products, list):
                         raise ValueError(f'malformed attention assessment products for {item_id}')
+
                     for product in products:
                         prod_path = product.get('path') if isinstance(product, dict) else product
                         target = extractor(prod_path)
@@ -308,9 +340,107 @@ def scan_attention_refs(
         if fail_closed:
             raise
         return refs, str(exc)
+
     for rows in refs.values():
         rows.sort(key=lambda r: (r['owner'], r.get('item', ''), r.get('receipt', ''), r['path']))
     return refs, None
+
+
+def _scan_uncommitted_request_file(
+    entry: Path,
+    other: str,
+    extractor: Callable[[Any], str | None],
+    *,
+    include_record_ids: bool,
+    skip_self_turn: bool,
+    fail_closed: bool,
+    refs: dict[str, list[dict[str, str]]],
+    errors: list[str],
+) -> None:
+    req_file = entry / 'request.json'
+    if not (req_file.exists() or req_file.is_symlink()):
+        return
+
+    try:
+        if not is_ordinary_file_stat(req_file.lstat()):
+            raise ValueError(f'symlink request file in uncommitted turn {other}')
+        req = strict_json(read_bytes(req_file, MAX_BYTES))
+    except (OSError, ValueError) as exc:
+        if fail_closed:
+            raise
+        errors.append(f'unreadable request in uncommitted turn {other}: {exc}')
+        return
+
+    if include_record_ids:
+        for rid in req.get('records', ()):
+            if isinstance(rid, str) and rid:
+                refs.setdefault(rid, []).append({
+                    'uncommitted_turn': other,
+                    'field': 'records',
+                    'path': f'records/{rid}.json',
+                })
+        for comp in req.get('compositions', ()):
+            if isinstance(comp, dict) and isinstance(comp.get('record'), str) and comp['record']:
+                rid = comp['record']
+                refs.setdefault(rid, []).append({
+                    'uncommitted_turn': other,
+                    'field': 'compositions',
+                    'path': f'records/{rid}.json',
+                })
+
+    for field in ('sources', 'targets', 'methods', 'materials'):
+        values = req.get(field, [])
+        if isinstance(values, list):
+            for val in values:
+                raw_path = val.get('path') if isinstance(val, dict) else val
+                target = extractor(raw_path)
+                if target is not None and (not skip_self_turn or target != other):
+                    refs.setdefault(target, []).append({
+                        'uncommitted_turn': other,
+                        'field': field,
+                        'path': raw_path,
+                    })
+
+    brief_val = req.get('brief')
+    brief_path = brief_val.get('path') if isinstance(brief_val, dict) else brief_val
+    brief_target = extractor(brief_path)
+    if brief_target is not None and (not skip_self_turn or brief_target != other):
+        refs.setdefault(brief_target, []).append({
+            'uncommitted_turn': other,
+            'field': 'brief',
+            'path': brief_path,
+        })
+
+
+def _scan_uncommitted_selection_file(
+    entry: Path,
+    other: str,
+    *,
+    fail_closed: bool,
+    refs: dict[str, list[dict[str, str]]],
+    errors: list[str],
+) -> None:
+    sel_file = entry / 'selection.json'
+    if not (sel_file.exists() or sel_file.is_symlink()):
+        return
+
+    try:
+        sel = strict_json(read_bytes(sel_file, MAX_BYTES))
+    except (OSError, ValueError) as exc:
+        if fail_closed:
+            raise
+        errors.append(f'unreadable selection in uncommitted turn {other}: {exc}')
+        return
+
+    view = sel.get('view')
+    if isinstance(view, dict):
+        for rid in view.get('selected_records', ()):
+            if isinstance(rid, str) and rid:
+                refs.setdefault(rid, []).append({
+                    'uncommitted_turn': other,
+                    'field': 'selection.view.selected_records',
+                    'path': f'records/{rid}.json',
+                })
 
 
 def scan_uncommitted_turn_refs(
@@ -328,11 +458,14 @@ def scan_uncommitted_turn_refs(
     turns_root = system.work / '.system/turns'
     if not turns_root.exists() and not turns_root.is_symlink():
         return refs, errors
+
     require(is_ordinary_dir_stat(turns_root.lstat()), 'ordinary turns working directory required')
+
     for entry in sorted(turns_root.iterdir(), key=lambda p: p.name):
         if entry.name.startswith('.'):
             continue
         other = entry.name
+
         try:
             info = entry.lstat()
         except OSError as exc:
@@ -340,14 +473,17 @@ def scan_uncommitted_turn_refs(
                 raise
             errors.append(f'unreadable turn directory entry {other}: {exc}')
             continue
+
         if not is_ordinary_dir_stat(info):
             msg = f'non-directory turn working entry: {other}'
             if fail_closed:
                 raise ValueError(msg)
             errors.append(msg)
             continue
+
         if other in committed_packets:
             continue
+
         prep_file = entry / 'preparation.json'
         if prep_file.exists() or prep_file.is_symlink():
             try:
@@ -359,64 +495,26 @@ def scan_uncommitted_turn_refs(
                 continue
             if prep.get('phase') == 'abandoned':
                 continue
-        req_file = entry / 'request.json'
-        if req_file.exists() or req_file.is_symlink():
-            try:
-                if not is_ordinary_file_stat(req_file.lstat()):
-                    raise ValueError(f'symlink request file in uncommitted turn {other}')
-                req = strict_json(read_bytes(req_file, MAX_BYTES))
-            except (OSError, ValueError) as exc:
-                if fail_closed:
-                    raise
-                errors.append(f'unreadable request in uncommitted turn {other}: {exc}')
-                continue
-            if include_record_ids:
-                for rid in req.get('records', ()):
-                    if isinstance(rid, str) and rid:
-                        refs.setdefault(rid, []).append({
-                            'uncommitted_turn': other, 'field': 'records', 'path': f'records/{rid}.json',
-                        })
-                for comp in req.get('compositions', ()):
-                    if isinstance(comp, dict) and isinstance(comp.get('record'), str) and comp['record']:
-                        rid = comp['record']
-                        refs.setdefault(rid, []).append({
-                            'uncommitted_turn': other, 'field': 'compositions', 'path': f'records/{rid}.json',
-                        })
-            for field in ('sources', 'targets', 'methods', 'materials'):
-                values = req.get(field, [])
-                if isinstance(values, list):
-                    for val in values:
-                        raw_path = val.get('path') if isinstance(val, dict) else val
-                        target = extractor(raw_path)
-                        if target is not None and (not skip_self_turn or target != other):
-                            refs.setdefault(target, []).append({
-                                'uncommitted_turn': other, 'field': field, 'path': raw_path,
-                            })
-            brief_val = req.get('brief')
-            brief_path = brief_val.get('path') if isinstance(brief_val, dict) else brief_val
-            brief_target = extractor(brief_path)
-            if brief_target is not None and (not skip_self_turn or brief_target != other):
-                refs.setdefault(brief_target, []).append({
-                    'uncommitted_turn': other, 'field': 'brief', 'path': brief_path,
-                })
+
+        _scan_uncommitted_request_file(
+            entry,
+            other,
+            extractor,
+            include_record_ids=include_record_ids,
+            skip_self_turn=skip_self_turn,
+            fail_closed=fail_closed,
+            refs=refs,
+            errors=errors,
+        )
         if include_record_ids:
-            sel_file = entry / 'selection.json'
-            if sel_file.exists() or sel_file.is_symlink():
-                try:
-                    sel = strict_json(read_bytes(sel_file, MAX_BYTES))
-                except (OSError, ValueError) as exc:
-                    if fail_closed:
-                        raise
-                    errors.append(f'unreadable selection in uncommitted turn {other}: {exc}')
-                    continue
-                view = sel.get('view')
-                if isinstance(view, dict):
-                    for rid in view.get('selected_records', ()):
-                        if isinstance(rid, str) and rid:
-                            refs.setdefault(rid, []).append({
-                                'uncommitted_turn': other, 'field': 'selection.view.selected_records',
-                                'path': f'records/{rid}.json',
-                            })
+            _scan_uncommitted_selection_file(
+                entry,
+                other,
+                fail_closed=fail_closed,
+                refs=refs,
+                errors=errors,
+            )
+
     for rows in refs.values():
         rows.sort(key=lambda r: (r['uncommitted_turn'], r['field'], r['path']))
     return refs, errors

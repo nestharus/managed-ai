@@ -3,52 +3,49 @@
 A result nominates receiving work. It does not read source paths, infer
 semantic dependencies, establish truth, or release independent obligations.
 """
+from __future__ import annotations
 
 import argparse as _argparse
 import copy as _copy
 import json as _json
+from pathlib import Path as _Path
 import sys as _sys
+from typing import Any
 
+if __package__ in (None, ""):
+    _src_root = str(_Path(__file__).resolve().parents[3])
+    if _src_root not in _sys.path:
+        _sys.path.insert(0, _src_root)
+
+from managed_ai.platform import strict_json_loads as _strict_json_loads
 
 _SELECTION_FIELDS = ("query_sha256", "catalogue_sha256", "policy_sha256")
 
 
-def _load_strict_json(path):
-    def _unique_pairs(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError("duplicate JSON key: " + key)
-            result[key] = value
-        return result
-
-    def _reject_constant(value):
-        raise ValueError("non-finite JSON number: " + value)
-
-    with open(path, "r", encoding="utf-8") as stream:
-        return _json.load(
-            stream,
-            object_pairs_hook=_unique_pairs,
-            parse_constant=_reject_constant,
-        )
+def _load_strict_json(path: _Path | str) -> Any:
+    return _strict_json_loads(_Path(path).read_bytes(), label=str(path), require_object=False)
 
 
-def _check_inputs(previous, current):
+def _check_inputs(previous: Any, current: Any) -> None:
     if not isinstance(previous, dict) or not isinstance(current, dict):
         raise ValueError("previous and current must be JSON objects")
+
     for key in ("artifacts", "obligations"):
         if not isinstance(previous.get(key), list):
             raise ValueError("previous." + key + " must be a list")
+
     for key in ("requirements", "sources", "artifacts"):
         if not isinstance(current.get(key), dict):
             raise ValueError("current." + key + " must be an object")
+
     if "selections" in current:
         if not isinstance(current["selections"], dict):
             raise ValueError("current.selections must be an object")
         for observed in current["selections"].values():
             if observed is not None and not isinstance(observed, dict):
                 raise ValueError("each current selection must be an object or null")
-    seen = set()
+
+    seen: set[str] = set()
     for receipt in previous["artifacts"]:
         if not isinstance(receipt, dict):
             raise ValueError("each artifact receipt must be an object")
@@ -57,6 +54,7 @@ def _check_inputs(previous, current):
         if receipt["id"] in seen:
             raise ValueError("artifact ids must be unique")
         seen.add(receipt["id"])
+
         if not isinstance(receipt.get("artifact_sha256"), str):
             raise ValueError("each artifact receipt requires artifact_sha256")
         for key in ("requirements", "sources"):
@@ -70,11 +68,12 @@ def _check_inputs(previous, current):
         for basis in receipt.get("selections", {}).values():
             if not isinstance(basis, dict):
                 raise ValueError("each previous selection must be an object")
+
     if any(not isinstance(item, dict) for item in previous["obligations"]):
         raise ValueError("each obligation must be an object")
 
 
-def _compare(kind, identity, expected, observations):
+def _compare(kind: str, identity: str, expected: Any, observations: dict[str, Any]) -> dict[str, str] | None:
     if identity not in observations:
         suffix = "unobserved"
     elif observations[identity] is None:
@@ -86,79 +85,75 @@ def _compare(kind, identity, expected, observations):
     return {"kind": kind + "_" + suffix, "id": identity}
 
 
-def _selection_reasons(receipt, current):
+def _selection_reasons(receipt: dict[str, Any], current: dict[str, Any]) -> list[dict[str, str]]:
     """Compare declared fields and retain unsupported discovery currentness."""
     selections = receipt.get("selections", {})
-    reasons = []
+    reasons: list[dict[str, str]] = []
+
     if receipt.get("scope", "fixed") == "discovery" and (
-        not selections or any(
-            any(field not in basis for field in _SELECTION_FIELDS)
-            for basis in selections.values()
-        )
+        not selections
+        or any(any(field not in basis for field in _SELECTION_FIELDS) for basis in selections.values())
     ):
         reasons.append({"kind": "selection_basis_missing", "id": receipt["id"]})
+
     observations = current.get("selections", {})
     for selection_id, basis in selections.items():
         if selection_id in observations and observations[selection_id] is None:
-            # A null selection explicitly observes every declared field absent.
             observed_fields = {field: None for field in basis}
         else:
             observed_fields = observations.get(selection_id, {})
+
         for field, expected in basis.items():
             reason = _compare("selection", field, expected, observed_fields)
             if reason is not None:
                 reason["id"] = selection_id + "/" + field
                 reasons.append(reason)
+
     return reasons
 
 
-def assess(previous: dict, current: dict) -> dict:
-    """Return ordered current/recheck/unknown decisions without mutating inputs.
-
-    Missing keys mean unobserved; explicit None means observed absent.
-    A known change outranks an unavailable observation, retaining all reasons.
-    Selection dependencies apply to every receipt; discovery also requires a
-    complete declared selection basis. Accepted inputs pin exact output bytes.
-    Open obligations are deep-copied independently of artifact decisions.
-    """
+def assess(previous: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    """Return ordered current/recheck/unknown decisions without mutating inputs."""
     _check_inputs(previous, current)
-    results = []
+    results: list[dict[str, Any]] = []
+
     for receipt in previous["artifacts"]:
-        reasons = []
-        for singular, plural in (("requirement", "requirements"),
-                                 ("source", "sources")):
+        reasons: list[dict[str, str]] = []
+        for singular, plural in (("requirement", "requirements"), ("source", "sources")):
             for identity, expected in receipt[plural].items():
                 reason = _compare(singular, identity, expected, current[plural])
                 if reason is not None:
                     reasons.append(reason)
-        reason = _compare("artifact", receipt["id"], receipt["artifact_sha256"],
-                          current["artifacts"])
+
+        reason = _compare("artifact", receipt["id"], receipt["artifact_sha256"], current["artifacts"])
         if reason is not None:
             reasons.append(reason)
+
         reasons.extend(_selection_reasons(receipt, current))
         for identity, expected in receipt.get("accepted_inputs", {}).items():
-            reason = _compare("accepted_input", identity, expected,
-                              current["artifacts"])
+            reason = _compare("accepted_input", identity, expected, current["artifacts"])
             if reason is not None:
                 reasons.append(reason)
-        known_change = any(reason["kind"].endswith(("_changed", "_absent"))
-                           for reason in reasons)
+
+        known_change = any(entry["kind"].endswith(("_changed", "_absent")) for entry in reasons)
         status = "recheck" if known_change else ("unknown" if reasons else "current")
         results.append({"id": receipt["id"], "status": status, "reasons": reasons})
+
     return {
         "scope": "declared-input-currentness",
         "artifacts": results,
-        "open_obligations": _copy.deepcopy([
-            item for item in previous["obligations"] if item.get("status") == "open"
-        ]),
+        "open_obligations": _copy.deepcopy(
+            [item for item in previous["obligations"] if item.get("status") == "open"],
+        ),
     }
 
 
-def _main(argv=None):
+def _main(argv: list[str] | None = None) -> int:
     parser = _argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--previous", required=True, help="previous receipts JSON")
     parser.add_argument("--current", required=True, help="current observations JSON")
     args = parser.parse_args(argv)
+
     try:
         previous = _load_strict_json(args.previous)
         current = _load_strict_json(args.current)
@@ -166,6 +161,7 @@ def _main(argv=None):
     except (OSError, UnicodeError, ValueError, KeyError, TypeError) as exc:
         print("continuation_assessor: " + str(exc), file=_sys.stderr)
         return 2
+
     print(_json.dumps(result, ensure_ascii=False, allow_nan=False))
     return 0
 

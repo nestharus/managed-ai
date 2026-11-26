@@ -4,7 +4,7 @@ Choose the package scope needed by the receiver:
 
 | Release | Contents |
 | --- | --- |
-| Python wheel / sdist | Standard PEP-517 package built from `pyproject.toml` and `src/managed_ai/` |
+| Python wheel / sdist | Standard PEP-517 package built from `pyproject.toml` and `src/managed_ai/` (excluding repo-local `scripts/`) |
 | Software bundle | Clean export of `src/managed_ai/`, `docs/`, `examples/`, `pyproject.toml`, `LICENSE`, plus optional initialized stores and deployments |
 | External domain | One external domain repository's `domain.json`, `catalogue.json`, sources, and tools exported at an exact Git commit |
 
@@ -14,7 +14,7 @@ Choose the package scope needed by the receiver:
 python -B -m pip wheel --no-build-isolation --no-deps . -w /path/to/dist
 ```
 
-Verify the wheel imports cleanly in isolated mode (`python -I`) and passes `tests/release/test_package_wheel.py`.
+Verify the wheel imports cleanly in isolated mode (`python -I`), excludes maintainer scripts under `scripts/`, and passes `tests/release/test_package_wheel.py`.
 
 ## 2. Export clean tracked sources for a bundle archive
 
@@ -45,11 +45,11 @@ For existing stores, apply reviewed domain/catalogue updates with native `config
 Run the acceptance gate and build the archive outside the staging tree:
 
 ```sh
-python -B src/managed_ai/release/check_current.py
-python -B src/managed_ai/release/package.py --root . --output /path/to/managed-ai.zip --replace
+python -B scripts/release/check_current.py
+python -B scripts/release/package.py --root /path/to/export --output /path/to/managed-ai.zip --replace
 ```
 
-`package.py` verifies `src/managed_ai/store/catalogue.json`, `src/managed_ai/CURRENT-RELEASE.json`, store schemas, deployment bindings, and `src/managed_ai/companions/peer/COMPONENTS.json` (stamping exact `bytes` + `sha256` pins into the exported bundle), generates `src/managed_ai/SOURCES.md`, `src/managed_ai/MANIFEST.json`, and root `MANIFEST.json`, and checks ZIP CRCs and member hashes before atomically writing the archive.
+`scripts/release/package.py` verifies `src/managed_ai/store/catalogue.json`, `src/managed_ai/CURRENT-RELEASE.json`, store schemas, deployment bindings, and `src/managed_ai/companions/peer/COMPONENTS.json` (stamping exact `bytes` + `sha256` pins into the exported bundle), generates `src/managed_ai/SOURCES.md`, `src/managed_ai/MANIFEST.json`, and root `MANIFEST.json`, and checks ZIP CRCs and member hashes before atomically writing the archive.
 
 ## 4. Qualify the extracted archive
 
