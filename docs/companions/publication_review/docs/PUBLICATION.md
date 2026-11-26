@@ -1,4 +1,4 @@
-# Publication Observation and Review (`companions/publication_review/`)
+# Publication Observation and Review (`src/managed_ai/companions/publication_review/`)
 
 Portable standard-library tools for observing declared source changes, checking recorded publication receipts, and reviewing affected consumers from any working directory without mutating canonical sources.
 
@@ -7,7 +7,7 @@ Portable standard-library tools for observing declared source changes, checking 
 Observe declared source inputs against recorded pins ([OBSERVATION-CONTRACT.md](OBSERVATION-CONTRACT.md)):
 
 ```sh
-python -B companions/publication_review/publication_observer.py \
+python -B src/managed_ai/companions/publication_review/publication_observer.py \
   --declaration /path/to/declaration.json \
   --root src=/path/to/source-root
 ```
@@ -15,7 +15,7 @@ python -B companions/publication_review/publication_observer.py \
 Run a full publication review (joining observation output with `continuation_assessor.py`):
 
 ```sh
-python -B companions/publication_review/publication_review.py \
+python -B src/managed_ai/companions/publication_review/publication_review.py \
   --declaration /path/to/declaration.json \
   --root src=/path/to/source-root \
   --retain-dir /path/to/new-receipt-dir

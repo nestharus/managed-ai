@@ -3,7 +3,7 @@
   "source_root": "managed-ai-shared-engine-1",
   "snapshot": {
     "edition": "managed-ai-shared-engine-1",
-    "selection_sha256": "3fb7f776141fefbfda26000061c9863d46a917ac51da6dacb6427f6dbb89491a",
+    "selection_sha256": "6844de69f3fb11c974698a42c3d0d37764052faa3c8ae9ec58b8e0f0989e6390",
     "relationship": "References to one canonical source body; domain sources are selected per store."
   },
   "entries": [
@@ -14,18 +14,18 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "prototype/agent-system/GUIDE.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:49943bb1765547063dab32fca277664952823bba450240de3cd03d309c34c4e6",
-      "body_path": "engine/store/GUIDE.md",
-      "sha256": "49943bb1765547063dab32fca277664952823bba450240de3cd03d309c34c4e6",
-      "source_sha256": "49943bb1765547063dab32fca277664952823bba450240de3cd03d309c34c4e6",
-      "bytes": 8363,
+      "body_id": "sha256:2133f8d1c389d786dfc0bc11c37365a5719a95099d4d61670a93f70c3548431a",
+      "body_path": "src/managed_ai/store/GUIDE.md",
+      "sha256": "2133f8d1c389d786dfc0bc11c37365a5719a95099d4d61670a93f70c3548431a",
+      "source_sha256": "2133f8d1c389d786dfc0bc11c37365a5719a95099d4d61670a93f70c3548431a",
+      "bytes": 8569,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "Name the person or program that needs the result and the action, artifact or understanding it must obtain. Use an adequate direct read, edit or call when that completes the duty. For unresolved work, retain a prospective contribution, follow its implications back to the missing relationship, and obtain the observation, proof, construction or participation that could change the next decision. Let actual returns revise the containing question.",
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/agent-system/COMPOSITION.md",
@@ -34,18 +34,18 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "prototype/agent-system/COMPOSITION.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:0b57cf8762473d864d84d9b0cb4448824e4f53a463d78d78da29d0d0b953368d",
-      "body_path": "engine/store/COMPOSITION.md",
-      "sha256": "0b57cf8762473d864d84d9b0cb4448824e4f53a463d78d78da29d0d0b953368d",
-      "source_sha256": "0b57cf8762473d864d84d9b0cb4448824e4f53a463d78d78da29d0d0b953368d",
-      "bytes": 19087,
+      "body_id": "sha256:682bfb5c76c27caa9d1da2cf408870825113120a9dceb650d21feca193e711e7",
+      "body_path": "docs/engine/store/COMPOSITION.md",
+      "sha256": "682bfb5c76c27caa9d1da2cf408870825113120a9dceb650d21feca193e711e7",
+      "source_sha256": "682bfb5c76c27caa9d1da2cf408870825113120a9dceb650d21feca193e711e7",
+      "bytes": 19125,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "The application is one artifact in a larger working arrangement. Its code, operating instructions, proposed system, research account and actual receiving work can be composed and revised together. Start from the useful contribution and inspect the relationship that is supposed to produce it.",
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/agent-system/README.md",
@@ -54,18 +54,18 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "prototype/agent-system/README.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:3f1f708db3f38338f5fb86d40fa5900601bc8b83470a329965e45dbe87ac59ba",
-      "body_path": "engine/store/README.md",
-      "sha256": "3f1f708db3f38338f5fb86d40fa5900601bc8b83470a329965e45dbe87ac59ba",
-      "source_sha256": "3f1f708db3f38338f5fb86d40fa5900601bc8b83470a329965e45dbe87ac59ba",
-      "bytes": 50146,
+      "body_id": "sha256:41bac03d46b1b1e9b623a8cab468fe062b1742df72667a16ba90e63beb5787d6",
+      "body_path": "docs/engine/store/README.md",
+      "sha256": "41bac03d46b1b1e9b623a8cab468fe062b1742df72667a16ba90e63beb5787d6",
+      "source_sha256": "41bac03d46b1b1e9b623a8cab468fe062b1742df72667a16ba90e63beb5787d6",
+      "bytes": 50291,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "This application joins persistent goals and extensible JSON records to captured context, actual returns, guarded artifact adoption, attention feedback and a source-bound research catalogue. It is a small work environment for an existing capable agent. It does not provide a model, infer every relevant relationship or make alignment judgments automatically. For a shared change, distinguish a received proposal from the current workspace target and the native owner's guarded adoption.",
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/docs/attention.md",
@@ -74,18 +74,18 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "prototype/docs/attention.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:0739ddcee8e074353634c6e1e7c6584703c41082d0e166ccebee26fa47588f65",
-      "body_path": "engine/docs/attention.md",
-      "sha256": "0739ddcee8e074353634c6e1e7c6584703c41082d0e166ccebee26fa47588f65",
-      "source_sha256": "0739ddcee8e074353634c6e1e7c6584703c41082d0e166ccebee26fa47588f65",
-      "bytes": 14315,
+      "body_id": "sha256:b691e8950b7d90b896fa5e4298d7822f09f669ab06b39c1b696fbda938def010",
+      "body_path": "docs/engine/attention.md",
+      "sha256": "b691e8950b7d90b896fa5e4298d7822f09f669ab06b39c1b696fbda938def010",
+      "source_sha256": "b691e8950b7d90b896fa5e4298d7822f09f669ab06b39c1b696fbda938def010",
+      "bytes": 14319,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "`runtime/attend.py` adds a receiving operation to the existing continuation exchange. It retains caller/model-nominated questions, their uses and source bindings, then returns public-record gaps and a wider field to the working interpreter. It does not call a model, decide semantic adequacy, execute a proposal, or infer every relationship worth discovering.",
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/collective-work/README.md",
@@ -94,18 +94,18 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "prototype/collective-work/README.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:0a41226915bf89c72bd0fbddc33ae1627a6a50a74bdb323fd5733214a532c23a",
-      "body_path": "optional/collective/README.md",
-      "sha256": "0a41226915bf89c72bd0fbddc33ae1627a6a50a74bdb323fd5733214a532c23a",
-      "source_sha256": "0a41226915bf89c72bd0fbddc33ae1627a6a50a74bdb323fd5733214a532c23a",
-      "bytes": 34043,
+      "body_id": "sha256:f465b1c8a3a24da77155397259ead3f4074d5e701c45a39d3ab2a41f8f73fd9a",
+      "body_path": "docs/collective/README.md",
+      "sha256": "f465b1c8a3a24da77155397259ead3f4074d5e701c45a39d3ab2a41f8f73fd9a",
+      "source_sha256": "f465b1c8a3a24da77155397259ead3f4074d5e701c45a39d3ab2a41f8f73fd9a",
+      "bytes": 34133,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "This small Python component retains source-qualified contributions, selective peer handoffs and the conditions for each local acceptance. Several participants can prepare different contributions while a new interpretation reopens one receiving use. The participants choose what matters, construct the relation and judge the return; the component makes those declared relationships durable and consequential.",
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/knowledge-system/README.md",
@@ -114,18 +114,18 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "prototype/knowledge-system/README.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:8a813fcec8741f74317cdfd48d71906097a566b317fff4149a6b9bb623e6eba8",
-      "body_path": "engine/library/README.md",
-      "sha256": "8a813fcec8741f74317cdfd48d71906097a566b317fff4149a6b9bb623e6eba8",
-      "source_sha256": "8a813fcec8741f74317cdfd48d71906097a566b317fff4149a6b9bb623e6eba8",
-      "bytes": 8736,
+      "body_id": "sha256:24405768436ce6be4a0eadaee3e75f9bd389127ea9d61055702ea5269ce63b71",
+      "body_path": "docs/engine/library/README.md",
+      "sha256": "24405768436ce6be4a0eadaee3e75f9bd389127ea9d61055702ea5269ce63b71",
+      "source_sha256": "24405768436ce6be4a0eadaee3e75f9bd389127ea9d61055702ea5269ce63b71",
+      "bytes": 8924,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "Read the catalogue selected by a Managed AI store. Use the library operations below when an independently published knowledge library is the intended source.",
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/knowledge-system/CONTRACT.md",
@@ -134,18 +134,18 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "prototype/knowledge-system/CONTRACT.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:a034482011bcdc226f755135a829f042ff2b759ba1c3220bbdbecc4aa56efda8",
-      "body_path": "engine/library/docs/CONTRACT.md",
-      "sha256": "a034482011bcdc226f755135a829f042ff2b759ba1c3220bbdbecc4aa56efda8",
-      "source_sha256": "a034482011bcdc226f755135a829f042ff2b759ba1c3220bbdbecc4aa56efda8",
-      "bytes": 24134,
+      "body_id": "sha256:b4915821b86709d115c7750c8db2a7f18375dacdcdc8e9006cc5055341cfeac3",
+      "body_path": "docs/engine/library/CONTRACT.md",
+      "sha256": "b4915821b86709d115c7750c8db2a7f18375dacdcdc8e9006cc5055341cfeac3",
+      "source_sha256": "b4915821b86709d115c7750c8db2a7f18375dacdcdc8e9006cc5055341cfeac3",
+      "bytes": 24150,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "Use the complete-library contract for an explicitly selected published library. A configured store exposes its own ordered domain and catalogue registrations.",
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/knowledge-system/MIGRATION.md",
@@ -154,18 +154,18 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "prototype/knowledge-system/MIGRATION.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:4cdc7cc04d11e2f5716559a2f5a3cfdb0ccb55893ce39c6edef9b48a0d523e35",
-      "body_path": "engine/library/docs/MIGRATION.md",
-      "sha256": "4cdc7cc04d11e2f5716559a2f5a3cfdb0ccb55893ce39c6edef9b48a0d523e35",
-      "source_sha256": "4cdc7cc04d11e2f5716559a2f5a3cfdb0ccb55893ce39c6edef9b48a0d523e35",
-      "bytes": 6360,
+      "body_id": "sha256:a3135827560c144858dde12c4df1deca61eac74347f304a22ebeb031b3f1a097",
+      "body_path": "docs/engine/library/MIGRATION.md",
+      "sha256": "a3135827560c144858dde12c4df1deca61eac74347f304a22ebeb031b3f1a097",
+      "source_sha256": "a3135827560c144858dde12c4df1deca61eac74347f304a22ebeb031b3f1a097",
+      "bytes": 6389,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "Recover the earlier library layout and its logical IDs. For a Managed AI edition, revise the registered owner and qualify the selecting store.",
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/knowledge-system/RESEARCH.md",
@@ -174,18 +174,18 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "prototype/knowledge-system/RESEARCH.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:5a5537ec3fa17d442ddd20bc27d8c2a6b2348f197c97cd232ff2d69fb829345a",
-      "body_path": "engine/library/docs/RESEARCH.md",
-      "sha256": "5a5537ec3fa17d442ddd20bc27d8c2a6b2348f197c97cd232ff2d69fb829345a",
-      "source_sha256": "5a5537ec3fa17d442ddd20bc27d8c2a6b2348f197c97cd232ff2d69fb829345a",
-      "bytes": 15315,
+      "body_id": "sha256:3fde79feb3ed217e8907b050df7c5f5dcbe6adc71b135d5c5fcda025df043a00",
+      "body_path": "docs/engine/library/RESEARCH.md",
+      "sha256": "3fde79feb3ed217e8907b050df7c5f5dcbe6adc71b135d5c5fcda025df043a00",
+      "source_sha256": "3fde79feb3ed217e8907b050df7c5f5dcbe6adc71b135d5c5fcda025df043a00",
+      "bytes": 15137,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "Develop the receiving question using the store-selected research method. Preserve the authority of the research owner, the catalogue maintainer and each receiving store.",
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "MODEL-BOUND-COMPOSITION.md",
@@ -195,7 +195,7 @@
       "source_path": "MODEL-BOUND-COMPOSITION.md",
       "source_root": "managed-ai-shared-engine-1",
       "body_id": "sha256:f750de811cb7a81e371dc316a80b2e7ce7208ffea66c7cb67421561f172b508d",
-      "body_path": "engine/MODEL-BOUND-COMPOSITION.md",
+      "body_path": "docs/engine/MODEL-BOUND-COMPOSITION.md",
       "sha256": "f750de811cb7a81e371dc316a80b2e7ce7208ffea66c7cb67421561f172b508d",
       "source_sha256": "f750de811cb7a81e371dc316a80b2e7ce7208ffea66c7cb67421561f172b508d",
       "bytes": 9673,
@@ -205,7 +205,7 @@
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "CLI-FIELD-REFERENCE.md",
@@ -214,18 +214,18 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "CLI-FIELD-REFERENCE.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:8cd9c2fd401b65f6192b3f498b614ee3a277deaafad1b71c39386d8d52691089",
-      "body_path": "engine/CLI-FIELD-REFERENCE.md",
-      "sha256": "8cd9c2fd401b65f6192b3f498b614ee3a277deaafad1b71c39386d8d52691089",
-      "source_sha256": "8cd9c2fd401b65f6192b3f498b614ee3a277deaafad1b71c39386d8d52691089",
-      "bytes": 22910,
+      "body_id": "sha256:0aa62a01a9024457d952bc45dbdbd471b515bc4c804c114f38e199e4e64e723b",
+      "body_path": "docs/engine/CLI-FIELD-REFERENCE.md",
+      "sha256": "0aa62a01a9024457d952bc45dbdbd471b515bc4c804c114f38e199e4e64e723b",
+      "source_sha256": "0aa62a01a9024457d952bc45dbdbd471b515bc4c804c114f38e199e4e64e723b",
+      "bytes": 22942,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "Read a configured store directly through its native catalogue. The separate library commands require an authoring source or a published library.",
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "host/OPERATION.md",
@@ -235,7 +235,7 @@
       "source_path": "host/OPERATION.md",
       "source_root": "managed-ai-shared-engine-1",
       "body_id": "sha256:4bbbc35fe594e79295f0d9f3567b14e9c2dd3a8687c0c32e1ef534470e736415",
-      "body_path": "engine/host/continuing_work/OPERATION.md",
+      "body_path": "docs/engine/host/continuing_work/OPERATION.md",
       "sha256": "4bbbc35fe594e79295f0d9f3567b14e9c2dd3a8687c0c32e1ef534470e736415",
       "source_sha256": "4bbbc35fe594e79295f0d9f3567b14e9c2dd3a8687c0c32e1ef534470e736415",
       "bytes": 7541,
@@ -245,7 +245,7 @@
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/patterns/continuous-consolidation/README.md",
@@ -255,7 +255,7 @@
       "source_path": "prototype/patterns/continuous-consolidation/README.md",
       "source_root": "managed-ai-shared-engine-1",
       "body_id": "sha256:9418cd013feed4c144390ef433fa544d59d7987ac252aba3ad7b841d5f47c3c2",
-      "body_path": "patterns/continuous-consolidation/README.md",
+      "body_path": "docs/patterns/continuous-consolidation/README.md",
       "sha256": "9418cd013feed4c144390ef433fa544d59d7987ac252aba3ad7b841d5f47c3c2",
       "source_sha256": "9418cd013feed4c144390ef433fa544d59d7987ac252aba3ad7b841d5f47c3c2",
       "bytes": 7132,
@@ -265,7 +265,7 @@
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/patterns/continuous-consolidation/inventory.md",
@@ -275,7 +275,7 @@
       "source_path": "prototype/patterns/continuous-consolidation/inventory.md",
       "source_root": "managed-ai-shared-engine-1",
       "body_id": "sha256:94c9670b79ba7566caecb466d99c8fb92f4e01d13050882d2272ffc28410c470",
-      "body_path": "patterns/continuous-consolidation/inventory.md",
+      "body_path": "docs/patterns/continuous-consolidation/inventory.md",
       "sha256": "94c9670b79ba7566caecb466d99c8fb92f4e01d13050882d2272ffc28410c470",
       "source_sha256": "94c9670b79ba7566caecb466d99c8fb92f4e01d13050882d2272ffc28410c470",
       "bytes": 10629,
@@ -285,7 +285,7 @@
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/patterns/continuous-consolidation/prompts/branch.md",
@@ -295,7 +295,7 @@
       "source_path": "prototype/patterns/continuous-consolidation/prompts/branch.md",
       "source_root": "managed-ai-shared-engine-1",
       "body_id": "sha256:948ef150b4b9fd23eb69271d137f2b0b392a5d5ea1a0944f934e25a03e1b8afb",
-      "body_path": "patterns/continuous-consolidation/prompts/branch.md",
+      "body_path": "docs/patterns/continuous-consolidation/prompts/branch.md",
       "sha256": "948ef150b4b9fd23eb69271d137f2b0b392a5d5ea1a0944f934e25a03e1b8afb",
       "source_sha256": "948ef150b4b9fd23eb69271d137f2b0b392a5d5ea1a0944f934e25a03e1b8afb",
       "bytes": 2041,
@@ -305,7 +305,7 @@
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/patterns/continuous-consolidation/prompts/coordinator.md",
@@ -315,7 +315,7 @@
       "source_path": "prototype/patterns/continuous-consolidation/prompts/coordinator.md",
       "source_root": "managed-ai-shared-engine-1",
       "body_id": "sha256:3ab5e4d378b8fcadbda581bcc1d1e28c757c059b70aca68f95d3ac65875a64bb",
-      "body_path": "patterns/continuous-consolidation/prompts/coordinator.md",
+      "body_path": "docs/patterns/continuous-consolidation/prompts/coordinator.md",
       "sha256": "3ab5e4d378b8fcadbda581bcc1d1e28c757c059b70aca68f95d3ac65875a64bb",
       "source_sha256": "3ab5e4d378b8fcadbda581bcc1d1e28c757c059b70aca68f95d3ac65875a64bb",
       "bytes": 4034,
@@ -325,7 +325,7 @@
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/patterns/continuous-consolidation/prompts/integrator.md",
@@ -335,7 +335,7 @@
       "source_path": "prototype/patterns/continuous-consolidation/prompts/integrator.md",
       "source_root": "managed-ai-shared-engine-1",
       "body_id": "sha256:6ac829ef43189ecffd8ae7882268bc121dc99ff697820c10037c79eb4022f48b",
-      "body_path": "patterns/continuous-consolidation/prompts/integrator.md",
+      "body_path": "docs/patterns/continuous-consolidation/prompts/integrator.md",
       "sha256": "6ac829ef43189ecffd8ae7882268bc121dc99ff697820c10037c79eb4022f48b",
       "source_sha256": "6ac829ef43189ecffd8ae7882268bc121dc99ff697820c10037c79eb4022f48b",
       "bytes": 2598,
@@ -345,7 +345,7 @@
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/patterns/continuous-consolidation/prompts/proposer.md",
@@ -355,7 +355,7 @@
       "source_path": "prototype/patterns/continuous-consolidation/prompts/proposer.md",
       "source_root": "managed-ai-shared-engine-1",
       "body_id": "sha256:857cdf11a1d5b2f3cf81caf41b8faa4eef459f2c242fc9ce2b39d8c5ca84bc76",
-      "body_path": "patterns/continuous-consolidation/prompts/proposer.md",
+      "body_path": "docs/patterns/continuous-consolidation/prompts/proposer.md",
       "sha256": "857cdf11a1d5b2f3cf81caf41b8faa4eef459f2c242fc9ce2b39d8c5ca84bc76",
       "source_sha256": "857cdf11a1d5b2f3cf81caf41b8faa4eef459f2c242fc9ce2b39d8c5ca84bc76",
       "bytes": 2072,
@@ -365,7 +365,7 @@
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/patterns/continuous-consolidation/prompts/qa.md",
@@ -375,7 +375,7 @@
       "source_path": "prototype/patterns/continuous-consolidation/prompts/qa.md",
       "source_root": "managed-ai-shared-engine-1",
       "body_id": "sha256:2317943324c8c3b6e6aa5330911274eec6345683feb7d70d37b587d884629a12",
-      "body_path": "patterns/continuous-consolidation/prompts/qa.md",
+      "body_path": "docs/patterns/continuous-consolidation/prompts/qa.md",
       "sha256": "2317943324c8c3b6e6aa5330911274eec6345683feb7d70d37b587d884629a12",
       "source_sha256": "2317943324c8c3b6e6aa5330911274eec6345683feb7d70d37b587d884629a12",
       "bytes": 1576,
@@ -385,7 +385,7 @@
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/patterns/continuous-consolidation/prompts/review.md",
@@ -395,7 +395,7 @@
       "source_path": "prototype/patterns/continuous-consolidation/prompts/review.md",
       "source_root": "managed-ai-shared-engine-1",
       "body_id": "sha256:1e4f9b9d3adf964705caf8f39b7b9994fd8a888e663889ca03ff15f37bf0027d",
-      "body_path": "patterns/continuous-consolidation/prompts/review.md",
+      "body_path": "docs/patterns/continuous-consolidation/prompts/review.md",
       "sha256": "1e4f9b9d3adf964705caf8f39b7b9994fd8a888e663889ca03ff15f37bf0027d",
       "source_sha256": "1e4f9b9d3adf964705caf8f39b7b9994fd8a888e663889ca03ff15f37bf0027d",
       "bytes": 1814,
@@ -405,7 +405,7 @@
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "prototype/patterns/continuous-consolidation/prompts/root-build.md",
@@ -415,7 +415,7 @@
       "source_path": "prototype/patterns/continuous-consolidation/prompts/root-build.md",
       "source_root": "managed-ai-shared-engine-1",
       "body_id": "sha256:1a4b58f465787cf33aeeebfcf99ad74910bca717df46f165023aba5be3b33c33",
-      "body_path": "patterns/continuous-consolidation/prompts/root-build.md",
+      "body_path": "docs/patterns/continuous-consolidation/prompts/root-build.md",
       "sha256": "1a4b58f465787cf33aeeebfcf99ad74910bca717df46f165023aba5be3b33c33",
       "source_sha256": "1a4b58f465787cf33aeeebfcf99ad74910bca717df46f165023aba5be3b33c33",
       "bytes": 1918,
@@ -425,7 +425,7 @@
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "host/README.md",
@@ -434,18 +434,18 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "host/README.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:3d524312e2509458ca260e7a43a13fe5ee2bcb55179f5650f613f7a0ca467896",
-      "body_path": "engine/host/README.md",
-      "sha256": "3d524312e2509458ca260e7a43a13fe5ee2bcb55179f5650f613f7a0ca467896",
-      "source_sha256": "3d524312e2509458ca260e7a43a13fe5ee2bcb55179f5650f613f7a0ca467896",
-      "bytes": 24007,
+      "body_id": "sha256:ceefcb36171df79d5d367511f708e6db7d43ba32b0fec7c690ce53a0677a5024",
+      "body_path": "docs/engine/host/README.md",
+      "sha256": "ceefcb36171df79d5d367511f708e6db7d43ba32b0fec7c690ce53a0677a5024",
+      "source_sha256": "ceefcb36171df79d5d367511f708e6db7d43ba32b0fec7c690ce53a0677a5024",
+      "bytes": 24036,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "This optional adapter repairs an enrollment and continuation gap in extended research and construction. It makes the original commission, explicit owed duties, current selected sources, forecasts, changed-source notices and nominated overlaps actual inputs to the native producing context. It uses the existing runtime for source capture, Attention, retained returns, guarded publication and goal interpretation. It does not add a model client, universal planner or domain ontology.",
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "host/CONSTRUCTION.md",
@@ -454,18 +454,18 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "host/CONSTRUCTION.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:489936ef151609eac18e2f0cf6ab255705c57bd0b77e07330cbfc37cf3c99adb",
-      "body_path": "engine/host/CONSTRUCTION.md",
-      "sha256": "489936ef151609eac18e2f0cf6ab255705c57bd0b77e07330cbfc37cf3c99adb",
-      "source_sha256": "489936ef151609eac18e2f0cf6ab255705c57bd0b77e07330cbfc37cf3c99adb",
-      "bytes": 15772,
+      "body_id": "sha256:938d40ef6e9ef9c5a999317508f57209b86c056ccac1a5a33425ffa6c2ceb5de",
+      "body_path": "docs/engine/host/CONSTRUCTION.md",
+      "sha256": "938d40ef6e9ef9c5a999317508f57209b86c056ccac1a5a33425ffa6c2ceb5de",
+      "source_sha256": "938d40ef6e9ef9c5a999317508f57209b86c056ccac1a5a33425ffa6c2ceb5de",
+      "bytes": 15610,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "Use this operation when a requested contribution still needs constructive development. Use an understood adequate operation directly when it already supplies the contribution. The general method is [the current concise guide](../../domains/research/sources/knowledge/research/current/method.md); [G42](../../domains/research/sources/knowledge/research/patterns/g42-artifact-led-discovery.md), [G43](../../domains/research/sources/knowledge/research/patterns/g43-artifact-composition.md) and [G45](../../domains/research/sources/knowledge/research/patterns/g45-developing-dimensions.md) retain the complete mechanisms and their limits. These are semantic operations performed by the capable participant, supported by actual tools and materials. Their names are not an implemented autonomous planner.",
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "host/MATERIAL-MAINTENANCE.md",
@@ -475,7 +475,7 @@
       "source_path": "host/MATERIAL-MAINTENANCE.md",
       "source_root": "managed-ai-shared-engine-1",
       "body_id": "sha256:c4f5d6bbe289086953cf921c7e2cb0d332d4e185cb72cf000b549e8677da5798",
-      "body_path": "engine/host/material_retention/MATERIAL-MAINTENANCE.md",
+      "body_path": "docs/engine/host/material_retention/MATERIAL-MAINTENANCE.md",
       "sha256": "c4f5d6bbe289086953cf921c7e2cb0d332d4e185cb72cf000b549e8677da5798",
       "source_sha256": "c4f5d6bbe289086953cf921c7e2cb0d332d4e185cb72cf000b549e8677da5798",
       "bytes": 23397,
@@ -485,7 +485,7 @@
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "host/RELATION-COMPOSITION.md",
@@ -495,7 +495,7 @@
       "source_path": "host/RELATION-COMPOSITION.md",
       "source_root": "managed-ai-shared-engine-1",
       "body_id": "sha256:d528f5080fe7288addb6d11f997a782eeb9b6ca1691878c6d99a9c4ba2f45f63",
-      "body_path": "engine/host/RELATION-COMPOSITION.md",
+      "body_path": "docs/engine/host/RELATION-COMPOSITION.md",
       "sha256": "d528f5080fe7288addb6d11f997a782eeb9b6ca1691878c6d99a9c4ba2f45f63",
       "source_sha256": "d528f5080fe7288addb6d11f997a782eeb9b6ca1691878c6d99a9c4ba2f45f63",
       "bytes": 6974,
@@ -505,7 +505,7 @@
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "host/PEER-COMMUNICATION.md",
@@ -517,7 +517,7 @@
       "source_path": "host/PEER-COMMUNICATION.md",
       "source_root": "managed-ai-shared-engine-1",
       "body_id": "sha256:2b7373ebd791979e5aa795d80ad35e93d0541e09f09e69fec96ce03004b5a5d0",
-      "body_path": "engine/host/continuing_work/PEER-COMMUNICATION.md",
+      "body_path": "docs/engine/host/continuing_work/PEER-COMMUNICATION.md",
       "sha256": "2b7373ebd791979e5aa795d80ad35e93d0541e09f09e69fec96ce03004b5a5d0",
       "source_sha256": "2b7373ebd791979e5aa795d80ad35e93d0541e09f09e69fec96ce03004b5a5d0",
       "bytes": 2448,
@@ -525,7 +525,7 @@
       "availability": "available",
       "purpose": "Use this operation only when the present comparison needs each relevant participant's own initial view before the other's interpretation. Ordinary integrated construction and direct peer collaboration do not require such a boundary.",
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "INSTANCES.md",
@@ -535,15 +535,15 @@
       "source_path": "INSTANCES.md",
       "purpose": "Use the central engine with selected portable stores and declared domains.",
       "scope": "Structural custody and explicit receiving; no universal semantic ontology.",
-      "body_path": "engine/INSTANCES.md",
-      "source_root_relative": "../..",
+      "body_path": "docs/engine/INSTANCES.md",
+      "source_root_relative": "../../..",
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "source_root": "managed-ai-shared-engine-1",
-      "source_sha256": "2bd0fda68761f3b850aa32610acca925b959678aff1e7d5669e910dc37238759",
-      "sha256": "2bd0fda68761f3b850aa32610acca925b959678aff1e7d5669e910dc37238759",
-      "bytes": 14542,
-      "body_id": "sha256:2bd0fda68761f3b850aa32610acca925b959678aff1e7d5669e910dc37238759"
+      "source_sha256": "948316ce90dce1166d60b2103f684e12919fdb120d703373dc4cea4ef08abe5c",
+      "sha256": "948316ce90dce1166d60b2103f684e12919fdb120d703373dc4cea4ef08abe5c",
+      "bytes": 14640,
+      "body_id": "sha256:948316ce90dce1166d60b2103f684e12919fdb120d703373dc4cea4ef08abe5c"
     },
     {
       "id": "host/SIGNAL-FIELD.md",
@@ -552,18 +552,18 @@
       "family": "selected-current-consumer-knowledge",
       "source_path": "host/SIGNAL-FIELD.md",
       "source_root": "managed-ai-shared-engine-1",
-      "body_id": "sha256:3ccaf117d3f99da9951b9d1183d504618e2f351b874f83408fb4f0b8c463bdfe",
-      "body_path": "engine/host/SIGNAL-FIELD.md",
-      "sha256": "3ccaf117d3f99da9951b9d1183d504618e2f351b874f83408fb4f0b8c463bdfe",
-      "source_sha256": "3ccaf117d3f99da9951b9d1183d504618e2f351b874f83408fb4f0b8c463bdfe",
-      "bytes": 17430,
+      "body_id": "sha256:f2c3cc69699ae04c330f69d0a45f3b3e6097014679ba91b80d58859c02310554",
+      "body_path": "docs/engine/host/SIGNAL-FIELD.md",
+      "sha256": "f2c3cc69699ae04c330f69d0a45f3b3e6097014679ba91b80d58859c02310554",
+      "source_sha256": "f2c3cc69699ae04c330f69d0a45f3b3e6097014679ba91b80d58859c02310554",
+      "bytes": 17488,
       "body_role": "complete-current-source-reference",
       "availability": "available",
       "purpose": "Serve explicitly supplied receiving uses across source changes and restart with bounded recovery, qualified live/historical/occurrence lifetimes and an actual capable callback; service is distinct from semantic acceptance.",
       "prerequisites": [],
       "operation_ids": [],
       "scope": "Current explicitly selected complete source; selection does not confer semantic acceptance.",
-      "source_root_relative": "../.."
+      "source_root_relative": "../../.."
     },
     {
       "id": "operation:observer-model",

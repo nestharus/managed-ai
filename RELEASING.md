@@ -4,67 +4,60 @@ Choose the package scope needed by the receiver:
 
 | Release | Contents |
 | --- | --- |
-| Full | Shared `engine/`, `companions/`, `optional/`, `patterns/`, `guidance/`, selected `domains/`, and initialized stores/deployments |
-| Working | Shared `engine/`, required `domains/`, and one initialized or fresh store and deployment |
-| Domain | One domain repository's `domain.json`, `catalogue.json`, sources, and tools exported at an exact Git commit |
+| Python wheel / sdist | Standard PEP-517 package built from `pyproject.toml` and `src/managed_ai/` |
+| Software bundle | Clean export of `src/managed_ai/`, `docs/`, `examples/`, `pyproject.toml`, `LICENSE`, plus optional initialized stores and deployments |
+| External domain | One external domain repository's `domain.json`, `catalogue.json`, sources, and tools exported at an exact Git commit |
 
-## 1. Export clean tracked sources
-
-Start from a clean checkout with initialized submodules:
+## 1. Build a standard Python wheel
 
 ```sh
-git submodule update --init --recursive
-git rev-parse HEAD
-git submodule status --recursive
+python -B -m pip wheel --no-build-isolation --no-deps . -w /path/to/dist
 ```
 
-Export tracked files (excluding `.git` metadata) into a clean staging directory outside the repository on a filesystem preserving file modes. Place each domain under `domains/<id>/` and preserve LF bytes and catalogue pins.
+Verify the wheel imports cleanly in isolated mode (`python -I`) and passes `tests/release/test_package_wheel.py`.
+
+## 2. Export clean tracked sources for a bundle archive
+
+Start from a clean checkout:
+
+```sh
+git rev-parse HEAD
+git status -s
+```
+
+Export tracked files (excluding `.git` metadata) into a clean staging directory outside the repository on a filesystem preserving file modes and LF bytes.
 
 To initialize a fresh store and deployment inside a working release directory:
 
 ```sh
-python -B engine/store/manage_store.py --root stores/work init \
+python -B src/managed_ai/store/manage_store.py --root stores/work init \
   --instance-id work --goal-text "Purpose of this store" \
-  --domain domains/research/domain.json \
-  --domain domains/ai-system-building/domain.json
+  --domain /path/to/domain/domain.json
 
-python -B engine/deployment/select_deployment.py --deployment deployments/work init \
-  --store stores/work --engine engine
+python -B src/managed_ai/deployment/select_deployment.py --deployment deployments/work init \
+  --store stores/work --engine src/managed_ai
 ```
 
-## 2. Verify selected sources and build the archive
+## 3. Verify and build the bundle archive
 
-For existing stores, apply reviewed domain/catalogue updates with native `configure --spec` against the current `system.json` digest and bind each deployment to the qualified engine (see [engine/INSTANCES.md](engine/INSTANCES.md)).
+For existing stores, apply reviewed domain/catalogue updates with native `configure --spec` against the current `system.json` digest and bind each deployment to the qualified engine (see [docs/engine/INSTANCES.md](docs/engine/INSTANCES.md)).
 
-Run the read-only selected-source gate for every included store, then package outside the staging tree:
+Run the acceptance gate and build the archive outside the staging tree:
 
 ```sh
-python -B domains/ai-system-building/operations/verify_selected_sources.py \
-  --bundle . --store stores/work
-
-python -B engine/release/package.py --root . --output /path/to/managed-ai.zip --replace
+python -B src/managed_ai/release/check_current.py
+python -B src/managed_ai/release/package.py --root . --output /path/to/managed-ai.zip --replace
 ```
 
-`package.py` verifies `engine/store/catalogue.json`, `engine/CURRENT-RELEASE.json`, store schemas, deployment bindings, and `companions/peer/COMPONENTS.json` (stamping exact `bytes` + `sha256` pins into the exported bundle), generates `engine/SOURCES.md`, `engine/MANIFEST.json`, and root `MANIFEST.json`, and checks ZIP CRCs and member hashes before atomically writing the archive. Compressed research originals (`.json.gz`, `.jsonl.gz`, `.tsv.gz`) are admitted only when bound to completed native import receipts and verified basis objects.
+`package.py` verifies `src/managed_ai/store/catalogue.json`, `src/managed_ai/CURRENT-RELEASE.json`, store schemas, deployment bindings, and `src/managed_ai/companions/peer/COMPONENTS.json` (stamping exact `bytes` + `sha256` pins into the exported bundle), generates `src/managed_ai/SOURCES.md`, `src/managed_ai/MANIFEST.json`, and root `MANIFEST.json`, and checks ZIP CRCs and member hashes before atomically writing the archive.
 
-## 3. Qualify the extracted archive
+## 4. Qualify the extracted archive
 
 Extract the generated ZIP into a fresh directory and verify every deployment and store:
 
 ```sh
-python -B engine/deployment/select_deployment.py --deployment deployments/work status
-python -B engine/deployment/select_deployment.py --deployment deployments/work system status
+python -B src/managed_ai/deployment/select_deployment.py --deployment deployments/work status
+python -B src/managed_ai/deployment/select_deployment.py --deployment deployments/work system status
 ```
 
-Record the archive SHA-256, Git commits, `engine` `code_sha256`, and store/domain digests alongside the receiving verification result. See [engine/release/README.md](engine/release/README.md) for core guidance pin refresh details.
-
-## 4. Export a single domain
-
-From the domain repository (`$domain` = domain ID, `$commit` = reviewed commit, `$archive` = output ZIP):
-
-```sh
-git -c core.autocrlf=false archive --format=zip --prefix="domains/$domain/" --output="$archive" "$commit"
-python -m zipfile -t "$archive"
-```
-
-Mount the exported domain in a disposable bundle, run native `configure`, and pass `verify_selected_sources.py`.
+Record the archive SHA-256, Git commit, engine `code_sha256`, and store/domain digests alongside the receiving verification result. See [docs/engine/release/README.md](docs/engine/release/README.md) for core guidance pin refresh details.

@@ -7,4 +7,4 @@ These adapters use the same central [engine](../engine/README.md). They contain 
 - [Publication review](publication_review/docs/PUBLICATION.md): declared source changes, receiving review and exact receipts.
 - [Representation](representation/CONTRACT.md): opt-in structural representation checking and preparation.
 
-Select the corpus and receiving store for the actual contribution. The trusted lexical reader is `engine/library/reader/knowledge.py`; corpus directories hold data. The native store’s domain/source catalogues are the primary route when source exposure or typed records must follow that store’s selection. Companion registration and source discovery do not establish participant acquisition or semantic acceptance.
+Select the corpus and receiving store for the actual contribution. The trusted lexical reader is `src/managed_ai/library/reader/knowledge.py`; corpus directories hold data. The native store’s domain/source catalogues are the primary route when source exposure or typed records must follow that store’s selection. Companion registration and source discovery do not establish participant acquisition or semantic acceptance.

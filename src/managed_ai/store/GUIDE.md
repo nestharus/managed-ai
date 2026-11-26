@@ -1,6 +1,6 @@
-> Current native entry. In the selected deployment use `system catalogue LOGICAL_ID --text`. From the package root use `python3 -B engine/library/cli.py --store STORE show LOGICAL_ID --text` for that store's domain and core sources. Omitting `--store` selects only the core catalogue. [Current construction](../host/CONSTRUCTION.md), [conditional peer communication](../host/continuing_work/PEER-COMMUNICATION.md), and [material maintenance](../host/material_retention/MATERIAL-MAINTENANCE.md) describe optional operations. Choose the operation for the actual contribution.
+> Current native entry. In the selected deployment use `system catalogue LOGICAL_ID --text`. From the package root use `python3 -B src/managed_ai/library/cli.py --store STORE show LOGICAL_ID --text` for that store's domain and core sources. Omitting `--store` selects only the core catalogue. [Current construction](../../../docs/engine/host/CONSTRUCTION.md), [conditional peer communication](../../../docs/engine/host/continuing_work/PEER-COMMUNICATION.md), and [material maintenance](../../../docs/engine/host/material_retention/MATERIAL-MAINTENANCE.md) describe optional operations. Choose the operation for the actual contribution.
 
-Read the [current instance and domain contract](../INSTANCES.md) when selecting stores, schemas, domain sources or retention.
+Read the [current instance and domain contract](../../../docs/engine/INSTANCES.md) when selecting stores, schemas, domain sources or retention.
 
 # Work from the receiving contribution
 
@@ -8,7 +8,7 @@ Name the person or program that needs the result and the action, artifact or und
 
 ## Choose the owner and retain the basis
 
-Use the runtime that already owns an existing native turn. The [capability map](../CAPABILITIES.md) identifies installed entries, what each supplies and the participation its host must provide. An unfamiliar finite operation also has a declared offer. Open its full contract and supply the actual observation model, prices, rights or receiving interface it requires.
+Use the runtime that already owns an existing native turn. The [capability map](../../../docs/engine/CAPABILITIES.md) identifies installed entries, what each supplies and the participation its host must provide. An unfamiliar finite operation also has a declared offer. Open its full contract and supply the actual observation model, prices, rights or receiving interface it requires.
 
 The native runtime retains goals, source-bound context, returned material, proposals and explicit adoption. A capable participant supplies semantic fit, source selection and whole-goal judgment. Select the exact current project sources or historical bodies the duty needs. An available catalogue entry records availability. Acquire its complete body when its argument or implementation matters.
 
@@ -17,11 +17,11 @@ Domain sources listed below by logical ID are optional and selected per store (`
 | Present need | Source or operation |
 |---|---|
 | Understand an unfamiliar artifact or ask a consequential question | Acquire `research/patterns/developing-probes.md` when the research domain is selected. |
-| Construct across interacting responsibilities | [Composition guide](COMPOSITION.md) and logical source `research/patterns/constructing-across-dimensions.md`. |
+| Construct across interacting responsibilities | [Composition guide](../../../docs/engine/store/COMPOSITION.md) and logical source `research/patterns/constructing-across-dimensions.md`. |
 | Reuse a method, observation or installed capability under changed terms | Acquire `research/patterns/qualifying-reuse.md` when the research domain is selected. |
-| Bind original JSON inputs or all candidates through a cutoff | [Source-admission contract](../../patterns/source-admission/README.md). |
-| Receive independent contributions or retain an unplaced finding | Logical source `research/patterns/collective-knowledge.md` and [collective contract](../../optional/collective/README.md). |
-| Return an actual discrepancy to another turn | `feedback open`, `feedback observe` and a fresh `context` under the [runtime contract](README.md). |
+| Bind original JSON inputs or all candidates through a cutoff | External source-admission pattern contract (when installed by a domain). |
+| Receive independent contributions or retain an unplaced finding | Logical source `research/patterns/collective-knowledge.md` and [collective contract](../../../docs/collective/README.md). |
+| Return an actual discrepancy to another turn | `feedback open`, `feedback observe` and a fresh `context` under the [runtime contract](../../../docs/engine/store/README.md). |
 | Inspect an authored dependency after a repository change | `compose --record ID --changed-since BASE --repo CHECKOUT`, followed by the affected receiving use. |
 
 ## Qualify the next use
@@ -36,7 +36,7 @@ Follow a promised effect to the owner that can still commit or prevent it. A des
 
 Prepare a context with the relevant sources, records, targets and governing obligations. Preserve the forecast before obtaining the return. A trusted command used through native `run` must consume an explicit `{packet}` or `{context}` argument. A command without that interface can be invoked directly by the host and its actual return received through the caller-brokered route. Keep the actual output and effect history through an uncertain command result.
 
-Before delegation, use `explain-context TURN` through the native or deployment entrance to inspect captured inclusion reasons and selected-body versus complete-context bytes. Older unrecorded reasons remain unknown. This explains delivery, not reading or semantic adequacy; the [runtime reference](README.md) gives the complete contract.
+Before delegation, use `explain-context TURN` through the native or deployment entrance to inspect captured inclusion reasons and selected-body versus complete-context bytes. Older unrecorded reasons remain unknown. This explains delivery, not reading or semantic adequacy; the [runtime reference](../../../docs/engine/store/README.md) gives the complete contract.
 
 For a verified launch failure or completed stdout above the reply limit, use `close-transport TURN --account ACCOUNT` after inspecting the carrier evidence. The recorded outcome keeps `recover-transport TURN`, the original attempt and open duties available. Live or uncertain commands retain their pending state.
 
@@ -52,4 +52,4 @@ Treat a proposed AI system as a produced artifact. Retain its receiving contract
 
 Compare the complete cost of the selected route with an adequate direct route. Include relevant preparation, exact acquisition, failed inquiry, installation, adaptation and receiving work. Preserve when separately arriving questions became available. Use the installed search, index or finite solver that serves that actual workload.
 
-After a consequential return, compare the immediate continuation with a broader, sibling or recomposed contribution. Carry the selected improvement into the next producer and obtain the subsequent use its prediction requires. Logical domain sources `research/current/application.md` and `research/current/method.md` (when the research domain is selected) together with the [runtime reference](README.md) supply complete deeper contracts.
+After a consequential return, compare the immediate continuation with a broader, sibling or recomposed contribution. Carry the selected improvement into the next producer and obtain the subsequent use its prediction requires. Logical domain sources `research/current/application.md` and `research/current/method.md` (when the research domain is selected) together with the [runtime reference](../../../docs/engine/store/README.md) supply complete deeper contracts.

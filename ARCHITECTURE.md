@@ -1,14 +1,13 @@
 # Architecture
 
-Managed AI separates **one shared engine**, **loadable domain data**, and **independent stores**. A deployment descriptor binds a store to a qualified engine edition without copying engine code or mirroring source corpora.
+Managed AI separates **one shared engine**, **externally loaded domain data**, and **independent stores**. A deployment descriptor binds a store to a qualified engine edition without copying engine code or mirroring source corpora.
 
 ```mermaid
 flowchart TD
-    D["Loadable domains (research, ai-system-building, writing)"] --> E["Shared engine (engine/)"]
-    G["Human and agent guidance (guidance/)"] --> D
+    D["External loadable domains (domain.json + catalogue.json)"] --> E["Shared engine (src/managed_ai/)"]
     E --> S1["External store A (system.json, exchange/, work/)"]
     E --> S2["External store B (system.json, exchange/, work/)"]
-    C["Optional companions & collective (companions/, optional/)"] --> E
+    C["Optional companions & collective (src/managed_ai/companions/, optional/)"] --> E
     S1 <-->|"Pinned cross-store record transfer"| S2
 ```
 
@@ -16,15 +15,15 @@ flowchart TD
 
 | Component | Responsibility |
 | --- | --- |
-| `engine/deployment/` | Deployment descriptors (`agent-system-deployment/2`), `code_identity()` verification, engine staging/activation, and cross-store owner admission. |
-| `engine/core/` | Platform locking/reparse guards, content-addressed object store, packet exchange, attention tracking, return collection, and wire-format constants. |
-| `engine/store/` | Native records (`g60-agent-system/0.1`), schema validation, domain/catalogue selection, context capture, `g60-composition/1` views, discovery, graph queries, transfer, and turn retirement. |
-| `engine/library/` | Standalone stdlib lexical/BM25/FTS5 knowledge reader, search, and product bundles (isolated from `core`/`store`/`deployment`). |
-| `engine/host/` | Continuing-work host, material retention, and signal-field observation queue built on top of native stores. |
-| `engine/tools/` & `engine/release/` | Operator helpers, guidance pin refresh, acceptance gate, and self-verifying release packager. |
-| `companions/` | Optional adapters: `workbench/` (model/tool callbacks & durable resume), `peer/` (bounded worker harness), `publication_review/` (dependency observation), and `representation/` (structural checks). |
-| `optional/collective/` | Optional SQLite-backed multi-owner receiving authority. |
-| `domains/*` | Independent Git submodules owning domain schemas, source catalogues, entry guidance, and declared tools. Loading a domain never executes its tools. |
+| `src/managed_ai/deployment/` | Deployment descriptors (`agent-system-deployment/2`), `code_identity()` verification, engine staging/activation, and cross-store owner admission. |
+| `src/managed_ai/core/` | Platform locking/reparse guards, content-addressed object store, packet exchange, attention tracking, return collection, and wire-format constants. |
+| `src/managed_ai/store/` | Native records (`g60-agent-system/0.1`), schema validation, domain/catalogue selection, context capture, `g60-composition/1` views, discovery, graph queries, transfer, and turn retirement. |
+| `src/managed_ai/library/` | Standalone stdlib lexical/BM25/FTS5 knowledge reader, search, and product bundles (isolated from `core`/`store`/`deployment`). |
+| `src/managed_ai/host/` | Continuing-work host, material retention, and signal-field observation queue built on top of native stores. |
+| `src/managed_ai/tools/` & `src/managed_ai/release/` | Operator helpers, guidance pin refresh, acceptance gate, and self-verifying release packager. |
+| `src/managed_ai/companions/` | Optional adapters: `workbench/` (model/tool callbacks & durable resume), `peer/` (bounded worker harness), `publication_review/` (dependency observation), and `representation/` (structural checks). |
+| `src/managed_ai/optional/collective/` | Optional SQLite-backed multi-owner receiving authority. |
+| External domains | Separate repositories owning domain schemas, source catalogues, entry guidance, and declared tools (`source_root: "."`). Loading a domain never executes its tools. |
 | External stores | Caller-owned directories (`system.json`, `exchange/`, `work/`) outside the engine checkout holding goals, records, packets, and local receiving accounts. |
 
 ## Storage, schemas, and retention
@@ -41,4 +40,4 @@ flowchart TD
 - **Guarded recomposition (`system recompose`):** Evaluates a `g60-recomposition/1` proposal against a pinned target revision and nominated source pins, computing affected consumers and read sets before `--accept DIGEST` or `--retain DIGEST` commits under expected-revision guards.
 - **Cross-store transfer (`export` / `receive`):** Exports a pinned observation (`instance_id`, `id`, `revision`, `sha256`). Receiving records the provenance and local receiving account without mutating the source store or silently adopting its claims or duties.
 
-See [engine/INSTANCES.md](engine/INSTANCES.md), [engine/store/README.md](engine/store/README.md), and [engine/CLI-FIELD-REFERENCE.md](engine/CLI-FIELD-REFERENCE.md) for full schemas and CLI specifications.
+See [docs/engine/INSTANCES.md](docs/engine/INSTANCES.md), [docs/engine/store/README.md](docs/engine/store/README.md), and [docs/engine/CLI-FIELD-REFERENCE.md](docs/engine/CLI-FIELD-REFERENCE.md) for full schemas and CLI specifications.

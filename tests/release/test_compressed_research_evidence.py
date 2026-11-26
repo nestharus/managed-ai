@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import unittest
 
 
-REPO = Path(__file__).resolve().parents[3]
-RELEASE = REPO / "engine/release"
+REPO = Path(__file__).resolve().parents[2]
+RELEASE = REPO / "src/managed_ai/release"
 package = runpy.run_path(str(RELEASE / "package.py"))
 
 

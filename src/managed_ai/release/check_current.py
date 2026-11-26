@@ -21,25 +21,62 @@ def _is_reparse_or_symlink(info):
 
 
 def _require_ordinary_ancestors(path, label, *, allow_missing_self=False):
-    normalized = Path(os.path.abspath(path))
-    for ancestor in reversed(normalized.parents):
-        try:
+    raw = Path(path)
+    if '\x00' in str(raw):
+        raise ValueError(f'{label}: NUL byte in path')
+    if raw.is_absolute():
+        current = Path(raw.anchor)
+        parts = raw.parts[1:]
+    else:
+        if raw.drive:
+            raise ValueError(f'{label}: drive-relative path forbidden')
+        cwd_text = os.environ.get('PWD') if os.name != 'nt' else None
+        cwd = Path(os.getcwd())
+        if cwd_text:
+            try:
+                candidate = Path(cwd_text)
+                if candidate.is_absolute() and os.path.samefile(cwd_text, '.'):
+                    cwd = candidate
+            except OSError:
+                pass
+        for ancestor in reversed(cwd.parents):
             info = ancestor.lstat()
+            if _is_reparse_or_symlink(info) or not stat.S_ISDIR(info.st_mode):
+                raise ValueError(f'{label}: ordinary directory required at {ancestor}')
+        info = cwd.lstat()
+        if _is_reparse_or_symlink(info) or not stat.S_ISDIR(info.st_mode):
+            raise ValueError(f'{label}: ordinary directory required at {cwd}')
+        current = cwd
+        parts = raw.parts
+    missing_seen = False
+    for part in parts:
+        if part in ('', '.'):
+            continue
+        if part == '..':
+            if missing_seen:
+                raise ValueError(f'{label}: traversal past missing ancestor forbidden')
+            current = current.parent
+            continue
+        current = current / part
+        try:
+            info = current.lstat()
         except FileNotFoundError:
             if allow_missing_self:
+                missing_seen = True
                 continue
-            raise ValueError(f'{label}: missing ancestor {ancestor}') from None
+            raise ValueError(f'{label}: missing directory {current}') from None
         if _is_reparse_or_symlink(info) or not stat.S_ISDIR(info.st_mode):
-            raise ValueError(f'{label}: ordinary directory required at {ancestor}')
-    try:
-        info = normalized.lstat()
-    except FileNotFoundError:
-        if allow_missing_self:
-            return normalized
-        raise ValueError(f'{label}: missing directory {normalized}') from None
-    if _is_reparse_or_symlink(info) or not stat.S_ISDIR(info.st_mode):
-        raise ValueError(f'{label}: ordinary directory required at {normalized}')
-    return normalized
+            raise ValueError(f'{label}: ordinary directory required at {current}')
+    if not missing_seen:
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            if not allow_missing_self:
+                raise ValueError(f'{label}: missing directory {current}') from None
+        else:
+            if _is_reparse_or_symlink(info) or not stat.S_ISDIR(info.st_mode):
+                raise ValueError(f'{label}: ordinary directory required at {current}')
+    return current
 
 
 def _write_json_atomic(directory, filename, payload):
@@ -75,14 +112,17 @@ def main():
     records_dir = None
     if args.records is not None:
         records_dir = _require_ordinary_ancestors(args.records, 'invalid --records', allow_missing_self=True)
-    program = product.parent / 'tests/engine/store/test_shared_instances.py'
+    repo_root = product.parents[1] if (product.name == 'managed_ai' and product.parent.name == 'src') else product.parent
+    program = repo_root / 'tests/store/test_shared_instances.py'
+    if not program.is_file() and (repo_root / 'tests/engine/store/test_shared_instances.py').is_file():
+        program = repo_root / 'tests/engine/store/test_shared_instances.py'
     run = subprocess.run(
         [sys.executable, '-B', str(program)],
         capture_output=True,
         text=True,
         encoding='utf-8',
         errors='replace',
-        env=dict(os.environ, G60_TEST_PRODUCT=str(product)),
+        env=dict(os.environ, G60_TEST_PRODUCT=str(product), G60_TEST_ENGINE=str(product)),
     )
     report = {
         'status': 'passed' if run.returncode == 0 else 'failed',

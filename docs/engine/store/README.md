@@ -2,13 +2,13 @@
 
 This application joins persistent goals and extensible JSON records to captured context, actual returns, guarded artifact adoption, attention feedback and a source-bound research catalogue. It is a small work environment for an existing capable agent. It does not provide a model, infer every relevant relationship or make alignment judgments automatically.
 
-Domain and catalogue loading live under [selection](selection/).
-[Turns](turns/) holds the input capture, record scope, preparation journal and frozen delivery explanation.
-[The installed catalogue](catalogue.json) binds the core source IDs and their bodies.
+Domain and catalogue loading live under [selection](../../../src/managed_ai/store/selection/).
+[Turns](../../../src/managed_ai/store/turns/) holds the input capture, record scope, preparation journal and frozen delivery explanation.
+[The installed catalogue](../../../src/managed_ai/store/catalogue.json) binds the core source IDs and their bodies.
 
 ## Start with one useful context
 
-Use Python 3.10 or later on Linux, macOS or native Windows. From `engine/store`:
+Use Python 3.11 or later on Linux, macOS or native Windows. From `src/managed_ai/store`:
 
 ```bash
 python3 -B manage_store.py --root ../../../my-ai-work init --goal-text "Review the current design and deliver a useful next version."
@@ -28,7 +28,7 @@ The deployment entrance points to the central engine and one independent native 
 From the package root:
 
 ```bash
-python -B engine/deployment/select_deployment.py --deployment /path/to/deployment system status
+python -B src/managed_ai/deployment/select_deployment.py --deployment /path/to/deployment system status
 ```
 
 Each store owns its selected domains, payload schemas and reference catalogues. Acquire a complete selected source with `system catalogue SOURCE_ID --text`, then nominate its logical ID in a context's `techniques`. Local workspace material still uses the context's `sources` paths. A source catalogue or an available tool description does not establish participant acquisition or authorize execution.
@@ -258,7 +258,7 @@ This command validates retained packet and object bytes without writing state or
 
 The integrated app reads `--request`, `--spec`, `--assessment` and `assess --receipt` JSON files as host file paths; an absolute path avoids dependence on the caller's working directory. It copies Attention inputs into its internal workspace before invoking that component. Paths inside Attention `basis` and `products` and ordinary context `sources` remain relative to runtime `work/`; `project_sources` remains relative to the selected accepted project. The core Attention command's input-file convention is therefore not the integrated app's input-file convention.
 
-Use `attention` for nominated considerations that need source/use-bound accounts. Optional `attention_groups` and `attention_items` lists select the union of named active groups/items; unknown selectors are refused. Empty selectors retain the all-active view. These selectors bound which Attention sources are observed; the item/byte output limits alone do not. A supplied wider field is still observed. Outside questions remain recoverable and are not freshly assessed by this selection. Its format and `receive --assessment account.json` are defined in the complete [Attention guide](../docs/attention.md). `track --spec FILE` and `assess TURN --receipt FILE --producer NAME` expose the same operations separately. In particular, `groups` is a list, not a string. Arbitrary record content remains open; the stricter Attention interface owns its declared schema. Do not equate an Attention account with whole-goal acceptance. If an optional assessment fails after receipt, the actual reply remains received and the returned recovery command addresses that assessment alone.
+Use `attention` for nominated considerations that need source/use-bound accounts. Optional `attention_groups` and `attention_items` lists select the union of named active groups/items; unknown selectors are refused. Empty selectors retain the all-active view. These selectors bound which Attention sources are observed; the item/byte output limits alone do not. A supplied wider field is still observed. Outside questions remain recoverable and are not freshly assessed by this selection. Its format and `receive --assessment account.json` are defined in the complete [Attention guide](../attention.md). `track --spec FILE` and `assess TURN --receipt FILE --producer NAME` expose the same operations separately. In particular, `groups` is a list, not a string. Arbitrary record content remains open; the stricter Attention interface owns its declared schema. Do not equate an Attention account with whole-goal acceptance. If an optional assessment fails after receipt, the actual reply remains received and the returned recovery command addresses that assessment alone.
 
 ## Discover current sources and maintain useful landmarks
 
@@ -322,7 +322,7 @@ The retained observer-model entry supplies its complete operation description an
 
 The historical LC-L07 locator is retained here only as a qualified identity note; its former all-history catalogue is not installed. The original body declared by that locator has SHA-256 `6361c33f8aaa3541197423d5e4cfc5a32300d3cf32c9507b2143e771954ff399`, member `cybernetics-research/theory/constructive_repair.md` in `G35-inside-G59`; its LC-L07 argument occupies original lines 55–82. Returning the locator does not return that original body.
 
-The paired research archive retains a primary constructive-repair source (`research/references/primary/cybernetics-research/theory/constructive_repair.md`) under its own current file identity, and a current construction account (`research/evidence/construction-in-use.md`), both routed in [navigation.json](../release/navigation.json). These are useful current routes, not a claim that the locator's exact historical body or all of its dependencies are installed. The maintained primary file and the locator's declared original have different byte identities.
+The paired research archive retains a primary constructive-repair source (`research/references/primary/cybernetics-research/theory/constructive_repair.md`) under its own current file identity, and a current construction account (`research/evidence/construction-in-use.md`), both routed in [navigation.json](../../../src/managed_ai/release/navigation.json). These are useful current routes, not a claim that the locator's exact historical body or all of its dependencies are installed. The maintained primary file and the locator's declared original have different byte identities.
 
 No predecessor archive or historical recovery command is required for ordinary current system use. A historical recipe retained in catalogue metadata describes an earlier environment and is not an installed recovery service. If a contribution specifically needs an omitted original, acquire that exact body, verify its declared identity and qualify its original premises before relying on it. A present account can support current use without being passed off as a byte-identical historical source.
 
@@ -361,11 +361,11 @@ python3 -B manage_store.py --root ../../../my-ai-work interpret --goal-revision 
 
 Use `met`, `continue` or `wait`; `wait` also requires `--condition`. The software retains the host-authored account. It does not infer success from item status or validate the semantic adequacy of a `met` claim. A changed goal, declared evidence or separate obligation membership/revision requires a new interpretation; useful old results and still-owed effects remain recoverable. Status gives exact reassessment reasons. Older accounts without a separate-obligation binding remain historical and explicitly require reassessment; unrelated notes and optional field changes alone do not invalidate a current judgment.
 
-For restart, retain the complete runtime root and use `status`, `show ID` and `recover TURN`. Current artifacts are under `work/outputs/`; original objects and returns remain under `exchange/`. No automatic garbage collection or semantic compaction is implemented. A handoff should name the actual current goal, accepted version, source routes, unresolved effects and selected next contribution. The complete [working guidance](GUIDE.md) explains the constructive route when new relationships must be developed.
+For restart, retain the complete runtime root and use `status`, `show ID` and `recover TURN`. Current artifacts are under `work/outputs/`; original objects and returns remain under `exchange/`. No automatic garbage collection or semantic compaction is implemented. A handoff should name the actual current goal, accepted version, source routes, unresolved effects and selected next contribution. The complete [working guidance](../../../src/managed_ai/store/GUIDE.md) explains the constructive route when new relationships must be developed.
 
 ## Verify the delivered contract
 
-From the repository root, run `python -B -m unittest discover -s tests/engine/store`. The core's tests and [overview](../core/README.md) cover its declared mechanisms. These checks establish particular software behavior; actual agent use and interpretation remain separate evidence.
+From the repository root, run `python -B -m unittest discover -s tests/store`. The core's tests and [overview](../core/README.md) cover its declared mechanisms. These checks establish particular software behavior; actual agent use and interpretation remain separate evidence.
 
 For the deployment addition, run `python3 -B agent-system/check_deployment.py`. Its isolated public-CLI checks cover actual source/instruction reselection, stable continuation commands, exact earlier-context recovery, expected-selection and manifest guards, complete membership, workspace publication boundaries, same-runtime binding and one actual bounded command lifetime. Its project text and replies are declared fixtures. A later real agent consuming the selected edition remains a separate receiving use.
 

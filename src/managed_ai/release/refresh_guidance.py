@@ -148,12 +148,20 @@ def render_sources_markdown(selected, nav):
     return '\n'.join(lines).encode('utf-8')
 
 
+def _engine_layout(root):
+    if root.name == 'managed_ai' and root.parent.name == 'src':
+        bundle_root = _ordinary_path(root.parents[1], S_ISDIR, 'ordinary bundle root required')
+        return True, bundle_root, '../../..', -2
+    if root.name == 'engine':
+        bundle_root = _ordinary_path(root.parent, S_ISDIR, 'ordinary bundle root required')
+        return True, bundle_root, '../..', -1
+    return False, root, '..', 0
+
+
 def render(root, *, include_sources_md=False):
     """Read canonical UTF-8 inputs and prepare each projection without writing."""
     root = _ordinary_path(root, S_ISDIR, 'ordinary engine directory required')
-    bundle_mode = root.name == 'engine'
-    bundle_root = _ordinary_path(root.parent, S_ISDIR, 'ordinary bundle root required') if bundle_mode else root
-    source_root_rel = '../..' if bundle_mode else '..'
+    bundle_mode, bundle_root, source_root_rel, min_depth = _engine_layout(root)
 
     selection_name = 'release/current_sources.json'
     catalogue_name = 'store/catalogue.json'
@@ -166,7 +174,6 @@ def render(root, *, include_sources_md=False):
         if not isinstance(spelling, str) or not spelling or '\\' in spelling or Path(spelling).anchor:
             raise ValueError('current source reference must be relative to the engine: ' + row['id'])
         relative = Path(spelling)
-        min_depth = -1 if bundle_mode else 0
         depth = 0
         escaped = False
         for part in relative.parts:

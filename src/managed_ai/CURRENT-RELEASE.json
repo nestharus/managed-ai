@@ -4,7 +4,7 @@
   "engine_api": "managed-ai-runtime/1",
   "deployment_api": "agent-system-deployment/2",
   "store_schema": "managed-ai-store/1",
-  "selection_sha256": "3fb7f776141fefbfda26000061c9863d46a917ac51da6dacb6427f6dbb89491a",
+  "selection_sha256": "6844de69f3fb11c974698a42c3d0d37764052faa3c8ae9ec58b8e0f0989e6390",
   "source_count": 28,
   "source_ownership": "Canonical maintained source files; reference catalogues do not duplicate their bodies.",
   "scope": "Same executable engine for independent schema-governed stores; domains and selected knowledge are data."

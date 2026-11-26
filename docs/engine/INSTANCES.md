@@ -16,23 +16,23 @@ Deployment dispatch checks the selected source again before loading its native e
 
 The invoked wrapper's local deployment controller issues the activation receipt. Selecting a newer engine through an earlier controller retains that controller's reporting behavior. A completed `activate` prints verified deployment status on stdout. If candidate removal or status readback raises a handled error after the descriptor write completes, `activate` exits 2 and emits JSON on stderr with `status` set to `committed_incomplete`, `operation` set to `activate`, the `error`, and the SHA-256 of the exact descriptor written (including the activation reason) in `descriptor_sha256`. A `failed_step` of `candidate_cleanup` means removal of the staged file reported an error before status readback. A `failed_step` of `status_readback` means removal succeeded and reading or verifying the resulting selection failed.
 
-Run `engine/deployment/select_deployment.py --deployment DEPLOYMENT status` and compare its `descriptor_sha256` with the reported digest. If status refuses, inspect the descriptor and its selected code and store binding for that deployment. A leftover `candidate.json` is staging data. Candidate removal has no separate directory sync, so recheck staging after crash recovery. For another selection, including a return to qualified earlier code, stage it afresh and activate with the observed current descriptor digest, the fresh candidate digest and a reason. A writer error can occur on either side of replacement. Guard release or output can also fail after the selection has been written. Reconcile the current selection and staging before retrying after an `unresolved` error or a missing receipt.
+Run `src/managed_ai/deployment/select_deployment.py --deployment DEPLOYMENT status` and compare its `descriptor_sha256` with the reported digest. If status refuses, inspect the descriptor and its selected code and store binding for that deployment. A leftover `candidate.json` is staging data. Candidate removal has no separate directory sync, so recheck staging after crash recovery. For another selection, including a return to qualified earlier code, stage it afresh and activate with the observed current descriptor digest, the fresh candidate digest and a reason. A writer error can occur on either side of replacement. Guard release or output can also fail after the selection has been written. Reconcile the current selection and staging before retrying after an `unresolved` error or a missing receipt.
 
 Deployment status reopens the current descriptor and reports its raw digest with the engine and store it verified from those bytes. A retained Python deployment handle can read current status after activation. Reopen the handle before dispatching or staging against the new selection. An ordinary CLI dispatch verifies the store binding and engine source on its fresh opening under the deployment guard. Frozen `explain-context` keeps its lock-free entry. Native `system status` also loads the store's selected domains and catalogues. Qualify changes to those store pins separately through `configure --spec FILE` with the current store descriptor digest and a receiving account.
 
 From the package root:
 
 ```sh
-python -B engine/deployment/select_deployment.py --deployment /path/to/deployment system status
+python -B src/managed_ai/deployment/select_deployment.py --deployment /path/to/deployment system status
 ```
 
 Create an additional instance only in a new location:
 
 ```sh
-python3 -B engine/store/manage_store.py --root stores/example init \
+python3 -B src/managed_ai/store/manage_store.py --root stores/example init \
   --instance-id example-instance --goal-text "Actual receiving contribution" \
   --domain /absolute/domain/domain.json --catalogue /absolute/instance-sources.json
-python3 -B engine/deployment/select_deployment.py --deployment deployments/example init \
+python3 -B src/managed_ai/deployment/select_deployment.py --deployment deployments/example init \
   --engine engine --store stores/example
 ```
 
@@ -45,8 +45,8 @@ A domain manifest declares `format: managed-ai-domain/1`, `id`, `version`, `engi
 A reference catalogue has `format: managed-ai-source-catalogue/1` and `sources`. Each row declares `id`, `path`, `sha256`, `bytes`, optional title/kind/summary, and `exposure` (`available` or `sealed`). Individual paths cannot escape the explicitly declared source root. Instance catalogues may declare their own `source_root` relative to the catalogue file. Complete acquisition checks current bytes against the selected identity. Sealed sources remain metadata only: ordinary source reading and context capture refuse their bodies.
 
 ```sh
-python3 -B engine/library/cli.py --store stores/research show SOURCE_ID --text
-python3 -B engine/deployment/select_deployment.py --deployment deployments/novel system catalogue SOURCE_ID --text
+python3 -B src/managed_ai/library/cli.py --store stores/research show SOURCE_ID --text
+python3 -B src/managed_ai/deployment/select_deployment.py --deployment deployments/novel system catalogue SOURCE_ID --text
 ```
 
 The installed catalogue uses `agent-system-catalogue/1` and also reads its untagged layout. Primary IDs across the core and selected references are unique. A primary ID takes precedence over a compatibility alias. Each alias names one primary target and becomes available when that target is selected. Listing, body lookup and context capture use this same resolution.
@@ -63,7 +63,7 @@ The native record owner enforces declared kinds on ordinary writes and imports. 
 
 To requalify changed domain/catalogue files, run `configure --spec FILE` through the selected native entrance. The specification supplies `expected_sha256` of the current `system.json`, a nonempty `account`, and replacement `domains` and/or `catalogues` path lists. The operation checks existing records against the proposed schema selection and refuses removal of a schema still owning records. It then atomically replaces the store descriptor. If an older engine accepted a dangling local reference, ordinary store reads can now refuse. Put the corrected manifest at a separate path and submit the full replacement domain list with the current descriptor digest through this same command. Direct and deployed configure validate the proposed selection and existing heads before committing it. Earlier captures retain their original evidence.
 
-For delayed receipt of an exact reviewed plan, check that the selected native `configure --help` advertises `managed-ai-reviewed-configure/1`. Request that format for the store in the [source-maintenance planner](../domains/ai-system-building/operations/SOURCE-MAINTENANCE.md). Pass the emitted file to the same `configure --spec FILE` command. The store owner compares the receiving instance, prior descriptor digest and ordered domain and catalogue paths and digests before replacing the descriptor. Inspect the returned `reviewed_plan` and descriptor digest for each store. A later store can refuse even after an earlier one has accepted. Use the path-list specification when the task calls for the current compatible edition.
+For delayed receipt of an exact reviewed plan, check that the selected native `configure --help` advertises `managed-ai-reviewed-configure/1`. Request that format for the store in an external source-maintenance planner (such as logical source `ai-system-building/operations/SOURCE-MAINTENANCE.md` when that domain is selected). Pass the emitted file to the same `configure --spec FILE` command. The store owner compares the receiving instance, prior descriptor digest and ordered domain and catalogue paths and digests before replacing the descriptor. Inspect the returned `reviewed_plan` and descriptor digest for each store. A later store can refuse even after an earlier one has accepted. Use the path-list specification when the task calls for the current compatible edition.
 
 ## Current state, imports and retained evidence
 
