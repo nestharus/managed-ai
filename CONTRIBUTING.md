@@ -4,7 +4,8 @@
 
 - `src/managed_ai/` holds domain-neutral runtime packages (`platform/`, `deployment/`, `core/`, `store/`, `library/`, `host/`, `companions/`, `collective/`) plus runtime JSON assets (`CURRENT-RELEASE.json`, `store/catalogue.json`, `library/source-map.json`). Do not hardcode domain names, domain workflows, or private workspace paths into `src/managed_ai/`.
 - Keep OS/platform branching strictly inside `src/managed_ai/platform/` (zero `os.name`, `sys.platform`, `ctypes.WinDLL`, `msvcrt`, or `fcntl` outside `platform/`). Every domain package owns its own concrete contracts, configs, and storage natively.
-- Keep maintainer/CI-CD scripts and selection metadata under `scripts/` (`scripts/release/*`, `scripts/publish_library.py`) so built wheels ship only runtime packages and runtime data assets.
+- Keep maintainer/CI-CD scripts, container definitions, local compose stacks, IaC, and GitOps manifests under `scripts/`, `containers/`, `deploy/`, `infra/`, `gitops/`, and `.buildkite/` so built wheels ship only runtime packages and runtime data assets.
+- Mirror `src/managed_ai/` and `scripts/` under `tests/` by domain capability (`tests/{platform_adapter,core,deployment,store,library,host,companions,collective,release,ci}/`), naming test modules for the behavior they verify rather than sprint or wave numbers.
 - External domain repositories supply reusable schemas, catalogues, guidance, and domain operations independently (`source_root: "."`). Keep domain changes in the owning domain repository and refresh its `catalogue.json` and `domain.json` pins.
 - Never open sealed source entries (marked `"exposure": "sealed"` in catalogues) as ordinary text sources.
 
@@ -23,7 +24,10 @@ From the repository root:
 ```sh
 python -B -m unittest discover -s tests
 python -B scripts/release/check_current.py
+python -B -m unittest tests/ci/test_image_lifecycle.py
 ```
+
+CI pipelines in `.buildkite/pipeline.yml` enforce unit tests, `check_current.py`, deployment static checks, and wheel isolation audits before building any container image.
 
 ## Updating core guidance pins
 
