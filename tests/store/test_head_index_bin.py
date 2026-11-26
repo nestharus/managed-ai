@@ -496,6 +496,7 @@ class HeadIndexBinTests(unittest.TestCase):
             self.assertTrue(verified.is_exact_base)
             self.assertEqual(len(verified.overrides), 0)
             self.assertEqual(verified.live_ids, expected_order)
+            self.assertEqual(list(verified.all_entries().keys()), expected_order)
 
         # graph_query.lint() must execute the zero-copy _lint_mmap fast path, not all_entries().
         with mock.patch.object(graph_query, '_lint_mmap', wraps=graph_query._lint_mmap) as lint_spy:

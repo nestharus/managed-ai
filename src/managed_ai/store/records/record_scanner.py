@@ -328,7 +328,8 @@ class VerifiedIndexView:
 
     def all_entries(self) -> dict[str, dict]:
         if self.is_exact_base:
-            return self.view.all_entries()
+            base = self.view.all_entries()
+            return {ident: base[ident] for ident in self.live_ids}
 
         out: dict[str, dict] = {}
         dels = self.view.delta_dels | self.removed
