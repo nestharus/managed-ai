@@ -793,6 +793,52 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             )
             self.assertNotEqual(bad_ref.returncode, 0)
 
+    def test_c41_2a_with_engine_keeps_external_managed_ai_mounted_for_lazy_imports(self):
+        import importlib
+        with TemporaryDirectory() as temporary:
+            tmp = Path(temporary)
+            coloc_src = tmp / "colocated/src"
+            ext_src = tmp / "external/src"
+            for src_root, label, add_ext_only in (
+                (coloc_src, "COLOCATED", False),
+                (ext_src, "EXTERNAL", True),
+            ):
+                pkg = src_root / "managed_ai"
+                (pkg / "store").mkdir(parents=True)
+                (pkg / "__init__.py").write_text(f"LABEL = {label!r}\n", encoding="utf-8")
+                (pkg / "store/__init__.py").write_text("", encoding="utf-8")
+                (pkg / "store/shared_tag.py").write_text(f"TAG = {label!r}\n", encoding="utf-8")
+                if add_ext_only:
+                    (pkg / "store/ext_only_helper.py").write_text("ORIGIN = 'EXTERNAL_ONLY'\n", encoding="utf-8")
+                (pkg / "store/system.py").write_text(
+                    "def run_lazy():\n"
+                    "    from managed_ai.store.shared_tag import TAG\n"
+                    "    from managed_ai.store.ext_only_helper import ORIGIN\n"
+                    "    return (TAG, ORIGIN)\n",
+                    encoding="utf-8",
+                )
+
+            coloc_str = str(coloc_src.resolve())
+            saved = {k: sys.modules.pop(k) for k in list(sys.modules) if k == "managed_ai" or k.startswith("managed_ai.")}
+            sys.path.insert(0, coloc_str)
+            try:
+                coloc_mod = importlib.import_module("managed_ai")
+                self.assertEqual(coloc_mod.LABEL, "COLOCATED")
+                with PACKAGE["_with_engine"](ext_src / "managed_ai", "store/system.py") as api:
+                    # Lazy imports inside the external module MUST bind to external, not colocated
+                    self.assertEqual(api["run_lazy"](), ("EXTERNAL", "EXTERNAL_ONLY"))
+                # After exiting context, colocated managed_ai MUST be restored cleanly
+                self.assertIs(sys.modules.get("managed_ai"), coloc_mod)
+                self.assertEqual(sys.modules["managed_ai"].LABEL, "COLOCATED")
+                self.assertNotIn("managed_ai.store.ext_only_helper", sys.modules)
+            finally:
+                for k in list(sys.modules):
+                    if k == "managed_ai" or k.startswith("managed_ai."):
+                        sys.modules.pop(k, None)
+                sys.modules.update(saved)
+                if coloc_str in sys.path:
+                    sys.path.remove(coloc_str)
+
 
 if __name__ == "__main__":
     unittest.main()

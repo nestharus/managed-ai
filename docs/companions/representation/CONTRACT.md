@@ -26,7 +26,7 @@ obligations and explicitly selected material still participate in native guards.
 
 ## Prepare the actual operation
 
-In a shared package, `ENGINE_RUNTIME` is `engine/runtime`. Both the adapter and `check_representation.py` take this directory.
+In a shared package, `ENGINE_RUNTIME` is `src/managed_ai`. Both the adapter and `check_representation.py` take this directory.
 
 Call `representation.py --engine ENGINE_RUNTIME --root RUNTIME prepare --spec FILE`.
 The specification has format `g60-representation-operation/1` and these fields:

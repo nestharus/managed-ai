@@ -31,12 +31,14 @@ def _require_ordinary_ancestors(path, label, *, allow_missing_self=False):
         if raw.drive:
             raise ValueError(f'{label}: drive-relative path forbidden')
         cwd_text = os.environ.get('PWD') if os.name != 'nt' else None
+        cwd = Path(os.getcwd())
         if cwd_text:
-            cwd = Path(cwd_text)
-            if not cwd.is_absolute():
-                cwd = Path(os.getcwd())
-        else:
-            cwd = Path(os.getcwd())
+            try:
+                candidate = Path(cwd_text)
+                if candidate.is_absolute() and os.path.samefile(cwd_text, '.'):
+                    cwd = candidate
+            except OSError:
+                pass
         for ancestor in reversed(cwd.parents):
             info = ancestor.lstat()
             if _is_reparse_or_symlink(info) or not stat.S_ISDIR(info.st_mode):

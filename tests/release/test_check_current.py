@@ -100,6 +100,40 @@ class ReleaseAcceptance(unittest.TestCase):
             self.assertNotEqual(abbrev.returncode, 0)
             self.assertFalse((real_rec / 'ACCEPTANCE.json').exists())
 
+    def test_c41_1_ignores_stale_or_nonexistent_posix_pwd(self):
+        import runpy
+        mod = runpy.run_path(str(ENGINE / 'release/check_current.py'))
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dir_a = root / 'dir_a'
+            dir_b = root / 'dir_b'
+            (dir_a / 'sub').mkdir(parents=True)
+            (dir_b / 'sub').mkdir(parents=True)
+            old_cwd = os.getcwd()
+            old_pwd = os.environ.get('PWD')
+            try:
+                os.chdir(dir_b)
+                os.environ['PWD'] = str(dir_a)
+                got = mod['_require_ordinary_ancestors'](Path('sub'), 'test')
+                self.assertEqual(got.resolve(), (dir_b / 'sub').resolve())
+
+                os.environ['PWD'] = str(root / 'does_not_exist')
+                got2 = mod['_require_ordinary_ancestors'](Path('sub'), 'test')
+                self.assertEqual(got2.resolve(), (dir_b / 'sub').resolve())
+
+                if os.name != 'nt':
+                    link_b = root / 'link_b'
+                    link_b.symlink_to(dir_b)
+                    os.environ['PWD'] = str(link_b)
+                    with self.assertRaisesRegex(ValueError, 'ordinary directory required'):
+                        mod['_require_ordinary_ancestors'](Path('sub'), 'test')
+            finally:
+                os.chdir(old_cwd)
+                if old_pwd is None:
+                    os.environ.pop('PWD', None)
+                else:
+                    os.environ['PWD'] = old_pwd
+
 
 if __name__ == '__main__':
     unittest.main()

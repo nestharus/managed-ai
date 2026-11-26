@@ -2,6 +2,7 @@
 """Package the one current source tree, without inherited release directories."""
 import argparse
 import codecs
+from contextlib import ExitStack, contextmanager
 import gzip
 import importlib
 import re
@@ -141,13 +142,13 @@ def source_paths(root, engine):
                 yield path
 
 
-def _run_with_engine(engine, relative):
+@contextmanager
+def _with_engine(engine, relative):
     engine_path = Path(engine).resolve(strict=True)
     is_pkg = _is_package_engine(engine_path)
     import_root = str(engine_path.parent if is_pkg else engine_path)
-    added = import_root not in sys.path
-    if added:
-        sys.path.insert(0, import_root)
+    sys.path.insert(0, import_root)
+    importlib.invalidate_caches()
     saved_modules = None
     try:
         if is_pkg:
@@ -155,7 +156,7 @@ def _run_with_engine(engine, relative):
             expected = (engine_path / relative).resolve(strict=True)
             existing = sys.modules.get("managed_ai")
             existing_file = getattr(existing, "__file__", None) if existing is not None else None
-            if existing is not None and (
+            if existing is None or (
                 existing_file is None or Path(existing_file).resolve() != (engine_path / "__init__.py").resolve()
             ):
                 saved_modules = {
@@ -166,16 +167,19 @@ def _run_with_engine(engine, relative):
             mod = importlib.import_module(mod_name)
             if Path(mod.__file__).resolve(strict=True) != expected:
                 raise ValueError("Loaded engine module differs from selected engine: " + mod_name)
-            return vars(mod)
-        return runpy.run_path(str(engine_path / relative))
+            yield vars(mod)
+        else:
+            yield runpy.run_path(str(engine_path / relative))
     finally:
         if saved_modules is not None:
             for k in list(sys.modules):
                 if k == "managed_ai" or k.startswith("managed_ai."):
                     sys.modules.pop(k, None)
             sys.modules.update(saved_modules)
-        if added and import_root in sys.path:
+        try:
             sys.path.remove(import_root)
+        except ValueError:
+            pass
 
 
 def received_compressed_text(system):
@@ -186,8 +190,8 @@ def received_compressed_text(system):
         # Earlier native instances expose the same exchange and instance
         # binding. Read their retained receipts through the current owner.
         engine = Path(__file__).resolve().parents[1]
-        reader = _run_with_engine(engine, "store/records/record_import.py")["completed_receipt_records"]
-        acknowledgements = reader(system)
+        with _with_engine(engine, "store/records/record_import.py") as api:
+            acknowledgements = list(api["completed_receipt_records"](system))
     accepted = {(item["id"], item["revision"], item["sha256"]) for item in acknowledgements}
     evidence = set()
     for head in system.records():
@@ -281,39 +285,40 @@ def members(root, engine=...):
     result = {}
     stores = {}
     native_api = None
-    for path in sorted(source_paths(root, engine), key=lambda path: (path, path.as_posix())):
-        relative = path.relative_to(root).as_posix()
-        if "\\" in relative or ".." in Path(relative).parts:
-            raise ValueError("Unsafe archive member path: " + relative)
-        if path.suffix.lower() in {".zip", ".tar", ".gz"}:
-            match = re.fullmatch(
-                r"stores/([^/]+)/work/((?:.+/)?([a-f0-9]{2})/([a-f0-9]{64})\.gz)",
-                relative,
-            )
-            if (not match or match[3] != match[4][:2] or engine is None or engine == root
-                    or not (root / "stores" / match[1] / "system.json").is_file()):
-                raise ValueError("Select extracted useful source instead of nested transport: " + str(path))
-            store_name, work_rel, _, expected_sha = match.groups()
-            if store_name not in stores:
-                if native_api is None:
-                    native_api = _run_with_engine(engine, "store/system.py")
-                store = native_api["System"](root / "stores" / store_name)
-                stores[store_name] = (
-                    store,
-                    received_compressed_text(store),
-                    _store_compressed_prefixes(store),
+    with ExitStack() as stack:
+        for path in sorted(source_paths(root, engine), key=lambda path: (path, path.as_posix())):
+            relative = path.relative_to(root).as_posix()
+            if "\\" in relative or ".." in Path(relative).parts:
+                raise ValueError("Unsafe archive member path: " + relative)
+            if path.suffix.lower() in {".zip", ".tar", ".gz"}:
+                match = re.fullmatch(
+                    r"stores/([^/]+)/work/((?:.+/)?([a-f0-9]{2})/([a-f0-9]{64})\.gz)",
+                    relative,
                 )
-            store, allowed, allowed_prefixes = stores[store_name]
-            if not any(work_rel.startswith(prefix) for prefix in allowed_prefixes):
-                raise ValueError("Select extracted useful source instead of nested transport: " + str(path))
-            current = identity(path)
-            if current["sha256"] != expected_sha or (work_rel, expected_sha, current["bytes"]) not in allowed:
-                raise ValueError("Missing accepted research evidence for compressed source: " + relative)
-            store.ex.objects.read(expected_sha, expected_bytes=current["bytes"])
-            check_compressed_text(path)
-            result[relative] = current
-        else:
-            result[relative] = identity(path)
+                if (not match or match[3] != match[4][:2] or engine is None or engine == root
+                        or not (root / "stores" / match[1] / "system.json").is_file()):
+                    raise ValueError("Select extracted useful source instead of nested transport: " + str(path))
+                store_name, work_rel, _, expected_sha = match.groups()
+                if store_name not in stores:
+                    if native_api is None:
+                        native_api = stack.enter_context(_with_engine(engine, "store/system.py"))
+                    store = native_api["System"](root / "stores" / store_name)
+                    stores[store_name] = (
+                        store,
+                        received_compressed_text(store),
+                        _store_compressed_prefixes(store),
+                    )
+                store, allowed, allowed_prefixes = stores[store_name]
+                if not any(work_rel.startswith(prefix) for prefix in allowed_prefixes):
+                    raise ValueError("Select extracted useful source instead of nested transport: " + str(path))
+                current = identity(path)
+                if current["sha256"] != expected_sha or (work_rel, expected_sha, current["bytes"]) not in allowed:
+                    raise ValueError("Missing accepted research evidence for compressed source: " + relative)
+                store.ex.objects.read(expected_sha, expected_bytes=current["bytes"])
+                check_compressed_text(path)
+                result[relative] = current
+            else:
+                result[relative] = identity(path)
     return result
 
 
@@ -575,20 +580,20 @@ def verify_store_schemas(root, core):
     stores = list(descriptors(root, 'stores', 'system.json'))
     if not stores:
         return
-    api = _run_with_engine(core, 'store/system.py')
-    for descriptor in stores:
-        system = api['System'](descriptor.parent)
-        for record in system.records():
-            system.domain_selection.validate_record(record)
+    with _with_engine(core, 'store/system.py') as api:
+        for descriptor in stores:
+            system = api['System'](descriptor.parent)
+            for record in system.records():
+                system.domain_selection.validate_record(record)
 
 
 def verify_deployment_bindings(root, core):
     deployments = list(descriptors(root, 'deployments', 'deployment.json'))
     if not deployments:
         return
-    deployment_api = _run_with_engine(core, 'deployment/controller.py')
-    for descriptor in deployments:
-        deployment_api['Deployment'](descriptor.parent).verify()
+    with _with_engine(core, 'deployment/controller.py') as deployment_api:
+        for descriptor in deployments:
+            deployment_api['Deployment'](descriptor.parent).verify()
 
 
 def _engine_prefix(root, core):
