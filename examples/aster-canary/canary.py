@@ -10,8 +10,8 @@ SRC = ROOT / 'src'
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 from managed_ai.store.system import System
-from managed_ai.optional.collective.collective_store import Collective, Session
-from managed_ai.optional.collective.collective_store.contract import pin, require
+from managed_ai.collective.store import Collective, Session
+from managed_ai.collective.store.contract import pin, require
 from managed_ai.core.storage import encode, exclusive, read_json, sha
 from managed_ai.store.protocol.inputs import accounted_closure
 

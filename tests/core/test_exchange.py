@@ -58,7 +58,7 @@ class ExchangeTests(unittest.TestCase):
 
     def test_fresh_process_reopens_external_context(self):
         self.prepare()
-        p = subprocess.run([sys.executable, '-B', str(ROOT/'core/cli/exchange_packets.py'), '--root', str(self.root),
+        p = subprocess.run([sys.executable, '-B', str(ROOT/'core/exchange/cli.py'), '--root', str(self.root),
                             'inspect', 'one'], capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(json.loads(p.stdout)['consumer'], 'reader')

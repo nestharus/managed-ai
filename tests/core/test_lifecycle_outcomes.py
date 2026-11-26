@@ -99,7 +99,7 @@ class LifecycleOutcomes(unittest.TestCase):
         for field in ['origin_request', 'streams', 'result', 'stream_integrity', 'status']:
             self.assertEqual(recovered[field], view[field])
         shutil.rmtree(self.root / 'carrier')
-        process = subprocess.run([sys.executable, '-B', str(ROOT / 'core/cli/exchange_packets.py'), '--root', str(self.root),
+        process = subprocess.run([sys.executable, '-B', str(ROOT / 'core/exchange/cli.py'), '--root', str(self.root),
                                   'recover-transport', 'one'], capture_output=True, text=True)
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertEqual(json.loads(process.stdout), recovered)

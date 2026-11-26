@@ -4,19 +4,19 @@ Standalone standard-library examples demonstrating Managed AI receiving, feedbac
 
 ## Receiving example (`receiving_example.py`)
 
-Drives `optional/collective/manage_collective.py` (`Python 3.11+` / `SQLite 3.38+`) through three operations without embedding model inference or automatic retries:
+Drives `src/managed_ai/collective/store/cli.py` (`Python 3.11+` / `SQLite 3.38+`) through three operations without embedding model inference or automatic retries:
 
 - **Prepare:** creates distinct `producer` candidate and `receiver` observation/approval records under a unique `namespace`, capturing declared `sources` and `reconsider_from` actors (`g60-receiver-use/1`).
   ```sh
-  python -B examples/receiving_example.py --engine optional/collective --db /path/to/use.sqlite --operation prepare --input prepare.json
+  python -B examples/receiving_example.py --engine src/managed_ai/collective --db /path/to/use.sqlite --operation prepare --input prepare.json
   ```
 - **Take (admit later):** rechecks current source editions, approval pin, and required findings inside the local write transaction before recording `received-use`.
   ```sh
-  python -B examples/receiving_example.py --engine optional/collective --db /path/to/use.sqlite --operation take --input take.json
+  python -B examples/receiving_example.py --engine src/managed_ai/collective --db /path/to/use.sqlite --operation take --input take.json
   ```
 - **Resume:** reconciles an unfinished target via explicit `source_decisions` (`renew` / `release`) and notice `treatments` (`incorporated` / `retained-adequate` / `not-applicable`).
 
-Exit codes: `0` accepted, `2` refused, `3` unresolved. Inspect uncertain delivery via `optional/collective/manage_collective.py --db ... receipt --actor ACTOR --command CMD`.
+Exit codes: `0` accepted, `2` refused, `3` unresolved. Inspect uncertain delivery via `python -B -m managed_ai.collective --db ... receipt --actor ACTOR --command CMD`.
 
 ## Native feedback example (`native_feedback.py`)
 

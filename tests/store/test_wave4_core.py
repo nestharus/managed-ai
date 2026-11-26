@@ -27,7 +27,7 @@ from managed_ai.store.cli.command_dispatch import emit
 from managed_ai.store.composition.composition_change_notice import notice
 from managed_ai.store.composition.composition_opportunities import guarded_inventory
 from managed_ai.store.system import ENTRYPOINT, EngineEntrypoint, System
-from managed_ai.tools import open_contact
+from managed_ai.core.exchange import open_contact
 
 
 class Wave4CoreTests(unittest.TestCase):
@@ -97,7 +97,7 @@ class Wave4CoreTests(unittest.TestCase):
         self.assertEqual(report['candidate_relations'], [{'id': 'ab', 'prediction': 'check beta'}])
 
     def test_w4_cb3_library_cli_and_audit_feedback_respect_owner_lock(self):
-        """W4-CB3: engine/library/cli.py --store and engine/tools/audit_feedback.py acquire shared owner.lock."""
+        """W4-CB3: library/cli.py --store and store/governance/audit_feedback.py acquire shared owner.lock."""
         lock_path = self.store / 'exchange/owner.lock'
         short_env = {'MANAGED_AI_DOMAIN_ADMISSION_SECONDS': '0.05'}
 
@@ -108,7 +108,7 @@ class Wave4CoreTests(unittest.TestCase):
                            env=short_env, expected_rc=75)
             self.assertEqual(json.loads(p1.stderr)['status'], 'contended')
 
-            p2 = self._run([sys.executable, '-B', str(ENGINE / 'tools/audit_feedback.py'),
+            p2 = self._run([sys.executable, '-B', str(ENGINE / 'store/governance/audit_feedback.py'),
                             str(ENGINE), str(self.store), 'goal', '--obligation'],
                            env=short_env, expected_rc=75)
             self.assertEqual(json.loads(p2.stderr)['status'], 'contended')
@@ -120,7 +120,7 @@ class Wave4CoreTests(unittest.TestCase):
                            env=short_env, expected_rc=0)
             self.assertIn('entries', json.loads(p3.stdout))
 
-            p4 = self._run([sys.executable, '-B', str(ENGINE / 'tools/audit_feedback.py'),
+            p4 = self._run([sys.executable, '-B', str(ENGINE / 'store/governance/audit_feedback.py'),
                             str(ENGINE), str(self.store), 'goal', '--obligation'],
                            env=short_env, expected_rc=0)
             self.assertEqual(json.loads(p4.stdout)['record'], 'goal')
@@ -147,21 +147,21 @@ class Wave4CoreTests(unittest.TestCase):
 
         # Under shared lock: list/inspect succeed concurrently!
         with shared(lock_path, allow_readonly_open=True):
-            p_ex = self._run([sys.executable, '-B', str(ENGINE / 'core/cli/exchange_packets.py'),
+            p_ex = self._run([sys.executable, '-B', str(ENGINE / 'core/exchange/cli.py'),
                               '--root', str(ex_root), 'list'], env=short_env, expected_rc=0)
             self.assertIsInstance(json.loads(p_ex.stdout), list)
 
-            p_att = self._run([sys.executable, '-B', str(ENGINE / 'core/cli/track_attention.py'),
+            p_att = self._run([sys.executable, '-B', str(ENGINE / 'core/attention.py'),
                                '--root', str(ex_root), 'inspect', 'fb-cb5'], env=short_env, expected_rc=0)
             self.assertEqual(json.loads(p_att.stdout)['id'], 'fb-cb5')
 
         # Under exclusive lock: read-only CLIs exit 75 with structured contention JSON
         with exclusive(lock_path):
-            p_ex2 = self._run([sys.executable, '-B', str(ENGINE / 'core/cli/exchange_packets.py'),
+            p_ex2 = self._run([sys.executable, '-B', str(ENGINE / 'core/exchange/cli.py'),
                                '--root', str(ex_root), 'list'], env=short_env, expected_rc=75)
             self.assertEqual(json.loads(p_ex2.stderr)['status'], 'contended')
 
-            p_att2 = self._run([sys.executable, '-B', str(ENGINE / 'core/cli/track_attention.py'),
+            p_att2 = self._run([sys.executable, '-B', str(ENGINE / 'core/attention.py'),
                                 '--root', str(ex_root), 'inspect', 'fb-cb5'], env=short_env, expected_rc=75)
             self.assertEqual(json.loads(p_att2.stderr)['status'], 'contended')
 
@@ -189,8 +189,8 @@ class Wave4CoreTests(unittest.TestCase):
                 self.assertEqual(owner.instance_id, 'proof-inst')
 
     def test_w4_cb7_collect_returns_ownership_and_open_contact(self):
-        """W4-CB7: collect_returns runs on Windows, external_root guards all of engine/, open_contact handles plain stderr."""
-        p = self._run([sys.executable, '-B', str(ENGINE / 'core/cli/collect_returns.py'), '--help'], expected_rc=0)
+        """W4-CB7: collector runs on Windows, external_root guards all of engine/, open_contact handles plain stderr."""
+        p = self._run([sys.executable, '-B', str(ENGINE / 'core/exchange/transport/collector.py'), '--help'], expected_rc=0)
         self.assertIn('admit', p.stdout)
 
         # external_root rejects paths inside engine/ (including engine/host, engine/core, engine/release)
@@ -256,7 +256,7 @@ class Wave4CoreTests(unittest.TestCase):
         from managed_ai.store.protocol.inputs import artifact_target
         from managed_ai.store.selection.domain_selection import source_path
         from managed_ai.store.selection.installed_catalogue import InstalledCatalogue
-        from managed_ai.library.reader.library_format import relative as lib_relative
+        from managed_ai.library.format import relative as lib_relative
 
         bad_paths = (
             'C:escape.txt',
@@ -312,7 +312,7 @@ class Wave4CoreTests(unittest.TestCase):
         self.assertFalse((self.base / 'escape.txt').exists())
         self.assertFalse((sys_obj.work / 'operations/demo').exists())
 
-        # C29-1: _publication_basis emits canonical Wave 4 core/cli/exchange_packets.py entry
+        # C29-1 / W8: _publication_basis emits canonical core/exchange/cli.py entry
         basis = _publication_basis(
             'p1',
             'out.txt',
@@ -322,7 +322,7 @@ class Wave4CoreTests(unittest.TestCase):
             [],
         )
         self.assertIsNotNone(basis)
-        self.assertEqual(basis['inspect']['entry'], 'core/cli/exchange_packets.py')
+        self.assertEqual(basis['inspect']['entry'], 'core/exchange/cli.py')
 
 
 if __name__ == '__main__':

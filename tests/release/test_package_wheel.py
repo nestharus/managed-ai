@@ -42,14 +42,24 @@ class PackageWheelTest(unittest.TestCase):
             with zipfile.ZipFile(wheel) as archive:
                 names = set(archive.namelist())
 
-            # Maintainer/CI-CD scripts must live under scripts/ and NEVER ship inside the wheel.
+            # Maintainer scripts, retired shims, and release assets must NEVER ship inside the wheel.
             for forbidden in (
+                "managed_ai/release/__init__.py",
+                "managed_ai/release/current_sources.json",
+                "managed_ai/release/navigation.json",
                 "managed_ai/release/package.py",
                 "managed_ai/release/check_current.py",
                 "managed_ai/release/refresh_guidance.py",
                 "managed_ai/library/bundles/publish.py",
+                "managed_ai/library/bundles/product_bundle.py",
+                "managed_ai/library/reader/knowledge.py",
+                "managed_ai/library/search/lexical_search.py",
+                "managed_ai/core/cli/exchange_packets.py",
+                "managed_ai/tools/audit_feedback.py",
+                "managed_ai/tools/open_contact.py",
             ):
                 self.assertNotIn(forbidden, names)
+            self.assertFalse(any(name.startswith("managed_ai/release/") for name in names))
 
             # Runtime data assets must still be bundled cleanly inside the wheel.
             for required in (
@@ -58,8 +68,8 @@ class PackageWheelTest(unittest.TestCase):
                 "managed_ai/store/GUIDE.md",
                 "managed_ai/store/catalogue.json",
                 "managed_ai/library/source-map.json",
-                "managed_ai/release/current_sources.json",
-                "managed_ai/release/navigation.json",
+                "managed_ai/store/governance/audit_feedback.py",
+                "managed_ai/core/exchange/open_contact.py",
             ):
                 self.assertIn(required, names)
 

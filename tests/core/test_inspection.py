@@ -170,7 +170,7 @@ class InspectionTests(unittest.TestCase):
     def test_fresh_cli_can_receive_then_continue_without_repairing_old_intent(self):
         intent = self.interrupt(after=True)
         before = intent.read_bytes()
-        p = subprocess.run([sys.executable, '-B', str(ROOT / 'core/cli/exchange_packets.py'), '--root', str(self.root),
+        p = subprocess.run([sys.executable, '-B', str(ROOT / 'core/exchange/cli.py'), '--root', str(self.root),
                             'inspect', 'one'], capture_output=True, text=True, timeout=10)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(json.loads(p.stdout)['publications'][0]['record']['phase'], 'intent')

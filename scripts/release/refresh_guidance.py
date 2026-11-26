@@ -182,14 +182,32 @@ def _resolve_source_entry(root: Path, bundle_root: Path, min_depth: int, row: di
     return _ordinary_within(cursor, allowed_root, S_ISREG, "ordinary canonical source required")
 
 
+def _locate_release_assets(resolved_root: Path, bundle_root: Path) -> tuple[Path, Path, Path]:
+    """Locate current_sources.json and navigation.json (scripts/release/ first, legacy core/release/ fallback)."""
+    if bundle_root != resolved_root:
+        scripts_selection = bundle_root / "scripts/release/current_sources.json"
+        try:
+            scripts_selection.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            return scripts_selection, bundle_root / "scripts/release/navigation.json", bundle_root
+
+    return (
+        resolved_root / "release/current_sources.json",
+        resolved_root / "release/navigation.json",
+        resolved_root,
+    )
+
+
 def render(root: Path, *, include_sources_md: bool = False) -> tuple[dict[str, bytes], dict]:
     """Read canonical UTF-8 inputs and prepare each projection without writing."""
     resolved_root = _ordinary_path(root, S_ISDIR, "ordinary engine directory required")
     _, bundle_root, source_root_rel, min_depth = _engine_layout(resolved_root)
 
-    selection_name = "release/current_sources.json"
+    selection_path, nav_path, selection_boundary = _locate_release_assets(resolved_root, bundle_root)
     catalogue_name = "store/catalogue.json"
-    selected = _read_strict_object(resolved_root / selection_name, resolved_root)
+    selected = _read_strict_object(selection_path, selection_boundary)
     catalogue = _read_strict_object(resolved_root / catalogue_name, resolved_root)
     prior = {entry["id"]: entry for entry in catalogue["entries"]}
     entries = []
@@ -229,7 +247,7 @@ def render(root: Path, *, include_sources_md: bool = False) -> tuple[dict[str, b
         "selection_sha256": selection_sha,
         "relationship": "References to one canonical source body; domain sources are selected per store.",
     }
-    nav = _read_strict_object(resolved_root / "release/navigation.json", resolved_root)
+    nav = _read_strict_object(nav_path, selection_boundary)
     marker = {
         "format": "managed-ai-shared-engine/1",
         "edition": selected["edition"],
@@ -242,14 +260,16 @@ def render(root: Path, *, include_sources_md: bool = False) -> tuple[dict[str, b
         "scope": "Same executable engine for independent schema-governed stores; domains and selected knowledge are data.",
     }
 
+    selection_key = selection_path.relative_to(bundle_root).as_posix()
+    core_prefix = "" if resolved_root == bundle_root else resolved_root.relative_to(bundle_root).as_posix() + "/"
     projections: dict[str, bytes] = {
-        selection_name: selection,
-        catalogue_name: json_bytes(catalogue),
+        selection_key: selection,
+        core_prefix + catalogue_name: json_bytes(catalogue),
     }
     if include_sources_md:
-        projections["SOURCES.md"] = render_sources_markdown(selected, nav)
+        projections[core_prefix + "SOURCES.md"] = render_sources_markdown(selected, nav)
 
-    projections["CURRENT-RELEASE.json"] = json_bytes(marker)
+    projections[core_prefix + "CURRENT-RELEASE.json"] = json_bytes(marker)
     summary = {"status": "refreshed", "canonical_sources": len(entries), "selection_sha256": selection_sha}
     return projections, summary
 
@@ -257,13 +277,14 @@ def render(root: Path, *, include_sources_md: bool = False) -> tuple[dict[str, b
 def refresh(root: Path, *, include_sources_md: bool = False) -> dict:
     """Stage complete files, then replace targets in order with the marker last."""
     resolved_root = _ordinary_path(root, S_ISDIR, "ordinary engine directory required")
+    _, bundle_root, _, _ = _engine_layout(resolved_root)
     projections, summary = render(resolved_root, include_sources_md=include_sources_md)
 
     with ExitStack() as cleanup:
         staged_paths = []
         for name, raw in projections.items():
             rel_target = Path(name)
-            cursor = resolved_root
+            cursor = bundle_root
             for part in rel_target.parts[:-1]:
                 cursor = cursor / part
                 _ordinary_entry(cursor, S_ISDIR, "ordinary projection directory required")
@@ -276,7 +297,7 @@ def refresh(root: Path, *, include_sources_md: bool = False) -> dict:
             else:
                 if is_reparse_or_symlink_stat(info) or not S_ISREG(info.st_mode):
                     raise ValueError("ordinary projection target required: " + str(target))
-                if not target.resolve(strict=True).is_relative_to(resolved_root):
+                if not target.resolve(strict=True).is_relative_to(bundle_root):
                     raise ValueError("ordinary projection target required: " + str(target))
                 mode = S_IMODE(info.st_mode)
 

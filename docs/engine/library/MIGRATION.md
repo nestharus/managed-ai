@@ -22,7 +22,7 @@ The source map collects complete current, evidence and pattern Markdown bodies, 
 
 ```bash
 python3 -B scripts/publish_library.py --root . publish --edition next-accepted --output /tmp/next-knowledge
-python3 -B src/managed_ai/library/reader/knowledge.py --library /tmp/next-knowledge verify
+python3 -B src/managed_ai/library/cli.py --library /tmp/next-knowledge verify
 python3 -B scripts/publish_library.py --root . audit --library /tmp/next-knowledge
 ```
 

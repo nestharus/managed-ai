@@ -15,17 +15,24 @@ _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 from tests._paths import ENGINE, SRC
-from managed_ai.library.reader import knowledge
+from managed_ai.library import catalogue, format as lib_format
+from managed_ai.library.catalogue import (
+    Library,
+    MAX_BATCH_INPUT,
+    MAX_BATCH_QUERIES,
+    MAX_BATCH_RESULT,
+    MAX_INDEX,
+)
 
 
 def has_fts5():
-    if knowledge.sqlite3 is None:
+    if catalogue.sqlite3 is None:
         return False
     try:
-        with closing(knowledge.sqlite3.connect(':memory:')) as connection:
+        with closing(catalogue.sqlite3.connect(':memory:')) as connection:
             connection.execute('CREATE VIRTUAL TABLE availability USING fts5(body)')
         return True
-    except knowledge.SQLITE_ERRORS:
+    except catalogue.SQLITE_ERRORS:
         return False
 
 
@@ -58,7 +65,7 @@ class DiscoveryTest(unittest.TestCase):
         directory = self.root / name; directory.mkdir(); (directory / 'objects').mkdir()
         rows = []
         for ident, body in bodies.items():
-            h = knowledge.digest(body); obj = 'objects/' + h + '.txt'
+            h = lib_format.digest(body); obj = 'objects/' + h + '.txt'
             (directory / obj).write_bytes(body)
             rows.append(dict(id=ident, title=ident, summary='Complete supplied body', object=obj,
                 sha256=h, bytes=len(body), source=dict(path=ident, sha256=h), link_base=ident,
@@ -69,9 +76,9 @@ class DiscoveryTest(unittest.TestCase):
         if len(bodies) > 1:
             modules.append(dict(id='joined', title='Joined use', purpose='Supply both declared contributions',
                 members=[list(bodies)[1]], requires=['base'], parents=[], external_participation=['Actual receiving host.']))
-        manifest = dict(format=knowledge.FORMAT, edition=name, bodies=rows, modules=modules, provenance={})
-        (directory / 'catalogue.json').write_bytes(knowledge.encoded(manifest))
-        return knowledge.Library(directory)
+        manifest = dict(format=lib_format.FORMAT, edition=name, bodies=rows, modules=modules, provenance={})
+        (directory / 'catalogue.json').write_bytes(lib_format.encoded(manifest))
+        return Library(directory)
 
     @staticmethod
     def ids(result):
@@ -145,8 +152,8 @@ class DiscoveryTest(unittest.TestCase):
         self.library.discover('needle')
         manifest = copy.deepcopy(self.library.catalogue)
         manifest['bodies'][1]['title'] = 'needle'
-        (self.library.directory/'catalogue.json').write_bytes(knowledge.encoded(manifest))
-        current = knowledge.Library(self.library.directory)
+        (self.library.directory/'catalogue.json').write_bytes(lib_format.encoded(manifest))
+        current = Library(self.library.directory)
         result = current.discover('needle')
         self.assertNotEqual(current.sha256, self.library.sha256)
         self.assertEqual(self.ids(result), ['meaning/b.md'])
@@ -174,19 +181,19 @@ class DiscoveryTest(unittest.TestCase):
         class MissingExtensionSQLite:
             @staticmethod
             def connect(path): return connection
-        with patch.object(knowledge, 'sqlite3', MissingExtensionSQLite), \
-             patch.object(knowledge, 'SQLITE_ERRORS', (MissingExtensionError,)):
+        with patch.object(catalogue, 'sqlite3', MissingExtensionSQLite), \
+             patch.object(catalogue, 'SQLITE_ERRORS', (MissingExtensionError,)):
             with self.assertRaisesRegex(ValueError, 'FTS5 preparation unavailable'):
                 self.library.discover('Complete', backend='fts5')
         self.assertTrue(connection.closed)
         self.assertEqual(self.library.discover('Complete')['coverage']['matched_bodies'], 2)
-        with patch.object(knowledge, 'sqlite3', None):
+        with patch.object(catalogue, 'sqlite3', None):
             with self.assertRaisesRegex(ValueError, 'SQLite support unavailable'):
                 self.library.discover('Complete', backend='fts5')
             self.assertEqual(self.library.discover('Complete')['coverage']['matched_bodies'], 2)
 
     def test_cli_without_sqlite_binding_keeps_default_and_refuses_fts(self):
-        source = str(Path(knowledge.__file__).resolve())
+        source = str((ENGINE / 'library/cli.py').resolve())
         for backend, expected_exit in [('bm25', 0), ('fts5', 2)]:
             result = subprocess.run([sys.executable, '-B', '-c', NO_SQLITE_CLI, source,
                                      str(self.library.directory), backend], capture_output=True, text=True)
@@ -214,10 +221,10 @@ class DiscoveryTest(unittest.TestCase):
             self.assertEqual(actual['coverage']['omitted_body_ids'], expected['coverage']['omitted_body_ids'])
             self.assertEqual(actual['coverage']['verified_bodies'], 0)
             self.assertEqual(actual['coverage']['examined_body_bytes'], 0)
-        with closing(knowledge.sqlite3.connect(output)) as db:
+        with closing(catalogue.sqlite3.connect(output)) as db:
             self.assertEqual(db.execute('SELECT body FROM body_docs').fetchall(), [(None,)] * 3)
             self.assertEqual(db.execute('PRAGMA freelist_count').fetchone()[0], 0)
-        self.assertEqual(knowledge.digest(output.read_bytes()), receipt['index']['sha256'])
+        self.assertEqual(lib_format.digest(output.read_bytes()), receipt['index']['sha256'])
 
     @unittest.skipUnless(FTS5_AVAILABLE, 'optional SQLite FTS5 unavailable')
     def test_prepared_nomination_does_not_claim_source_verification(self):
@@ -239,11 +246,11 @@ class DiscoveryTest(unittest.TestCase):
         args = dict(backend='fts5', index=output, index_sha256=receipt['index']['sha256'])
         self.assertEqual(self.library.discover('Complete', scan_limit=1, **args)['coverage']['omitted_body_ids'], ['meaning/b.md'])
         with self.assertRaisesRegex(ValueError, 'basis differs'): self.library.discover('Complete', **args)
-        with patch.object(knowledge, 'SEARCH_POLICY', 'changed-policy'):
+        with patch.object(catalogue, 'SEARCH_POLICY', 'changed-policy'):
             with self.assertRaisesRegex(ValueError, 'basis differs'): self.library.discover('Complete', scan_limit=1, **args)
         manifest = copy.deepcopy(self.library.catalogue); manifest['bodies'][0]['title'] = 'Changed metadata'
-        (self.library.directory / 'catalogue.json').write_bytes(knowledge.encoded(manifest))
-        current = knowledge.Library(self.library.directory)
+        (self.library.directory / 'catalogue.json').write_bytes(lib_format.encoded(manifest))
+        current = Library(self.library.directory)
         with self.assertRaisesRegex(ValueError, 'basis differs'): current.discover('Complete', scan_limit=1, **args)
         data = bytearray(output.read_bytes()); data[-1] ^= 1; output.write_bytes(data)
         with self.assertRaisesRegex(ValueError, 'expected digest'): self.library.discover('Complete', scan_limit=1, **args)
@@ -257,7 +264,7 @@ class DiscoveryTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'outside the library'):
             self.library.prepare_index(alias / 'index.sqlite')
         with self.assertRaisesRegex(ValueError, 'outside the library'):
-            knowledge.Library(alias).prepare_index(self.library.directory / 'index.sqlite')
+            Library(alias).prepare_index(self.library.directory / 'index.sqlite')
         self.assertFalse((self.library.directory / 'index.sqlite').exists())
         output = self.root / 'fresh.sqlite'; self.library.prepare_index(output)
         before = output.read_bytes()
@@ -272,24 +279,24 @@ class DiscoveryTest(unittest.TestCase):
     @unittest.skipUnless(FTS5_AVAILABLE, 'optional SQLite FTS5 unavailable')
     def test_prepared_index_private_copy_fallback(self):
         output = self.root / 'fallback.sqlite'; receipt = self.library.prepare_index(output)
-        connect = knowledge.sqlite3.connect
+        connect = catalogue.sqlite3.connect
         class NoDeserialize:
             def __init__(self, *args, **kwargs): self.connection = connect(*args, **kwargs)
             def __getattr__(self, name):
                 if name == 'deserialize': raise AttributeError(name)
                 return getattr(self.connection, name)
         expected = self.library.discover('Complete', backend='fts5')
-        with patch.object(knowledge.sqlite3, 'connect', NoDeserialize):
+        with patch.object(catalogue.sqlite3, 'connect', NoDeserialize):
             result = self.library.discover('Complete', backend='fts5', index=output,
                                           index_sha256=receipt['index']['sha256'])
         self.assertEqual(result['bodies'], expected['bodies'])
-        self.assertEqual(knowledge.digest(output.read_bytes()), receipt['index']['sha256'])
+        self.assertEqual(lib_format.digest(output.read_bytes()), receipt['index']['sha256'])
 
     def test_prepared_index_options_are_explicit_and_sqlite_remains_optional(self):
         for options in [dict(index='not-read'), dict(index_sha256='0' * 64),
                         dict(index='not-read', index_sha256='0' * 64)]:
             with self.assertRaises(ValueError): self.library.discover('Complete', **options)
-        with patch.object(knowledge, 'sqlite3', None):
+        with patch.object(catalogue, 'sqlite3', None):
             with self.assertRaisesRegex(ValueError, 'SQLite support unavailable'):
                 self.library.prepare_index(self.root / 'missing.sqlite')
             with self.assertRaisesRegex(ValueError, 'SQLite support unavailable'):
@@ -310,11 +317,11 @@ class DiscoveryTest(unittest.TestCase):
             def read(self, size=-1): return super().read(min(size, 17))
         payload = b'retained bytes' * 100
         with patch.object(Path, 'open', return_value=ShortReads(payload)):
-            self.assertEqual(knowledge.read_bytes(file, len(payload)), payload)
+            self.assertEqual(lib_format.read_bytes(file, len(payload)), payload)
         # The on-disk stat still reports one byte: simulate growth after stat.
         with patch.object(Path, 'open', return_value=ShortReads(payload)):
             with self.assertRaisesRegex(ValueError, 'grew beyond byte bound'):
-                knowledge.read_bytes(file, len(payload) - 1)
+                lib_format.read_bytes(file, len(payload) - 1)
 
 
 class DiscoveryBatchTest(unittest.TestCase):
@@ -342,12 +349,12 @@ class DiscoveryBatchTest(unittest.TestCase):
         args = self.prepare(scan_limit=2)
         queries = ['correcting', '"semantic junction"', 'café', 'one.md', 'base', 'a in the', 'correcting']
         expected = [self.library.discover(q, backend='fts5', **args) for q in queries]
-        actual_read = knowledge.read_bytes
+        actual_read = catalogue.read_bytes
         with patch.object(self.library, 'body', side_effect=AssertionError('read canonical body')), \
-             patch.object(knowledge, 'read_bytes', wraps=actual_read) as observed:
+             patch.object(catalogue, 'read_bytes', wraps=actual_read) as observed:
             batch = self.library.discover_batch(queries, **args)
         self.assertEqual(observed.call_count, 1)
-        self.assertEqual(observed.call_args.args, (args['index'], knowledge.MAX_INDEX))
+        self.assertEqual(observed.call_args.args, (args['index'], MAX_INDEX))
         self.assertEqual(batch['preparation']['index_read_bytes'], args['index'].stat().st_size)
         self.assertEqual(batch['preparation']['index_opens'], 1)
         self.assertEqual(batch['preparation']['canonical_body_read_bytes'], 0)
@@ -360,8 +367,8 @@ class DiscoveryBatchTest(unittest.TestCase):
         self.assertEqual(batch['results'][5]['coverage']['omitted_body_ids'], list(self.library.bodies))
 
     def test_filtered_questions_do_not_open_or_verify_an_image(self):
-        with patch.object(knowledge, 'PreparedIndex', side_effect=AssertionError('opened index')), \
-             patch.object(knowledge, 'sqlite3', None):
+        with patch.object(catalogue, 'PreparedIndex', side_effect=AssertionError('opened index')), \
+             patch.object(catalogue, 'sqlite3', None):
             result = self.library.discover_batch(['a in the', '""'], index=self.root/'absent', index_sha256='0'*64)
         self.assertFalse(result['preparation']['index_verified'])
         self.assertEqual(result['preparation']['index_opens'], 0)
@@ -371,14 +378,14 @@ class DiscoveryBatchTest(unittest.TestCase):
 
     def test_invalid_batch_is_rejected_before_index_acquisition(self):
         invalid = [[], 'question', {}, [None], [''], ['  '], ['"unfinished'],
-                   ['x'] * (knowledge.MAX_BATCH_QUERIES + 1), ['😀' * 600],
-                   ['x\x00' * 1024] * knowledge.MAX_BATCH_QUERIES]
-        with patch.object(knowledge, 'PreparedIndex', side_effect=AssertionError('opened index')):
+                   ['x'] * (MAX_BATCH_QUERIES + 1), ['😀' * 600],
+                   ['x\x00' * 1024] * MAX_BATCH_QUERIES]
+        with patch.object(catalogue, 'PreparedIndex', side_effect=AssertionError('opened index')):
             for queries in invalid:
                 with self.subTest(queries=str(queries)[:50]), self.assertRaises(ValueError):
                     self.library.discover_batch(queries, index=self.root/'absent', index_sha256='0'*64)
             for options in [dict(limit=0), dict(scan_limit=0), dict(max_bytes=0),
-                            dict(max_result_bytes=0), dict(max_result_bytes=knowledge.MAX_BATCH_RESULT+1)]:
+                            dict(max_result_bytes=0), dict(max_result_bytes=MAX_BATCH_RESULT+1)]:
                 with self.assertRaises(ValueError):
                     self.library.discover_batch(['useful'], index=self.root/'absent', index_sha256='0'*64, **options)
 
@@ -387,13 +394,13 @@ class DiscoveryBatchTest(unittest.TestCase):
         args = self.prepare(scan_limit=1)
         with self.assertRaisesRegex(ValueError, 'basis differs'):
             self.library.discover_batch(['useful'], **{**args, 'scan_limit':2})
-        with patch.object(knowledge, 'SEARCH_POLICY', 'changed-policy'):
+        with patch.object(catalogue, 'SEARCH_POLICY', 'changed-policy'):
             with self.assertRaisesRegex(ValueError, 'basis differs'):
                 self.library.discover_batch(['useful'], **args)
         manifest = copy.deepcopy(self.library.catalogue)
         manifest['bodies'][0]['title'] = 'Changed metadata'
-        (self.library.directory/'catalogue.json').write_bytes(knowledge.encoded(manifest))
-        current = knowledge.Library(self.library.directory)
+        (self.library.directory/'catalogue.json').write_bytes(lib_format.encoded(manifest))
+        current = Library(self.library.directory)
         try:
             with self.assertRaisesRegex(ValueError, 'basis differs'):
                 current.discover_batch(['useful'], **args)
@@ -406,7 +413,7 @@ class DiscoveryBatchTest(unittest.TestCase):
         args = self.prepare()
         before = args['index'].read_bytes()
         expected = self.library.discover_batch(['correcting', 'evidence'], **args)
-        original_search = knowledge.PreparedIndex.search
+        original_search = catalogue.PreparedIndex.search
         changed = False
         def change_after_read(prepared, table, parsed):
             nonlocal changed
@@ -414,7 +421,7 @@ class DiscoveryBatchTest(unittest.TestCase):
                 corrupted = bytearray(before); corrupted[-1] ^= 1
                 args['index'].write_bytes(corrupted); changed = True
             return original_search(prepared, table, parsed)
-        with patch.object(knowledge.PreparedIndex, 'search', change_after_read):
+        with patch.object(catalogue.PreparedIndex, 'search', change_after_read):
             actual = self.library.discover_batch(['correcting', 'evidence'], **args)
         self.assertEqual(actual, expected)
         with self.assertRaisesRegex(ValueError, 'expected digest'):
@@ -425,20 +432,20 @@ class DiscoveryBatchTest(unittest.TestCase):
         args = self.prepare(scan_limit=1)
         queries = ['correcting', 'a in the', 'café']
         result = self.library.discover_batch(queries, **args)
-        bound = len(knowledge.encoded(result))
+        bound = len(lib_format.encoded(result))
         # The numeric bound is itself in the envelope. Reach its exact fixed
         # point, then verify that removing one byte refuses the whole result.
         for _ in range(5):
             result = self.library.discover_batch(queries, max_result_bytes=bound, **args)
-            size = len(knowledge.encoded(result))
+            size = len(lib_format.encoded(result))
             if size == bound: break
             bound = size
         self.assertEqual(size, bound)
         opened = []
-        class TrackedIndex(knowledge.PreparedIndex):
+        class TrackedIndex(catalogue.PreparedIndex):
             def __init__(self, *a, **kw):
                 super().__init__(*a, **kw); opened.append(self)
-        with patch.object(knowledge, 'PreparedIndex', TrackedIndex):
+        with patch.object(catalogue, 'PreparedIndex', TrackedIndex):
             with self.assertRaisesRegex(ValueError, 'JSON byte bound'):
                 self.library.discover_batch(queries, max_result_bytes=bound-1, **args)
         self.assertEqual(len(opened), 1)
@@ -450,13 +457,13 @@ class DiscoveryBatchTest(unittest.TestCase):
     def test_query_failure_closes_private_copy_without_partial_return(self):
         args = self.prepare()
         opened, paths = [], []
-        original_connect = knowledge.sqlite3.connect
+        original_connect = catalogue.sqlite3.connect
         class NoDeserialize:
             def __init__(self, *a, **kw): self.connection = original_connect(*a, **kw)
             def __getattr__(self, name):
                 if name == 'deserialize': raise AttributeError(name)
                 return getattr(self.connection, name)
-        class FailingIndex(knowledge.PreparedIndex):
+        class FailingIndex(catalogue.PreparedIndex):
             def __init__(self, *a, **kw):
                 super().__init__(*a, **kw); opened.append(self)
                 paths.append(Path(self.temporary.name))
@@ -465,8 +472,8 @@ class DiscoveryBatchTest(unittest.TestCase):
                 self.calls += 1
                 if self.calls == 3: raise RuntimeError('simulated query interruption')
                 return super().search(table, parsed)
-        with patch.object(knowledge.sqlite3, 'connect', NoDeserialize), \
-             patch.object(knowledge, 'PreparedIndex', FailingIndex):
+        with patch.object(catalogue.sqlite3, 'connect', NoDeserialize), \
+             patch.object(catalogue, 'PreparedIndex', FailingIndex):
             with self.assertRaisesRegex(RuntimeError, 'simulated query interruption'):
                 self.library.discover_batch(['correcting', 'evidence'], **args)
         self.assertEqual(len(opened), 1)
@@ -479,15 +486,15 @@ class DiscoveryBatchTest(unittest.TestCase):
         args = self.prepare()
         query_file = self.root/'questions.json'
         queries = ['"semantic junction"', 'café', 'a in the']
-        query_file.write_bytes(knowledge.encoded(queries))
-        command = [sys.executable, '-B', str(Path(knowledge.__file__).resolve()), '--library',
+        query_file.write_bytes(lib_format.encoded(queries))
+        command = [sys.executable, '-B', str((ENGINE / 'library/cli.py').resolve()), '--library',
                    str(self.library.directory), 'discover-batch', '--queries', str(query_file),
                    '--index', str(args['index']), '--index-sha256', args['index_sha256']]
         result = subprocess.run(command, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), self.library.discover_batch(queries, **args))
-        self.assertLessEqual(len(result.stdout), knowledge.MAX_BATCH_RESULT)
-        query_file.write_bytes(b' ' * knowledge.MAX_BATCH_INPUT + b'[]')
+        self.assertLessEqual(len(result.stdout), MAX_BATCH_RESULT)
+        query_file.write_bytes(b' ' * MAX_BATCH_INPUT + b'[]')
         refused = subprocess.run(command, capture_output=True)
         self.assertEqual(refused.returncode, 2)
         self.assertEqual(refused.stdout, b'')

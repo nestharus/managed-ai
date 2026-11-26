@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import sys
 import tempfile
 from typing import Any
 
@@ -43,18 +42,8 @@ MAX_BATCH_INPUT = DEFAULT_LIBRARY_CONFIG.batch.max_input_bytes
 MAX_BATCH_RESULT = DEFAULT_LIBRARY_CONFIG.batch.max_result_bytes
 
 
-def _compat_attr(name: str, local_value: Any) -> Any:
-    """Respect runtime patches applied to the compatibility facade library.reader.knowledge."""
-    facade = sys.modules.get("managed_ai.library.reader.knowledge")
-    if facade is not None and hasattr(facade, name):
-        return getattr(facade, name)
-    return local_value
-
-
 def _resolve_read_bytes():
-    if read_bytes is not _DEFAULT_READ_BYTES:
-        return read_bytes
-    return _compat_attr("read_bytes", read_bytes)
+    return read_bytes
 
 
 def batch_json_size(value: Any, maximum: int, extra_indent: int = 0) -> int:
@@ -205,15 +194,13 @@ class Library:
         return selected, omitted, total
 
     def index_basis(self, scan_limit: int, max_bytes: int) -> dict[str, Any]:
-        sqlite_mod = _compat_attr("sqlite3", sqlite3)
-        policy = _compat_attr("SEARCH_POLICY", SEARCH_POLICY)
-        need(sqlite_mod is not None, "SQLite support unavailable; use ordinary BM25 discovery")
+        need(sqlite3 is not None, "SQLite support unavailable; use ordinary BM25 discovery")
 
         selected, _, total = self.search_scope(scan_limit, max_bytes)
         return {
             "format": self.config.search.index_format,
             "library_sha256": self.sha256,
-            "policy": policy,
+            "policy": SEARCH_POLICY,
             "backend": "fts5",
             "analyzer": FtsAnalyzer.identity(self.config.search),
             "bodies": selected,
@@ -223,9 +210,8 @@ class Library:
         }
 
     def _build_prepared_sqlite(self, staged: Path, basis: dict[str, Any]) -> None:
-        sqlite_mod = _compat_attr("sqlite3", sqlite3)
         max_index = self.config.search.max_index_bytes
-        db = sqlite_mod.connect(staged)
+        db = sqlite3.connect(staged)
 
         try:
             db.execute("PRAGMA page_size=4096")
@@ -378,19 +364,16 @@ class Library:
         if not searchable:
             return {}, {}, False, 0
 
-        sqlite_mod = _compat_attr("sqlite3", sqlite3)
-        sqlite_errs = _compat_attr("SQLITE_ERRORS", SQLITE_ERRORS)
-        prepared_cls = _compat_attr("PreparedIndex", PreparedIndex)
         reader = _resolve_read_bytes()
 
         if index is not None:
-            prepared = prepared_cls(
+            prepared = PreparedIndex(
                 index,
                 index_sha256,
                 self.index_basis(scan_limit, max_bytes),
                 config=self.config,
                 reader=reader,
-                sqlite_mod=sqlite_mod,
+                sqlite_mod=sqlite3,
             )
             try:
                 body_hits = prepared.search("body_docs", parsed)
@@ -413,8 +396,8 @@ class Library:
                 scope,
                 documents,
                 module_documents,
-                sqlite_mod=sqlite_mod,
-                sqlite_errors=sqlite_errs,
+                sqlite_mod=sqlite3,
+                sqlite_errors=SQLITE_ERRORS,
                 config=self.config,
             )
 
@@ -469,8 +452,7 @@ class Library:
             self.search_scope(scan_limit, max_bytes) if searchable else ([], list(self.bodies), 0)
         )
 
-        policy = _compat_attr("SEARCH_POLICY", SEARCH_POLICY)
-        scope = SearchScope(self.sha256, policy, backend, tuple(examined))
+        scope = SearchScope(self.sha256, SEARCH_POLICY, backend, tuple(examined))
         reusable = self.prepared_scope == scope
 
         if allow_retained_scope and searchable and reusable and self._search_cache is not None:
@@ -575,16 +557,14 @@ class Library:
 
         try:
             if any(searchable for _, _, searchable in questions):
-                prepared_cls = _compat_attr("PreparedIndex", PreparedIndex)
-                sqlite_mod = _compat_attr("sqlite3", sqlite3)
                 reader = _resolve_read_bytes()
-                prepared = prepared_cls(
+                prepared = PreparedIndex(
                     index,
                     index_sha256,
                     self.index_basis(scan_limit, max_bytes),
                     config=self.config,
                     reader=reader,
-                    sqlite_mod=sqlite_mod,
+                    sqlite_mod=sqlite3,
                 )
                 selected, omitted, byte_count = self.search_scope(scan_limit, max_bytes)
 
@@ -724,7 +704,6 @@ class Library:
                 )
             )
 
-        policy = _compat_attr("SEARCH_POLICY", SEARCH_POLICY)
         return {
             "format": "knowledge-discovery/1",
             "library_sha256": self.sha256,
@@ -733,7 +712,7 @@ class Library:
             "query": {
                 "text": query,
                 "backend": backend,
-                "policy": policy,
+                "policy": SEARCH_POLICY,
                 **parsed,
                 "empty_after_filtering": not (parsed["terms"] or parsed["phrases"]),
             },

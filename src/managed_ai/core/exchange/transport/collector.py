@@ -25,7 +25,7 @@ if __name__ == "__main__":
 
 from managed_ai.platform import check_unfollowed_ancestors, detached_subprocess_kwargs
 
-from managed_ai.core.ownership import NativeLayout
+from managed_ai.core.ownership import NativeLayout, external_root
 from managed_ai.core.storage import (
     AdmissionContended,
     admission_deadline,
@@ -459,7 +459,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(*, validate_root=None) -> None:
+def main(*, validate_root=external_root) -> None:
     parser = _build_parser()
     args = parser.parse_args()
 

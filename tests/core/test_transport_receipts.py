@@ -92,7 +92,7 @@ class TransportReceiptTests(unittest.TestCase):
         self.assertEqual(self.ex.get(record['proposals'][0]['sha256']), proposal.read_bytes())
         shutil.rmtree(self.root / 'carrier')
         (self.work / 'brief.md').write_text('A fresh receiving purpose.\n')
-        process = subprocess.run([sys.executable, '-B', str(ROOT / 'core/cli/exchange_packets.py'), '--root', str(self.root),
+        process = subprocess.run([sys.executable, '-B', str(ROOT / 'core/exchange/cli.py'), '--root', str(self.root),
                                   'recover-transport', 'one'], capture_output=True, timeout=10)
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertEqual(json.loads(process.stdout), captured)

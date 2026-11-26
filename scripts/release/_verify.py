@@ -29,7 +29,11 @@ from managed_ai.platform import (
 )
 from scripts.release.refresh_guidance import source_identity_line
 
+REPO_RELEASE_DIR = Path(__file__).resolve().parent
+SCRIPTS_SELECTION = Path("scripts/release/current_sources.json")
+SCRIPTS_NAVIGATION = Path("scripts/release/navigation.json")
 SELECTION = Path("release/current_sources.json")
+NAVIGATION = Path("release/navigation.json")
 CATALOGUE = Path("store/catalogue.json")
 MARKER = Path("CURRENT-RELEASE.json")
 MAX_COMPRESSED_TEXT_BYTES = 64 * 1024 * 1024
@@ -118,8 +122,59 @@ def is_package_engine(core: Path) -> bool:
     return (Path(core) / "__init__.py").is_file()
 
 
+def _resolve_bundle_root(core: Path, bundle_root: Path | None) -> Path:
+    if bundle_root is not None:
+        return bundle_root.resolve(strict=True)
+    resolved = core.resolve(strict=True)
+    if resolved.name == "managed_ai" and resolved.parent.name == "src":
+        return resolved.parents[1]
+    if resolved.name == "engine":
+        return resolved.parent
+    return resolved
+
+
+def resolve_selection_path(core: Path, bundle_root: Path | None = None) -> Path:
+    """Locate current_sources.json in bundle scripts/release/, legacy core/release/, or co-located scripts/release/."""
+    resolved_core = core.resolve(strict=True)
+    effective_bundle = _resolve_bundle_root(resolved_core, bundle_root)
+    if effective_bundle != resolved_core:
+        candidate = observed_path(effective_bundle, SCRIPTS_SELECTION, stat.S_ISREG)
+        if candidate is not None:
+            return candidate
+
+    legacy = observed_path(resolved_core, SELECTION, stat.S_ISREG)
+    if legacy is not None:
+        return legacy
+
+    return check_ordinary_path(REPO_RELEASE_DIR / "current_sources.json", stat.S_ISREG)
+
+
+def resolve_navigation_path(core: Path, bundle_root: Path | None = None) -> Path | None:
+    """Locate navigation.json in bundle scripts/release/, legacy core/release/, or co-located scripts/release/."""
+    resolved_core = core.resolve(strict=True)
+    effective_bundle = _resolve_bundle_root(resolved_core, bundle_root)
+    if effective_bundle != resolved_core:
+        candidate = observed_path(effective_bundle, SCRIPTS_NAVIGATION, stat.S_ISREG)
+        if candidate is not None:
+            return candidate
+
+    legacy = observed_path(resolved_core, NAVIGATION, stat.S_ISREG)
+    if legacy is not None:
+        return legacy
+
+    co_located = REPO_RELEASE_DIR / "navigation.json"
+    if optional_entry(co_located) is not None:
+        return check_ordinary_path(co_located, stat.S_ISREG)
+
+    return None
+
+
 def inventory_engine(root: Path) -> Path | None:
-    if observed_path(root, Path("src/managed_ai") / SELECTION, stat.S_ISREG, scope_probe=True) is not None:
+    if observed_path(root, Path("src/managed_ai"), stat.S_ISDIR, scope_probe=True) is not None and (
+        observed_path(root, SCRIPTS_SELECTION, stat.S_ISREG, scope_probe=True) is not None
+        or observed_path(root, Path("src/managed_ai") / MARKER, stat.S_ISREG, scope_probe=True) is not None
+        or observed_path(root, Path("src/managed_ai") / SELECTION, stat.S_ISREG, scope_probe=True) is not None
+    ):
         return (root / "src/managed_ai").resolve(strict=True)
 
     if observed_path(root, Path("engine") / SELECTION, stat.S_ISREG, scope_probe=True) is not None:
@@ -345,7 +400,7 @@ def verify_core_selection(
         expected_root_rel = ".."
 
     directories = {(member_root / parent).as_posix() for name in member_map for parent in Path(name).parents}
-    selection_path = core / SELECTION
+    selection_path = resolve_selection_path(core, bundle_root=bundle_root)
     selection = read_json(selection_path)
     current = read_json(core / MARKER)
     if current["selection_sha256"] != identity(selection_path)["sha256"]:

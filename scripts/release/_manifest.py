@@ -16,6 +16,7 @@ for _entry in (str(REPO_ROOT / "src"), str(REPO_ROOT)):
 from managed_ai.platform import is_reparse_or_symlink_stat
 from scripts.release._verify import (
     CATALOGUE,
+    SCRIPTS_SELECTION,
     SELECTION,
     STAGED_PROJECTIONS,
     catalogue_path,
@@ -28,6 +29,8 @@ from scripts.release._verify import (
     ordinary,
     read_json,
     received_compressed_text,
+    resolve_navigation_path,
+    resolve_selection_path,
     store_compressed_prefixes,
     verify_core_selection,
     verify_deployment_bindings,
@@ -68,6 +71,11 @@ def source_paths(root: Path, engine: Path | None):
             if parent is not None:
                 key = parent.resolve(strict=True).as_posix()
                 staging.setdefault(key, []).append(f".{resolved_target.name}.")
+
+        scripts_release = observed_path(root, SCRIPTS_SELECTION.parent, stat.S_ISDIR, scope_probe=True)
+        if scripts_release is not None:
+            key = scripts_release.resolve(strict=True).as_posix()
+            staging.setdefault(key, []).append(f".{SCRIPTS_SELECTION.name}.")
 
     pending = [root]
     while pending:
@@ -146,9 +154,9 @@ def members(root: Path, engine=...) -> dict[str, dict]:
     return result
 
 
-def generate_sources_markdown(core: Path) -> Path:
-    selected = read_json(core / SELECTION)
-    nav_path = observed_path(core, Path("release/navigation.json"), stat.S_ISREG)
+def generate_sources_markdown(core: Path, *, bundle_root: Path | None = None) -> Path:
+    selected = read_json(resolve_selection_path(core, bundle_root=bundle_root))
+    nav_path = resolve_navigation_path(core, bundle_root=bundle_root)
     nav = read_json(nav_path) if nav_path is not None else {}
     raw = render_sources_markdown(selected, nav)
     target = core / "SOURCES.md"
@@ -203,7 +211,7 @@ def refresh_manifests(root: Path, core: Path | None) -> None:
             if stamped_rel.startswith(prefix):
                 native[stamped_rel[len(prefix) :]] = stamped_id
         if "SOURCES.md" not in native:
-            generated = generate_sources_markdown(core)
+            generated = generate_sources_markdown(core, bundle_root=root)
             src_id = identity(generated)
             native["SOURCES.md"] = src_id
             tree[prefix + "SOURCES.md"] = src_id

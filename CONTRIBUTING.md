@@ -2,9 +2,9 @@
 
 ## Repository boundaries
 
-- `src/managed_ai/` holds domain-neutral runtime packages (`platform/`, `deployment/`, `core/`, `store/`, `library/`, `host/`, `tools/`, `companions/`, `optional/collective/`) plus runtime JSON assets (`release/*.json`, `store/catalogue.json`, `library/source-map.json`). Do not hardcode domain names, domain workflows, or private workspace paths into `src/managed_ai/`.
+- `src/managed_ai/` holds domain-neutral runtime packages (`platform/`, `deployment/`, `core/`, `store/`, `library/`, `host/`, `companions/`, `collective/`) plus runtime JSON assets (`CURRENT-RELEASE.json`, `store/catalogue.json`, `library/source-map.json`). Do not hardcode domain names, domain workflows, or private workspace paths into `src/managed_ai/`.
 - Keep OS/platform branching strictly inside `src/managed_ai/platform/` (zero `os.name`, `sys.platform`, `ctypes.WinDLL`, `msvcrt`, or `fcntl` outside `platform/`). Every domain package owns its own concrete contracts, configs, and storage natively.
-- Keep maintainer/CI-CD scripts under `scripts/` (`scripts/release/*`, `scripts/publish_library.py`) so built wheels ship only runtime packages and runtime data assets.
+- Keep maintainer/CI-CD scripts and selection metadata under `scripts/` (`scripts/release/*`, `scripts/publish_library.py`) so built wheels ship only runtime packages and runtime data assets.
 - External domain repositories supply reusable schemas, catalogues, guidance, and domain operations independently (`source_root: "."`). Keep domain changes in the owning domain repository and refresh its `catalogue.json` and `domain.json` pins.
 - Never open sealed source entries (marked `"exposure": "sealed"` in catalogues) as ordinary text sources.
 
@@ -27,7 +27,7 @@ python -B scripts/release/check_current.py
 
 ## Updating core guidance pins
 
-After editing any document registered in `src/managed_ai/release/current_sources.json`, run:
+After editing any document registered in `scripts/release/current_sources.json`, run:
 
 ```sh
 python -B scripts/release/refresh_guidance.py

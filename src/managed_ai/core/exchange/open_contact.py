@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
 """Commission an open inquiry and return a UTF-8 observation through an installed G60 system."""
+from __future__ import annotations
+
 import argparse
 import json
 from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+from typing import Any, Callable
+
+if __name__ == '__main__':
+    sys.dont_write_bytecode = True
+    _src_root = str(Path(__file__).resolve().parents[3])
+    if _src_root not in sys.path:
+        sys.path.insert(0, _src_root)
+
+from managed_ai.platform import strict_json_loads
 
 
 def need(condition, message):
@@ -43,20 +54,11 @@ def _resolve_store_entry(product: Path) -> Path:
 
 
 def _strict_json_loads(raw: bytes | str, label: str = 'JSON'):
-    text = raw.decode('utf-8') if isinstance(raw, (bytes, bytearray)) else raw
+    return strict_json_loads(raw, label)
 
-    def unique_keys(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError(f'duplicate JSON key {key!r}: {label}')
-            result[key] = value
-        return result
 
-    def reject_constant(token):
-        raise ValueError(f'nonfinite JSON constant {token!r}: {label}')
-
-    return json.loads(text, object_pairs_hook=unique_keys, parse_constant=reject_constant)
+def _load_json_object(path: Path) -> dict[str, Any]:
+    return strict_json_loads(path.read_bytes(), str(path), require_object=True)
 
 
 def _error_code(exc: NativeError) -> str | None:
@@ -151,6 +153,20 @@ class Contact:
         return packet
 
 
+_COMMAND_HANDLERS: dict[str, Callable[[Contact, argparse.Namespace], Any]] = {
+    'init': lambda contact, args: contact.run('init', '--goal-text', args.goal),
+    'open': lambda contact, args: contact.open(_load_json_object(args.order)),
+    'return': lambda contact, args: contact.attach(
+        _load_json_object(args.ticket)['ticket'],
+        _load_json_object(args.account),
+        args.raw.read_bytes().decode('utf-8'),
+    ),
+    'context': lambda contact, args: contact.context(args.scope, args.turn),
+    'stages': lambda contact, args: contact.run('inquiry', 'stages', args.scope),
+    'status': lambda contact, args: contact.run('feedback', 'inspect', args.scope),
+}
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     p.add_argument('product', type=Path, help='extracted G60-system-use directory')
@@ -169,25 +185,10 @@ def main():
     cmds.add_parser('stages', allow_abbrev=False).add_argument('scope')
     a = p.parse_args()
 
-    def load(path):
-        value = _strict_json_loads(path.read_bytes(), str(path))
-        need(isinstance(value, dict), f'JSON object required: {path}')
-        return value
-
+    handler = _COMMAND_HANDLERS.get(a.command)
+    need(handler is not None, f'Unsupported command: {a.command}')
     with TemporaryDirectory() as scratch:
-        c = Contact(a.product, a.state, scratch)
-        if a.command == 'init':
-            result = c.run('init', '--goal-text', a.goal)
-        elif a.command == 'open':
-            result = c.open(load(a.order))
-        elif a.command == 'return':
-            result = c.attach(load(a.ticket)['ticket'], load(a.account), a.raw.read_bytes().decode('utf-8'))
-        elif a.command == 'context':
-            result = c.context(a.scope, a.turn)
-        elif a.command == 'stages':
-            result = c.run('inquiry', 'stages', a.scope)
-        else:
-            result = c.run('feedback', 'inspect', a.scope)
+        result = handler(Contact(a.product, a.state, scratch), a)
         print(json.dumps(result, indent=2, ensure_ascii=False))
 
 

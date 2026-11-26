@@ -11,11 +11,17 @@ from pathlib import Path
 import sys
 from typing import Any
 
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
+    _src_root = str(Path(__file__).resolve().parents[2])
+    if _src_root not in sys.path:
+        sys.path.insert(0, _src_root)
+
 from managed_ai.platform import strict_json_loads
 
-from .exchange import Exchange
-from .ownership import external_root, packet_id as _id, relative_path as _relative
-from .storage import (
+from managed_ai.core.exchange import Exchange
+from managed_ai.core.ownership import external_root, packet_id as _id, relative_path as _relative
+from managed_ai.core.storage import (
     AdmissionContended,
     MAX_BYTES,
     admission_deadline,

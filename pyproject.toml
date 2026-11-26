@@ -33,7 +33,6 @@ managed_ai = [
     "store/catalogue.json",
     "store/bodies/*.txt",
     "library/source-map.json",
-    "release/*.json",
     "companions/peer/COMPONENTS.json",
     "companions/peer/configs/*.json",
     "companions/workbench/configs/*.json",
