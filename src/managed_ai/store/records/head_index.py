@@ -21,6 +21,14 @@ from managed_ai.core.storage import (
 )
 from managed_ai.platform import PLATFORM, strict_json_loads
 from managed_ai.store.protocol.inputs import parse_input_bytes
+from managed_ai.store.records.head_index_bin import (
+    HEAD_INDEX_FORMAT_V3,
+    HeadIndexView,
+    active_binary_path,
+    open_binary_view,
+    read_current_pointer,
+    write_binary_index,
+)
 
 INDEX_DOMAIN = b'g60/verified-head-index/1\0'
 DELTA_DOMAIN = b'g60/verified-head-index-delta/1\0'
@@ -307,7 +315,7 @@ def build_entry(record: dict, raw: bytes, info: os.stat_result) -> dict:
 
 
 class HeadIndex:
-    """Store-local HMAC-verified head index under exchange/index/head-index.json (+ HMAC delta sidecar).
+    """Store-local HMAC-verified head index (binary mmap v3 + legacy JSON fallback + HMAC delta sidecar).
 
     Read-only operations never create the owner key or write the index. Any HMAC
     mismatch, missing key, or filesystem metadata mismatch falls back to strict
@@ -317,8 +325,17 @@ class HeadIndex:
     def __init__(self, owner: Path, receipts):
         self.directory = owner / 'index'
         self.path = self.directory / 'head-index.json'
+        self.current_path = self.directory / 'head-index.current.json'
         self.delta_path = self.directory / 'head-index.delta.jsonl'
         self.receipts = receipts
+
+    def exists(self) -> bool:
+        """Return True if either binary v3 current pointer or legacy JSON head index exists."""
+        return self.current_path.exists() or self.path.exists()
+
+    def binary_path(self) -> Path | None:
+        """Return the active immutable head-index.gen<N>.bin path if present."""
+        return active_binary_path(self.directory)
 
     @staticmethod
     def _extract_fast_tag(raw: bytes) -> str | None:
@@ -338,8 +355,16 @@ class HeadIndex:
             return None
         return tag, b'{' + raw[75:]
 
-    def _read_base_tag(self) -> str | None:
-        """Read only the 76-byte leading HMAC tag of head-index.json without loading the full file."""
+    def _read_base_tag(self, record_format: str | None = None) -> str | None:
+        """Read the base HMAC tag from head-index.current.json (v3) or head-index.json (legacy)."""
+        pointer = read_current_pointer(self.directory)
+        if pointer is not None:
+            if record_format is not None and pointer.get('record_format') != record_format:
+                return None
+            if has_ordinary_file(self.directory / pointer['file']):
+                return pointer['hmac']
+            return None
+
         try:
             info = self.path.lstat()
         except OSError:
@@ -356,6 +381,69 @@ class HeadIndex:
 
         return self._extract_fast_tag(head + b'x')
 
+    def _read_delta_overlay(
+        self,
+        key: bytes,
+        base_tag: str,
+        record_format: str,
+    ) -> tuple[dict[str, dict], set[str]] | None:
+        """Verify and parse exchange/index/head-index.delta.jsonl into (puts, dels), or None on tamper."""
+        try:
+            info = self.delta_path.lstat()
+        except FileNotFoundError:
+            return {}, set()
+        except OSError:
+            return None
+
+        if not is_ordinary_file_stat(info):
+            return None
+
+        try:
+            raw_lines = self.delta_path.read_bytes().splitlines()
+        except OSError:
+            return None
+
+        puts: dict[str, dict] = {}
+        dels: set[str] = set()
+
+        for line in raw_lines:
+            if not line:
+                continue
+
+            tag = self._extract_fast_tag(line)
+            if tag is None:
+                return None
+
+            expected = _incremental_hmac(key, DELTA_DOMAIN, b'{', memoryview(line)[75:])
+            if not hmac.compare_digest(tag, expected):
+                return None
+
+            try:
+                row = strict_json_loads(line, self.delta_path, require_object=True)
+            except (UnicodeDecodeError, ValueError):
+                return None
+
+            if (
+                row.get('base_hmac') != base_tag
+                or row.get('record_format') != record_format
+            ):
+                return None
+
+            op = row.get('op')
+            if op == 'put' and isinstance(row.get('entries'), dict):
+                for ident, entry in row['entries'].items():
+                    puts[ident] = entry
+                    dels.discard(ident)
+            elif op == 'del' and isinstance(row.get('ids'), list):
+                for ident in row['ids']:
+                    if isinstance(ident, str):
+                        puts.pop(ident, None)
+                        dels.add(ident)
+            else:
+                return None
+
+        return puts, dels
+
     def _apply_delta(
         self,
         key: bytes,
@@ -364,55 +452,45 @@ class HeadIndex:
         entries: dict[str, dict],
     ) -> bool:
         """Verify and fold exchange/index/head-index.delta.jsonl into entries. Returns False on any tamper."""
-        try:
-            info = self.delta_path.lstat()
-        except FileNotFoundError:
-            return True
-        except OSError:
+        overlay = self._read_delta_overlay(key, base_tag, record_format)
+        if overlay is None:
             return False
 
-        if not is_ordinary_file_stat(info):
-            return False
-
-        try:
-            raw_lines = self.delta_path.read_bytes().splitlines()
-        except OSError:
-            return False
-
-        for line in raw_lines:
-            if not line:
-                continue
-
-            tag = self._extract_fast_tag(line)
-            if tag is None:
-                return False
-
-            expected = _incremental_hmac(key, DELTA_DOMAIN, b'{', memoryview(line)[75:])
-            if not hmac.compare_digest(tag, expected):
-                return False
-
-            try:
-                row = strict_json_loads(line, self.delta_path, require_object=True)
-            except (UnicodeDecodeError, ValueError):
-                return False
-
-            if (
-                row.get('base_hmac') != base_tag
-                or row.get('record_format') != record_format
-            ):
-                return False
-
-            op = row.get('op')
-            if op == 'put' and isinstance(row.get('entries'), dict):
-                entries.update(row['entries'])
-            elif op == 'del' and isinstance(row.get('ids'), list):
-                for ident in row['ids']:
-                    if isinstance(ident, str):
-                        entries.pop(ident, None)
-            else:
-                return False
-
+        puts, dels = overlay
+        for ident in dels:
+            entries.pop(ident, None)
+        entries.update(puts)
         return True
+
+    def open_view(self, record_format: str) -> HeadIndexView | None:
+        """Open a zero-copy mmap HeadIndexView over binary v3 (+ verified delta overlay) or return None."""
+        key = self.receipts._key(create=False)
+        if key is None:
+            return None
+
+        view = open_binary_view(self.directory, key, record_format)
+        if view is None:
+            return None
+
+        overlay = self._read_delta_overlay(key, view.hmac_hex, record_format)
+        if overlay is None:
+            view.close()
+            return None
+
+        puts, dels = overlay
+        view.delta_puts = puts
+        view.delta_dels = dels
+        return view
+
+    def get_entry(self, record_format: str, ident: str) -> dict | None:
+        """O(log N) single-record lookup via binary v3 mmap, falling back to legacy JSON if needed."""
+        view = self.open_view(record_format)
+        if view is not None:
+            with view:
+                return view.get_entry(ident)
+
+        entries = self.load(record_format)
+        return None if entries is None else entries.get(ident)
 
     def _load_legacy_envelope(
         self,
@@ -456,12 +534,8 @@ class HeadIndex:
 
         return entries, fmt
 
-    def load_with_format(self, record_format: str) -> tuple[dict[str, dict], str] | None:
-        """Read and HMAC-verify the stored index (+ delta sidecar), returning (entries, index_format) or None."""
-        key = self.receipts._key(create=False)
-        if key is None:
-            return None
-
+    def _load_json_with_format(self, key: bytes, record_format: str) -> tuple[dict[str, dict], str] | None:
+        """Read and HMAC-verify legacy head-index.json (+ delta sidecar)."""
         try:
             if not has_ordinary_file(self.path):
                 return None
@@ -469,7 +543,6 @@ class HeadIndex:
         except OSError:
             return None
 
-        # Fast path: authenticate tail directly over memoryview without duplicating the buffer.
         tag = self._extract_fast_tag(raw)
         if tag is not None:
             expected = _incremental_hmac(key, INDEX_DOMAIN, b'{', memoryview(raw)[75:])
@@ -497,13 +570,33 @@ class HeadIndex:
 
         return self._load_legacy_envelope(key, raw, record_format)
 
+    def load_with_format(self, record_format: str) -> tuple[dict[str, dict], str] | None:
+        """Read and HMAC-verify binary v3 or legacy JSON index (+ delta), returning (entries, format) or None."""
+        key = self.receipts._key(create=False)
+        if key is None:
+            return None
+
+        view = self.open_view(record_format)
+        if view is not None:
+            with view:
+                return view.all_entries(), INDEX_FORMAT
+
+        return self._load_json_with_format(key, record_format)
+
     def load(self, record_format: str) -> dict[str, dict] | None:
         """Read and HMAC-verify the stored index without creating keys or files."""
         loaded = self.load_with_format(record_format)
         return None if loaded is None else loaded[0]
 
     def save(self, record_format: str, entries: dict[str, dict], *, create_key: bool = True) -> dict:
-        """Atomically write the HMAC-signed compact JSON index and clear any delta sidecar."""
+        """Atomically publish a new immutable binary mmap HeadIndex v3 generation and clear delta sidecar."""
+        key = self.receipts._key(create=create_key)
+        if key is None:
+            raise ValueError('head index key is unavailable')
+        return write_binary_index(self.directory, key, record_format, entries)
+
+    def save_json(self, record_format: str, entries: dict[str, dict], *, create_key: bool = True) -> dict:
+        """Atomically write the legacy HMAC-signed compact JSON index and clear any delta sidecar."""
         key = self.receipts._key(create=create_key)
         if key is None:
             raise ValueError('head index key is unavailable')
@@ -531,7 +624,7 @@ class HeadIndex:
         return {'format': INDEX_FORMAT, 'indexed_records': len(entries), 'path': str(self.path)}
 
     def _append_delta(self, key: bytes, base_tag: str, row: dict) -> bool:
-        """Append one HMAC-signed delta line; return False if compaction into head-index.json is needed."""
+        """Append one HMAC-signed delta line; return False if compaction into head-index.gen<N+1>.bin is needed."""
         payload = _compact_json(row)
         tag = _incremental_hmac(key, DELTA_DOMAIN, payload)
         line = b'{"hmac":"' + tag.encode('ascii') + b'",' + payload[1:] + b'\n'
@@ -589,15 +682,15 @@ class HeadIndex:
             return False
 
     def update_if_present(self, record_format: str, updates: dict[str, dict]) -> bool:
-        """Incrementally update entries via HMAC delta sidecar (auto-compacting on thresholds)."""
-        if not updates or not self.path.exists():
+        """Incrementally update entries via HMAC delta sidecar (auto-compacting into v3 gen<N+1>)."""
+        if not updates or not self.exists():
             return False
 
         key = self.receipts._key(create=False)
         if key is None:
             return False
 
-        base_tag = self._read_base_tag()
+        base_tag = self._read_base_tag(record_format)
         if base_tag is not None:
             row = {
                 'base_hmac': base_tag,
@@ -621,15 +714,15 @@ class HeadIndex:
             return False
 
     def remove_if_present(self, record_format: str, removed_ids: list[str]) -> bool:
-        """Remove cold-archived record entries via HMAC delta sidecar (auto-compacting on thresholds)."""
-        if not removed_ids or not self.path.exists():
+        """Remove cold-archived record entries via HMAC delta sidecar (auto-compacting into v3 gen<N+1>)."""
+        if not removed_ids or not self.exists():
             return False
 
         key = self.receipts._key(create=False)
         if key is None:
             return False
 
-        base_tag = self._read_base_tag()
+        base_tag = self._read_base_tag(record_format)
         if base_tag is not None:
             row = {
                 'base_hmac': base_tag,

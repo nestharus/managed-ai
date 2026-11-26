@@ -70,24 +70,29 @@ def canonical(value) -> bytes:
 def integer(value, name: str, minimum: int, maximum: int) -> int:
     if type(value) is not int or not minimum <= value <= maximum:
         raise ValueError(f'{name} must be an integer from {minimum} to {maximum}')
+
     return value
 
 
 def strings(value, name: str) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(v, str) or not v.strip() for v in value):
         raise ValueError(name + ' must be a list of nonempty strings')
+
     if len(set(value)) != len(value):
         raise ValueError(name + ' contains duplicates')
+
     return value
 
 
 def request(value, deployed: bool) -> dict:
     if not isinstance(value, dict):
         raise ValueError('discovery request must be an object')
+
     if set(value) - FIELDS:
         raise ValueError('unknown discovery fields: ' + ', '.join(sorted(set(value) - FIELDS)))
 
     query = value.get('query', '')
+
     if not isinstance(query, str):
         raise ValueError('discovery query must be text')
 
@@ -96,16 +101,20 @@ def request(value, deployed: bool) -> dict:
             raise ValueError(flag + ' must be Boolean')
 
     scopes = strings(value.get('scopes', list(SCOPES if deployed else ('records', 'techniques'))), 'scopes')
+
     if not scopes or set(scopes) - set(SCOPES):
         raise ValueError('scopes must select records, project or techniques')
+
     if 'project' in scopes and not deployed:
         raise ValueError('project discovery requires an explicitly selected deployment')
 
     direction = value.get('direction', 'outgoing')
+
     if direction not in ('outgoing', 'incoming', 'both'):
         raise ValueError('direction must be outgoing, incoming or both')
 
     scan_order = value.get('scan_order', 'inventory')
+
     if scan_order not in SCAN_ORDERS:
         raise ValueError('scan_order must be inventory, scope-round-robin or seeded')
 
@@ -130,16 +139,21 @@ def request(value, deployed: bool) -> dict:
         'include_inactive': value.get('include_inactive', False),
         'scan_order': scan_order,
     }
+
     if scan_order == 'seeded':
         normalized['seed'] = seed
+
     if value.get('records_only'):
         normalized['records_only'] = True
 
     exclude_labels = strings(value.get('exclude_relation_labels', []), 'exclude_relation_labels')
+
     if exclude_labels:
         normalized['exclude_relation_labels'] = exclude_labels
+
     if value.get('include_content_links'):
         normalized['include_content_links'] = True
+
     return normalized
 
 
@@ -151,10 +165,12 @@ class Discovery:
 
     def verify_selection(self, pins):
         """Resolve exact candidate pins before a later context uses their selectors."""
+
         if not isinstance(pins, list) or len(pins) > 200:
             raise ValueError('source pins must be a list of at most 200 {ref, source} objects')
 
         refs, scopes = [], set()
+
         for pin in pins:
             if not isinstance(pin, dict) or set(pin) != {'ref', 'source'}:
                 raise ValueError('each source pin must contain exactly ref and source')
@@ -194,6 +210,7 @@ class Discovery:
                 raise ValueError('selected discovery source is unavailable as verified context text: ' + pin['ref'])
 
         verified = strict_json_loads(canonical(pins), 'source pins', require_object=False)
+
         return {'verified': verified, 'context_request': current['context_request']}
 
     def _init_search_state(self, supplied: dict) -> None:
@@ -224,6 +241,7 @@ class Discovery:
     def _build_coverage(self, all_candidates: list[dict], shown: list[dict], omitted: list[str]) -> dict:
         unexamined = {
             scope: [ref for ref in self.by_scope[scope] if ref not in self.examined]
+
             for scope in self.req['scopes']
         }
         project = self.projects.current
@@ -236,6 +254,7 @@ class Discovery:
             if self.req['query'].strip()
             else 'inventory'
         )
+
         return {
             'requested_scopes': self.req['scopes'],
             'unavailable_default_scopes': [] if project else ['project'],
@@ -284,8 +303,10 @@ class Discovery:
 
     def _build_ranked_recovery(self) -> dict | None:
         engine = Path(__file__).resolve().parents[2]
-        reader = engine / 'library' / 'reader' / 'knowledge.py'
-        if not (reader.is_file() and (engine / 'library' / 'library' / 'catalogue.json').is_file()):
+        cli_path = engine / 'library' / 'cli.py'
+        lib_dir = engine / 'library' / 'library'
+
+        if not (cli_path.is_file() and (lib_dir / 'catalogue.json').is_file()):
             return None
 
         query = self.req['query']
@@ -297,15 +318,18 @@ class Discovery:
                 'source owner before using a nomination.'
             ),
         }
+
         if len(query.encode('utf-8')) <= 2048 and '\x00' not in query:
             recovery['argv'] = [
-                sys.executable, '-B', str(reader), 'discover', '--backend', 'bm25',
+                sys.executable, '-B', str(cli_path), '--library', str(lib_dir),
+                'discover', '--backend', 'bm25',
                 '--query=' + query, '--limit', str(min(self.req['limit'], 100)),
                 '--scan-limit', str(min(self.req['scan_limit'], 2048)),
                 '--max-bytes', str(self.req['max_bytes']),
             ]
         else:
             recovery['input_needed'] = 'Supply a ranked query of at most 2048 UTF-8 bytes without NUL.'
+
         return recovery
 
     def search(self, supplied):
@@ -319,6 +343,7 @@ class Discovery:
             and (self.records.work / 'records').is_dir()
         )
         fd_ctx = nullcontext(None)
+
         if use_fast_records:
             if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
                 fd_ctx = self.records.ex.open_workspace_dir('records')
@@ -327,6 +352,7 @@ class Discovery:
 
         with fd_ctx as records_fd:
             self._records_fd = records_fd
+
             try:
                 self._inventory()
                 if self.req['anchors']:
@@ -337,8 +363,10 @@ class Discovery:
                 all_candidates = list(self.candidates.values())
                 shown = all_candidates[:self.req['limit']]
                 selectors = {key: [] for key in SELECTOR.values()}
+
                 for candidate in shown:
                     self._selector(candidate)
+
                     for key, values in (candidate.get('selector') or {}).items():
                         selectors[key].extend(v for v in values if v not in selectors[key])
             finally:
@@ -346,6 +374,7 @@ class Discovery:
                 self._records_dir_str = None
 
         omitted = [c['ref'] for c in all_candidates[self.req['limit']:]]
+
         if omitted:
             self.saturated.add('result-limit')
 
@@ -374,6 +403,7 @@ class Discovery:
             recovery = self._build_ranked_recovery()
             if recovery is not None:
                 result['recovery'] = recovery
+
         return result
 
     def _inventory(self):
@@ -408,6 +438,7 @@ class Discovery:
             entries = self.catalogue.get('entries', [])
             if not isinstance(entries, list):
                 raise ValueError('catalogue entries must be a list')
+
             for row in sorted(entries, key=lambda r: r['id']):
                 ref = 'technique:' + row['id']
                 if ref in self.entries:
@@ -417,12 +448,14 @@ class Discovery:
 
     def _skip(self, ref, reason):
         key = (ref, reason)
+
         if key not in self._skips:
             self._skips.add(key)
             self.skipped.append({'ref': ref, 'reason': reason})
 
     def _unresolve(self, target, reason, declared_in=None):
         key = (target, reason, declared_in)
+
         if key not in self._unresolved:
             self._unresolved.add(key)
             self.unresolved.append({'target': target, 'reason': reason, 'declared_in': declared_in})
@@ -431,17 +464,21 @@ class Discovery:
         if not isinstance(target, str) or not target:
             self._unresolve(str(target), 'nonempty-reference-required', declared_in)
             return None
+
         if ':' not in target and 'record:' + target in self.entries:
             target = 'record:' + target
 
         prefix = target.partition(':')[0]
         scope = PREFIX_SCOPE.get(prefix)
+
         if scope is None:
             self._unresolve(target, 'unknown-reference-or-undeclared-bare-record', declared_in)
             return None
+
         if scope not in self.req['scopes']:
             self._unresolve(target, 'outside-requested-scopes', declared_in)
             return None
+
         if target not in self.entries:
             self._unresolve(target, 'absent-from-selected-inventory', declared_in)
             return None
@@ -450,18 +487,22 @@ class Discovery:
     def _budget_bytes(self, ref, count) -> bool:
         if type(count) is not int or count < 0:
             raise ValueError('source byte count must be a nonnegative integer')
+
         if self.examined_bytes + count > self.req['max_bytes']:
             self.saturated.add('body-byte-budget')
             self._skip(ref, 'body-byte-budget')
             return False
         self.examined_bytes += count
+
         return True
 
     def _read_record_bounded(self, ref, ident):
         """Read and verify one hot record in a single open/stat under the discovery byte budget."""
+
         if self._records_fd is not None:
             filename = packet_id(ident) + '.json'
             full_path = self.records.work / 'records' / filename
+
             try:
                 fd = os.open(filename, _OPEN_RO_NOFOLLOW, dir_fd=self._records_fd)
             except FileNotFoundError:
@@ -501,6 +542,7 @@ class Discovery:
         if self._records_dir_str is not None:
             filename = packet_id(ident) + '.json'
             full_str = self._records_dir_str + os.sep + filename
+
             try:
                 info = os.lstat(full_str)
             except FileNotFoundError:
@@ -525,6 +567,7 @@ class Discovery:
             return record, raw
 
         byte_limit = self.records.size(ident)
+
         if not self._budget_bytes(ref, byte_limit):
             return None
         return self.records.read(ident, byte_limit=byte_limit)
@@ -532,8 +575,10 @@ class Discovery:
     def _inspect(self, ref):
         if ref in self.loaded:
             return self.loaded[ref]
+
         if ref in self.examined:
             return None
+
         if len(self.examined) >= self.req['scan_limit']:
             self.saturated.add('entry-scan-budget')
             self._skip(ref, 'entry-scan-budget')
@@ -606,16 +651,19 @@ class Discovery:
             }
 
         self.loaded[ref] = value
+
         return value
 
     def _body(self, ref):
         if ref in self.bodies:
             return self.bodies[ref]
+
         if ref in self.body_failures:
             return None
 
         entry = self.entries[ref]
         row, scope = entry.get('row'), entry['scope']
+
         if scope == 'records':
             return None
 

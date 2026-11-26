@@ -360,9 +360,17 @@ class Wave3RuntimeTests(unittest.TestCase):
             self.assertEqual(read_json(self.store / 'exchange/packets/turn-fmt/binding.json')['format'],
                              PACKET_BINDING_FORMAT)
 
-            # HeadIndex v2 written by reindex, AND explicit v1 HeadIndex loads with HEAD_INDEX_FORMAT_V1
-            sys_obj.reindex()
-            idx_path = sys_obj.record_store.index.path
+            # HeadIndex v3 binary written by reindex, AND explicit v1 legacy JSON loads with HEAD_INDEX_FORMAT_V1
+            rcpt = sys_obj.reindex()
+            self.assertEqual(rcpt['format'], 'managed-ai-head-index/3')
+            hi = sys_obj.record_store.index
+            entries = hi.load(sys_obj.record_store.format)
+            self.assertIsNotNone(entries)
+            assert entries is not None
+            # Remove binary v3 pointer to exercise legacy v1 head-index.json fallback
+            hi.current_path.unlink()
+            hi.save_json(sys_obj.record_store.format, entries, create_key=False)
+            idx_path = hi.path
             parsed = json.loads(idx_path.read_bytes())
             self.assertEqual(parsed['format'], HEAD_INDEX_FORMAT)
             import hmac as hmac_mod

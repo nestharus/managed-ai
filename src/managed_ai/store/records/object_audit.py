@@ -35,6 +35,11 @@ from managed_ai.store.records.deduplication import (
     execute_deduplicate_originals,
     plan_deduplicate_originals,
 )
+from managed_ai.store.records.pack_slab import (
+    execute_pack_objects,
+    gc_packed_objects,
+    plan_pack_objects,
+)
 
 _SHA_RE = re.compile(r'^[0-9a-f]{64}$')
 _BYTE_HEX64_RE = re.compile(rb'"([0-9a-f]{64})"')
@@ -108,23 +113,29 @@ def _collect_live_record_refs(system, known: set[str], known_bytes: set[bytes], 
     if not idents:
         return
 
-    indexed = store.index.load(store.format)
-    raw_digests: dict[str, str] | None = (
-        {
-            ident: entry['raw_sha256']
-            for ident, entry in indexed.items()
-            if isinstance(entry, dict) and isinstance(entry.get('raw_sha256'), str)
-        }
-        if indexed is not None
-        else None
-    )
-    del indexed
+    view = store.index.open_view(store.format)
+    raw_digests: dict[str, str] | None = None
+    if view is None:
+        indexed = store.index.load(store.format)
+        raw_digests = (
+            {
+                ident: entry['raw_sha256']
+                for ident, entry in indexed.items()
+                if isinstance(entry, dict) and isinstance(entry.get('raw_sha256'), str)
+            }
+            if indexed is not None
+            else None
+        )
+        del indexed
 
     def inspect_chunk(chunk: list[str], records_fd: int | None, dir_str: str | None) -> set[str]:
         found: set[str] = set()
         for ident in chunk:
             raw, full_path = _read_live_record_raw(store, ident, records_fd, dir_str)
-            expected_sha = raw_digests.get(ident) if raw_digests is not None else None
+            if view is not None:
+                expected_sha = view.get_raw_sha256(ident)
+            else:
+                expected_sha = raw_digests.get(ident) if raw_digests is not None else None
             if expected_sha is not None and hmac.compare_digest(sha(raw), expected_sha):
                 if not known_bytes:
                     continue
@@ -154,12 +165,50 @@ def _collect_live_record_refs(system, known: set[str], known_bytes: set[bytes], 
             for found in pool.map(lambda c: inspect_chunk(c, records_fd, dir_str), chunks):
                 out.update(found)
 
-    if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
-        with system.ex.open_workspace_dir('records') as records_fd:
-            run_chunks(records_fd, None)
-    else:
-        _, dir_str = store._validated_records_dir_win()
-        run_chunks(None, dir_str)
+    try:
+        if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
+            with system.ex.open_workspace_dir('records') as records_fd:
+                run_chunks(records_fd, None)
+        else:
+            _, dir_str = store._validated_records_dir_win()
+            run_chunks(None, dir_str)
+    finally:
+        if view is not None:
+            view.close()
+
+
+def _scan_object_payload(
+    key: str,
+    raw: bytes,
+    known: set[str],
+    known_bytes: set[bytes],
+    reachable_bytes: set[bytes],
+    found: set[str],
+    fvo_found: set[str],
+) -> None:
+    stripped = raw.lstrip()
+    if stripped[:1] not in (b'{', b'['):
+        return
+
+    has_escape = b'\\u' in raw
+    has_fvo = b'"full_view_object"' in raw
+    if not has_escape and not has_fvo:
+        if not _has_unvisited_hex_token(raw, known_bytes, reachable_bytes):
+            return
+
+    try:
+        doc = strict_json_loads(raw, key, require_object=False)
+    except (UnicodeDecodeError, ValueError):
+        return
+
+    if not isinstance(doc, (dict, list)):
+        return
+
+    _extract_object_hashes(doc, known, found)
+    if isinstance(doc, dict):
+        fvo = doc.get('full_view_object')
+        if isinstance(fvo, str) and fvo in known:
+            fvo_found.add(fvo)
 
 
 def _expand_object_wave(
@@ -169,50 +218,51 @@ def _expand_object_wave(
     known_bytes: set[bytes],
     reachable_bytes: set[bytes],
     objects_fd: int | None,
+    loose_keys: set[str],
+    pack_sess,
 ) -> tuple[set[str], set[str]]:
-    """Read, SHA-verify, and extract newly referenced hashes for one BFS frontier in parallel."""
+    """Read, SHA-verify, and extract newly referenced hashes (sequential slab order for packed objects)."""
+    discovered: set[str] = set()
+    fvo_all: set[str] = set()
+
+    packed_wave: set[str] = set()
+    loose_wave: list[str] = []
+    if pack_sess is not None and pack_sess.has_packs:
+        for key in keys:
+            if key in loose_keys:
+                loose_wave.append(key)
+            else:
+                packed_wave.add(key)
+    else:
+        loose_wave = keys
+
+    # Scan packed frontier keys in strict sequential (shard, slab_offset) order through open mmap.
+    if packed_wave and pack_sess is not None:
+        for key, raw in pack_sess.iter_verified_sequential(packed_wave, retained=True):
+            _scan_object_payload(key, raw, known, known_bytes, reachable_bytes, discovered, fvo_all)
+
+    if not loose_wave:
+        return discovered, fvo_all
+
     def inspect_chunk(chunk: list[str]) -> tuple[set[str], set[str]]:
         found: set[str] = set()
         fvo_found: set[str] = set()
-
         for key in chunk:
             raw = objects.read(key, retained=True, dir_fd=objects_fd)
-            stripped = raw.lstrip()
-            if stripped[:1] not in (b'{', b'['):
-                continue
-
-            has_escape = b'\\u' in raw
-            has_fvo = b'"full_view_object"' in raw
-            if not has_escape and not has_fvo:
-                if not _has_unvisited_hex_token(raw, known_bytes, reachable_bytes):
-                    continue
-
-            try:
-                doc = strict_json_loads(raw, key, require_object=False)
-            except (UnicodeDecodeError, ValueError):
-                continue
-
-            if not isinstance(doc, (dict, list)):
-                continue
-
-            _extract_object_hashes(doc, known, found)
-            if isinstance(doc, dict):
-                fvo = doc.get('full_view_object')
-                if isinstance(fvo, str) and fvo in known:
-                    fvo_found.add(fvo)
-
+            _scan_object_payload(key, raw, known, known_bytes, reachable_bytes, found, fvo_found)
         return found, fvo_found
 
-    if len(keys) < 16:
-        return inspect_chunk(keys)
+    if len(loose_wave) < 16:
+        sub_found, sub_fvo = inspect_chunk(loose_wave)
+        discovered.update(sub_found)
+        fvo_all.update(sub_fvo)
+        return discovered, fvo_all
 
     from concurrent.futures import ThreadPoolExecutor
 
-    workers = min(8, len(keys))
-    step = (len(keys) + workers - 1) // workers
-    chunks = [keys[i:i + step] for i in range(0, len(keys), step)]
-    discovered: set[str] = set()
-    fvo_all: set[str] = set()
+    workers = min(8, len(loose_wave))
+    step = (len(loose_wave) + workers - 1) // workers
+    chunks = [loose_wave[i:i + step] for i in range(0, len(loose_wave), step)]
 
     with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
         for sub_found, sub_fvo in pool.map(inspect_chunk, chunks):
@@ -300,6 +350,8 @@ def _expand_transitive_closure(
     known: set[str],
     known_bytes: set[bytes],
     layer_sets: dict[str, set[str]],
+    loose_keys: set[str],
+    pack_sess,
 ) -> set[str]:
     """Fixed-point wave-BFS expansion over reached JSON objects."""
     reachable: set[str] = set()
@@ -324,7 +376,7 @@ def _expand_transitive_closure(
                 break
             visited_expansion.update(wave)
             discovered, fvo_found = _expand_object_wave(
-                objects, wave, known, known_bytes, reachable_bytes, objects_fd,
+                objects, wave, known, known_bytes, reachable_bytes, objects_fd, loose_keys, pack_sess,
             )
             if fvo_found:
                 layer_sets['packets_transitive_exposure'].update(fvo_found)
@@ -343,60 +395,75 @@ def _expand_transitive_closure(
 
 
 def audit_objects(system) -> dict:
-    """Compute exact 9-layer transitive reachability over exchange/objects (read-only LOCK_SH)."""
+    """Compute exact 9-layer transitive reachability over exchange/objects (loose + reserved shard slabs)."""
     objects = system.ex.objects
     obj_info: dict[str, dict] = {}
-    for key, _, is_comp, disk_bytes in objects.entries():
-        if key not in obj_info:
-            obj_info[key] = {'object': key, 'disk_bytes': disk_bytes, 'compressed': is_comp}
-        else:
-            obj_info[key]['disk_bytes'] += disk_bytes
+    loose_keys: set[str] = set()
 
-    known = set(obj_info.keys())
-    known_bytes = {k.encode('ascii') for k in known}
+    with objects.pack_session() as pack_sess:
+        for key, _, is_comp, disk_bytes in objects.entries():
+            loose_keys.add(key)
+            if key not in obj_info:
+                obj_info[key] = {'object': key, 'disk_bytes': disk_bytes, 'compressed': is_comp}
+            else:
+                obj_info[key]['disk_bytes'] += disk_bytes
 
-    layer_sets: dict[str, set[str]] = {
-        'live_records': set(),
-        'cold_archive': set(),
-        'packets_direct': set(),
-        'packets_transitive_exposure': set(),
-        'attention': set(),
-        'interpretations': set(),
-        'imports': set(),
-        'batches': set(),
-        'sources_received': set(),
-        'turns_and_carrier': set(),
-        'transitive_objects': set(),
-    }
+        for prow in pack_sess.live_entries():
+            key = prow['object']
+            if key not in obj_info:
+                obj_info[key] = {
+                    'object': key,
+                    'disk_bytes': prow['disk_bytes'],
+                    'compressed': prow['compressed'],
+                }
+            else:
+                obj_info[key]['disk_bytes'] += prow['disk_bytes']
 
-    # Layer 1: Live hot records (streamed in bounded chunks)
-    _collect_live_record_refs(system, known, known_bytes, layer_sets['live_records'])
+        known = set(obj_info.keys())
+        known_bytes = {k.encode('ascii') for k in known}
 
-    # Layer 2: Cold-archived records
-    archive = system.record_store.cold_archive
-    for ident in archive.ids():
-        rec, _ = archive.read(ident)
-        _extract_object_hashes(rec, known, layer_sets['cold_archive'])
+        layer_sets: dict[str, set[str]] = {
+            'live_records': set(),
+            'cold_archive': set(),
+            'packets_direct': set(),
+            'packets_transitive_exposure': set(),
+            'attention': set(),
+            'interpretations': set(),
+            'imports': set(),
+            'batches': set(),
+            'sources_received': set(),
+            'turns_and_carrier': set(),
+            'transitive_objects': set(),
+        }
 
-    # Layers 3 & 4: exchange/packets/** + transitive exposure.json -> full_view_object
-    _collect_packet_and_exposure_refs(
-        system,
-        known,
-        layer_sets['packets_direct'],
-        layer_sets['packets_transitive_exposure'],
-    )
+        # Layer 1: Live hot records (streamed in bounded chunks)
+        _collect_live_record_refs(system, known, known_bytes, layer_sets['live_records'])
 
-    # Layers 5-9: attention, interpretations, imports, batches, sources, turns, carrier
-    _scan_json_tree(system.ex.root / 'attention', known, layer_sets['attention'])
-    _scan_json_tree(system.work / 'interpretations', known, layer_sets['interpretations'])
-    _scan_json_tree(system.work / '.system/imports', known, layer_sets['imports'])
-    _scan_json_tree(system.work / '.system/batches', known, layer_sets['batches'])
-    _scan_json_tree(system.work / 'sources/received', known, layer_sets['sources_received'])
-    _scan_json_tree(system.work / '.system/turns', known, layer_sets['turns_and_carrier'])
-    _scan_json_tree(system.work / '.system/retirements', known, layer_sets['turns_and_carrier'])
-    _scan_json_tree(system.ex.root / 'carrier', known, layer_sets['turns_and_carrier'])
+        # Layer 2: Cold-archived records
+        archive = system.record_store.cold_archive
+        for ident in archive.ids():
+            rec, _ = archive.read(ident)
+            _extract_object_hashes(rec, known, layer_sets['cold_archive'])
 
-    reachable = _expand_transitive_closure(objects, known, known_bytes, layer_sets)
+        # Layers 3 & 4: exchange/packets/** + transitive exposure.json -> full_view_object
+        _collect_packet_and_exposure_refs(
+            system,
+            known,
+            layer_sets['packets_direct'],
+            layer_sets['packets_transitive_exposure'],
+        )
+
+        # Layers 5-9: attention, interpretations, imports, batches, sources, turns, carrier
+        _scan_json_tree(system.ex.root / 'attention', known, layer_sets['attention'])
+        _scan_json_tree(system.work / 'interpretations', known, layer_sets['interpretations'])
+        _scan_json_tree(system.work / '.system/imports', known, layer_sets['imports'])
+        _scan_json_tree(system.work / '.system/batches', known, layer_sets['batches'])
+        _scan_json_tree(system.work / 'sources/received', known, layer_sets['sources_received'])
+        _scan_json_tree(system.work / '.system/turns', known, layer_sets['turns_and_carrier'])
+        _scan_json_tree(system.work / '.system/retirements', known, layer_sets['turns_and_carrier'])
+        _scan_json_tree(system.ex.root / 'carrier', known, layer_sets['turns_and_carrier'])
+
+        reachable = _expand_transitive_closure(objects, known, known_bytes, layer_sets, loose_keys, pack_sess)
 
     unreachable_keys = sorted(known - reachable)
     unreachable = [obj_info[k] for k in unreachable_keys]
@@ -425,7 +492,7 @@ def audit_objects(system) -> dict:
 
 
 def gc_objects(system, *, plan: dict, expected_plan: str, reason: str) -> dict:
-    """Explicitly prune ONLY strictly unreachable nominated objects after live 9-layer re-audit under owner.lock."""
+    """Explicitly prune ONLY strictly unreachable nominated objects (loose + logical/physical slab GC)."""
     _verify_plan(
         plan,
         AUDIT_FORMAT,
@@ -460,10 +527,9 @@ def gc_objects(system, *, plan: dict, expected_plan: str, reason: str) -> dict:
     )
 
     objects = system.ex.objects
-    removed: list[dict] = []
+    loose_removed: set[str] = set()
     reclaimed = 0
     for key in nominated_keys:
-        removed_any = False
         for suffix in ('', '.deflate'):
             candidate = objects.directory / (key + suffix)
             try:
@@ -475,11 +541,19 @@ def gc_objects(system, *, plan: dict, expected_plan: str, reason: str) -> dict:
             size = info.st_size
             candidate.unlink()
             reclaimed += size
-            removed_any = True
-        require(removed_any, f'object missing during gc: {key}')
-        removed.append({'object': key, 'reclaimed_bytes': live_unreachable[key]['disk_bytes']})
+            loose_removed.add(key)
 
-    sync_dir(objects.directory)
+    if loose_removed:
+        sync_dir(objects.directory)
+
+    packed_gc = gc_packed_objects(objects.packs_dir, set(nominated_keys))
+    packed_removed = set(packed_gc['tombstoned_keys'])
+    reclaimed += packed_gc['logical_reclaimed_bytes']
+
+    removed: list[dict] = []
+    for key in nominated_keys:
+        require(key in loose_removed or key in packed_removed, f'object missing during gc: {key}')
+        removed.append({'object': key, 'reclaimed_bytes': live_unreachable[key]['disk_bytes']})
 
     receipt = {
         'format': GC_RECEIPT_FORMAT,
@@ -491,6 +565,17 @@ def gc_objects(system, *, plan: dict, expected_plan: str, reason: str) -> dict:
         'reclaimed_bytes': reclaimed,
         'removed': removed,
     }
+    if packed_gc['tombstoned_count'] > 0:
+        receipt['packed_gc'] = {
+            'tombstoned_count': packed_gc['tombstoned_count'],
+            'logical_reclaimed_bytes': packed_gc['logical_reclaimed_bytes'],
+            'physical_reclaimed_bytes': packed_gc['physical_reclaimed_bytes'],
+            'repacked_shards': packed_gc['repacked_shards'],
+            'dropped_shards': packed_gc['dropped_shards'],
+            'generation': packed_gc['generation'],
+            'occ_generation': packed_gc['occ_generation'],
+        }
+
     receipt_path = _write_receipt(system, f'gc-objects-{expected_plan[:16]}.json', receipt)
     return dict(receipt, receipt_path=str(receipt_path))
 
@@ -501,7 +586,9 @@ __all__ = [
     'audit_objects',
     'execute_compact_objects',
     'execute_deduplicate_originals',
+    'execute_pack_objects',
     'gc_objects',
     'plan_compact_objects',
     'plan_deduplicate_originals',
+    'plan_pack_objects',
 ]

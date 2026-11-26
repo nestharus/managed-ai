@@ -109,30 +109,30 @@ class Wave1RuntimeTests(unittest.TestCase):
                     self.assertEqual(err['lock'], str(owner_lock))
 
     def test_single_code_identity_per_cli_invocation(self):
-        probe = (
-            "import sys\n"
-            "from pathlib import Path\n"
-            "from unittest.mock import patch\n"
-            "from managed_ai.deployment import controller\n"
-            "from managed_ai.core.storage import OwnerBusy, exclusive\n"
-            "calls = 0\n"
-            "locked_during_hash = []\n"
-            "owner_lock = Path(sys.argv[1])\n"
-            "orig = controller.code_identity\n"
-            "def counted(engine):\n"
-            "    global calls\n"
-            "    calls += 1\n"
-            "    try:\n"
-            "        with exclusive(owner_lock):\n"
-            "            locked_during_hash.append(False)\n"
-            "    except OwnerBusy:\n"
-            "        locked_during_hash.append(True)\n"
-            "    return orig(engine)\n"
-            "with patch.object(controller, 'code_identity', side_effect=counted):\n"
-            "    sys.argv = ['controller.py', *sys.argv[2:]]\n"
-            "    controller.main()\n"
-            "print(f'CODE_IDENTITY_CALLS={calls} LOCKED={locked_during_hash}', file=sys.stderr)\n"
-        )
+        probe = "\n".join([
+            "import sys",
+            "from pathlib import Path",
+            "from unittest.mock import patch",
+            "from managed_ai.deployment import controller",
+            "from managed_ai.core.storage import OwnerBusy, exclusive",
+            "calls = 0",
+            "locked_during_hash = []",
+            "owner_lock = Path(sys.argv[1])",
+            "orig = controller.code_identity",
+            "def counted(engine):",
+            "    global calls",
+            "    calls += 1",
+            "    try:",
+            "        with exclusive(owner_lock):",
+            "            locked_during_hash.append(False)",
+            "    except OwnerBusy:",
+            "        locked_during_hash.append(True)",
+            "    return orig(engine)",
+            "with patch.object(controller, 'code_identity', side_effect=counted):",
+            "    sys.argv = ['controller.py', *sys.argv[2:]]",
+            "    controller.main()",
+            "print(f'CODE_IDENTITY_CALLS={calls} LOCKED={locked_during_hash}', file=sys.stderr)",
+        ])
         owner_lock = self.store / 'exchange/owner.lock'
         owner_lock.touch()
         env = os.environ.copy()
@@ -275,7 +275,11 @@ class Wave1RuntimeTests(unittest.TestCase):
                 system.put({'id': f'rec-{i:02d}', 'kind': 'note', 'content': {'title': f'Title {i}', 'body': 'original'}}, 0)
             receipt = system.reindex()
             self.assertEqual(receipt['indexed_records'], 21)
-            self.assertTrue(system.record_store.index.path.is_file())
+            bin_path = system.record_store.index.binary_path()
+            self.assertIsNotNone(bin_path)
+            assert bin_path is not None
+            self.assertTrue(bin_path.is_file())
+            self.assertTrue(system.record_store.index.current_path.is_file())
             self.assertTrue(system.record_store.receipts.key_path.is_file())
 
             # Incremental put keeps index synced
@@ -284,15 +288,17 @@ class Wave1RuntimeTests(unittest.TestCase):
             self.assertIsNotNone(summaries)
             self.assertEqual(summaries['rec-00']['revision'], 2)
 
-            # Tampered HMAC in head-index.json falls back cleanly to strict RecordStore reads
-            raw_idx = system.record_store.index.path.read_bytes()
-            system.record_store.index.path.write_bytes(raw_idx.replace(b'"note"', b'"fake"', 1))
+            # Tampered HMAC in binary head index falls back cleanly to strict RecordStore reads
+            raw_idx = bin_path.read_bytes()
+            tampered_idx = bytearray(raw_idx)
+            tampered_idx[200] ^= 0x01
+            bin_path.write_bytes(bytes(tampered_idx))
             self.assertIsNone(system.record_store.index.load(system.record_store.format))
             self.assertIsNone(system.record_store.indexed_summaries())
             # status() still works cleanly by falling back
             st = system.status()
             self.assertEqual(len(st['records']), 21)
-            system.record_store.index.path.write_bytes(raw_idx)
+            bin_path.write_bytes(raw_idx)
 
             # Same-size, same-mtime tamper on disk MUST be caught by scoped_heads() (TurnScope / context)
             target = system.record_path('rec-05')
@@ -529,7 +535,10 @@ class Wave1RuntimeTests(unittest.TestCase):
             r1 = system.put({'id': 'idx-a', 'kind': 'note', 'content': {'v': 1}}, 0)
             r2 = system.put({'id': 'idx-b', 'kind': 'note', 'content': {'v': 1}}, 0)
             system.reindex()
-            stale_index_bytes = system.record_store.index.path.read_bytes()
+            stale_ptr_bytes = system.record_store.index.current_path.read_bytes()
+            stale_bin_path = system.record_store.index.binary_path()
+            assert stale_bin_path is not None
+            stale_bin_bytes = stale_bin_path.read_bytes()
             spec = {
                 'format': 'managed-ai-batch-update/1',
                 'id': 'idx-resume-batch',
@@ -560,7 +569,9 @@ class Wave1RuntimeTests(unittest.TestCase):
             self.assertEqual(mid['idx-b']['revision'], 1)
 
             # Simulate hard kill where HeadIndex was never flushed before process death, then resume
-            system.record_store.index.path.write_bytes(stale_index_bytes)
+            system.record_store.index.delta_path.unlink(missing_ok=True)
+            stale_bin_path.write_bytes(stale_bin_bytes)
+            system.record_store.index.current_path.write_bytes(stale_ptr_bytes)
             completed = put_batch(system, spec)
             self.assertTrue(completed['complete'])
             after = system.record_store.indexed_summaries()

@@ -275,10 +275,54 @@ class System:
     def materialize(self, operation: str) -> dict:
         return self.techniques.materialize(operation, self.ex)
 
+    def _status_records_from_view(self, verified, needs_body) -> list[dict]:
+        view = verified.view
+        if verified.is_exact_base:
+            needed_slots: set[int] = set(view.slots_for_kind('obligation'))
+            goal_slot = view.slot_for_id('goal')
+            if goal_slot >= 0:
+                needed_slots.add(goal_slot)
+
+            needed_ids = [view.slot_id(slot) for slot in sorted(needed_slots)]
+            full_by_id = {rec['id']: rec for rec in self.record_store.scan_records(needed_ids)}
+            return [
+                full_by_id[view.slot_id(slot)] if slot in needed_slots else view.slot_summary_fields(slot)
+                for slot in range(view.record_count)
+            ]
+
+        overrides = verified.overrides
+        puts = view.delta_puts
+        needed_ids = []
+        base_summaries: dict[str, dict] = {}
+        for ident in verified.live_ids:
+            entry = overrides.get(ident) or puts.get(ident)
+            if entry is not None:
+                if needs_body(ident, entry['kind']):
+                    needed_ids.append(ident)
+                else:
+                    base_summaries[ident] = entry
+            else:
+                slot = view.slot_for_id(ident)
+                if slot >= 0:
+                    if needs_body(ident, view.slot_kind_name(slot)):
+                        needed_ids.append(ident)
+                    else:
+                        base_summaries[ident] = view.slot_summary_fields(slot)
+                else:
+                    needed_ids.append(ident)
+
+        full_by_id = {rec['id']: rec for rec in self.record_store.scan_records(needed_ids)}
+        return [full_by_id[ident] if ident in full_by_id else base_summaries[ident] for ident in verified.live_ids]
+
     def _load_status_records(self, verify_all_basis: bool) -> list[dict]:
         needs_body = lambda ident, kind: ident == 'goal' or kind == 'obligation'
         if verify_all_basis:
             return list(self.record_store.scoped_heads(needs_body))
+
+        verified = self.record_store.open_verified_index_view()
+        if verified is not None:
+            with verified:
+                return self._status_records_from_view(verified, needs_body)
 
         summaries = self.record_store.indexed_summaries()
         if summaries is None:

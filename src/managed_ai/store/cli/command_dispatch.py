@@ -261,6 +261,25 @@ def _act_gc_objects(system, args):
         system, plan=read(args.plan), expected_plan=args.expected_plan, reason=args.reason)
 
 
+def _act_pack_objects(system, args):
+    from managed_ai.store.records import pack_slab
+    if getattr(args, 'apply', False):
+        return pack_slab.execute_pack_objects(
+            system,
+            shard_target_bytes=args.shard_bytes,
+            compress=args.compress,
+            include_cold_archive=args.include_cold_archive,
+            expected_plan=args.expected_plan,
+            reason=args.reason,
+        )
+    return pack_slab.plan_pack_objects(
+        system,
+        shard_target_bytes=args.shard_bytes,
+        compress=args.compress,
+        include_cold_archive=args.include_cold_archive,
+    )
+
+
 def _act_retire_turns(system, args):
     if args.retire_turns_action == 'plan':
         return system.plan_turn_retirement(turns=args.turns or None, all_eligible=args.all_eligible)
@@ -285,6 +304,7 @@ _ACTION_HANDLERS = {
     'archive-records': _act_archive,
     'audit-objects': _act_audit_objects,
     'gc-objects': _act_gc_objects,
+    'pack-objects': _act_pack_objects,
     'graph': _act_graph,
     'status': _act_status,
     'abandon-context': lambda system, args: system.abandon_context(args.turn, args.account),

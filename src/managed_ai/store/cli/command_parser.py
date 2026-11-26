@@ -33,6 +33,8 @@ def is_readonly_action(args) -> bool:
         return getattr(args, 'dedup_action', None) == 'plan'
     if action == 'compact-objects':
         return getattr(args, 'compact_action', None) == 'plan'
+    if action == 'pack-objects':
+        return not getattr(args, 'apply', False)
     if action == 'archive-records':
         return getattr(args, 'archive_action', None) == 'plan'
     if action == 'retire-turns':
@@ -201,6 +203,43 @@ def _store_maintenance_commands(sub) -> None:
     gc.add_argument('--plan', required=True, type=Path)
     gc.add_argument('--expected-plan', required=True)
     gc.add_argument('--reason', required=True)
+
+    pack = sub.add_parser(
+        'pack-objects',
+        allow_abbrev=False,
+        help='dry-run plan or --apply packing of loose exchange objects into reserved shard slabs',
+    )
+    pack.add_argument(
+        '--apply',
+        action='store_true',
+        help='Execute shard packing and remove verified packed loose copies (default is read-only dry-run)',
+    )
+    pack.add_argument(
+        '--shard-bytes',
+        type=int,
+        default=64 * 1024 * 1024,
+        help='Target shard slab size in bytes (default 64 MiB)',
+    )
+    pack.add_argument(
+        '--compress',
+        action='store_true',
+        help='Opportunistically DEFLATE-compress loose raw objects when smaller during packing',
+    )
+    pack.add_argument(
+        '--include-cold-archive',
+        action='store_true',
+        help='Also pack loose cold-archive blobs into reserved shard slabs',
+    )
+    pack.add_argument(
+        '--expected-plan',
+        default=None,
+        help='Optional plan_sha256 guard to pin dry-run plan before --apply',
+    )
+    pack.add_argument(
+        '--reason',
+        default='Pack immutable loose exchange objects into reserved shard slabs.',
+        help='Audit account recorded in the pack-objects maintenance receipt',
+    )
 
 
 def _store_graph_commands(sub) -> None:

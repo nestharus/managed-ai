@@ -272,6 +272,14 @@ class RecordStore:
         """Return (verified_entries, index_format) or None if unindexed (works on POSIX and Windows)."""
         return record_scanner.indexed_summaries_with_format(self, max_workers=max_workers)
 
+    def open_verified_index_view(self, *, max_workers: int = 16):
+        """Open a zero-copy verified HeadIndexView over binary v3, or return None if unavailable."""
+        return record_scanner.open_verified_index_view(self, max_workers=max_workers)
+
+    def get_indexed_entry(self, ident: str) -> dict | None:
+        """Return one stat/HMAC-verified index entry via O(log N) mmap binary search, or None."""
+        return record_scanner.get_verified_entry(self, ident)
+
     def indexed_summaries(self, *, max_workers: int = 16) -> dict[str, dict] | None:
         """Return HMAC + (size, mtime_ns, ino) verified head summaries, or None if unindexed."""
         loaded = self.indexed_summaries_with_format(max_workers=max_workers)
@@ -558,9 +566,9 @@ class RecordStore:
         if not _defer_index_update:
             if self._deferred_index_ids is not None:
                 self._deferred_index_ids.append(body['id'])
-                if self._deferred_index_entries is not None and self.index.path.exists():
+                if self._deferred_index_entries is not None and self.index.exists():
                     self._deferred_index_entries[body['id']] = build_entry(body, raw, path.lstat())
-            elif self.index.path.exists():
+            elif self.index.exists():
                 self.index.update_if_present(self.format, {body['id']: build_entry(body, raw, path.lstat())})
 
         return {

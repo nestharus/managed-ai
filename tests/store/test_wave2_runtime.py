@@ -758,16 +758,23 @@ class Wave2RuntimeTests(unittest.TestCase):
         system = System(self.store)
         with exclusive(system.ex.root / 'owner.lock'):
             system.reindex()
-            idx_path = system.record_store.index.path
+            hi = system.record_store.index
+            entries = hi.load(system.record_store.format)
+            self.assertIsNotNone(entries)
+            assert entries is not None
+            # Exercise legacy JSON fast-path HMAC & Wave 1 sorted-key envelope fallback when binary v3 is absent
+            hi.current_path.unlink()
+            hi.save_json(system.record_store.format, entries, create_key=False)
+            idx_path = hi.path
             raw_new = idx_path.read_bytes()
             # Fast-path format starts with {"hmac":"<64hex>", and is valid JSON
             self.assertTrue(raw_new.startswith(b'{"hmac":"'))
             parsed = json.loads(raw_new)
             self.assertEqual(parsed['format'], INDEX_FORMAT)
-            self.assertIsNotNone(system.record_store.index.load(system.record_store.format))
+            self.assertIsNotNone(hi.load(system.record_store.format))
             # Single-byte tamper caught before json.loads
             idx_path.write_bytes(raw_new.replace(b'"goal"', b'"goa1"', 1))
-            self.assertIsNone(system.record_store.index.load(system.record_store.format))
+            self.assertIsNone(hi.load(system.record_store.format))
             # Backward-compatible Wave 1 sorted-key envelope still loads cleanly
             body = {k: v for k, v in parsed.items() if k != 'hmac'}
             payload = json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
@@ -777,7 +784,7 @@ class Wave2RuntimeTests(unittest.TestCase):
                                       separators=(',', ':'), allow_nan=False).encode('utf-8')
             self.assertFalse(legacy_bytes.startswith(b'{"hmac":"'))
             idx_path.write_bytes(legacy_bytes)
-            self.assertIsNotNone(system.record_store.index.load(system.record_store.format))
+            self.assertIsNotNone(hi.load(system.record_store.format))
 
         # O_NOFOLLOW dir-FD traversal in read_selected_body rejects symlink leaf & symlink intermediate dir
         src_root = self.root / 'nofollow-root'

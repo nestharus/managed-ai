@@ -16,6 +16,8 @@ from managed_ai.core.formats import (
 )
 from managed_ai.core.ownership import packet_id
 from managed_ai.core.storage import (
+    DEFAULT_SHARD_TARGET_BYTES,
+    PackSession,
     _OPEN_RO_NOFOLLOW,
     atomic_bytes,
     encode,
@@ -113,11 +115,12 @@ def _decompress_exact(path: Path, expected_bytes: int, expected_sha256: str) -> 
 
 
 class ColdArchive:
-    """Verified compressed cold record store under exchange/cold-records/."""
+    """Verified compressed cold record store under exchange/cold-records/ (loose + optional shard slabs)."""
 
     def __init__(self, exchange_root: Path, record_format: str):
         self.directory = exchange_root / 'cold-records'
         self.blobs_dir = self.directory / 'records'
+        self.packs_dir = self.directory / 'packs'
         self.manifest_path = self.directory / 'manifest.json'
         self.record_format = record_format
         self._manifest_cache: tuple[tuple[int, int, int], dict] | None = None
@@ -180,7 +183,18 @@ class ColdArchive:
         require(type(raw_bytes) is int and raw_bytes >= 0, f'invalid cold archive byte count: {ident}')
         digest(raw_sha256, 'cold archive raw_sha256')
 
-        raw = _decompress_exact(self.blob_path(ident), raw_bytes, raw_sha256)
+        blob = self.blob_path(ident)
+        if blob.exists() or blob.is_symlink():
+            raw = _decompress_exact(blob, raw_bytes, raw_sha256)
+        elif (self.packs_dir / 'CURRENT.json').exists():
+            with PackSession(self.packs_dir) as session:
+                packed_raw = session.read(raw_sha256, retained=True, expected_bytes=raw_bytes)
+            if packed_raw is None:
+                raise ValueError(f'archived record missing from cold archive packs: {ident}')
+            raw = packed_raw
+        else:
+            raw = _decompress_exact(blob, raw_bytes, raw_sha256)
+
         record = strict_json(raw)
         require(
             record.get('id') == ident and record.get('format') == self.record_format,
@@ -195,6 +209,12 @@ class ColdArchive:
             'archived record head differs from cold archive manifest',
         )
         return record, raw
+
+    def pack_blobs(self, *, shard_target_bytes: int = DEFAULT_SHARD_TARGET_BYTES) -> dict:
+        """Pack loose cold-archived blobs into reserved shard slabs under exchange/cold-records/packs/."""
+        from managed_ai.store.records.pack_slab import pack_cold_archive_blobs
+
+        return pack_cold_archive_blobs(self, shard_target_bytes=shard_target_bytes)
 
     def save_manifest(self, instance_id: str, records: dict[str, dict]) -> None:
         self._manifest_cache = None
@@ -580,17 +600,32 @@ def restore_archived_records(system, *, ids: list[str], reason: str) -> dict:
         })
 
     sync_dir(records_dir)
-    if system.record_store.index.path.exists():
+    if system.record_store.index.exists():
         system.record_store.index.update_if_present(system.record_store.format, index_updates)
 
+    removed_raw_shas: set[str] = set()
     for ident in requested:
-        manifest_records.pop(ident, None)
+        entry = manifest_records.pop(ident, None)
+        if isinstance(entry, dict) and isinstance(entry.get('raw_sha256'), str):
+            removed_raw_shas.add(entry['raw_sha256'])
     archive.save_manifest(system.instance_id, manifest_records)
 
     for ident in requested:
         archive.blob_path(ident).unlink(missing_ok=True)
     if archive.blobs_dir.exists():
         sync_dir(archive.blobs_dir)
+
+    if removed_raw_shas and (archive.packs_dir / 'CURRENT.json').exists():
+        still_used = {
+            row['raw_sha256']
+            for row in manifest_records.values()
+            if isinstance(row, dict) and isinstance(row.get('raw_sha256'), str)
+        }
+        dead_shas = removed_raw_shas - still_used
+        if dead_shas:
+            from managed_ai.store.records.pack_slab import gc_packed_objects
+
+            gc_packed_objects(archive.packs_dir, dead_shas)
 
     for ident, record, _ in staged:
         reloaded, _ = system.record_store.read(ident)
