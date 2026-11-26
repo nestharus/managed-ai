@@ -16,6 +16,7 @@ if __name__ == "__main__":
     if _src_root not in sys.path:
         sys.path.insert(0, _src_root)
 
+from managed_ai import __version__
 from managed_ai.core.exchange import Exchange
 from managed_ai.core.ownership import external_root
 from managed_ai.core.ownership import packet_id as _id
@@ -698,6 +699,7 @@ class Attention:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--root", required=True, type=Path, help="existing external exchange root")
     parser.add_argument("--admission-deadline", type=float, help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="action", required=True)

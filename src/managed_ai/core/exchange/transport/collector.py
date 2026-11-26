@@ -23,6 +23,7 @@ if __name__ == "__main__":
     if _src_root not in sys.path:
         sys.path.insert(0, _src_root)
 
+from managed_ai import __version__
 from managed_ai.core.ownership import NativeLayout, external_root
 from managed_ai.core.storage import (
     AdmissionContended,
@@ -457,9 +458,12 @@ class Collector:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--admission-deadline", type=float, help=argparse.SUPPRESS)
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(
+        dest="command", required=True, metavar="{admit,resume,list,receive}"
+    )
 
     admit = sub.add_parser("admit", allow_abbrev=False, help="explicitly admit one local argv job")
     admit.add_argument("job_id")
@@ -479,7 +483,7 @@ def _build_parser() -> argparse.ArgumentParser:
     receive.add_argument("consumer")
     receive.add_argument("--current-brief", type=Path)
 
-    internal = sub.add_parser("_worker", allow_abbrev=False, help=argparse.SUPPRESS)
+    internal = sub.add_parser("_worker", allow_abbrev=False)
     internal.add_argument("key")
     internal.add_argument("token")
 

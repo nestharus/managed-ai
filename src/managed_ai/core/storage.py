@@ -568,6 +568,81 @@ class ObjectStore:
         with path.open("rb") as stream:
             return self._decompress_bounded(stream, limit, path), False
 
+    @staticmethod
+    def _resolve_read_limit(size: int, *, retained: bool, expected_bytes: int | None) -> int:
+        if expected_bytes is not None:
+            if size != expected_bytes:
+                raise ValueError("content object changed (length changed)")
+            return expected_bytes if retained else min(expected_bytes, MAX_BYTES)
+        return size if retained else MAX_BYTES
+
+    def _read_loose_raw_posix(
+        self,
+        key: str,
+        path: Path,
+        *,
+        retained: bool,
+        expected_bytes: int | None,
+        dir_fd: int | None,
+    ) -> tuple[bytes, bool]:
+        target = key if dir_fd is not None else path
+        try:
+            fd = os.open(target, _OPEN_RO_NOFOLLOW, dir_fd=dir_fd)
+        except OSError as exc:
+            if exc.errno == errno.ENOENT:
+                return self._read_deflate_or_pack(
+                    key, retained=retained, expected_bytes=expected_bytes, dir_fd=dir_fd
+                )
+            if exc.errno in (errno.ELOOP, errno.EISDIR, errno.ENOTDIR, errno.ENXIO):
+                raise ValueError(f"ordinary file required: {path}") from None
+            raise
+
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError(f"ordinary file required: {path}")
+            limit = self._resolve_read_limit(
+                info.st_size, retained=retained, expected_bytes=expected_bytes
+            )
+            stream = os.fdopen(fd, "rb")
+        except BaseException:
+            os.close(fd)
+            raise
+
+        with stream:
+            data = stream.read(limit + 1)
+        if len(data) > limit:
+            raise ValueError(f"file exceeds {limit} bytes: {path}")
+        return data, False
+
+    def _read_loose_raw_win(
+        self,
+        key: str,
+        path: Path,
+        *,
+        retained: bool,
+        expected_bytes: int | None,
+    ) -> tuple[bytes, bool]:
+        try:
+            raw_info = path.lstat()
+        except FileNotFoundError:
+            return self._read_deflate_or_pack(
+                key, retained=retained, expected_bytes=expected_bytes, dir_fd=None
+            )
+
+        if not is_ordinary_file_stat(raw_info):
+            raise ValueError(f"ordinary file required: {path}")
+        limit = self._resolve_read_limit(
+            raw_info.st_size, retained=retained, expected_bytes=expected_bytes
+        )
+        if read_bytes is _READ_BYTES:
+            with path.open("rb") as stream:
+                data = stream.read(limit + 1)
+            if len(data) > limit:
+                raise ValueError(f"file exceeds {limit} bytes: {path}")
+            return data, False
+        return read_bytes(path, limit), False
+
     def read(
         self,
         key: str,
@@ -588,71 +663,15 @@ class ObjectStore:
                 return packed
 
         path = self.directory / key
-        data: bytes | None = None
-        verified_in_pack = False
         if hasattr(os, "O_NOFOLLOW") and read_bytes is _READ_BYTES:
-            target = key if dir_fd is not None else path
-            try:
-                fd = os.open(target, _OPEN_RO_NOFOLLOW, dir_fd=dir_fd)
-            except OSError as exc:
-                if exc.errno == errno.ENOENT:
-                    data, verified_in_pack = self._read_deflate_or_pack(
-                        key,
-                        retained=retained,
-                        expected_bytes=expected_bytes,
-                        dir_fd=dir_fd,
-                    )
-                elif exc.errno in (errno.ELOOP, errno.EISDIR, errno.ENOTDIR, errno.ENXIO):
-                    raise ValueError(f"ordinary file required: {path}") from None
-                else:
-                    raise
-            else:
-                try:
-                    info = os.fstat(fd)
-                    if not stat.S_ISREG(info.st_mode):
-                        raise ValueError(f"ordinary file required: {path}")
-                    size = info.st_size
-                    if expected_bytes is not None:
-                        if size != expected_bytes:
-                            raise ValueError("content object changed (length changed)")
-                        limit = expected_bytes if retained else min(expected_bytes, MAX_BYTES)
-                    else:
-                        limit = size if retained else MAX_BYTES
-                    stream = os.fdopen(fd, "rb")
-                except BaseException:
-                    os.close(fd)
-                    raise
-                with stream:
-                    data = stream.read(limit + 1)
-                if len(data) > limit:
-                    raise ValueError(f"file exceeds {limit} bytes: {path}")
+            data, verified_in_pack = self._read_loose_raw_posix(
+                key, path, retained=retained, expected_bytes=expected_bytes, dir_fd=dir_fd
+            )
         else:
-            try:
-                raw_info = path.lstat()
-            except FileNotFoundError:
-                data, verified_in_pack = self._read_deflate_or_pack(
-                    key,
-                    retained=retained,
-                    expected_bytes=expected_bytes,
-                    dir_fd=None,
-                )
-            else:
-                if not is_ordinary_file_stat(raw_info):
-                    raise ValueError(f"ordinary file required: {path}")
-                size = raw_info.st_size
-                if expected_bytes is not None:
-                    if size != expected_bytes:
-                        raise ValueError("content object changed (length changed)")
-                    limit = expected_bytes if retained else min(expected_bytes, MAX_BYTES)
-                else:
-                    limit = size if retained else MAX_BYTES
-                if read_bytes is _READ_BYTES:
-                    with path.open("rb") as stream:
-                        data = stream.read(limit + 1)
-                    if len(data) > limit:
-                        raise ValueError(f"file exceeds {limit} bytes: {path}")
-                else:
-                    data = read_bytes(path, limit)
+            data, verified_in_pack = self._read_loose_raw_win(
+                key, path, retained=retained, expected_bytes=expected_bytes
+            )
+
         if verified_in_pack:
             return data
         if expected_bytes is not None and len(data) != expected_bytes:

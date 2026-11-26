@@ -361,6 +361,7 @@ class Wave5CoreTests(unittest.TestCase):
                                 missing.append(f"{py.relative_to(ENGINE)}:{node.lineno} ({name})")
         self.assertEqual(missing, [], f"CLI parsers missing allow_abbrev=False: {missing}")
 
+    @unittest.skipUnless(shutil.which("git"), "git binary not installed")
     def test_w5_df1_df2_df3_df5_df6_df7_dogfood_and_qualification(self):
         """W5-DF1/2/3/5/6/7: collision IDs, write-time composition check, bare focus, inline
         discover, summaries, single code_identity & git provenance."""

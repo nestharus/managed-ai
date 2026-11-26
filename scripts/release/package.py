@@ -88,7 +88,9 @@ def _validate_output_path(root: Path, output_arg: Path, *, replace: bool) -> Pat
 
 def _build_archive(root: Path, core: Path | None, source: dict[str, dict], output: Path) -> dict:
     output.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=".g60-package-", suffix=".partial", dir=output.parent)
+    fd, temporary = tempfile.mkstemp(
+        prefix=".managed-ai-package-", suffix=".partial", dir=output.parent
+    )
     os.close(fd)
     try:
         with zipfile.ZipFile(

@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from managed_ai import __version__
 from managed_ai.core.storage import exclusive, is_reparse_or_symlink, shared
 
 from .identity import _engine_directory, _ordinary_dir, _status_payload, read_descriptor_bytes
@@ -27,6 +28,7 @@ def parser() -> argparse.ArgumentParser:
         description="Select one shared native engine and one schema-governed store by reference.",
         allow_abbrev=False,
     )
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("--deployment", type=Path, required=True)
     p.add_argument(
         "--expected-descriptor", help="Deployment edition verified by the forwarding entrance"
