@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+from contextlib import contextmanager
 import hashlib
 import importlib
 from importlib.machinery import EXTENSION_SUFFIXES
@@ -326,25 +327,42 @@ def _is_colocated_engine(resolved_entry: Path) -> bool:
     return resolved_entry == checked.resolve(strict=True)
 
 
-def _load_canonical_module(path: Path, engine_root: Path):
-    """Load store/system.py from a canonical src/managed_ai package (or legacy engine/ layout)."""
+@contextmanager
+def _mount_canonical_module(path: Path, engine_root: Path):
+    """Mount store/system.py from a canonical src/managed_ai package (or legacy engine/ layout).
+
+    For external managed_ai package copies, keeps the external managed_ai.* namespace
+    mounted in sys.modules for the full context lifetime so lazy function-body imports
+    inside System/Attention/Exchange resolve strictly to the qualified external engine,
+    then restores the caller's sys.path and sys.modules cleanly on exit.
+    """
     resolved_engine = engine_root.resolve()
     init_file = resolved_engine / '__init__.py'
     if init_file.is_file():
-        if resolved_engine == COLOCATED_ENGINE_ROOT.resolve():
+        colocated_root = COLOCATED_ENGINE_ROOT.resolve()
+        if resolved_engine == colocated_root:
             src_root_str = str(resolved_engine.parent)
             if src_root_str not in sys.path:
                 sys.path.insert(0, src_root_str)
-            return importlib.import_module('managed_ai.store.system')
+            yield importlib.import_module('managed_ai.store.system')
+            return
         # External managed_ai package copy (regardless of outer directory name):
-        # mount it as 'managed_ai' in an isolated sys.modules snapshot during load.
+        # mount it as 'managed_ai' in an isolated sys.modules snapshot across the context.
         saved_path = list(sys.path)
         saved_modules = {
             name: sys.modules.pop(name)
             for name in list(sys.modules)
             if name == 'managed_ai' or name.startswith('managed_ai.')
         }
+        colocated_src = colocated_root.parent
+        def _is_colocated_src(entry: str) -> bool:
+            try:
+                return Path(entry or '.').resolve() == colocated_src
+            except OSError:
+                return False
         try:
+            sys.path[:] = [entry for entry in saved_path if not _is_colocated_src(entry)]
+            importlib.invalidate_caches()
             pkg_spec = importlib.util.spec_from_file_location(
                 'managed_ai',
                 init_file,
@@ -359,49 +377,65 @@ def _load_canonical_module(path: Path, engine_root: Path):
             loaded_file = getattr(module, '__file__', None)
             if not loaded_file or Path(loaded_file).resolve() != path.resolve():
                 raise ValueError(PROFILE_ERROR)
-            return module
+            yield module
         finally:
             sys.path[:] = saved_path
             for name in list(sys.modules):
                 if name == 'managed_ai' or name.startswith('managed_ai.'):
                     sys.modules.pop(name, None)
             sys.modules.update(saved_modules)
+            importlib.invalidate_caches()
+        return
 
+    saved_path = list(sys.path)
+    saved_legacy = {
+        name: sys.modules.pop(name)
+        for name in list(sys.modules)
+        if name in ('core', 'store', 'deployment') or name.startswith(('core.', 'store.', 'deployment.'))
+    }
     engine_root_str = str(resolved_engine)
-    if engine_root_str in sys.path:
-        sys.path.remove(engine_root_str)
-    sys.path.insert(0, engine_root_str)
-    for mod_name in list(sys.modules):
-        if mod_name in ('core', 'store', 'deployment') or mod_name.startswith(('core.', 'store.', 'deployment.')):
-            mod = sys.modules.get(mod_name)
-            mod_file = getattr(mod, '__file__', None)
-            if mod_file:
-                try:
-                    if not Path(mod_file).resolve().is_relative_to(resolved_engine):
-                        sys.modules.pop(mod_name, None)
-                except OSError:
-                    pass
-            else:
-                sys.modules.pop(mod_name, None)
     spec = importlib.util.spec_from_file_location('reviewed_capture_engine', path)
     if spec is None or spec.loader is None:
+        sys.modules.update(saved_legacy)
         raise ValueError(PROFILE_ERROR)
-    module = importlib.util.module_from_spec(spec)
     previous = sys.modules.get(spec.name)
-    sys.modules[spec.name] = module
     try:
+        if engine_root_str in sys.path:
+            sys.path.remove(engine_root_str)
+        sys.path.insert(0, engine_root_str)
+        importlib.invalidate_caches()
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
         spec.loader.exec_module(module)
+        yield module
     finally:
+        sys.path[:] = saved_path
         if previous is None:
             sys.modules.pop(spec.name, None)
         else:
             sys.modules[spec.name] = previous
-    return module
+        for name in list(sys.modules):
+            if name in ('core', 'store', 'deployment') or name.startswith(('core.', 'store.', 'deployment.')):
+                sys.modules.pop(name, None)
+        sys.modules.update(saved_legacy)
+        importlib.invalidate_caches()
 
 
-def qualify_engine(engine: Path, *, expected_profile: str | None = None,
-                   deployment: Path | None = None) -> tuple[object, dict]:
-    """Qualify and load a native implementation; refuse unqualified external engines before exec."""
+def _load_canonical_module(path: Path, engine_root: Path):
+    """Load store/system.py (prefer qualified_engine() context manager for external engines)."""
+    with _mount_canonical_module(path, engine_root) as module:
+        return module
+
+
+@contextmanager
+def qualified_engine(engine: Path, *, expected_profile: str | None = None,
+                     deployment: Path | None = None):
+    """Qualify and mount a native implementation for the duration of an operation.
+
+    Refuses unqualified external engines before executing any external code, keeps
+    external managed_ai.* packages mounted across lazy imports inside the context,
+    and restores sys.modules / sys.path on exit.
+    """
     path, programs, layout = _native_sources_with_layout(engine)
     profile = _profile_digest(programs)
     resolved_entry = Path(engine).resolve(strict=True)
@@ -435,30 +469,45 @@ def qualify_engine(engine: Path, *, expected_profile: str | None = None,
         else:
             raise ValueError(EXTERNAL_PROFILE_ERROR)
 
-    if layout == 'canonical':
-        module = _load_canonical_module(path, engine_root)
-        _verify_canonical_contract(module)
-    else:
-        spec = importlib.util.spec_from_file_location('reviewed_capture_engine', path)
-        if spec is None or spec.loader is None:
-            raise ValueError(PROFILE_ERROR)
-        module = importlib.util.module_from_spec(spec)
-        previous = sys.modules.get(spec.name)
-        sys.modules[spec.name] = module
-        try:
-            spec.loader.exec_module(module)
-        finally:
-            if previous is None:
-                sys.modules.pop(spec.name, None)
-            else:
-                sys.modules[spec.name] = previous
-
     info = {
         'profile': profile,
         'admission': admission,
         'git_head_commit': _git_head_commit(engine_root),
     }
-    return module, info
+    if layout == 'canonical':
+        with _mount_canonical_module(path, engine_root) as module:
+            _verify_canonical_contract(module)
+            yield module, info
+        return
+
+    spec = importlib.util.spec_from_file_location('reviewed_capture_engine', path)
+    if spec is None or spec.loader is None:
+        raise ValueError(PROFILE_ERROR)
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(spec.name)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+        yield module, info
+    finally:
+        if previous is None:
+            sys.modules.pop(spec.name, None)
+        else:
+            sys.modules[spec.name] = previous
+
+
+_qualified_engine = qualified_engine
+
+
+def qualify_engine(engine: Path, *, expected_profile: str | None = None,
+                   deployment: Path | None = None) -> tuple[object, dict]:
+    """Qualify and load a native implementation; refuse unqualified external engines before exec.
+
+    Callers that invoke methods with lazy imports on an external managed_ai package should
+    use `with qualified_engine(...) as (native, info):` so the external namespace remains mounted.
+    """
+    with qualified_engine(engine, expected_profile=expected_profile, deployment=deployment) as result:
+        return result
 
 
 def reviewed_engine(engine: Path, *, expected_profile: str | None = None,
@@ -582,39 +631,39 @@ def main():
     inspect.add_argument('turn')
     args = parser.parse_args()
     try:
-        native, info = qualify_engine(
+        with qualified_engine(
             args.engine,
             expected_profile=args.expected_profile,
             deployment=args.deployment,
-        )
-        root, exchange_root = _exchange_root(native, args.root)
-        with native.exclusive(exchange_root / 'owner.lock'):
-            system = native.System(root)
-            if system.ex.root.resolve() != exchange_root.resolve():
-                raise ValueError('native exchange lock root differs from selected system exchange')
-            if args.action == 'inspect-turn':
-                result = {'turn': turn_summary(system, args.turn)}
-            elif args.action == 'reconcile-assess':
-                observed = system.ex.inspect(args.turn)
-                result = _reconcile_assessment(native, system, args.turn, args.receipt, args.producer, observed)
-            else:
-                # Keep the open-turn check and retention in one cooperative
-                # owner invocation. assess only changes Attention, so this
-                # selected transport observation remains applicable afterward.
-                observed = system.ex.inspect(args.turn)
-                if observed['return'] is not None:
-                    raise ValueError(RETURN_ERROR)
-                attention = system.assess(args.turn, args.receipt, args.producer)
-                result = {'attention': attention,
-                          'status': {'turns': [turn_summary(system, args.turn, observed)]}}
-            adapter_meta = {
-                'native_profile_sha256': info['profile'],
-                'admission': info['admission'],
-                'scope': 'Selected native assessment and turn only; no global status computation.',
-            }
-            if info.get('git_head_commit') is not None:
-                adapter_meta['git_head_commit'] = info['git_head_commit']
-            result['capture_adapter'] = adapter_meta
+        ) as (native, info):
+            root, exchange_root = _exchange_root(native, args.root)
+            with native.exclusive(exchange_root / 'owner.lock'):
+                system = native.System(root)
+                if system.ex.root.resolve() != exchange_root.resolve():
+                    raise ValueError('native exchange lock root differs from selected system exchange')
+                if args.action == 'inspect-turn':
+                    result = {'turn': turn_summary(system, args.turn)}
+                elif args.action == 'reconcile-assess':
+                    observed = system.ex.inspect(args.turn)
+                    result = _reconcile_assessment(native, system, args.turn, args.receipt, args.producer, observed)
+                else:
+                    # Keep the open-turn check and retention in one cooperative
+                    # owner invocation. assess only changes Attention, so this
+                    # selected transport observation remains applicable afterward.
+                    observed = system.ex.inspect(args.turn)
+                    if observed['return'] is not None:
+                        raise ValueError(RETURN_ERROR)
+                    attention = system.assess(args.turn, args.receipt, args.producer)
+                    result = {'attention': attention,
+                              'status': {'turns': [turn_summary(system, args.turn, observed)]}}
+                adapter_meta = {
+                    'native_profile_sha256': info['profile'],
+                    'admission': info['admission'],
+                    'scope': 'Selected native assessment and turn only; no global status computation.',
+                }
+                if info.get('git_head_commit') is not None:
+                    adapter_meta['git_head_commit'] = info['git_head_commit']
+                result['capture_adapter'] = adapter_meta
         print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         print(json.dumps({'status': 'unresolved', 'operation': args.action,
