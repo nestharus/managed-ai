@@ -8,21 +8,21 @@ from tempfile import TemporaryDirectory
 import unittest
 
 
-REPO = Path(__file__).resolve().parents[3]
-RELEASE = REPO / "engine/release"
+REPO = Path(__file__).resolve().parents[2]
+RELEASE = REPO / "src/managed_ai/release"
 
 
 class SourceListTest(unittest.TestCase):
     def test_checkout_metadata_refuses_before_manifest_or_transport_write(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary) / "bundle"
-            release = root / "engine/release"
+            release = root / "src/managed_ai/release"
             release.mkdir(parents=True)
             (release / "current_sources.json").write_text("{}", encoding="utf-8")
             domain = root / "domains/research"
             domain.mkdir(parents=True)
             transport = root.parent / "current.zip"
-            prior = [root / "MANIFEST.json", root / "engine/MANIFEST.json", transport]
+            prior = [root / "MANIFEST.json", root / "src/managed_ai/MANIFEST.json", transport]
             for path in prior:
                 path.write_bytes(b"existing")
             for path, directory in [(root / ".git", True), (domain / ".git", False)]:
@@ -47,10 +47,11 @@ class SourceListTest(unittest.TestCase):
     def check_stale_identity(self, catalogue_root):
         with TemporaryDirectory() as temporary:
             root = Path(temporary) / "bundle"
-            core = root / "engine"
+            core = root / "src/managed_ai"
             (core / "release").mkdir(parents=True)
             (core / catalogue_root).mkdir(parents=True)
-            rows = [{"id": name, "source": name + ".md"} for name in ("neighbor", "guide")]
+            (root / "docs").mkdir(parents=True)
+            rows = [{"id": name, "source": f"../../docs/{name}.md"} for name in ("neighbor", "guide")]
             (core / "release/current_sources.json").write_text(
                 json.dumps({"edition": "test", "bodies": rows}), encoding="utf-8"
             )
@@ -58,8 +59,8 @@ class SourceListTest(unittest.TestCase):
                 json.dumps({"entries": rows}), encoding="utf-8"
             )
             (core / "release/navigation.json").write_text("{}", encoding="utf-8")
-            (core / "neighbor.md").write_bytes(b"neighbor")
-            (core / "guide.md").write_bytes(b"current")
+            (root / "docs/neighbor.md").write_bytes(b"neighbor")
+            (root / "docs/guide.md").write_bytes(b"current")
             subprocess.run([sys.executable, "-B", str(RELEASE / "refresh_guidance.py"),
                             "--root", str(core), "--write-sources-md"],
                            check=True, capture_output=True)
@@ -79,8 +80,8 @@ class SourceListTest(unittest.TestCase):
                     result = subprocess.run([sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(root), *args],
                                             capture_output=True, text=True)
                     self.assertEqual(result.returncode, 1, result)
-                    self.assertIn("Expected guide: [guide.md](guide.md) — " + current, result.stderr)
-                    self.assertIn("Observed guide: [guide.md](guide.md) — " + stale, result.stderr)
+                    self.assertIn("Expected guide: [../../docs/guide.md](../../docs/guide.md) — " + current, result.stderr)
+                    self.assertIn("Observed guide: [../../docs/guide.md](../../docs/guide.md) — " + stale, result.stderr)
                     self.assertIn("Run release guidance refresh", result.stderr)
                     for path in protected:
                         self.assertEqual(path.read_bytes(), b"prior contents")
@@ -88,16 +89,17 @@ class SourceListTest(unittest.TestCase):
     def test_package_generates_sources_md_when_absent_in_git_export(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary) / "bundle"
-            core = root / "engine"
+            core = root / "src/managed_ai"
             (core / "release").mkdir(parents=True)
             (core / "store").mkdir(parents=True)
-            rows = [{"id": "guide", "source": "guide.md"}]
+            (root / "docs").mkdir(parents=True)
+            rows = [{"id": "guide", "source": "../../docs/guide.md"}]
             (core / "release/current_sources.json").write_text(
                 json.dumps({"edition": "test", "bodies": rows}), encoding="utf-8"
             )
             (core / "store/catalogue.json").write_text(json.dumps({"entries": rows}), encoding="utf-8")
             (core / "release/navigation.json").write_text("{}", encoding="utf-8")
-            (core / "guide.md").write_bytes(b"# Guide\n\nBody.\n")
+            (root / "docs/guide.md").write_bytes(b"# Guide\n\nBody.\n")
             subprocess.run([sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(core)],
                            check=True, capture_output=True)
             # Default refresh_guidance does not create SOURCES.md in Git checkouts
@@ -110,7 +112,7 @@ class SourceListTest(unittest.TestCase):
             self.assertTrue((core / "SOURCES.md").is_file())
             self.assertTrue((core / "MANIFEST.json").is_file())
             self.assertTrue((root / "MANIFEST.json").is_file())
-            self.assertIn("guide.md", (core / "SOURCES.md").read_text(encoding="utf-8"))
+            self.assertIn("../../docs/guide.md", (core / "SOURCES.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

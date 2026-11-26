@@ -3,6 +3,7 @@
 import argparse
 import codecs
 import gzip
+import importlib
 import re
 import hashlib
 from itertools import zip_longest
@@ -16,7 +17,7 @@ import runpy
 import sys
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 SELECTION = Path("release/current_sources.json")
 CATALOGUE = Path("store/catalogue.json")
 MARKER = Path("CURRENT-RELEASE.json")
@@ -72,7 +73,16 @@ def observed_path(root, relative, kind, *, scope_probe=False):
     return None
 
 
+def _is_package_engine(core):
+    core = Path(core)
+    return core.name == "managed_ai" and (
+        core.parent.name == "src" or (core / "__init__.py").is_file()
+    )
+
+
 def inventory_engine(root):
+    if observed_path(root, Path("src/managed_ai") / SELECTION, stat.S_ISREG, scope_probe=True) is not None:
+        return (root / "src/managed_ai").resolve(strict=True)
     if observed_path(root, Path("engine") / SELECTION, stat.S_ISREG, scope_probe=True) is not None:
         return (root / "engine").resolve(strict=True)
     if (observed_path(root, SELECTION, stat.S_ISREG, scope_probe=True) is not None
@@ -132,15 +142,40 @@ def source_paths(root, engine):
 
 
 def _run_with_engine(engine, relative):
-    engine_str = str(Path(engine).resolve(strict=True))
-    added = engine_str not in sys.path
+    engine_path = Path(engine).resolve(strict=True)
+    is_pkg = _is_package_engine(engine_path)
+    import_root = str(engine_path.parent if is_pkg else engine_path)
+    added = import_root not in sys.path
     if added:
-        sys.path.insert(0, engine_str)
+        sys.path.insert(0, import_root)
+    saved_modules = None
     try:
-        return runpy.run_path(str(Path(engine) / relative))
+        if is_pkg:
+            mod_name = "managed_ai." + relative[:-3].replace("/", ".")
+            expected = (engine_path / relative).resolve(strict=True)
+            existing = sys.modules.get("managed_ai")
+            existing_file = getattr(existing, "__file__", None) if existing is not None else None
+            if existing is not None and (
+                existing_file is None or Path(existing_file).resolve() != (engine_path / "__init__.py").resolve()
+            ):
+                saved_modules = {
+                    k: sys.modules.pop(k)
+                    for k in list(sys.modules)
+                    if k == "managed_ai" or k.startswith("managed_ai.")
+                }
+            mod = importlib.import_module(mod_name)
+            if Path(mod.__file__).resolve(strict=True) != expected:
+                raise ValueError("Loaded engine module differs from selected engine: " + mod_name)
+            return vars(mod)
+        return runpy.run_path(str(engine_path / relative))
     finally:
-        if added and engine_str in sys.path:
-            sys.path.remove(engine_str)
+        if saved_modules is not None:
+            for k in list(sys.modules):
+                if k == "managed_ai" or k.startswith("managed_ai."):
+                    sys.modules.pop(k, None)
+            sys.modules.update(saved_modules)
+        if added and import_root in sys.path:
+            sys.path.remove(import_root)
 
 
 def received_compressed_text(system):
@@ -348,7 +383,10 @@ def verify_core_selection(core, native, *, prefix="", bundle_root=None, tree=Non
     bundle_mode = bundle_root is not None
     member_root = bundle_root.resolve(strict=True) if bundle_mode else core.resolve(strict=True)
     member_map = tree if (bundle_mode and tree is not None) else native
-    expected_root_rel = "../.." if bundle_mode else ".."
+    if bundle_mode:
+        expected_root_rel = "../../.." if (core.name == "managed_ai" and core.parent.name == "src") else "../.."
+    else:
+        expected_root_rel = ".."
     directories = {(member_root / parent).as_posix() for name in member_map for parent in Path(name).parents}
     selection_path = core / SELECTION
     selection = read_json(selection_path)
@@ -457,7 +495,15 @@ def exact_path(root, relative, kind):
 
 
 def verify_workbench_components(root, *, stamp=False):
-    companions_root = exact_path(root, Path("companions"), stat.S_ISDIR)
+    pkg_dir = exact_path(root, Path("src/managed_ai"), stat.S_ISDIR)
+    companions_root = None
+    manifest_label = "companions/peer/COMPONENTS.json"
+    if pkg_dir is not None:
+        companions_root = exact_path(pkg_dir, Path("companions"), stat.S_ISDIR)
+        if companions_root is not None:
+            manifest_label = "src/managed_ai/companions/peer/COMPONENTS.json"
+    if companions_root is None:
+        companions_root = exact_path(root, Path("companions"), stat.S_ISDIR)
     if companions_root is None:
         return None
     peer_root = exact_path(companions_root, Path("peer"), stat.S_ISDIR)
@@ -465,7 +511,7 @@ def verify_workbench_components(root, *, stamp=False):
         return None
     manifest_path = exact_path(peer_root, Path("COMPONENTS.json"), stat.S_ISREG)
     if manifest_path is None:
-        raise ValueError("Missing shared peer component manifest: companions/peer/COMPONENTS.json")
+        raise ValueError("Missing shared peer component manifest: " + manifest_label)
     try:
         components = _read_strict_object(manifest_path)
     except (UnicodeDecodeError, ValueError) as error:
@@ -545,10 +591,15 @@ def verify_deployment_bindings(root, core):
         deployment_api['Deployment'](descriptor.parent).verify()
 
 
+def _engine_prefix(root, core):
+    return core.resolve(strict=True).relative_to(root.resolve(strict=True)).as_posix() + "/"
+
+
 def verify_bundle(root, core, native, tree=None):
     if tree is None:
         tree = members(root, core)
-    bodies = verify_core_selection(core, native, prefix="engine/", bundle_root=root, tree=tree)
+    prefix = _engine_prefix(root, core)
+    bodies = verify_core_selection(core, native, prefix=prefix, bundle_root=root, tree=tree)
     if "SOURCES.md" in native:
         verify_source_list(core / "SOURCES.md", bodies)
     verify_workbench_components(root)
@@ -578,14 +629,18 @@ def refresh_manifests(root, core):
             tree["SOURCES.md"] = identity(generated)
     elif core is not None:
         # The receiving bundle locates its engine at this exact member prefix.
-        prefix = "engine/"
+        prefix = _engine_prefix(root, core)
         native = {name[len(prefix):]: row for name, row in tree.items() if name.startswith(prefix)}
         inner = manifest_name(core)
         native.pop(inner, None)
         verify_bundle(root, core, native, tree=tree)
         stamped_manifest = verify_workbench_components(root, stamp=True)
         if stamped_manifest is not None:
-            tree["companions/peer/COMPONENTS.json"] = identity(stamped_manifest)
+            stamped_rel = stamped_manifest.resolve(strict=True).relative_to(root.resolve(strict=True)).as_posix()
+            stamped_id = identity(stamped_manifest)
+            tree[stamped_rel] = stamped_id
+            if stamped_rel.startswith(prefix):
+                native[stamped_rel[len(prefix):]] = stamped_id
         if "SOURCES.md" not in native:
             generated = _generate_sources_markdown(core)
             src_id = identity(generated)

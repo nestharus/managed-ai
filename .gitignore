@@ -15,6 +15,8 @@ dist/
 
 # Package-time generated release manifests and source index
 /MANIFEST.json
+/src/managed_ai/MANIFEST.json
+/src/managed_ai/SOURCES.md
 /engine/MANIFEST.json
 /engine/SOURCES.md
 

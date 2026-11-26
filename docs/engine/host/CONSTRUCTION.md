@@ -1,6 +1,6 @@
 # Develop the construction before committing its realization
 
-Use this operation when a requested contribution still needs constructive development. Use an understood adequate operation directly when it already supplies the contribution. The general method is [the current concise guide](../../domains/research/sources/knowledge/research/current/method.md); [G42](../../domains/research/sources/knowledge/research/patterns/g42-artifact-led-discovery.md), [G43](../../domains/research/sources/knowledge/research/patterns/g43-artifact-composition.md) and [G45](../../domains/research/sources/knowledge/research/patterns/g45-developing-dimensions.md) retain the complete mechanisms and their limits. These are semantic operations performed by the capable participant, supported by actual tools and materials. Their names are not an implemented autonomous planner.
+Use this operation when a requested contribution still needs constructive development. Use an understood adequate operation directly when it already supplies the contribution. When an external research domain is selected, its logical sources `research/current/method.md`, `research/patterns/g42-artifact-led-discovery.md`, `research/patterns/g43-artifact-composition.md` and `research/patterns/g45-developing-dimensions.md` retain the complete mechanisms and their limits. These are semantic operations performed by the capable participant, supported by actual tools and materials. Their names are not an implemented autonomous planner.
 
 ## Recover the live contribution
 

@@ -16,8 +16,8 @@ from unittest import mock
 import zipfile
 
 
-REPO = Path(__file__).resolve().parents[3]
-ENGINE = REPO / "engine"
+REPO = Path(__file__).resolve().parents[2]
+ENGINE = REPO / "src/managed_ai"
 RELEASE = ENGINE / "release"
 PACKAGE = runpy.run_path(str(RELEASE / "package.py"))
 REFRESH = runpy.run_path(str(RELEASE / "refresh_guidance.py"))
@@ -35,20 +35,22 @@ def _write_json(path, value):
 
 
 def _build_minimal_bundle(root, *, include_siblings=False):
-    core = root / "engine"
+    core = root / "src/managed_ai"
     (core / "release").mkdir(parents=True)
     (core / "store").mkdir(parents=True)
-    rows = [{"id": "guide", "source": "guide.md"}]
-    (core / "guide.md").write_bytes(b"# Guide\n\nWorking release body.\n")
+    (core / "__init__.py").write_text("", encoding="utf-8")
+    (root / "docs/engine").mkdir(parents=True)
+    rows = [{"id": "guide", "source": "../../docs/engine/guide.md"}]
+    (root / "docs/engine/guide.md").write_bytes(b"# Guide\n\nWorking release body.\n")
     if include_siblings:
-        (root / "optional/collective").mkdir(parents=True)
-        (root / "optional/collective/README.md").write_bytes(b"# Collective\n\nOptional body.\n")
-        (root / "patterns/continuous-consolidation").mkdir(parents=True)
-        (root / "patterns/continuous-consolidation/README.md").write_bytes(b"# Patterns\n\nPattern body.\n")
+        (root / "docs/collective").mkdir(parents=True)
+        (root / "docs/collective/README.md").write_bytes(b"# Collective\n\nOptional body.\n")
+        (root / "docs/patterns/continuous-consolidation").mkdir(parents=True)
+        (root / "docs/patterns/continuous-consolidation/README.md").write_bytes(b"# Patterns\n\nPattern body.\n")
         rows.extend([
-            {"id": "prototype/collective-work/README.md", "source": "../optional/collective/README.md"},
+            {"id": "prototype/collective-work/README.md", "source": "../../docs/collective/README.md"},
             {"id": "prototype/patterns/continuous-consolidation/README.md",
-             "source": "../patterns/continuous-consolidation/README.md"},
+             "source": "../../docs/patterns/continuous-consolidation/README.md"},
         ])
     (core / "release/current_sources.json").write_text(
         json.dumps({"edition": "working-test", "bodies": rows}), encoding="utf-8"
@@ -67,7 +69,7 @@ def _build_minimal_bundle(root, *, include_siblings=False):
 
 
 def _write_peer_components(root, files):
-    companions = root / "companions"
+    companions = root / "src/managed_ai/companions"
     peer = companions / "peer"
     peer.mkdir(parents=True, exist_ok=True)
     manifest_files = {}
@@ -102,7 +104,7 @@ def _write_sample_domain(bundle):
                     "exposure": "available",
                     "id": "work-sample/guide.md",
                     "kind": "guide",
-                    "path": "domains/work-sample/sources/guide.md",
+                    "path": "sources/guide.md",
                     "sha256": _sha256(note_bytes),
                     "title": "Working sample",
                 }
@@ -119,7 +121,7 @@ def _write_sample_domain(bundle):
             "id": "work-sample",
             "requires_domains": [],
             "schemas": {},
-            "source_root": "../..",
+            "source_root": ".",
             "tools": [],
             "version": "1",
         },
@@ -134,16 +136,17 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             bundle = tmp / "working-release"
             shutil.copytree(
                 ENGINE,
-                bundle / "engine",
+                bundle / "src/managed_ai",
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "companions"),
+            )
+            shutil.copytree(
+                REPO / "docs",
+                bundle / "docs",
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
             )
-            for sibling in ("optional", "patterns"):
-                if (REPO / sibling).is_dir():
-                    shutil.copytree(
-                        REPO / sibling,
-                        bundle / sibling,
-                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-                    )
+            for root_file in ("LICENSE", "pyproject.toml"):
+                if (REPO / root_file).is_file():
+                    shutil.copy2(REPO / root_file, bundle / root_file)
             domain_json = _write_sample_domain(bundle)
             store = bundle / "stores/work"
             deployment = bundle / "deployments/work"
@@ -151,7 +154,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 [
                     sys.executable,
                     "-B",
-                    str(bundle / "engine/store/manage_store.py"),
+                    str(bundle / "src/managed_ai/store/manage_store.py"),
                     "--root",
                     str(store),
                     "init",
@@ -171,28 +174,28 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 [
                     sys.executable,
                     "-B",
-                    str(bundle / "engine/deployment/select_deployment.py"),
+                    str(bundle / "src/managed_ai/deployment/select_deployment.py"),
                     "--deployment",
                     str(deployment),
                     "init",
                     "--store",
                     str(store),
                     "--engine",
-                    str(bundle / "engine"),
+                    str(bundle / "src/managed_ai"),
                 ],
                 cwd=bundle,
                 check=True,
                 capture_output=True,
                 text=True,
             )
-            self.assertFalse((bundle / "companions").exists())
+            self.assertFalse((bundle / "src/managed_ai/companions").exists())
 
-            core = (bundle / "engine").resolve(strict=True)
+            core = (bundle / "src/managed_ai").resolve(strict=True)
             tree = PACKAGE["members"](bundle, core)
             native = {
-                name[len("engine/"):]: row
+                name[len("src/managed_ai/"):]: row
                 for name, row in tree.items()
-                if name.startswith("engine/") and name != "engine/MANIFEST.json"
+                if name.startswith("src/managed_ai/") and name != "src/managed_ai/MANIFEST.json"
             }
             PACKAGE["verify_bundle"](bundle, core, native, tree=tree)
 
@@ -214,8 +217,8 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             payload = json.loads(packed.stdout)
             self.assertEqual(payload["status"], "packaged")
             self.assertTrue((bundle / "MANIFEST.json").is_file())
-            self.assertTrue((bundle / "engine/MANIFEST.json").is_file())
-            self.assertTrue((bundle / "engine/SOURCES.md").is_file())
+            self.assertTrue((bundle / "src/managed_ai/MANIFEST.json").is_file())
+            self.assertTrue((bundle / "src/managed_ai/SOURCES.md").is_file())
             with zipfile.ZipFile(archive) as zf:
                 self.assertIsNone(zf.testzip())
                 extracted_parent = tmp / "extracted"
@@ -226,7 +229,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 [
                     sys.executable,
                     "-B",
-                    str(extracted / "engine/deployment/select_deployment.py"),
+                    str(extracted / "src/managed_ai/deployment/select_deployment.py"),
                     "--deployment",
                     str(extracted / "deployments/work"),
                     "status",
@@ -242,7 +245,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 [
                     sys.executable,
                     "-B",
-                    str(extracted / "engine/deployment/select_deployment.py"),
+                    str(extracted / "src/managed_ai/deployment/select_deployment.py"),
                     "--deployment",
                     str(extracted / "deployments/work"),
                     "system",
@@ -256,7 +259,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             self.assertEqual(json.loads(sys_status.stdout)["instance_id"], "working-release-test")
 
             # Also succeeds when companions/ exists without companions/peer/
-            pub = bundle / "companions/publication_review"
+            pub = bundle / "src/managed_ai/companions/publication_review"
             pub.mkdir(parents=True)
             (pub / "PUBLICATION.md").write_text("# Publication\n", encoding="utf-8")
             refreshed = subprocess.run(
@@ -281,12 +284,12 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             core = _build_minimal_bundle(bundle, include_siblings=True)
             cat = json.loads((core / "store/catalogue.json").read_text(encoding="utf-8"))
             by_id = {e["id"]: e for e in cat["entries"]}
-            self.assertEqual(by_id["guide"]["source_root_relative"], "../..")
-            self.assertEqual(by_id["guide"]["body_path"], "engine/guide.md")
-            self.assertEqual(by_id["prototype/collective-work/README.md"]["body_path"], "optional/collective/README.md")
+            self.assertEqual(by_id["guide"]["source_root_relative"], "../../..")
+            self.assertEqual(by_id["guide"]["body_path"], "docs/engine/guide.md")
+            self.assertEqual(by_id["prototype/collective-work/README.md"]["body_path"], "docs/collective/README.md")
             self.assertEqual(
                 by_id["prototype/patterns/continuous-consolidation/README.md"]["body_path"],
-                "patterns/continuous-consolidation/README.md",
+                "docs/patterns/continuous-consolidation/README.md",
             )
             archive = tmp / "minimal-working.zip"
             result = subprocess.run(
@@ -327,7 +330,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
 
             # Tampered component file fails before rewriting MANIFEST.json
             prior_manifest = (bundle / "MANIFEST.json").read_bytes()
-            (bundle / "companions/workbench/core/workbench_agent.py").write_bytes(b"AGENT = 2\n")
+            (bundle / "src/managed_ai/companions/workbench/core/workbench_agent.py").write_bytes(b"AGENT = 2\n")
             tampered = subprocess.run(
                 [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle), "--refresh-only"],
                 capture_output=True,
@@ -411,7 +414,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
-            pub = bundle / "Companions/publication_review"
+            pub = bundle / "src/managed_ai/Companions/publication_review"
             pub.mkdir(parents=True)
             (pub / "PUBLICATION.md").write_text("# Publication\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "expected companions, observed Companions"):
@@ -421,7 +424,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
             _write_peer_components(bundle, {"workbench/core/workbench_agent.py": b"AGENT = 1\n"})
-            rename_exact(bundle / "companions", "Companions")
+            rename_exact(bundle / "src/managed_ai/companions", "Companions")
             with self.assertRaisesRegex(ValueError, "expected companions, observed Companions"):
                 PACKAGE["verify_workbench_components"](bundle)
 
@@ -445,7 +448,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
             _write_peer_components(bundle, {"workbench/core/workbench_agent.py": b"AGENT = 1\n"})
-            rename_exact(bundle / "companions/workbench/core/workbench_agent.py", "Workbench_Agent.py")
+            rename_exact(bundle / "src/managed_ai/companions/workbench/core/workbench_agent.py", "Workbench_Agent.py")
             with self.assertRaisesRegex(
                 ValueError, "expected workbench/core/workbench_agent.py, observed workbench/core/Workbench_Agent.py"
             ):
@@ -455,7 +458,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
             _write_peer_components(bundle, {"workbench/controller/agent_runtime.py": b"RT = 1\n"})
-            rename_exact(bundle / "companions/workbench/controller", "Controller")
+            rename_exact(bundle / "src/managed_ai/companions/workbench/controller", "Controller")
             with self.assertRaisesRegex(
                 ValueError, "expected workbench/controller, observed workbench/Controller"
             ):
@@ -469,16 +472,16 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             _build_minimal_bundle(bundle)
             outside = tmp / "outside_peer"
             outside.mkdir()
-            (bundle / "companions").mkdir()
-            (bundle / "companions/peer").symlink_to(outside)
+            (bundle / "src/managed_ai/companions").mkdir()
+            (bundle / "src/managed_ai/companions/peer").symlink_to(outside)
             with self.assertRaisesRegex(ValueError, "ordinary files and directories"):
                 PACKAGE["verify_workbench_components"](bundle)
 
-            (bundle / "companions/peer").unlink()
+            (bundle / "src/managed_ai/companions/peer").unlink()
             _write_peer_components(bundle, {"workbench/core/workbench_agent.py": b"AGENT = 1\n"})
             ext_file = tmp / "ext.py"
             ext_file.write_bytes(b"AGENT = 1\n")
-            target = bundle / "companions/workbench/core/workbench_agent.py"
+            target = bundle / "src/managed_ai/companions/workbench/core/workbench_agent.py"
             target.unlink()
             target.symlink_to(ext_file)
             with self.assertRaisesRegex(ValueError, "ordinary files and directories"):
@@ -575,7 +578,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             core = _build_minimal_bundle(bundle)
-            guide = core / "guide.md"
+            guide = bundle / "docs/engine/guide.md"
             orig_lstat = Path.lstat
 
             def patched_lstat(path_self):
@@ -587,9 +590,9 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "ordinary canonical source required"):
                     REFRESH["render"](core)
 
-            # Traversal escaping above bundle root must be rejected
+            # Traversal escaping above bundle root (3 levels up from src/managed_ai) must be rejected
             (core / "release/current_sources.json").write_text(
-                json.dumps({"edition": "working-test", "bodies": [{"id": "guide", "source": "../../escape.md"}]}),
+                json.dumps({"edition": "working-test", "bodies": [{"id": "guide", "source": "../../../escape.md"}]}),
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "escapes allowed package root"):
@@ -728,21 +731,21 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 self.assertNotEqual(res_pkg_root.returncode, 0)
                 self.assertIn("ordinary files and directories", res_pkg_root.stderr)
 
-    def test_declarative_components_stamping_gitignore_and_allow_abbrev(self):
+    def test_declarative_components_stamping_license_pyproject_gitignore_and_allow_abbrev(self):
         with TemporaryDirectory() as temporary:
             tmp = Path(temporary)
             bundle = tmp / "bundle"
             _build_minimal_bundle(bundle)
-            # .gitignore in root & domains must be admitted cleanly (only .git is refused)
+            # LICENSE, pyproject.toml, and .gitignore must be admitted cleanly (only .git is refused)
+            (bundle / "LICENSE").write_text("MIT License\n", encoding="utf-8")
+            (bundle / "pyproject.toml").write_text('[project]\nname = "managed-ai"\n', encoding="utf-8")
             (bundle / ".gitignore").write_text("__pycache__/\n*.pyc\n", encoding="utf-8")
-            (bundle / "domains/sample").mkdir(parents=True)
-            (bundle / "domains/sample/.gitignore").write_text("__pycache__/\n", encoding="utf-8")
             # Declarative COMPONENTS.json (omitting "identity" in Git checkouts)
-            comp_file = bundle / "companions/workbench/core/io_utils.py"
+            comp_file = bundle / "src/managed_ai/companions/workbench/core/io_utils.py"
             comp_file.parent.mkdir(parents=True)
             comp_raw = b"IO = 1\n"
             comp_file.write_bytes(comp_raw)
-            peer = bundle / "companions/peer"
+            peer = bundle / "src/managed_ai/companions/peer"
             peer.mkdir(parents=True)
             _write_json(
                 peer / "COMPONENTS.json",
@@ -765,11 +768,17 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 stamped["files"]["workbench/core/io_utils.py"]["identity"],
                 {"bytes": len(comp_raw), "sha256": _sha256(comp_raw)},
             )
-            self.assertTrue((bundle / "engine/SOURCES.md").is_file())
+            self.assertTrue((bundle / "src/managed_ai/SOURCES.md").is_file())
             manifest = json.loads((bundle / "MANIFEST.json").read_text(encoding="utf-8"))
+            inner_manifest = json.loads((bundle / "src/managed_ai/MANIFEST.json").read_text(encoding="utf-8"))
+            self.assertIn("LICENSE", manifest["members"])
+            self.assertIn("pyproject.toml", manifest["members"])
             self.assertIn(".gitignore", manifest["members"])
-            self.assertIn("domains/sample/.gitignore", manifest["members"])
-            self.assertIn("engine/SOURCES.md", manifest["members"])
+            self.assertIn("src/managed_ai/SOURCES.md", manifest["members"])
+            self.assertEqual(
+                inner_manifest["members"]["companions/peer/COMPONENTS.json"],
+                manifest["members"]["src/managed_ai/companions/peer/COMPONENTS.json"],
+            )
             # W5-B11: allow_abbrev=False refuses abbreviated flags on package.py & refresh_guidance.py
             bad_pkg = subprocess.run(
                 [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle), "--ref"],
@@ -778,7 +787,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             )
             self.assertNotEqual(bad_pkg.returncode, 0)
             bad_ref = subprocess.run(
-                [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--ro", str(bundle / "engine")],
+                [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--ro", str(bundle / "src/managed_ai")],
                 capture_output=True,
                 text=True,
             )

@@ -16,7 +16,7 @@ Keep the original projection separate from its later interpretation. A review ca
 
 | Component | Contribution | Connection to the rest of this system |
 |---|---|---|
-| [Operating guide](GUIDE.md) and actual capable participant | Semantic projection, question development, proposal construction and judgment | The selected guide enters each new context. The participant applies it to the particular artifact; the tool does not infer that application from file delivery. |
+| [Operating guide](../../../src/managed_ai/store/GUIDE.md) and actual capable participant | Semantic projection, question development, proposal construction and judgment | The selected guide enters each new context. The participant applies it to the particular artifact; the tool does not infer that application from file delivery. |
 | `system.py`: request normalization and context composition | Selects records, sources, proposed artifacts and bounded derived views for an actual receiver | Calls the exact custody substrate and captures the producer/selection identities. Governing goal, field and obligation records remain visible. |
 | `system.py`: record and whole-goal owners | Retains expected-revision changes and explicit judgments | Ordinary artifact content remains open. Current whole-goal use depends on the goal revision, evidence and separate obligations; local queue state is insufficient. |
 | `composition.py` | Projects an explicitly supplied composition into relation observations and an open contribution field | Reads a nominated `g60-composition/1` record and its declared basis. It exposes supplied prerequisites, alternatives, missing qualification, interaction and omissions. It does not select the best work or execute it. |
@@ -44,7 +44,7 @@ python3 -B system.py --root ../my-ai-work compose --record explanation-system \
   --focus relation:claim-to-explanation --limit 6 --pair-limit 100
 ```
 
-For a selected deployment, use its stable `engine/deployment/select_deployment.py --deployment ... system` prefix. A view can also enter a normal context request:
+For a selected deployment, use its stable `src/managed_ai/deployment/select_deployment.py --deployment ... system` prefix. A view can also enter a normal context request:
 
 ```json
 {

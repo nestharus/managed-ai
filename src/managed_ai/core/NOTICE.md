@@ -1,3 +1,5 @@
 # Source notice
 
-This distribution contains model-produced Python code from the author's G60 project and a cleaned command interface and test harness. It does not bundle third-party source libraries or third-party datasets. The Python interpreter and optional build tools have their own licenses. This notice does not introduce a new license grant or change the author's ownership decisions.
+This distribution is licensed under the MIT License (Copyright (c) 2026 nestharus; see the repository root `LICENSE`).
+
+It consists of standard-library Python software developed with model assistance together with its command interface and test suite. It does not bundle third-party source libraries or third-party datasets; the Python runtime and optional build tools carry their own licenses.
