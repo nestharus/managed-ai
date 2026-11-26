@@ -550,32 +550,36 @@ def open_verified_index_view(store, *, max_workers: int = 16) -> VerifiedIndexVi
         return None
 
     try:
-        idents = store.ids()
+        raw_idents = store.ids()
+        # HeadIndex v3 slots are sorted by UTF-8 bare ID (head_index_bin.py:build_binary_image), whereas
+        # RecordStore.ids() preserves legacy <id>.json filename order; sort for O(N) merge-walk while
+        # keeping raw_idents on VerifiedIndexView.live_ids for exact unindexed status() order parity.
+        sorted_idents = sorted(raw_idents, key=lambda ident: ident.encode('utf-8'))
         overrides: dict[str, dict] = {}
-        if idents:
+        if sorted_idents:
             if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
                 with store.ex.open_workspace_dir('records') as records_fd:
                     pairs = chunk_map(
-                        idents,
+                        sorted_idents,
                         lambda chunk: _verify_view_posix_chunk(store, view, records_fd, chunk),
                         max_workers=min(max_workers, 8),
                     )
             else:
                 _, dir_str = validated_records_dir_win(store)
                 pairs = chunk_map(
-                    idents,
+                    sorted_idents,
                     lambda chunk: _verify_view_win_chunk(store, view, dir_str, chunk),
                     max_workers=min(max_workers, 8),
                 )
             overrides = dict(pairs)
 
-        if len(idents) == view.record_count and not view.has_deltas and not overrides:
+        if len(sorted_idents) == view.record_count and not view.has_deltas and not overrides:
             removed: set[str] = set()
         else:
-            live_set = set(idents)
+            live_set = set(sorted_idents)
             removed = {ident for ident in view.iter_ids() if ident not in live_set}
 
-        return VerifiedIndexView(view, live_ids=idents, overrides=overrides, removed=removed)
+        return VerifiedIndexView(view, live_ids=raw_idents, overrides=overrides, removed=removed)
     except BaseException:
         view.close()
         raise

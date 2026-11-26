@@ -461,6 +461,66 @@ class HeadIndexBinTests(unittest.TestCase):
         assert loaded is not None
         self.assertEqual(loaded[1], HEAD_INDEX_FORMAT)
 
+    def test_hyphenated_prefix_ids_sort_order_and_mmap_exact_base(self) -> None:
+        """C53-1 / P8-3-BUG: hyphenated prefix IDs preserve <id>.json ids() contract AND zero-copy mmap exact base."""
+        from unittest import mock
+
+        system = System(self.store)
+        with exclusive(system.ex.root / 'owner.lock'):
+            system.put({'id': 'goal-sub', 'kind': 'note', 'content': {'title': 'Goal Sub'}}, 0)
+            system.put({'id': 'c1', 'kind': 'note', 'content': {'title': 'Claim 1'}}, 0)
+            system.put({
+                'id': 'c1-evidence',
+                'kind': 'note',
+                'content': {'title': 'Claim 1 Evidence'},
+                'relations': [{'relation': 'supports', 'target': 'c1'}],
+            }, 0)
+
+        # Canonical <id>.json filename order (pinned by continuing_state_support census / test_f05):
+        # '-' (45) < '.' (46), so 'c1-evidence.json' precedes 'c1.json' and 'goal-sub.json' precedes 'goal.json'.
+        expected_order = ['c1-evidence', 'c1', 'goal-sub', 'goal']
+        self.assertEqual(system.record_store.ids(), expected_order)
+
+        # Unindexed status record list order before binary index exists.
+        st_unindexed = system.status()['records']
+        self.assertEqual([r['id'] for r in st_unindexed], expected_order)
+
+        with exclusive(system.ex.root / 'owner.lock'):
+            system.reindex()
+
+        # Zero-copy binary mmap verification sorts internally by UTF-8 bare ID -> exact base with zero overrides.
+        verified = system.record_store.open_verified_index_view()
+        self.assertIsNotNone(verified)
+        assert verified is not None
+        with verified:
+            self.assertTrue(verified.is_exact_base)
+            self.assertEqual(len(verified.overrides), 0)
+            self.assertEqual(verified.live_ids, expected_order)
+
+        # graph_query.lint() must execute the zero-copy _lint_mmap fast path, not all_entries().
+        with mock.patch.object(graph_query, '_lint_mmap', wraps=graph_query._lint_mmap) as lint_spy:
+            lt = graph_query.lint(system)
+        self.assertTrue(lt['indexed'])
+        self.assertGreaterEqual(lint_spy.call_count, 1)
+
+        # Indexed status() record order matches unindexed status() order identically.
+        st_indexed = system.status()['records']
+        self.assertEqual([r['id'] for r in st_indexed], expected_order)
+        self.assertEqual(st_indexed, st_unindexed)
+
+        # Defensive sort in open_verified_index_view handles an alternate store returning arbitrary unsorted ids().
+        orig_ids = system.record_store.ids
+        system.record_store.ids = lambda: ['goal', 'c1', 'goal-sub', 'c1-evidence']
+        try:
+            verified_unsorted = system.record_store.open_verified_index_view()
+            self.assertIsNotNone(verified_unsorted)
+            assert verified_unsorted is not None
+            with verified_unsorted:
+                self.assertTrue(verified_unsorted.is_exact_base)
+                self.assertEqual(len(verified_unsorted.overrides), 0)
+        finally:
+            system.record_store.ids = orig_ids
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

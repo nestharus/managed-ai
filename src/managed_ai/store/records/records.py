@@ -320,6 +320,7 @@ class RecordStore:
         records_dir = self.work / 'records'
         try:
             with os.scandir(records_dir) as entries:
+                # Preserve <id>.json filename sort order (pinned by continuing_state_support census/obligation_basis).
                 names = sorted(entry.name for entry in entries if entry.name.endswith('.json'))
         except FileNotFoundError:
             return []

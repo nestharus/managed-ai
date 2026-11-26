@@ -285,10 +285,12 @@ class System:
 
             needed_ids = [view.slot_id(slot) for slot in sorted(needed_slots)]
             full_by_id = {rec['id']: rec for rec in self.record_store.scan_records(needed_ids)}
-            return [
+            records = [
                 full_by_id[view.slot_id(slot)] if slot in needed_slots else view.slot_summary_fields(slot)
                 for slot in range(view.record_count)
             ]
+            records.sort(key=lambda r: r['id'] + '.json')
+            return records
 
         overrides = verified.overrides
         puts = view.delta_puts
