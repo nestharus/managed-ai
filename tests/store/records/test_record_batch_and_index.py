@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Wave 1 regression tests: LOCK_SH, admission backoff, single code_identity, HMAC index, put-batch, L5(1), AU1, SC3."""
 if __package__:
-    from .native_test_paths import APP, ENGINE, PRODUCT
+    from ..native_test_paths import APP, ENGINE, PRODUCT
 else:
-    from native_test_paths import APP, ENGINE, PRODUCT
+    from pathlib import Path as _Path
+    import sys as _sys
+    _repo = str(_Path(__file__).resolve().parents[3])
+    if _repo not in _sys.path:
+        _sys.path.insert(0, _repo)
+    from tests.store.native_test_paths import APP, ENGINE, PRODUCT
 import errno
 import json
 import os

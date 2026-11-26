@@ -12,9 +12,14 @@ from unittest import mock
 import zlib
 
 if __package__:
-    from .native_test_paths import ENGINE
+    from ..native_test_paths import ENGINE
 else:
-    from native_test_paths import ENGINE
+    from pathlib import Path as _Path
+    import sys as _sys
+    _repo = str(_Path(__file__).resolve().parents[3])
+    if _repo not in _sys.path:
+        _sys.path.insert(0, _repo)
+    from tests.store.native_test_paths import ENGINE
 
 from managed_ai.core.storage import (
     OCC_LIVE_DEFLATE,

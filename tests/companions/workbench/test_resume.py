@@ -15,7 +15,7 @@ for _p in (str(SRC_ROOT), str(REPO_ROOT)):
 
 from managed_ai.companions.workbench import durable_agent, inspect_config, resumable_workbench
 from managed_ai.companions.workbench.source_tools import SearchImplementation
-from tests.companions.workbench_fixtures import change_query_parser, search_layout
+from tests.companions.workbench._fixtures import change_query_parser, search_layout
 
 
 class SourceReplay(unittest.TestCase):

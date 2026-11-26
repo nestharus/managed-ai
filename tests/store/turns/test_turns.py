@@ -1,8 +1,13 @@
 """Reopen a native context after actual process exits at its two local owners."""
 if __package__:
-    from .native_test_paths import APP, ENGINE, PRODUCT, SRC
+    from ..native_test_paths import APP, ENGINE, PRODUCT, SRC
 else:
-    from native_test_paths import APP, ENGINE, PRODUCT, SRC
+    from pathlib import Path as _Path
+    import sys as _sys
+    _repo = str(_Path(__file__).resolve().parents[3])
+    if _repo not in _sys.path:
+        _sys.path.insert(0, _repo)
+    from tests.store.native_test_paths import APP, ENGINE, PRODUCT, SRC
 import json
 import os
 from pathlib import Path

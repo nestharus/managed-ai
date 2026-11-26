@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 if __package__:
-    from .native_test_paths import APP, ENGINE, PRODUCT
+    from ..native_test_paths import APP, ENGINE, PRODUCT
 else:
-    from native_test_paths import APP, ENGINE, PRODUCT
+    from pathlib import Path as _Path
+    import sys as _sys
+    _repo = str(_Path(__file__).resolve().parents[3])
+    if _repo not in _sys.path:
+        _sys.path.insert(0, _repo)
+    from tests.store.native_test_paths import APP, ENGINE, PRODUCT
 import copy
 import hashlib
 import json

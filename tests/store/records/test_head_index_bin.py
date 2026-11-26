@@ -9,9 +9,14 @@ from tempfile import TemporaryDirectory
 import unittest
 
 if __package__:
-    from .native_test_paths import ENGINE as _ENGINE
+    from ..native_test_paths import ENGINE as _ENGINE
 else:
-    from native_test_paths import ENGINE as _ENGINE
+    from pathlib import Path as _Path
+    import sys as _sys
+    _repo = str(_Path(__file__).resolve().parents[3])
+    if _repo not in _sys.path:
+        _sys.path.insert(0, _repo)
+    from tests.store.native_test_paths import ENGINE as _ENGINE
 
 _ = _ENGINE
 

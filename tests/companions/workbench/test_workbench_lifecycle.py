@@ -24,7 +24,7 @@ from managed_ai.companions.workbench import (
     source_tools,
     workbench_agent,
 )
-from tests.companions.workbench_fixtures import search_layout
+from tests.companions.workbench._fixtures import search_layout
 
 
 class WorkbenchWave4Tests(unittest.TestCase):

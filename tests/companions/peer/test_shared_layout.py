@@ -19,7 +19,7 @@ for _p in (str(SRC_ROOT), str(REPO_ROOT)):
 from managed_ai.companions.peer import peer_workbench
 from managed_ai.companions.workbench import source_tools
 from managed_ai.companions.workbench.source_tools import SearchImplementation, SourceService, identity
-from tests.companions.workbench_fixtures import change_query_parser, search_layout
+from tests.companions.workbench._fixtures import change_query_parser, search_layout
 
 
 class SharedLayout(unittest.TestCase):
