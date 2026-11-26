@@ -12,11 +12,18 @@ from managed_ai.core.formats import (
     validate_optional_format,
 )
 from managed_ai.core.storage import encode, read_bytes, read_json, sha, strict_json_loads
+from managed_ai.store.turns.view_chunks import (
+    hydrate_outside_view_records,
+    outside_view_record_count,
+    validate_outside_view_chunks_metadata,
+)
 
 ROLES = ("methods", "materials", "targets", "returns", "artifacts")
 
 
-def captured_view(exchange: Any, turn: str, request: dict[str, Any]) -> dict[str, Any]:
+def captured_view(
+    exchange: Any, turn: str, request: dict[str, Any], *, hydrate_outside: bool = True
+) -> dict[str, Any]:
     """Read only the full view referenced by this already validated packet."""
     prefix = ".system/turns/" + turn + "/"
     with exchange.objects.pack_session():
@@ -30,6 +37,9 @@ def captured_view(exchange: Any, turn: str, request: dict[str, Any]) -> dict[str
                 exchange.objects.read(binding["full_view_object"]), "view.json"
             )
             validate_optional_format(view, TURN_VIEW_FORMAT, "view.json")
+            if hydrate_outside:
+                return hydrate_outside_view_records(exchange.objects, view)
+            validate_outside_view_chunks_metadata(view)
             return view
 
         original = next(
@@ -40,6 +50,9 @@ def captured_view(exchange: Any, turn: str, request: dict[str, Any]) -> dict[str
 
         view = strict_json_loads(exchange.objects.read(original["sha256"]), "view.json")
         validate_optional_format(view, TURN_VIEW_FORMAT, "view.json")
+        if hydrate_outside:
+            return hydrate_outside_view_records(exchange.objects, view)
+        validate_outside_view_chunks_metadata(view)
         return view
 
 
@@ -186,7 +199,7 @@ def _build_explanation_units(
 def explain_context(exchange: Any, turn: str) -> dict[str, Any]:
     with exchange.objects.pack_session():
         directory, request = exchange.load(turn)
-        view = captured_view(exchange, turn, request)
+        view = captured_view(exchange, turn, request, hydrate_outside=False)
         binding = read_json(directory / "binding.json")
         validate_optional_format(binding, PACKET_BINDING_FORMAT, "binding.json")
 
@@ -238,8 +251,9 @@ def explain_context(exchange: Any, turn: str) -> dict[str, Any]:
             )
         },
         "outside_counts": {
-            k: len(view.get(k, []))
-            for k in ("outside_view_records", "outside_techniques", "outside_project_sources")
+            "outside_view_records": outside_view_record_count(view),
+            "outside_techniques": len(view.get("outside_techniques", [])),
+            "outside_project_sources": len(view.get("outside_project_sources", [])),
         },
         "provenance_scope": (
             "Recorded reasons come from actual capture additions. Older or unrecorded origins "

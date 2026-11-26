@@ -250,6 +250,10 @@ def _verify_captured_recovery(
     try:
         view_doc = system.view(turn)
         require(isinstance(view_doc, dict), "captured view must be an object")
+        require(
+            isinstance(view_doc.get("outside_view_records"), list),
+            "captured view outside_view_records must be a list",
+        )
 
         recovered = system.recover(turn)
         require(

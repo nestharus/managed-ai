@@ -89,6 +89,7 @@ TURN_PREPARATION_FORMAT = "managed-ai-turn-preparation/1"
 TURN_SELECTION_FORMAT = "managed-ai-turn-selection/1"
 TURN_EXPOSURE_FORMAT = "managed-ai-turn-exposure/1"
 TURN_VIEW_FORMAT = "managed-ai-turn-view/1"
+RECORD_ID_CHUNK_FORMAT = "managed-ai-record-id-chunk/1"
 
 
 REGISTRY: dict[str, str] = {
@@ -152,6 +153,7 @@ REGISTRY: dict[str, str] = {
     "turn_selection": TURN_SELECTION_FORMAT,
     "turn_exposure": TURN_EXPOSURE_FORMAT,
     "turn_view": TURN_VIEW_FORMAT,
+    "record_id_chunk": RECORD_ID_CHUNK_FORMAT,
 }
 
 

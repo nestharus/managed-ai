@@ -28,6 +28,7 @@ from managed_ai.store.query.information import Information
 from managed_ai.store.records.records import is_content_addressed_basis
 from managed_ai.store.turns.preparation_journal import TurnPreparation, feedback_id
 from managed_ai.store.turns.record_scope import RecordSelection, TurnScope, additional_basis
+from managed_ai.store.turns.view_chunks import compact_outside_view_records
 
 
 class TurnCapture:
@@ -338,35 +339,30 @@ class TurnCapture:
         return self._write_input(directory, "discovery-summary.json", encode(summary))
 
     def _working_view(
-        self,
-        directory: Path,
-        turn: str,
-        techniques: list[str],
-        view: dict[str, Any],
+        self, directory: Path, turn: str, techniques: list[str], view: dict[str, Any]
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        view_doc = dict(view, format=TURN_VIEW_FORMAT)
+        view_doc = compact_outside_view_records(
+            self.ex.objects, dict(view, format=TURN_VIEW_FORMAT)
+        )
         encoded = encode(view_doc)
         full_view = self._write_input(directory, "view.json", encoded)
-
-        exposure = {
-            k: v
-            for k, v in view.items()
-            if k
-            not in {
-                "outside_techniques",
-                "outside_project_sources",
-                "outside_record_basis",
-                "discovery",
-                "compositions",
-                "feedback_guard",
-                "inclusion_origins",
-            }
+        omitted_keys = {
+            "outside_view_records",
+            "outside_techniques",
+            "outside_project_sources",
+            "outside_record_basis",
+            "discovery",
+            "compositions",
+            "feedback_guard",
+            "inclusion_origins",
         }
+        exposure = {k: v for k, v in view.items() if k not in omitted_keys}
         exposure.update(
             format=TURN_EXPOSURE_FORMAT,
             full_view_object=self.ex.objects.put(encoded),
             full_view_path=full_view,
             full_view_recovery=self.command("view", turn),
+            outside_view_record_count=len(view["outside_view_records"]),
             outside_technique_count=len(view["outside_techniques"]),
             outside_project_source_count=len(view["outside_project_sources"]),
             outside_record_basis_count=len(view["outside_record_basis"]),
@@ -377,7 +373,6 @@ class TurnCapture:
                 "outside identities are recoverable, not read or applied."
             ),
         )
-
         return exposure, view_doc
 
     def _resolve_turn_selection(
