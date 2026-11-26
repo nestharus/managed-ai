@@ -9,12 +9,14 @@ import unittest
 from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-WORKBENCH_CORE = REPO_ROOT / 'companions/workbench/core'
-if str(WORKBENCH_CORE) not in sys.path:
-    sys.path.insert(0, str(WORKBENCH_CORE))
+SRC_ROOT = REPO_ROOT / 'src'
+WORKBENCH_CORE = SRC_ROOT / 'managed_ai/companions/workbench/core'
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
-from source_tools import encoded, identity
-from workbench_agent import Workbench
+from managed_ai.companions.workbench.core import source_tools
+from managed_ai.companions.workbench.core.source_tools import encoded, identity
+from managed_ai.companions.workbench.core.workbench_agent import Workbench
 
 
 class ReceiptPublication(unittest.TestCase):
@@ -42,7 +44,7 @@ class ReceiptPublication(unittest.TestCase):
             observations.append((next(iter(candidate['sources'])), self.service.receipts()))
             raise OSError('before replace')
 
-        with patch('source_tools.os.replace', side_effect=refuse):
+        with patch.object(source_tools.os, 'replace', side_effect=refuse):
             with self.assertRaisesRegex(OSError, 'before replace'):
                 self.read('one.md')
         failed, observed = observations[0]
@@ -57,7 +59,7 @@ class ReceiptPublication(unittest.TestCase):
         self.assert_reopens({failed, other})
 
     def test_identical_retry_writes_after_a_prepublication_fault(self):
-        with patch('source_tools.os.replace', side_effect=OSError('before replace')):
+        with patch.object(source_tools.os, 'replace', side_effect=OSError('before replace')):
             with self.assertRaisesRegex(OSError, 'before replace'):
                 self.read('one.md')
         receipt = self.read('one.md')
@@ -68,7 +70,7 @@ class ReceiptPublication(unittest.TestCase):
         self.read('one.md')
         index = self.service.db
         (self.service.root / 'two.md').write_text('A new observation.')
-        with patch('source_tools.os.replace', side_effect=OSError('before replace')):
+        with patch.object(source_tools.os, 'replace', side_effect=OSError('before replace')):
             with self.assertRaisesRegex(OSError, 'before replace'):
                 self.service.refresh()
         self.assertIs(self.service.db, index)
@@ -86,7 +88,7 @@ class ReceiptPublication(unittest.TestCase):
             replace(staging, destination)
             raise OSError('lost replace response')
 
-        with patch('source_tools.os.replace', side_effect=lose_response) as writes:
+        with patch.object(source_tools.os, 'replace', side_effect=lose_response) as writes:
             receipt = self.read('two.md')
             self.assertEqual(self.read('two.md'), receipt)
             self.assertEqual(writes.call_count, 1)
@@ -98,7 +100,7 @@ class ReceiptPublication(unittest.TestCase):
             replace(staging, destination)
             raise KeyboardInterrupt
 
-        with patch('source_tools.os.replace', side_effect=interrupt):
+        with patch.object(source_tools.os, 'replace', side_effect=interrupt):
             with self.assertRaises(KeyboardInterrupt):
                 self.read('one.md')
         first, = json.loads(self.service.ledger_path.read_bytes())['sources']
@@ -117,7 +119,7 @@ class ReceiptPublication(unittest.TestCase):
             replace(staging, destination)
             raise OSError('different postimage')
 
-        with patch('source_tools.os.replace', side_effect=publish_other_image):
+        with patch.object(source_tools.os, 'replace', side_effect=publish_other_image):
             with self.assertRaisesRegex(OSError, 'different postimage'):
                 self.read('two.md')
         self.assertIn(key, self.service.receipts()['sources'])
@@ -136,7 +138,7 @@ class ReceiptPublication(unittest.TestCase):
                 raise PermissionError('readback unavailable')
             return read_bytes(path)
 
-        with patch('source_tools.os.replace', side_effect=lose_response), patch.object(Path, 'read_bytes', unavailable):
+        with patch.object(source_tools.os, 'replace', side_effect=lose_response), patch.object(Path, 'read_bytes', unavailable):
             with self.assertRaisesRegex(OSError, 'readback unavailable'):
                 self.read('one.md')
         first, = json.loads(self.service.ledger_path.read_bytes())['sources']
@@ -148,10 +150,11 @@ class ReceiptPublication(unittest.TestCase):
         exported = self.service.receipts()
         self.assertEqual(set(exported['sources']), expected)
         self.assertEqual(path.read_bytes(), encoded(exported) + b'\n')
-        script = ("import json,sys; from workbench_agent import Workbench; "
+        script = ("import json,sys; sys.path.insert(0, sys.argv[3]); "
+                  "from managed_ai.companions.workbench.core.workbench_agent import Workbench; "
                   "w=Workbench(json.loads(sys.argv[1]),resume=True); "
                   "w.restore(json.loads(sys.argv[2])); print(json.dumps(w.source_service.receipts()))")
         raw = subprocess.check_output([sys.executable, '-B', '-c', script,
-                                       json.dumps(self.config), json.dumps(self.owner.checkpoint())],
-                                      cwd=WORKBENCH_CORE)
+                                       json.dumps(self.config), json.dumps(self.owner.checkpoint()),
+                                       str(SRC_ROOT)])
         self.assertEqual(json.loads(raw), exported)

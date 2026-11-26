@@ -8,12 +8,13 @@ import tempfile
 import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-COLLECTIVE_DIR = REPO_ROOT / 'optional/collective'
+SRC_ROOT = REPO_ROOT / 'src'
+COLLECTIVE_DIR = SRC_ROOT / 'managed_ai/optional/collective'
 MANAGE_CLI = COLLECTIVE_DIR / 'manage_collective.py'
-if str(COLLECTIVE_DIR) not in sys.path:
-    sys.path.insert(0, str(COLLECTIVE_DIR))
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
-from collective_store import contract, database
+from managed_ai.optional.collective.collective_store import contract, database
 
 
 class CollectiveHardeningTests(unittest.TestCase):
@@ -34,8 +35,8 @@ class CollectiveHardeningTests(unittest.TestCase):
     def test_refuses_database_inside_optional_collective_and_engine(self):
         for forbidden in (
             COLLECTIVE_DIR / 'forbidden.sqlite',
-            REPO_ROOT / 'engine/forbidden.sqlite',
-            REPO_ROOT / 'engine/host/forbidden.sqlite',
+            SRC_ROOT / 'managed_ai/forbidden.sqlite',
+            SRC_ROOT / 'managed_ai/host/forbidden.sqlite',
         ):
             with self.subTest(forbidden=str(forbidden)):
                 self.assertTrue(database.inside_product(forbidden, COLLECTIVE_DIR))

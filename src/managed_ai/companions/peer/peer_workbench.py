@@ -39,7 +39,10 @@ try:
         validate_peer_entry,
     )
 except ImportError:
-    from peer_protocol import (
+    _src_root = Path(__file__).resolve().parents[3]
+    if str(_src_root) not in sys.path:
+        sys.path.insert(0, str(_src_root))
+    from managed_ai.companions.peer.peer_protocol import (
         OWNER_STATUSES,
         REQUEST_SCHEMA,
         RETURN_SCHEMA,
@@ -68,6 +71,16 @@ COMPANIONS_ROOT = HERE.parent
 COUNT_KEYS = ("model_calls", "tool_calls", "peer_read_calls", "peer_read_bytes")
 CONTRACT_FILES = ("docs/PEER-CONTRACT.md",)
 _MODULES = None
+
+
+def _contract_file(name: str) -> Path:
+    local = HERE / name
+    if local.is_file():
+        return local
+    repo_doc = HERE.parents[3] / "docs/companions/peer" / name
+    if repo_doc.is_file():
+        return repo_doc
+    raise FileNotFoundError("Peer contract document is absent: " + str(repo_doc))
 
 
 def write_json(path, value):
@@ -491,15 +504,18 @@ def run_peer_turn(config, request, *, model=None):
         try:
             modules, manifest = components()
             contract = "\n\n".join(
-                "SOURCE " + Path(name).name + "\n\n" + (HERE / name).read_text(encoding="utf-8")
+                "SOURCE " + Path(name).name + "\n\n" + _contract_file(name).read_text(encoding="utf-8")
                 for name in CONTRACT_FILES
             )
             sources = dict(config["sources"])
             sources["peer-request"] = json.dumps(request, ensure_ascii=False, indent=2, allow_nan=False)
             sources["peer-workbench-contract"] = contract
             code_files = {
-                name: identity((HERE / name).read_bytes())
-                for name in ("peer_workbench.py", "peer_protocol.py", "COMPONENTS.json") + CONTRACT_FILES
+                **{
+                    name: identity((HERE / name).read_bytes())
+                    for name in ("peer_workbench.py", "peer_protocol.py", "COMPONENTS.json")
+                },
+                **{name: identity(_contract_file(name).read_bytes()) for name in CONTRACT_FILES},
             }
             source = modules["source_tools"].SourceService(
                 corpus,

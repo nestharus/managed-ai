@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 import json
 from pathlib import Path
+import sys
 
 try:
     from .config import load_controller as _load_controller
@@ -25,8 +26,11 @@ try:
         sha256_bytes,
     )
 except ImportError:
-    from config import load_controller as _load_controller
-    from io_utils import (
+    _src_root = Path(__file__).resolve().parents[4]
+    if str(_src_root) not in sys.path:
+        sys.path.insert(0, str(_src_root))
+    from managed_ai.companions.workbench.core.config import load_controller as _load_controller
+    from managed_ai.companions.workbench.core.io_utils import (
         BasisMismatchError,
         OwnerLockError,
         atomic_json,

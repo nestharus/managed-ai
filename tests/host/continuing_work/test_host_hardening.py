@@ -11,27 +11,33 @@ import time
 import unittest
 from unittest.mock import patch
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-HERE = REPO_ROOT / 'engine/host/continuing_work'
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SRC_ROOT = REPO_ROOT / 'src'
+HERE = SRC_ROOT / 'managed_ai/host/continuing_work'
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
-import capture_native
-import continuing_work
-from continuing_work import Host, MAX_EVENT_LINE_BYTES, MAX_EVENT_STREAM_BYTES
-import native_bridge
-import occurrence_files
+from managed_ai.host.continuing_work import (
+    capture_native,
+    continuing_work,
+    native_bridge,
+    occurrence_files,
+)
+from managed_ai.host.continuing_work.continuing_work import (
+    Host,
+    MAX_EVENT_LINE_BYTES,
+    MAX_EVENT_STREAM_BYTES,
+)
 
 ENGINE = (
-    REPO_ROOT / 'engine/store/manage_store.py'
-    if (REPO_ROOT / 'engine/store/manage_store.py').is_file()
+    SRC_ROOT / 'managed_ai/store/manage_store.py'
+    if (SRC_ROOT / 'managed_ai/store/manage_store.py').is_file()
     else REPO_ROOT / 'engine/runtime/manage_store.py'
 )
 
 
 def _native_engine_available() -> bool:
-    if not (REPO_ROOT / 'engine/store/manage_store.py').is_file():
-        # Stage 4.2 pre-merge split: engine/runtime/ has partial Wave 4 moves until Stage 4.3 pins the Wave 4 profile.
+    if not (SRC_ROOT / 'managed_ai/store/manage_store.py').is_file():
         try:
             capture_native.reviewed_engine(ENGINE)
             return True
@@ -62,7 +68,7 @@ class ContinuingWorkCrossPlatformTests(unittest.TestCase):
             "import sys, time",
             "from pathlib import Path",
             "sys.path.insert(0, sys.argv[1])",
-            "from occurrence_files import file_lock",
+            "from managed_ai.host.continuing_work.occurrence_files import file_lock",
             "with file_lock(Path(sys.argv[2])):",
             "    Path(sys.argv[3]).write_text('ready', encoding='utf-8')",
             "    deadline = time.monotonic() + 15",
@@ -70,7 +76,7 @@ class ContinuingWorkCrossPlatformTests(unittest.TestCase):
             "        time.sleep(0.05)",
         ])
         proc = subprocess.Popen(
-            [sys.executable, '-B', '-c', holder, str(HERE),
+            [sys.executable, '-B', '-c', holder, str(SRC_ROOT),
              str(lock_file), str(ready), str(release)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
@@ -128,10 +134,10 @@ class ContinuingWorkCrossPlatformTests(unittest.TestCase):
         threads = [threading.Thread(target=worker, args=(t,)) for t in range(3)]
         child_code = (
             "import sys; sys.path.insert(0, sys.argv[1]); "
-            "from continuing_work import Host; h = Host(sys.argv[2]); "
+            "from managed_ai.host.continuing_work.continuing_work import Host; h = Host(sys.argv[2]); "
             "[h.event('xplat-proc', {'seq': i, 'pad': 'p' * 120}) for i in range(15)]"
         )
-        proc = subprocess.Popen([sys.executable, '-B', '-c', child_code, str(HERE), str(self.host.root)])
+        proc = subprocess.Popen([sys.executable, '-B', '-c', child_code, str(SRC_ROOT), str(self.host.root)])
         for t in threads:
             t.start()
         for t in threads:
@@ -309,10 +315,10 @@ class ContinuingWorkHardening(unittest.TestCase):
         threads = [threading.Thread(target=worker, args=(t,)) for t in range(4)]
         child_code = (
             "import sys; sys.path.insert(0, sys.argv[1]); "
-            "from continuing_work import Host; h = Host(sys.argv[2]); "
+            "from managed_ai.host.continuing_work.continuing_work import Host; h = Host(sys.argv[2]); "
             "[h.event('proc-write', {'seq': i, 'pad': 'p' * 200}) for i in range(20)]"
         )
-        proc = subprocess.Popen([sys.executable, '-B', '-c', child_code, str(HERE), str(self.host.root)])
+        proc = subprocess.Popen([sys.executable, '-B', '-c', child_code, str(SRC_ROOT), str(self.host.root)])
         for t in threads:
             t.start()
         for t in threads:

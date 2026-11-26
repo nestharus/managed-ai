@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
+import importlib
 from importlib.machinery import EXTENSION_SUFFIXES
 import importlib.util
 import json
@@ -25,10 +26,15 @@ import stat
 import sys
 
 HERE = Path(__file__).resolve().parent
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
+SRC_ROOT = HERE.parents[2]
+if __package__ in (None, '') and str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
-from occurrence_files import check_unfollowed_ancestors, is_reparse_or_symlink, loads_strict
+from managed_ai.host.continuing_work.occurrence_files import (
+    check_unfollowed_ancestors,
+    is_reparse_or_symlink,
+    loads_strict,
+)
 
 COLOCATED_ENGINE_ROOT = HERE.parents[1]
 COLOCATED_ENGINE_ENTRY = COLOCATED_ENGINE_ROOT / 'store/manage_store.py'
@@ -36,7 +42,7 @@ EXPECTED_ENGINE_API = 'managed-ai-runtime/1'
 EXPECTED_DEPLOYMENT_API = 'agent-system-deployment/2'
 EXPECTED_STORE_SCHEMA = 'managed-ai-store/1'
 _SHA256_RE = re.compile(r'^[0-9a-f]{64}$')
-_CODE_ID_EXCLUDED_DIRS = frozenset({'tests', 'examples', 'patterns'})
+_CODE_ID_EXCLUDED_DIRS = frozenset({'tests', 'examples', 'patterns', 'companions', 'optional'})
 _NON_SOURCE_SUFFIXES = ('.pyc', '.pyo', '.pyd', '.so', *EXTENSION_SUFFIXES)
 
 # Frozen historical pre-Wave-4 engine/runtime/ profiles kept only for archival replay.
@@ -320,6 +326,79 @@ def _is_colocated_engine(resolved_entry: Path) -> bool:
     return resolved_entry == checked.resolve(strict=True)
 
 
+def _load_canonical_module(path: Path, engine_root: Path):
+    """Load store/system.py from a canonical src/managed_ai package (or legacy engine/ layout)."""
+    resolved_engine = engine_root.resolve()
+    init_file = resolved_engine / '__init__.py'
+    if init_file.is_file():
+        if resolved_engine == COLOCATED_ENGINE_ROOT.resolve():
+            src_root_str = str(resolved_engine.parent)
+            if src_root_str not in sys.path:
+                sys.path.insert(0, src_root_str)
+            return importlib.import_module('managed_ai.store.system')
+        # External managed_ai package copy (regardless of outer directory name):
+        # mount it as 'managed_ai' in an isolated sys.modules snapshot during load.
+        saved_path = list(sys.path)
+        saved_modules = {
+            name: sys.modules.pop(name)
+            for name in list(sys.modules)
+            if name == 'managed_ai' or name.startswith('managed_ai.')
+        }
+        try:
+            pkg_spec = importlib.util.spec_from_file_location(
+                'managed_ai',
+                init_file,
+                submodule_search_locations=[str(resolved_engine)],
+            )
+            if pkg_spec is None or pkg_spec.loader is None:
+                raise ValueError(PROFILE_ERROR)
+            pkg_mod = importlib.util.module_from_spec(pkg_spec)
+            sys.modules['managed_ai'] = pkg_mod
+            pkg_spec.loader.exec_module(pkg_mod)
+            module = importlib.import_module('managed_ai.store.system')
+            loaded_file = getattr(module, '__file__', None)
+            if not loaded_file or Path(loaded_file).resolve() != path.resolve():
+                raise ValueError(PROFILE_ERROR)
+            return module
+        finally:
+            sys.path[:] = saved_path
+            for name in list(sys.modules):
+                if name == 'managed_ai' or name.startswith('managed_ai.'):
+                    sys.modules.pop(name, None)
+            sys.modules.update(saved_modules)
+
+    engine_root_str = str(resolved_engine)
+    if engine_root_str in sys.path:
+        sys.path.remove(engine_root_str)
+    sys.path.insert(0, engine_root_str)
+    for mod_name in list(sys.modules):
+        if mod_name in ('core', 'store', 'deployment') or mod_name.startswith(('core.', 'store.', 'deployment.')):
+            mod = sys.modules.get(mod_name)
+            mod_file = getattr(mod, '__file__', None)
+            if mod_file:
+                try:
+                    if not Path(mod_file).resolve().is_relative_to(resolved_engine):
+                        sys.modules.pop(mod_name, None)
+                except OSError:
+                    pass
+            else:
+                sys.modules.pop(mod_name, None)
+    spec = importlib.util.spec_from_file_location('reviewed_capture_engine', path)
+    if spec is None or spec.loader is None:
+        raise ValueError(PROFILE_ERROR)
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(spec.name)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if previous is None:
+            sys.modules.pop(spec.name, None)
+        else:
+            sys.modules[spec.name] = previous
+    return module
+
+
 def qualify_engine(engine: Path, *, expected_profile: str | None = None,
                    deployment: Path | None = None) -> tuple[object, dict]:
     """Qualify and load a native implementation; refuse unqualified external engines before exec."""
@@ -356,40 +435,23 @@ def qualify_engine(engine: Path, *, expected_profile: str | None = None,
         else:
             raise ValueError(EXTERNAL_PROFILE_ERROR)
 
-    engine_root_str = str(engine_root)
-    if path.parent.name == 'store':
-        if engine_root_str in sys.path:
-            sys.path.remove(engine_root_str)
-        sys.path.insert(0, engine_root_str)
-        # Drop cached core/store/deployment modules loaded from a different engine root.
-        for mod_name in list(sys.modules):
-            if mod_name in ('core', 'store', 'deployment') or mod_name.startswith(('core.', 'store.', 'deployment.')):
-                mod = sys.modules.get(mod_name)
-                mod_file = getattr(mod, '__file__', None)
-                if mod_file:
-                    try:
-                        if not Path(mod_file).resolve().is_relative_to(engine_root.resolve()):
-                            sys.modules.pop(mod_name, None)
-                    except OSError:
-                        pass
-                else:
-                    sys.modules.pop(mod_name, None)
-    spec = importlib.util.spec_from_file_location('reviewed_capture_engine', path)
-    if spec is None or spec.loader is None:
-        raise ValueError(PROFILE_ERROR)
-    module = importlib.util.module_from_spec(spec)
-    previous = sys.modules.get(spec.name)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        if previous is None:
-            sys.modules.pop(spec.name, None)
-        else:
-            sys.modules[spec.name] = previous
-
     if layout == 'canonical':
+        module = _load_canonical_module(path, engine_root)
         _verify_canonical_contract(module)
+    else:
+        spec = importlib.util.spec_from_file_location('reviewed_capture_engine', path)
+        if spec is None or spec.loader is None:
+            raise ValueError(PROFILE_ERROR)
+        module = importlib.util.module_from_spec(spec)
+        previous = sys.modules.get(spec.name)
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            if previous is None:
+                sys.modules.pop(spec.name, None)
+            else:
+                sys.modules[spec.name] = previous
 
     info = {
         'profile': profile,

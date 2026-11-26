@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import subprocess
+import sys
 import time
 
 try:
@@ -23,8 +24,16 @@ try:
     )
     from .model_bridges import write_mailbox_response
 except ImportError:
-    from config import DEFAULT_CONTROLLER_DIR, build_model_transport, is_clean_relative_posix, load_controller
-    from io_utils import (
+    _src_root = Path(__file__).resolve().parents[4]
+    if str(_src_root) not in sys.path:
+        sys.path.insert(0, str(_src_root))
+    from managed_ai.companions.workbench.core.config import (
+        DEFAULT_CONTROLLER_DIR,
+        build_model_transport,
+        is_clean_relative_posix,
+        load_controller,
+    )
+    from managed_ai.companions.workbench.core.io_utils import (
         BasisMismatchError,
         atomic_bytes,
         atomic_json,
@@ -35,7 +44,7 @@ except ImportError:
         sha256_bytes,
         sync_dir,
     )
-    from model_bridges import write_mailbox_response
+    from managed_ai.companions.workbench.core.model_bridges import write_mailbox_response
 
 
 def inside(root, relative):
@@ -85,7 +94,10 @@ class Workbench:
             try:
                 from .source_tools import SourceService
             except ImportError:
-                from source_tools import SourceService
+                _src_root = Path(__file__).resolve().parents[4]
+                if str(_src_root) not in sys.path:
+                    sys.path.insert(0, str(_src_root))
+                from managed_ai.companions.workbench.core.source_tools import SourceService
             source_state = Path(config.get("source_state_dir", self.state / "source-service")).resolve()
             if source_state.is_relative_to(self.workspace):
                 raise ValueError("source_state_dir must be outside model-editable workspace")

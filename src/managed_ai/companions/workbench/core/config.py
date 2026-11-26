@@ -10,7 +10,10 @@ from types import ModuleType
 try:
     from .io_utils import canonical_bytes, loads_strict, pin_file, sha256_bytes
 except ImportError:
-    from io_utils import canonical_bytes, loads_strict, pin_file, sha256_bytes
+    _src_root = Path(__file__).resolve().parents[4]
+    if str(_src_root) not in sys.path:
+        sys.path.insert(0, str(_src_root))
+    from managed_ai.companions.workbench.core.io_utils import canonical_bytes, loads_strict, pin_file, sha256_bytes
 
 
 CORE_DIR = Path(__file__).resolve().parent
@@ -52,15 +55,26 @@ RESOLVE_FIELDS = frozenset({
 def default_search_paths(repo_root=None):
     """Return (entry_path, dependency_paths) for the bundled lexical search library."""
     if repo_root is None:
-        repo_root = CORE_DIR.parents[2]
-    engine = Path(repo_root) / "engine"
-    primary = engine / BUNDLED_SEARCH_ENTRY
-    if primary.exists() or primary.is_symlink():
-        return primary, [engine / rel for rel in BUNDLED_SEARCH_DEPS]
-    legacy = engine / _LEGACY_SEARCH_ENTRY
-    if legacy.exists() or legacy.is_symlink():
-        return legacy, [engine / rel for rel in _LEGACY_SEARCH_DEPS]
-    return primary, [engine / rel for rel in BUNDLED_SEARCH_DEPS]
+        engine = CORE_DIR.parents[2]
+        candidates = (
+            (engine, BUNDLED_SEARCH_ENTRY, BUNDLED_SEARCH_DEPS),
+            (engine / "engine", BUNDLED_SEARCH_ENTRY, BUNDLED_SEARCH_DEPS),
+            (engine / "engine", _LEGACY_SEARCH_ENTRY, _LEGACY_SEARCH_DEPS),
+        )
+    else:
+        base = Path(repo_root)
+        candidates = (
+            (base / "src/managed_ai", BUNDLED_SEARCH_ENTRY, BUNDLED_SEARCH_DEPS),
+            (base, BUNDLED_SEARCH_ENTRY, BUNDLED_SEARCH_DEPS),
+            (base / "engine", BUNDLED_SEARCH_ENTRY, BUNDLED_SEARCH_DEPS),
+            (base / "engine", _LEGACY_SEARCH_ENTRY, _LEGACY_SEARCH_DEPS),
+        )
+    for root, entry_rel, dep_rels in candidates:
+        candidate = root / entry_rel
+        if candidate.exists() or candidate.is_symlink():
+            return candidate, [root / rel for rel in dep_rels]
+    default_root, default_entry, default_deps = candidates[0]
+    return default_root / default_entry, [default_root / rel for rel in default_deps]
 
 
 def is_clean_relative_posix(value):
@@ -165,7 +179,10 @@ def build_model_transport(model_config):
     try:
         from .model_bridges import CommandModel, MailboxModel
     except ImportError:
-        from model_bridges import CommandModel, MailboxModel
+        _src_root = Path(__file__).resolve().parents[4]
+        if str(_src_root) not in sys.path:
+            sys.path.insert(0, str(_src_root))
+        from managed_ai.companions.workbench.core.model_bridges import CommandModel, MailboxModel
 
     if not isinstance(model_config, dict):
         raise ValueError("model configuration must be an object")

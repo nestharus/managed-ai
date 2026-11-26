@@ -1,4 +1,4 @@
-"""Temporary Wave 4 engine/library source layouts for workbench binding and replay tests."""
+"""Temporary src/managed_ai/library source layouts for workbench binding and replay tests."""
 from pathlib import Path
 
 
@@ -6,9 +6,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def search_layout(root):
-    """Build a Wave 4 engine/library/{reader,search,bundles} fixture under root."""
-    engine = REPO_ROOT / 'engine'
-    lib = root / 'engine/library'
+    """Build a src/managed_ai/library/{reader,search,bundles} fixture under root."""
+    engine = REPO_ROOT / 'src/managed_ai'
+    lib = root / 'src/managed_ai/library'
     for sub in ('reader', 'search', 'bundles'):
         (lib / sub).mkdir(parents=True, exist_ok=True)
     if (engine / 'library/reader/knowledge.py').is_file():

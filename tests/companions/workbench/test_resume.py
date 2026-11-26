@@ -7,16 +7,15 @@ import unittest
 from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-WORKBENCH_CORE = REPO_ROOT / 'companions/workbench/core'
-TESTS_COMPANIONS = REPO_ROOT / 'tests/companions'
-for _p in (str(WORKBENCH_CORE), str(TESTS_COMPANIONS)):
+SRC_ROOT = REPO_ROOT / 'src'
+WORKBENCH_CORE = SRC_ROOT / 'managed_ai/companions/workbench/core'
+for _p in (str(SRC_ROOT), str(REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import durable_agent
-import resumable_workbench
-from source_tools import SearchImplementation
-from workbench_fixtures import change_query_parser, search_layout
+from managed_ai.companions.workbench.core import durable_agent, inspect_config, resumable_workbench
+from managed_ai.companions.workbench.core.source_tools import SearchImplementation
+from tests.companions.workbench_fixtures import change_query_parser, search_layout
 
 
 class SourceReplay(unittest.TestCase):
@@ -164,7 +163,7 @@ class SourceReplay(unittest.TestCase):
             "import sys, time",
             "from pathlib import Path",
             "sys.path.insert(0, sys.argv[1])",
-            "import durable_agent",
+            "from managed_ai.companions.workbench.core import durable_agent",
             "with durable_agent._lock(Path(sys.argv[2])):",
             "    Path(sys.argv[3]).write_text('ready', encoding='utf-8')",
             "    deadline = time.monotonic() + 15",
@@ -172,7 +171,7 @@ class SourceReplay(unittest.TestCase):
             "        time.sleep(0.05)",
         ])
         proc = subprocess.Popen(
-            [sys.executable, "-B", "-c", holder, str(WORKBENCH_CORE),
+            [sys.executable, "-B", "-c", holder, str(SRC_ROOT),
              str(durable_dir), str(ready), str(release)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
@@ -201,7 +200,6 @@ class SourceReplay(unittest.TestCase):
 
     def test_command_code_and_inspect_config_agree_on_backslash_paths(self):
         import os
-        import inspect_config
 
         bin_dir = self.root / "bin"
         bin_dir.mkdir()

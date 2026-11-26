@@ -7,8 +7,10 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'optional/collective'))
-import record_evidence as evidence
+SRC_ROOT = Path(__file__).resolve().parents[3] / 'src'
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+from managed_ai.optional.collective import record_evidence as evidence
 
 
 class EvidenceUseTests(unittest.TestCase):

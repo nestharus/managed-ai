@@ -4,8 +4,10 @@ import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'optional/collective'))
-from collective import Collective, pin
+SRC_ROOT = Path(__file__).resolve().parents[3] / 'src'
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+from managed_ai.optional.collective.collective import Collective, pin
 
 
 class StagedReceiving(unittest.TestCase):

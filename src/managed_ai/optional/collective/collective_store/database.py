@@ -105,9 +105,13 @@ def inside_product(path, product):
     if (product.parent / 'CURRENT-RELEASE.json').is_file():
         if resolved == product.parent or resolved.is_relative_to(product.parent):
             return True
-    # When hosted under optional/collective inside the repository root, guard engine/ too.
+    # When hosted under src/managed_ai/optional/collective (or legacy optional/collective), guard package root too.
     if product.name == 'collective' and product.parent.name == 'optional':
-        engine_dir = product.parents[1] / 'engine'
+        pkg_root = product.parents[1]
+        if (pkg_root / 'CURRENT-RELEASE.json').is_file():
+            if resolved == pkg_root or resolved.is_relative_to(pkg_root):
+                return True
+        engine_dir = pkg_root / 'engine'
         if (engine_dir / 'CURRENT-RELEASE.json').is_file():
             if resolved == engine_dir or resolved.is_relative_to(engine_dir):
                 return True

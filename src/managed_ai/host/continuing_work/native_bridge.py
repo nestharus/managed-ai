@@ -9,7 +9,7 @@ import subprocess
 import sys
 from tempfile import NamedTemporaryFile
 
-from occurrence_files import (
+from managed_ai.host.continuing_work.occurrence_files import (
     atomic_bytes,
     check_unfollowed_ancestors,
     digest,

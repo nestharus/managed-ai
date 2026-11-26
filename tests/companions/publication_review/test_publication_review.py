@@ -10,13 +10,16 @@ import unittest
 from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-PUB_DIR = REPO_ROOT / 'companions/publication_review'
-if str(PUB_DIR) not in sys.path:
-    sys.path.insert(0, str(PUB_DIR))
+SRC_ROOT = REPO_ROOT / 'src'
+PUB_DIR = SRC_ROOT / 'managed_ai/companions/publication_review'
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
-import continuation_assessor
-import publication_observer
-import publication_review
+from managed_ai.companions.publication_review import (
+    continuation_assessor,
+    publication_observer,
+    publication_review,
+)
 
 
 class PublicationReviewWave4Tests(unittest.TestCase):

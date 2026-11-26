@@ -6,22 +6,24 @@ import sys
 import tempfile
 import unittest
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-HOST_DIR = REPO_ROOT / 'engine/host/continuing_work'
-if str(HOST_DIR) not in sys.path:
-    sys.path.insert(0, str(HOST_DIR))
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SRC_ROOT = REPO_ROOT / 'src'
+ENGINE_ROOT = SRC_ROOT / 'managed_ai'
+HOST_DIR = ENGINE_ROOT / 'host/continuing_work'
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
-from continuing_work import Host
+from managed_ai.host.continuing_work.continuing_work import Host
 
 HERE = HOST_DIR
 ENGINE = (
-    REPO_ROOT / 'engine/store/manage_store.py'
-    if (REPO_ROOT / 'engine/store/manage_store.py').is_file()
+    ENGINE_ROOT / 'store/manage_store.py'
+    if (ENGINE_ROOT / 'store/manage_store.py').is_file()
     else REPO_ROOT / 'engine/runtime/manage_store.py'
 )
 COLLECT_RETURNS = (
-    REPO_ROOT / 'engine/core/cli/collect_returns.py'
-    if (REPO_ROOT / 'engine/core/cli/collect_returns.py').is_file()
+    ENGINE_ROOT / 'core/cli/collect_returns.py'
+    if (ENGINE_ROOT / 'core/cli/collect_returns.py').is_file()
     else ENGINE.with_name('collect_returns.py')
 )
 # Drop a successful native reply before the host can log it or update its scope.
@@ -29,7 +31,7 @@ COLLECT_RETURNS = (
 CUT = """
 import os, sys
 sys.path.insert(0, sys.argv.pop(1))
-import continuing_work as host
+from managed_ai.host.continuing_work import continuing_work as host
 point = sys.argv.pop(1)
 call = host.Host.call
 event = host.Host.event
@@ -53,11 +55,15 @@ PUBLICATION_CUT = """
 import os, sys
 sys.path.insert(0, sys.argv.pop(1))
 try:
-    from store import system
-    from core.exchange import publication
+    from managed_ai.store import system
+    from managed_ai.core.exchange import publication
 except ImportError:
-    import system
-    from continuation_support.exchange import publication
+    try:
+        from store import system
+        from core.exchange import publication
+    except ImportError:
+        import system
+        from continuation_support.exchange import publication
 write = publication.write_json
 def cut(path, value):
     if value.get('phase') == 'complete':
@@ -87,7 +93,7 @@ class HandoffRecovery(unittest.TestCase):
                            'duty_ids': ['gauge'], 'outputs': list(outputs), 'sources': []})
 
     def cli(self, action, sid, spec, *, cut=None, code=0):
-        entry = ['-c', CUT, str(HERE), cut] if cut else [str(HERE / 'continuing_work.py')]
+        entry = ['-c', CUT, str(SRC_ROOT), cut] if cut else [str(HERE / 'continuing_work.py')]
         spec_path = self.base / 'command.json'
         spec_path.write_text(json.dumps(spec))
         result = subprocess.run([sys.executable, '-B', *entry, '--root', str(self.host.root),
@@ -226,7 +232,12 @@ class HandoffRecovery(unittest.TestCase):
         self.receive('old', cut='receive', code=73)
         before = self.host.inspect_native('old')['return']
         target = 'outputs/old/reading.md'
-        native_root = ENGINE.parent.parent if ENGINE.parent.name == 'store' else ENGINE.parent / 'native'
+        if ENGINE.parent.name == 'store' and ENGINE.parents[1].name == 'managed_ai':
+            native_root = SRC_ROOT
+        elif ENGINE.parent.name == 'store':
+            native_root = ENGINE.parent.parent
+        else:
+            native_root = ENGINE.parent / 'native'
         child = subprocess.run([sys.executable, '-B', '-c', PUBLICATION_CUT, str(native_root),
                                 '--root', str(self.host.native), 'adopt', 'old', '--target', target,
                                 '--reason', 'Publish the selected observation.'], capture_output=True)

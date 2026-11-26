@@ -5,6 +5,7 @@ import math
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 
 try:
@@ -17,7 +18,10 @@ try:
         sync_dir,
     )
 except ImportError:
-    from io_utils import (
+    _src_root = Path(__file__).resolve().parents[4]
+    if str(_src_root) not in sys.path:
+        sys.path.insert(0, str(_src_root))
+    from managed_ai.companions.workbench.core.io_utils import (
         atomic_bytes,
         atomic_json,
         canonical_bytes as encode,

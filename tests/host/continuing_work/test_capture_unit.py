@@ -10,22 +10,25 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
-HOST_DIR = REPO_ROOT / 'engine/host/continuing_work'
-if str(HOST_DIR) not in sys.path:
-    sys.path.insert(0, str(HOST_DIR))
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SRC_ROOT = REPO_ROOT / 'src'
+HOST_DIR = SRC_ROOT / 'managed_ai/host/continuing_work'
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
-import capture_native
-from continuing_work import Host
-import native_bridge
-import repair_custody
-import scope_lifecycle
+from managed_ai.host.continuing_work import (
+    capture_native,
+    native_bridge,
+    repair_custody,
+    scope_lifecycle,
+)
+from managed_ai.host.continuing_work.continuing_work import Host
 
 
 class Wave4HostArchitectureTests(unittest.TestCase):
     def test_native_sources_narrows_to_deployment_core_store_only(self):
         with tempfile.TemporaryDirectory() as tmp:
-            engine = Path(tmp) / 'engine'
+            engine = Path(tmp) / 'src/managed_ai'
             included = (
                 'deployment/select_deployment.py',
                 'core/attention.py',
@@ -38,6 +41,8 @@ class Wave4HostArchitectureTests(unittest.TestCase):
                 'tools/collect_returns.py',
                 'host/continuing_work/continuing_work.py',
                 'release/package.py',
+                'companions/peer/peer_harness.py',
+                'optional/collective/collective.py',
             )
             for rel in included + excluded:
                 path = engine / rel
@@ -47,7 +52,10 @@ class Wave4HostArchitectureTests(unittest.TestCase):
             native_path, programs = capture_native.native_sources(engine / 'store/manage_store.py')
             self.assertEqual(native_path, (engine / 'store/system.py').resolve())
             self.assertEqual(set(programs), set(included))
-            self.assertFalse(any(k.startswith(('library/', 'tools/', 'host/', 'release/')) for k in programs))
+            self.assertFalse(any(
+                k.startswith(('library/', 'tools/', 'host/', 'release/', 'companions/', 'optional/'))
+                for k in programs
+            ))
             self.assertNotIn('store/test_ignored.py', programs)
 
     def test_host_uses_composition_instead_of_mixin_inheritance(self):
@@ -149,7 +157,7 @@ class Wave4HostArchitectureTests(unittest.TestCase):
 
     # --- Wave 5 (#213 Part B): Co-located auto-admission + external --expected-profile / --deployment ---
     def test_colocated_engine_auto_admits_and_records_live_profile_and_git_commit(self):
-        entry = REPO_ROOT / 'engine/store/manage_store.py'
+        entry = SRC_ROOT / 'managed_ai/store/manage_store.py'
         module, info = capture_native.qualify_engine(entry)
         self.assertEqual(info['admission'], 'colocated')
         self.assertEqual(len(info['profile']), 64)
@@ -188,9 +196,11 @@ class Wave4HostArchitectureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             ext_engine = root / 'ext_engine'
+            ext_engine.mkdir()
+            shutil.copy2(SRC_ROOT / 'managed_ai/__init__.py', ext_engine / '__init__.py')
             for subdir in ('deployment', 'core', 'store'):
                 shutil.copytree(
-                    REPO_ROOT / 'engine' / subdir,
+                    SRC_ROOT / 'managed_ai' / subdir,
                     ext_engine / subdir,
                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc'),
                 )
@@ -229,9 +239,7 @@ class Wave4HostArchitectureTests(unittest.TestCase):
             store_dir = root / 'store'
             mod_prof.System.initialize(store_dir, {'contribution': 'Test external deployment qualification.'})
             dep_dir = root / 'deployment'
-            if str(REPO_ROOT / 'engine') not in sys.path:
-                sys.path.insert(0, str(REPO_ROOT / 'engine'))
-            from deployment.controller import Deployment
+            from managed_ai.deployment.controller import Deployment
             Deployment.initialize(dep_dir, store_dir, engine=ext_engine)
 
             # CLI checks: unqualified refused (rc=2), --expected-profile accepted (rc=0), --deployment accepted (rc=0)!
