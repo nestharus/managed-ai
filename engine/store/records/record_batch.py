@@ -310,6 +310,7 @@ def put_batch(system, spec):
             # Ensure earlier committed prefix entries are also fresh in HeadIndex even if resume fails again.
             for row in result['records']:
                 store._deferred_index_ids.append(row['id'])
+        in_flight_pending = False
         try:
             for op, candidate, previous, previous_raw, preserve_basis, fields_sha, ready_write, already_committed in prepared:
                 if already_committed is not None:
@@ -336,6 +337,7 @@ def put_batch(system, spec):
                     'expected_after_revision': before_rev + 1,
                     'expected_fields_sha256': fields_sha,
                 }
+                in_flight_pending = True
                 write_json(receipt, dict(result, complete=False, pending=pending))
                 written = store._replace(
                     candidate,
@@ -352,9 +354,11 @@ def put_batch(system, spec):
                     'after_revision': written['revision'],
                     'after_sha256': written['sha256'],
                 })
+                in_flight_pending = False
         except BaseException:
-            # Persist completed prefix before propagating any failure.
-            if result['records']:
+            # Persist completed prefix only when no op is in-flight; while in_flight_pending
+            # is True, the pre-commit receipt already durably recorded result['records'] + pending.
+            if result['records'] and not in_flight_pending:
                 try:
                     write_json(receipt, dict(result, complete=False))
                 except OSError:

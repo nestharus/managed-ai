@@ -220,6 +220,7 @@ class Wave5CoreTests(unittest.TestCase):
         }
         pub_out = self.base / 'published-lib'
         publish.publish(src_root, None, spec, 'ed-1', pub_out)
+        publish._sync_dir(pub_out)
         self.assertTrue((pub_out / 'catalogue.json').is_file())
         self.assertEqual([p.name for p in self.base.glob('.published-lib*')], [])
 
@@ -461,6 +462,51 @@ class Wave5CoreTests(unittest.TestCase):
             final_summaries = sys_obj.record_store.indexed_summaries()
             self.assertIsNotNone(final_summaries)
             self.assertIn('compact-65', final_summaries)
+
+    def test_c37_1_put_batch_preserves_pending_on_crash_inside_replace(self):
+        """C37-1: Crash inside store._replace after op #2 commits on disk keeps WAL pending so retry recovers."""
+        sys_obj = System(self.store)
+        with exclusive(self.store / 'exchange/owner.lock'):
+            r1 = sys_obj.put({'id': 'c37-rec-1', 'kind': 'note', 'content': {'v': 1}}, 0)
+            r2 = sys_obj.put({'id': 'c37-rec-2', 'kind': 'note', 'content': {'v': 1}}, 0)
+            spec = {
+                'format': 'managed-ai-batch-update/1',
+                'id': 'c37-1-batch',
+                'instance_id': 'w5-inst',
+                'pin_predecessors': True,
+                'operations': [
+                    {'id': 'c37-rec-1', 'expected_revision': 1, 'expected_sha256': r1['sha256'],
+                     'mode': 'patch', 'replace_content_fields': {'v': 2}},
+                    {'id': 'c37-rec-2', 'expected_revision': 1, 'expected_sha256': r2['sha256'],
+                     'mode': 'patch', 'replace_content_fields': {'v': 2}},
+                ],
+            }
+            orig_issue = sys_obj.record_store.receipts.issue
+
+            def crash_after_rec2_disk_write(path, body, raw):
+                if body['id'] == 'c37-rec-2':
+                    raise OSError('simulated post-commit failure inside _replace for op #2')
+                return orig_issue(path, body, raw)
+
+            with patch.object(sys_obj.record_store.receipts, 'issue', side_effect=crash_after_rec2_disk_write):
+                with self.assertRaisesRegex(OSError, 'simulated post-commit failure'):
+                    record_batch.put_batch(sys_obj, spec)
+
+            # Op #2 already committed rev 2 on disk; WAL receipt MUST preserve pending='c37-rec-2'
+            self.assertEqual(sys_obj.show('c37-rec-2')['revision'], 2)
+            receipt_path = self.store / 'work/.system/batches/c37-1-batch.json'
+            partial = json.loads(receipt_path.read_bytes())
+            self.assertFalse(partial['complete'])
+            self.assertEqual([row['id'] for row in partial['records']], ['c37-rec-1'])
+            self.assertEqual(partial.get('pending', {}).get('id'), 'c37-rec-2')
+
+            # Retrying the identical batch reconciles op #2 and completes cleanly
+            completed = record_batch.put_batch(sys_obj, spec)
+            self.assertTrue(completed['complete'])
+            self.assertNotIn('pending', completed)
+            self.assertEqual([row['id'] for row in completed['records']], ['c37-rec-1', 'c37-rec-2'])
+            self.assertEqual(sys_obj.show('c37-rec-1')['content'], {'v': 2})
+            self.assertEqual(sys_obj.show('c37-rec-2')['content'], {'v': 2})
 
 
 if __name__ == '__main__':

@@ -7,11 +7,14 @@ change accepted sources, select an engine or install executable knowledge.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path, PurePosixPath
 import posixpath
 import re
+import shutil
 import sys
 from urllib.parse import unquote, urlsplit
+import uuid
 
 sys.dont_write_bytecode = True
 if not __package__:
@@ -122,9 +125,6 @@ def _sync_dir(directory: Path) -> None:
 
 
 def publish(root, overlay, spec, edition, output):
-    import os
-    import shutil
-    import uuid
     raw, objects = construct(root, overlay, spec, edition)
     output = knowledge.ordinary(output)
     knowledge.need(output.parent.is_dir(), 'existing output parent required')
@@ -145,20 +145,10 @@ def publish(root, overlay, spec, edition, output):
                     stream.write(body)
                     stream.flush()
                     os.fsync(stream.fileno())
-            if os.name == 'posix':
-                for d in (staging / 'objects', staging):
-                    fd = os.open(d, os.O_RDONLY)
-                    try:
-                        os.fsync(fd)
-                    finally:
-                        os.close(fd)
+            _sync_dir(staging / 'objects')
+            _sync_dir(staging)
             os.rename(staging, output)
-            if os.name == 'posix':
-                fd = os.open(output.parent, os.O_RDONLY)
-                try:
-                    os.fsync(fd)
-                finally:
-                    os.close(fd)
+            _sync_dir(output.parent)
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
             raise
