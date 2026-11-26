@@ -83,15 +83,36 @@ def product(libraries, selection, edition):
 
 
 def export(libraries, selection, edition, output):
+    import uuid
     raw, objects = product(libraries, selection, edition)
     output = ordinary(output)
     need(output.parent.is_dir(), 'existing output parent required')
     need(not output.exists(), 'output exists; inspect it rather than overwrite')
-    with output.open('xb') as stream:
-        with zipfile.ZipFile(stream, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-            for name, data in sorted({'catalogue.json': raw, **objects}.items()):
-                info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0)); info.compress_type = zipfile.ZIP_DEFLATED
-                info.external_attr = 0o100644 << 16; archive.writestr(info, data)
+    temp = output.with_name('.' + output.name + '.' + uuid.uuid4().hex + '.partial')
+    try:
+        with temp.open('xb') as stream:
+            with zipfile.ZipFile(stream, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+                for name, data in sorted({'catalogue.json': raw, **objects}.items()):
+                    info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0)); info.compress_type = zipfile.ZIP_DEFLATED
+                    info.external_attr = 0o100644 << 16; archive.writestr(info, data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if os.name == 'posix':
+            try:
+                os.link(temp, output)
+            except FileExistsError:
+                raise ValueError('output exists; inspect it rather than overwrite') from None
+            except OSError:
+                need(not output.exists(), 'output exists; inspect it rather than overwrite')
+                os.replace(temp, output)
+        else:
+            try:
+                os.rename(temp, output)
+            except FileExistsError:
+                raise ValueError('output exists; inspect it rather than overwrite') from None
+        _sync_directory(output.parent)
+    finally:
+        temp.unlink(missing_ok=True)
     return inspect_bundle(output)
 
 

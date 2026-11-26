@@ -131,7 +131,7 @@ def scan_obligation(product: Path, root: Path, ident: str):
 if __name__ == '__main__':
     _ensure_engine_path(ENGINE_ROOT)
     from core.storage import AdmissionContended
-    cli = argparse.ArgumentParser(description=__doc__)
+    cli = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     cli.add_argument('product', type=Path)
     cli.add_argument('root', type=Path)
     cli.add_argument('record')

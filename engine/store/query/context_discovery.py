@@ -9,13 +9,22 @@ later context, not a claim that a receiving participant has read their bodies.
 from __future__ import annotations
 
 from collections import deque
+from contextlib import nullcontext
+import copy
+import errno
 import hashlib
 import json
-import sys
+import os
 from pathlib import Path, PurePosixPath
-
+import stat
+import sys
 
 from core.formats import DISCOVERY_FORMAT as FORMAT
+from core.ownership import packet_id
+from core.storage import _OPEN_RO_NOFOLLOW, is_ordinary_file_stat
+from store.protocol.inputs import parse_input_bytes
+from store.records.head_index import extract_content_record_links
+from store.records.records import RecordStore
 PROJECT_CONTEXT_BYTES = 2 * 1024 * 1024
 SCOPES = ('records', 'project', 'techniques')
 PREFIX_SCOPE = {'record': 'records', 'project': 'project', 'technique': 'techniques'}
@@ -187,18 +196,45 @@ class Discovery:
         self.incoming = None
         self.lexical_nomination = None
         self.saturated = set()
-        self._inventory()
-        if self.req['anchors']:
-            self._traverse()
-        if self.req['query'].strip() or not self.req['anchors']:
-            self._lexical()
-        all_candidates = list(self.candidates.values())
-        shown = all_candidates[:self.req['limit']]
-        selectors = {key: [] for key in SELECTOR.values()}
-        for candidate in shown:
-            self._selector(candidate)
-            for key, values in (candidate.get('selector') or {}).items():
-                selectors[key].extend(v for v in values if v not in selectors[key])
+        self._records_fd = None
+        self._records_dir_str = None
+        self._project_selection_copy = (
+            copy.deepcopy(self.projects.current.get('selection'))
+            if self.projects.current is not None else None
+        )
+        self._catalogue_snapshot_copy = None
+
+        use_fast_records = (
+            'records' in self.req['scopes']
+            and type(self.records).size is RecordStore.size
+            and type(self.records).read is RecordStore.read
+            and (self.records.work / 'records').is_dir()
+        )
+        fd_ctx = nullcontext(None)
+        if use_fast_records:
+            if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
+                fd_ctx = self.records.ex.open_workspace_dir('records')
+            else:
+                _, self._records_dir_str = self.records._validated_records_dir_win()
+
+        with fd_ctx as records_fd:
+            self._records_fd = records_fd
+            try:
+                self._inventory()
+                if self.req['anchors']:
+                    self._traverse()
+                if self.req['query'].strip() or not self.req['anchors']:
+                    self._lexical()
+                all_candidates = list(self.candidates.values())
+                shown = all_candidates[:self.req['limit']]
+                selectors = {key: [] for key in SELECTOR.values()}
+                for candidate in shown:
+                    self._selector(candidate)
+                    for key, values in (candidate.get('selector') or {}).items():
+                        selectors[key].extend(v for v in values if v not in selectors[key])
+            finally:
+                self._records_fd = None
+                self._records_dir_str = None
         omitted = [c['ref'] for c in all_candidates[self.req['limit']:]]
         if omitted:
             self.saturated.add('result-limit')
@@ -235,9 +271,9 @@ class Discovery:
             'search_mode': ('anchor-neighborhood-and-lexical' if self.req['anchors'] and self.req['query'].strip()
                             else 'anchor-neighborhood' if self.req['anchors'] else
                             'lexical' if self.req['query'].strip() else 'inventory'),
-            'project_selection': None if project is None else project.get('selection'),
+            'project_selection': copy.deepcopy(self._project_selection_copy),
             'project_manifest_sha256': None if project is None else project.get('selection', {}).get('manifest_sha256'),
-            'catalogue_snapshot': None if self.catalogue is None else self.catalogue.get('snapshot'),
+            'catalogue_snapshot': copy.deepcopy(self._catalogue_snapshot_copy),
             'catalogue_metadata_sha256': None if self.catalogue is None else digest(canonical(self.catalogue)),
             'record_membership_sha256': digest(canonical(self.by_scope['records'])),
             'binding_scope': ('Catalogue metadata digest uses sorted compact UTF-8 JSON. Record membership '
@@ -247,14 +283,14 @@ class Discovery:
             'scope': SCOPE,
         }
         result = {
-            'format': FORMAT, 'request': self.req, 'candidates': shown,
+            'format': FORMAT, 'request': copy.deepcopy(self.req), 'candidates': shown,
             'context_request': {k: v for k, v in selectors.items() if v},
             'context_request_scope': ('Candidate selectors only: not automatically applicable, read by a '
                                       'participant, or authorized for an effect. Retain this discovery '
                                       'report and compare each expected source identity when preparing '
                                       'a later context. A changed source needs an explicit current use.'),
-            'source_bindings': {c['ref']: c['source'] for c in shown},
-            'examined_bodies': self.body_info,
+            'source_bindings': {c['ref']: copy.deepcopy(c['source']) for c in shown},
+            'examined_bodies': {k: dict(v) for k, v in self.body_info.items()},
             'coverage': coverage,
             'ordering': ('Requested anchors and bounded breadth-first relations, then lexical '
                          + self.req['scan_order'] + ' order; not a relevance ranking.'),
@@ -282,9 +318,7 @@ class Discovery:
                 else:
                     recovery['input_needed'] = 'Supply a ranked query of at most 2048 UTF-8 bytes without NUL.'
                 result['recovery'] = recovery
-        # The occurrence must not share mutable identity dictionaries with the
-        # live deployment/catalogue or caller's subsequent edits.
-        return json.loads(canonical(result))
+        return result
 
     def _inventory(self):
         if 'records' in self.req['scopes']:
@@ -295,11 +329,9 @@ class Discovery:
         if 'project' in self.req['scopes']:
             for row in sorted(self.projects.current['project_files'], key=lambda r: r['path']):
                 name = row['path']
-                parts = PurePosixPath(name)
-                from pathlib import PureWindowsPath
                 if (not isinstance(name, str) or not name or '\0' in name or '\\' in name
-                        or parts.is_absolute() or '..' in parts.parts or PureWindowsPath(name).drive
-                        or any(len(part) >= 2 and part[1] == ':' for part in name.split('/'))):
+                        or name.startswith('/') or (len(name) >= 2 and name[1] == ':')
+                        or any(part == '..' or (len(part) >= 2 and part[1] == ':') for part in name.split('/'))):
                     raise ValueError('invalid accepted-project member path')
                 ref = 'project:' + name
                 if ref in self.entries:
@@ -308,6 +340,7 @@ class Discovery:
                 self.by_scope['project'].append(ref)
         if 'techniques' in self.req['scopes']:
             self.catalogue = self.techniques.index()
+            self._catalogue_snapshot_copy = copy.deepcopy(self.catalogue.get('snapshot'))
             entries = self.catalogue.get('entries', [])
             if not isinstance(entries, list):
                 raise ValueError('catalogue entries must be a list')
@@ -359,6 +392,71 @@ class Discovery:
         self.examined_bytes += count
         return True
 
+    def _read_record_bounded(self, ref, ident):
+        """Read and verify one hot record in a single open/stat under the discovery byte budget."""
+        if self._records_fd is not None:
+            filename = packet_id(ident) + '.json'
+            full_path = self.records.work / 'records' / filename
+            try:
+                fd = os.open(filename, _OPEN_RO_NOFOLLOW, dir_fd=self._records_fd)
+            except FileNotFoundError:
+                byte_limit = self.records.size(ident)
+                if not self._budget_bytes(ref, byte_limit):
+                    return None
+                return self.records.read(ident, byte_limit=byte_limit)
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
+                    raise ValueError(f'ordinary JSON file required: {full_path}') from None
+                raise
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError(f'ordinary JSON file required: {full_path}')
+                byte_limit = info.st_size
+                if not self._budget_bytes(ref, byte_limit):
+                    os.close(fd)
+                    fd = -1
+                    return None
+                stream = os.fdopen(fd, 'rb')
+                fd = -1
+            except BaseException:
+                if fd >= 0:
+                    os.close(fd)
+                raise
+            with stream:
+                raw = stream.read(byte_limit + 1)
+            if len(raw) > byte_limit:
+                raise ValueError(f'input exceeds {byte_limit} bytes: {full_path}')
+            record = parse_input_bytes(raw, full_path)
+            self.records._verify_record(ident, record, raw)
+            return record, raw
+        if self._records_dir_str is not None:
+            filename = packet_id(ident) + '.json'
+            full_str = self._records_dir_str + os.sep + filename
+            try:
+                info = os.lstat(full_str)
+            except FileNotFoundError:
+                byte_limit = self.records.size(ident)
+                if not self._budget_bytes(ref, byte_limit):
+                    return None
+                return self.records.read(ident, byte_limit=byte_limit)
+            if not is_ordinary_file_stat(info):
+                raise ValueError(f'ordinary JSON file required: {full_str}')
+            byte_limit = info.st_size
+            if not self._budget_bytes(ref, byte_limit):
+                return None
+            with open(full_str, 'rb') as stream:
+                raw = stream.read(byte_limit + 1)
+            if len(raw) > byte_limit:
+                raise ValueError(f'input exceeds {byte_limit} bytes: {full_str}')
+            record = parse_input_bytes(raw, Path(full_str))
+            self.records._verify_record(ident, record, raw)
+            return record, raw
+        byte_limit = self.records.size(ident)
+        if not self._budget_bytes(ref, byte_limit):
+            return None
+        return self.records.read(ident, byte_limit=byte_limit)
+
     def _inspect(self, ref):
         if ref in self.loaded:
             return self.loaded[ref]
@@ -372,31 +470,32 @@ class Discovery:
         entry = self.entries[ref]
         scope, ident = entry['scope'], entry['id']
         if scope == 'records':
-            byte_limit = self.records.size(ident)
-            if not self._budget_bytes(ref, byte_limit):
+            loaded = self._read_record_bounded(ref, ident)
+            if loaded is None:
                 return None
-            record, raw = self.records.read(ident, byte_limit=byte_limit)
+            record, raw = loaded
+            raw_sha = digest(raw)
             self.bodies[ref] = raw.decode('utf-8')
-            self.body_info[ref] = {'bytes': len(raw), 'sha256': digest(raw), 'verified': True, 'text': True}
+            self.body_info[ref] = {'bytes': len(raw), 'sha256': raw_sha, 'verified': True, 'text': True}
             if not self.req['include_inactive'] and record.get('active') is False:
                 self._skip(ref, 'inactive-record')
                 return None
             source = {'scope': scope, 'id': ident, 'format': record.get('format'),
                       'revision': record['revision'], 'record_sha256': record['sha256'],
-                      'body_sha256': digest(raw), 'bytes': len(raw)}
+                      'body_sha256': raw_sha, 'bytes': len(raw)}
             metadata = ' '.join(str(record.get(k, '')) for k in ('id', 'kind'))
             value = {'ref': ref, 'scope': scope, 'id': ident, 'source': source,
                      'title': ident, 'metadata': metadata, 'record': record}
         elif scope == 'project':
             row = entry['row']
             source = {'scope': scope, 'path': ident, 'sha256': row['sha256'], 'bytes': row['bytes'],
-                      'selection': self.projects.current.get('selection')}
+                      'selection': copy.deepcopy(self._project_selection_copy)}
             value = {'ref': ref, 'scope': scope, 'id': ident, 'source': source,
                      'title': ident, 'metadata': ident}
         else:
             row = entry['row']
             source = {'scope': scope, 'id': ident, 'sha256': row['sha256'], 'bytes': row['bytes'],
-                      'catalogue_snapshot': self.catalogue.get('snapshot'),
+                      'catalogue_snapshot': copy.deepcopy(self._catalogue_snapshot_copy),
                       'source_root': row.get('source_root'), 'source_path': row.get('source_path')}
             metadata = ' '.join(str(row.get(k, '')) for k in ('id', 'title', 'kind', 'family', 'source_path', 'purpose'))
             value = {'ref': ref, 'scope': scope, 'id': ident, 'source': source,
@@ -575,7 +674,6 @@ class Discovery:
                 self.edge_keys.add(key)
                 self.edges.append(edge)
         if self.req.get('include_content_links') and isinstance(record.get('content'), dict):
-            from store.records.head_index import extract_content_record_links
             content_links = extract_content_record_links(record['content'])
             syn_index = len(record.get('relations', []))
             budget_hit = False

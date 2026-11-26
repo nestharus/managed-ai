@@ -42,9 +42,26 @@ def _resolve_store_entry(product: Path) -> Path:
     return product / 'store' / 'manage_store.py'
 
 
+def _strict_json_loads(raw: bytes | str, label: str = 'JSON'):
+    text = raw.decode('utf-8') if isinstance(raw, (bytes, bytearray)) else raw
+
+    def unique_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f'duplicate JSON key {key!r}: {label}')
+            result[key] = value
+        return result
+
+    def reject_constant(token):
+        raise ValueError(f'nonfinite JSON constant {token!r}: {label}')
+
+    return json.loads(text, object_pairs_hook=unique_keys, parse_constant=reject_constant)
+
+
 def _error_code(exc: NativeError) -> str | None:
     try:
-        parsed = json.loads(str(exc))
+        parsed = _strict_json_loads(str(exc), 'native error')
     except (ValueError, TypeError):
         return None
     return parsed.get('code') if isinstance(parsed, dict) else None
@@ -60,10 +77,10 @@ class Contact:
         if payload is not None:
             self.spec.write_text(json.dumps(payload, ensure_ascii=False, allow_nan=False), encoding='utf-8')
         proc = subprocess.run([sys.executable, '-B', str(self.system), '--root', str(self.state), *map(str, args)],
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, encoding='utf-8')
         if proc.returncode:
             raise NativeError(proc.stderr.strip())
-        return json.loads(proc.stdout)
+        return _strict_json_loads(proc.stdout, 'native stdout')
 
     def open(self, order):
         return self.run('inquiry', 'open', '--spec', self.spec, payload=order)
@@ -135,25 +152,27 @@ class Contact:
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__)
+    p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     p.add_argument('product', type=Path, help='extracted G60-system-use directory')
     p.add_argument('state', type=Path, help='existing native state, or empty destination for init')
     cmds = p.add_subparsers(dest='command', required=True)
-    cmds.add_parser('init').add_argument('goal')
-    cmds.add_parser('open').add_argument('order', type=Path)
-    att = cmds.add_parser('return')
+    cmds.add_parser('init', allow_abbrev=False).add_argument('goal')
+    cmds.add_parser('open', allow_abbrev=False).add_argument('order', type=Path)
+    att = cmds.add_parser('return', allow_abbrev=False)
     att.add_argument('ticket', type=Path, help='JSON stdout of open')
     att.add_argument('account', type=Path)
     att.add_argument('raw', type=Path)
-    ctx = cmds.add_parser('context')
+    ctx = cmds.add_parser('context', allow_abbrev=False)
     ctx.add_argument('scope')
     ctx.add_argument('turn')
-    cmds.add_parser('status').add_argument('scope')
-    cmds.add_parser('stages').add_argument('scope')
+    cmds.add_parser('status', allow_abbrev=False).add_argument('scope')
+    cmds.add_parser('stages', allow_abbrev=False).add_argument('scope')
     a = p.parse_args()
 
     def load(path):
-        return json.loads(path.read_bytes())
+        value = _strict_json_loads(path.read_bytes(), str(path))
+        need(isinstance(value, dict), f'JSON object required: {path}')
+        return value
 
     with TemporaryDirectory() as scratch:
         c = Contact(a.product, a.state, scratch)

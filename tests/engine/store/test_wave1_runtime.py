@@ -499,7 +499,7 @@ class Wave1RuntimeTests(unittest.TestCase):
                     if path == receipt_path and value.get('pending', {}).get('id') == expected_id:
                         saw_pending['flag'] = True
                         return orig_write(path, value)
-                    if path == receipt_path and saw_pending['flag'] and 'pending' not in value:
+                    if path == receipt_path and saw_pending['flag']:
                         raise OSError(f'simulated crash after commit of {expected_id}')
                     return orig_write(path, value)
 

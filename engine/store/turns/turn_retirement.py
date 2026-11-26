@@ -30,6 +30,7 @@ from core.storage import (
     MAX_BYTES,
     encode,
     is_ordinary_dir_stat,
+    is_ordinary_file_stat,
     is_reparse_or_symlink,
     now,
     open_directory,
@@ -119,90 +120,71 @@ def _read_strict_file(path: Path, limit: int = MAX_BYTES) -> dict[str, Any]:
     return strict_json(read_bytes(path, limit))
 
 
-def _evaluate_turn(
-    system,
-    turn: str,
-    turn_dir: Path,
-    *,
-    record_refs: dict[str, list[dict[str, Any]]],
-    record_scan_errors: list[str],
-    packet_refs: dict[str, list[dict[str, str]]],
-    packet_scan_errors: list[str],
-    attention_refs: dict[str, list[dict[str, str]]],
-    attention_error: str | None,
-    interp_refs: dict[str, list[dict[str, str]]],
-    interp_errors: list[str],
-    uncommitted_refs: dict[str, list[dict[str, str]]],
-    uncommitted_errors: list[str],
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    reasons: list[str] = []
-    details: dict[str, Any] = {}
+def _lstat_or_none(path: Path) -> os.stat_result | None:
+    try:
+        return path.lstat()
+    except FileNotFoundError:
+        return None
 
-    def refuse(code: str, detail: Any = None) -> None:
-        if code not in reasons:
-            reasons.append(code)
-        if detail is not None:
-            details[code] = detail
 
-    # Working directory structure check (no symlinks / special entries).
-    file_count, total_bytes, dir_sha, dir_issues, file_hashes, dir_paths = _scan_turn_directory(turn_dir)
-    if dir_issues:
-        refuse('working_dir_unsafe_entries', dir_issues)
-
-    # Guard (a): Packet exists, validates cleanly, and has a strict validated return.json.
+def _check_packet_and_return(system, turn: str, refuse) -> tuple[Path, dict | None, dict | None, dict | None]:
+    """Guard (a): Packet exists, validates cleanly, and has a strict validated return.json."""
     packet_dir = system.ex.directory(turn)
     staged_dir = system.ex.prepared_directory(turn)
-    if staged_dir.exists() or staged_dir.is_symlink():
+    if _lstat_or_none(staged_dir) is not None:
         refuse('staged_preparation_present', str(staged_dir.name))
 
     binding = None
     request = None
     returned = None
-    if packet_dir.is_symlink() or not packet_dir.is_dir():
+    pkt_info = _lstat_or_none(packet_dir)
+    if pkt_info is None or not is_ordinary_dir_stat(pkt_info):
         refuse('packet_missing')
+        return packet_dir, binding, request, returned
+
+    try:
+        binding = _read_strict_file(packet_dir / 'binding.json')
+        request = _read_strict_file(packet_dir / 'request.json')
+        loaded_dir, loaded_req = system.ex.load(turn)
+        require(loaded_dir == packet_dir and loaded_req == request,
+                'loaded packet differs from strict request')
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        refuse('packet_invalid', str(exc))
+        return packet_dir, None, None, None
+
+    try:
+        outcome = transport_outcome(system.ex, packet_dir, request)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        refuse('transport_outcome_unreadable', str(exc))
+        outcome = None
+    if outcome is not None:
+        refuse('terminal_without_return', outcome.get('reason'))
+
+    return_path = packet_dir / 'return.json'
+    ret_info = _lstat_or_none(return_path)
+    if ret_info is None or not is_ordinary_file_stat(ret_info):
+        refuse('missing_return')
     else:
         try:
-            binding = _read_strict_file(packet_dir / 'binding.json')
-            request = _read_strict_file(packet_dir / 'request.json')
-            loaded_dir, loaded_req = system.ex.load(turn)
-            require(loaded_dir == packet_dir and loaded_req == request,
-                    'loaded packet differs from strict request')
+            returned = _read_strict_file(return_path)
+            system.ex.validate_return(packet_dir, returned)
+            require(returned.get('packet') == turn
+                    and returned.get('request_sha256') == binding['request_sha256'],
+                    'return binding differs from packet request')
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            refuse('packet_invalid', str(exc))
-            binding = None
-            request = None
+            refuse('invalid_return', str(exc))
+            returned = None
+    return packet_dir, binding, request, returned
 
-        if request is not None:
-            try:
-                outcome = transport_outcome(system.ex, packet_dir, request)
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                refuse('transport_outcome_unreadable', str(exc))
-                outcome = None
-            if outcome is not None:
-                refuse('terminal_without_return', outcome.get('reason'))
 
-            return_path = packet_dir / 'return.json'
-            if return_path.is_symlink() or not return_path.is_file():
-                refuse('missing_return')
-            else:
-                try:
-                    returned = _read_strict_file(return_path)
-                    system.ex.validate_return(packet_dir, returned)
-                    require(returned.get('packet') == turn
-                            and returned.get('request_sha256') == binding['request_sha256'],
-                            'return binding differs from packet request')
-                except (OSError, ValueError, KeyError, TypeError) as exc:
-                    refuse('invalid_return', str(exc))
-                    returned = None
-
-    # Guard (b): Clean preparation state AND 100% of declared targets returned and fully published.
-    draft_dir = turn_dir / 'attention-draft'
-    if draft_dir.exists() or draft_dir.is_symlink():
+def _check_publications(turn: str, turn_dir: Path, packet_dir: Path, binding, request, returned, refuse):
+    """Guard (b): Clean preparation state AND 100% of declared targets returned and fully published."""
+    if _lstat_or_none(turn_dir / 'attention-draft') is not None:
         refuse('uncommitted_attention_draft')
 
     prep_path = turn_dir / 'preparation.json'
     prep_state = None
-    if prep_path.exists() or prep_path.is_symlink():
+    if _lstat_or_none(prep_path) is not None:
         try:
             prep_state = _read_strict_file(prep_path)
             phase = prep_state.get('phase')
@@ -256,8 +238,20 @@ def _evaluate_turn(
         if unpublished:
             refuse('unpublished_targets', unpublished)
         complete_targets = [t for t in declared_targets if t in complete_set]
+    return prep_state, declared_targets, complete_targets
 
-    # Guard (c): No live structural reference from records, cross-turn packets, Attention, interpretations, or uncommitted turns.
+
+def _check_live_references(
+    turn: str,
+    refuse,
+    *,
+    record_refs, record_scan_errors,
+    packet_refs, packet_scan_errors,
+    attention_refs, attention_error,
+    interp_refs, interp_errors,
+    uncommitted_refs, uncommitted_errors,
+) -> None:
+    """Guard (c): No live structural reference from records, packets, Attention, interps, or uncommitted turns."""
     if turn in record_refs:
         refuse('referenced_by_records', record_refs[turn])
     if record_scan_errors:
@@ -279,161 +273,212 @@ def _evaluate_turn(
     if uncommitted_errors:
         refuse('uncommitted_turn_scan_uncertain', uncommitted_errors)
 
-    # Guard (d): 100% of captured bodies/objects remain recoverable in exchange/objects & exchange/packets/<turn>.
-    if request is not None and returned is not None:
+
+def _check_working_copy_integrity(
+    system, turn: str, turn_dir: Path, binding, request, returned,
+    prep_state, declared_targets: list[str],
+    dir_issues: list[str], file_hashes: dict[str, str], dir_paths: list[str], refuse,
+) -> None:
+    """Guard (d): Verify 100% captured recoverability and working-copy byte correspondence."""
+    try:
+        view_doc = system.view(turn)
+        require(isinstance(view_doc, dict), 'captured view must be an object')
+        recovered = system.recover(turn)
+        require(recovered.get('request_sha256') == binding['request_sha256']
+                and recovered.get('context_sha256') == binding['context_sha256'],
+                'recovered context binding differs')
+        explained = system.explain_context(turn)
+        require(explained.get('request_sha256') == binding['request_sha256']
+                and explained.get('context_sha256') == binding['context_sha256'],
+                'explained context binding differs')
+        system.ex.objects.read(returned['reply_sha256'], retained=True,
+                               expected_bytes=returned['reply_bytes'])
+        for proposal in returned.get('proposals', []):
+            system.ex.objects.read(proposal['sha256'], retained=True,
+                                   expected_bytes=proposal['bytes'])
+        discovery_prefix = f'{TURNS_RELATIVE}/{turn}/discovery-summary.json'
+        disc_entry = next((r for r in request.get('materials', []) if r.get('path') == discovery_prefix), None)
+        if disc_entry is not None and disc_entry.get('sha256'):
+            disc_summary = strict_json(system.ex.objects.read(disc_entry['sha256'], retained=True))
+            if disc_summary.get('report_object'):
+                system.ex.objects.read(disc_summary['report_object'], retained=True)
+        if isinstance(prep_state, dict) and prep_state.get('feedback_object'):
+            system.ex.objects.read(prep_state['feedback_object'], retained=True)
+        att_state = system.attention._load()
+        fb_id = feedback_id(turn)
+        if fb_id in att_state.get('feedbacks', {}):
+            system.attention.inspect(fb_id)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        refuse('captured_recovery_failed', str(exc))
+
+    if dir_issues:
+        return
+
+    turn_prefix = f'{TURNS_RELATIVE}/{turn}/'
+    expected_captured: dict[str, str] = {}
+    brief_row = request.get('brief')
+    for row in ([brief_row] if isinstance(brief_row, dict) else []) + list(request.get('methods', [])) + list(request.get('materials', [])):
+        if not isinstance(row, dict):
+            continue
+        row_path = row.get('path')
+        row_sha = row.get('sha256')
+        if isinstance(row_path, str) and row_path.startswith(turn_prefix) and isinstance(row_sha, str):
+            expected_captured[row_path[len(turn_prefix):]] = row_sha
+
+    full_view_object = None
+    exp_sha = expected_captured.get('exposure.json')
+    if exp_sha:
         try:
-            view_doc = system.view(turn)
-            require(isinstance(view_doc, dict), 'captured view must be an object')
-            recovered = system.recover(turn)
-            require(recovered.get('request_sha256') == binding['request_sha256']
-                    and recovered.get('context_sha256') == binding['context_sha256'],
-                    'recovered context binding differs')
-            explained = system.explain_context(turn)
-            require(explained.get('request_sha256') == binding['request_sha256']
-                    and explained.get('context_sha256') == binding['context_sha256'],
-                    'explained context binding differs')
-            system.ex.objects.read(returned['reply_sha256'], retained=True,
-                                   expected_bytes=returned['reply_bytes'])
-            for proposal in returned.get('proposals', []):
-                system.ex.objects.read(proposal['sha256'], retained=True,
-                                       expected_bytes=proposal['bytes'])
-            discovery_prefix = f'{TURNS_RELATIVE}/{turn}/discovery-summary.json'
-            disc_entry = next((r for r in request.get('materials', []) if r.get('path') == discovery_prefix), None)
-            if disc_entry is not None and disc_entry.get('sha256'):
-                disc_summary = strict_json(system.ex.objects.read(disc_entry['sha256'], retained=True))
-                if disc_summary.get('report_object'):
-                    system.ex.objects.read(disc_summary['report_object'], retained=True)
-            if isinstance(prep_state, dict) and prep_state.get('feedback_object'):
-                system.ex.objects.read(prep_state['feedback_object'], retained=True)
-            att_state = system.attention._load()
-            fb_id = feedback_id(turn)
-            if fb_id in att_state.get('feedbacks', {}):
-                system.attention.inspect(fb_id)
+            exp_doc = strict_json(system.ex.objects.read(exp_sha, retained=True))
+            full_view_object = exp_doc.get('full_view_object')
+            if isinstance(full_view_object, str):
+                expected_captured['view.json'] = full_view_object
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            refuse('captured_recovery_failed', str(exc))
+            refuse('captured_recovery_failed', f'exposure.json verification failed: {exc}')
 
-        # Verify every working file/dir under work/.system/turns/<turn>/ is either a byte-identical
-        # captured packet/view object or a verified TurnPreparation/TurnCapture bookkeeping file.
-        if not dir_issues:
-            turn_prefix = f'{TURNS_RELATIVE}/{turn}/'
-            expected_captured: dict[str, str] = {}
-            brief_row = request.get('brief')
-            for row in ([brief_row] if isinstance(brief_row, dict) else []) + list(request.get('methods', [])) + list(request.get('materials', [])):
-                if not isinstance(row, dict):
-                    continue
-                row_path = row.get('path')
-                row_sha = row.get('sha256')
-                if isinstance(row_path, str) and row_path.startswith(turn_prefix) and isinstance(row_sha, str):
-                    expected_captured[row_path[len(turn_prefix):]] = row_sha
+    modified_files: list[str] = []
+    uncaptured_entries: list[str] = []
+    allowed_files: set[str] = set()
 
-            full_view_object = None
-            exp_sha = expected_captured.get('exposure.json')
-            if exp_sha:
-                try:
-                    exp_doc = strict_json(system.ex.objects.read(exp_sha, retained=True))
-                    full_view_object = exp_doc.get('full_view_object')
-                    if isinstance(full_view_object, str):
-                        expected_captured['view.json'] = full_view_object
-                except (OSError, ValueError, KeyError, TypeError) as exc:
-                    refuse('captured_recovery_failed', f'exposure.json verification failed: {exc}')
+    for rel, expected_sha in sorted(expected_captured.items()):
+        if rel in file_hashes:
+            allowed_files.add(rel)
+            if file_hashes[rel] != expected_sha:
+                modified_files.append(rel)
 
-            modified_files: list[str] = []
-            uncaptured_entries: list[str] = []
-            allowed_files: set[str] = set()
+    if 'preparation.json' in file_hashes:
+        allowed_files.add('preparation.json')
+        if not (isinstance(prep_state, dict)
+                and prep_state.get('phase') == 'sealed'
+                and prep_state.get('feedback') == feedback_id(turn)
+                and prep_state.get('request_sha256') == binding['request_sha256']
+                and prep_state.get('context_sha256') == binding['context_sha256']):
+            modified_files.append('preparation.json')
 
-            for rel, expected_sha in sorted(expected_captured.items()):
-                if rel in file_hashes:
-                    allowed_files.add(rel)
-                    if file_hashes[rel] != expected_sha:
-                        modified_files.append(rel)
-
-            # Verify known uncaptured bookkeeping files written by TurnPreparation / TurnCapture.
-            if 'preparation.json' in file_hashes:
-                allowed_files.add('preparation.json')
-                if not (isinstance(prep_state, dict)
-                        and prep_state.get('phase') == 'sealed'
-                        and prep_state.get('feedback') == feedback_id(turn)
-                        and prep_state.get('request_sha256') == binding['request_sha256']
-                        and prep_state.get('context_sha256') == binding['context_sha256']):
-                    modified_files.append('preparation.json')
-
+    work_request_doc = None
+    if 'request.json' in file_hashes:
+        allowed_files.add('request.json')
+        try:
+            work_request_doc = _read_strict_file(turn_dir / 'request.json')
+            require(isinstance(work_request_doc, dict)
+                    and set(work_request_doc) <= _TURN_REQUEST_ALLOWED_FIELDS
+                    and work_request_doc.get('consumer') == request.get('consumer')
+                    and work_request_doc.get('targets') == declared_targets
+                    and work_request_doc.get('returns') == [r['origin']['packet'] for r in request.get('returns', [])]
+                    and work_request_doc.get('artifacts') == [
+                        f"{r['origin']['packet']}:{r['origin']['proposal_path']}"
+                        for r in request.get('artifacts', [])
+                    ],
+                    'working request.json disagrees with packet request')
+            brief_sha = expected_captured.get('brief.md')
+            if brief_sha and isinstance(work_request_doc.get('task'), str):
+                brief_text = system.ex.objects.read(brief_sha, retained=True).decode('utf-8')
+                expected_prefix = '# Current receiving task\n\n' + work_request_doc['task'] + '\n'
+                require(brief_text.startswith(expected_prefix),
+                        'working request.json task disagrees with captured brief.md')
+        except (OSError, ValueError, KeyError, TypeError, UnicodeDecodeError):
+            modified_files.append('request.json')
             work_request_doc = None
-            if 'request.json' in file_hashes:
-                allowed_files.add('request.json')
+
+    if 'selection.json' in file_hashes:
+        allowed_files.add('selection.json')
+        try:
+            sel_doc = _read_strict_file(turn_dir / 'selection.json')
+            exact_fields(sel_doc, {'request', 'view', 'attention_feedback'}, {'format'}, 'selection.json')
+            validate_optional_format(sel_doc, TURN_SELECTION_FORMAT, 'selection.json')
+            require(sel_doc['attention_feedback'] == feedback_id(turn),
+                    'selection.json feedback differs')
+            require(isinstance(full_view_object, str)
+                    and sha(encode(sel_doc['view'])) == full_view_object,
+                    'selection.json view differs from captured full_view_object')
+            if work_request_doc is not None:
+                require(encode(sel_doc['request']) == encode(work_request_doc),
+                        'selection.json request differs from working request.json')
+        except (OSError, ValueError, KeyError, TypeError):
+            modified_files.append('selection.json')
+    elif 'request.json' in file_hashes:
+        modified_files.append('request.json')
+
+    if 'attention-spec.json' in file_hashes:
+        if isinstance(work_request_doc, dict) and 'attention' in work_request_doc:
+            allowed_files.add('attention-spec.json')
+            expected_att_sha = sha(encode(work_request_doc['attention']))
+            if file_hashes['attention-spec.json'] != expected_att_sha:
+                modified_files.append('attention-spec.json')
+            else:
                 try:
-                    work_request_doc = _read_strict_file(turn_dir / 'request.json')
-                    require(isinstance(work_request_doc, dict)
-                            and set(work_request_doc) <= _TURN_REQUEST_ALLOWED_FIELDS
-                            and work_request_doc.get('consumer') == request.get('consumer')
-                            and work_request_doc.get('targets') == declared_targets
-                            and work_request_doc.get('returns') == [r['origin']['packet'] for r in request.get('returns', [])]
-                            and work_request_doc.get('artifacts') == [
-                                f"{r['origin']['packet']}:{r['origin']['proposal_path']}"
-                                for r in request.get('artifacts', [])
-                            ],
-                            'working request.json disagrees with packet request')
-                    brief_sha = expected_captured.get('brief.md')
-                    if brief_sha and isinstance(work_request_doc.get('task'), str):
-                        brief_text = system.ex.objects.read(brief_sha, retained=True).decode('utf-8')
-                        expected_prefix = '# Current receiving task\n\n' + work_request_doc['task'] + '\n'
-                        require(brief_text.startswith(expected_prefix),
-                                'working request.json task disagrees with captured brief.md')
-                except (OSError, ValueError, KeyError, TypeError, UnicodeDecodeError):
-                    modified_files.append('request.json')
-                    work_request_doc = None
+                    system.ex.objects.read(expected_att_sha, retained=True)
+                except (OSError, ValueError):
+                    modified_files.append('attention-spec.json')
+        else:
+            uncaptured_entries.append('attention-spec.json')
 
-            if 'selection.json' in file_hashes:
-                allowed_files.add('selection.json')
-                try:
-                    sel_doc = _read_strict_file(turn_dir / 'selection.json')
-                    exact_fields(sel_doc, {'request', 'view', 'attention_feedback'}, {'format'}, 'selection.json')
-                    validate_optional_format(sel_doc, TURN_SELECTION_FORMAT, 'selection.json')
-                    require(sel_doc['attention_feedback'] == feedback_id(turn),
-                            'selection.json feedback differs')
-                    require(isinstance(full_view_object, str)
-                            and sha(encode(sel_doc['view'])) == full_view_object,
-                            'selection.json view differs from captured full_view_object')
-                    if work_request_doc is not None:
-                        require(encode(sel_doc['request']) == encode(work_request_doc),
-                                'selection.json request differs from working request.json')
-                except (OSError, ValueError, KeyError, TypeError):
-                    modified_files.append('selection.json')
-            elif 'request.json' in file_hashes:
-                # Without selection.json tying request.json to full_view_object, refuse unretained edits.
-                modified_files.append('request.json')
+    for rel in sorted(file_hashes):
+        if rel not in allowed_files:
+            uncaptured_entries.append(rel)
 
-            if 'attention-spec.json' in file_hashes:
-                if (isinstance(work_request_doc, dict) and 'attention' in work_request_doc):
-                    allowed_files.add('attention-spec.json')
-                    expected_att_sha = sha(encode(work_request_doc['attention']))
-                    if file_hashes['attention-spec.json'] != expected_att_sha:
-                        modified_files.append('attention-spec.json')
-                    else:
-                        try:
-                            system.ex.objects.read(expected_att_sha, retained=True)
-                        except (OSError, ValueError):
-                            modified_files.append('attention-spec.json')
-                else:
-                    uncaptured_entries.append('attention-spec.json')
+    allowed_dirs: set[str] = set()
+    for rel in allowed_files:
+        parent = posixpath.dirname(rel)
+        while parent:
+            allowed_dirs.add(parent)
+            parent = posixpath.dirname(parent)
+    for rel_dir in sorted(dir_paths):
+        if rel_dir not in allowed_dirs:
+            uncaptured_entries.append(rel_dir + '/')
 
-            for rel in sorted(file_hashes):
-                if rel not in allowed_files:
-                    uncaptured_entries.append(rel)
+    if modified_files:
+        refuse('working_dir_modified_after_capture', sorted(set(modified_files)))
+    if uncaptured_entries:
+        refuse('uncaptured_working_files', sorted(set(uncaptured_entries)))
 
-            allowed_dirs: set[str] = set()
-            for rel in allowed_files:
-                parent = posixpath.dirname(rel)
-                while parent:
-                    allowed_dirs.add(parent)
-                    parent = posixpath.dirname(parent)
-            for rel_dir in sorted(dir_paths):
-                if rel_dir not in allowed_dirs:
-                    uncaptured_entries.append(rel_dir + '/')
 
-            if modified_files:
-                refuse('working_dir_modified_after_capture', sorted(set(modified_files)))
-            if uncaptured_entries:
-                refuse('uncaptured_working_files', sorted(set(uncaptured_entries)))
+def _evaluate_turn(
+    system,
+    turn: str,
+    turn_dir: Path,
+    *,
+    record_refs: dict[str, list[dict[str, Any]]],
+    record_scan_errors: list[str],
+    packet_refs: dict[str, list[dict[str, str]]],
+    packet_scan_errors: list[str],
+    attention_refs: dict[str, list[dict[str, str]]],
+    attention_error: str | None,
+    interp_refs: dict[str, list[dict[str, str]]],
+    interp_errors: list[str],
+    uncommitted_refs: dict[str, list[dict[str, str]]],
+    uncommitted_errors: list[str],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    reasons: list[str] = []
+    details: dict[str, Any] = {}
+
+    def refuse(code: str, detail: Any = None) -> None:
+        if code not in reasons:
+            reasons.append(code)
+        if detail is not None:
+            details[code] = detail
+
+    file_count, total_bytes, dir_sha, dir_issues, file_hashes, dir_paths = _scan_turn_directory(turn_dir)
+    if dir_issues:
+        refuse('working_dir_unsafe_entries', dir_issues)
+
+    packet_dir, binding, request, returned = _check_packet_and_return(system, turn, refuse)
+    prep_state, declared_targets, complete_targets = _check_publications(
+        turn, turn_dir, packet_dir, binding, request, returned, refuse,
+    )
+    _check_live_references(
+        turn, refuse,
+        record_refs=record_refs, record_scan_errors=record_scan_errors,
+        packet_refs=packet_refs, packet_scan_errors=packet_scan_errors,
+        attention_refs=attention_refs, attention_error=attention_error,
+        interp_refs=interp_refs, interp_errors=interp_errors,
+        uncommitted_refs=uncommitted_refs, uncommitted_errors=uncommitted_errors,
+    )
+    if request is not None and returned is not None:
+        _check_working_copy_integrity(
+            system, turn, turn_dir, binding, request, returned,
+            prep_state, declared_targets, dir_issues, file_hashes, dir_paths, refuse,
+        )
 
     if reasons:
         ineligible_row: dict[str, Any] = {'turn': turn, 'reasons': sorted(reasons)}
@@ -464,15 +509,15 @@ def plan_turn_retirement(system, *, turns: list[str] | tuple[str, ...] | None = 
     require(type(all_eligible) is bool, 'all_eligible must be Boolean')
     if all_eligible:
         require(turns is None or len(turns) == 0,
-                'supply either explicit turns or all_eligible=True, not both')
+                'supply either --turn TURN or --all-eligible, not both')
     else:
         require(isinstance(turns, (list, tuple)) and len(turns) > 0,
-                'nominate at least one turn or pass all_eligible=True')
+                'nominate at least one turn (--turn TURN) or pass --all-eligible')
 
     turns_root = system.ex.path(TURNS_RELATIVE)
-    if turns_root.exists() or turns_root.is_symlink():
-        root_info = turns_root.lstat()
-        require(not stat.S_ISLNK(root_info.st_mode) and stat.S_ISDIR(root_info.st_mode),
+    root_info = _lstat_or_none(turns_root)
+    if root_info is not None:
+        require(is_ordinary_dir_stat(root_info),
                 'ordinary .system/turns directory required')
 
     candidates: list[tuple[str, Path]] = []
@@ -480,7 +525,7 @@ def plan_turn_retirement(system, *, turns: list[str] | tuple[str, ...] | None = 
     nominated_turns: list[str] = []
 
     if all_eligible:
-        if turns_root.is_dir():
+        if root_info is not None:
             for entry in sorted(turns_root.iterdir(), key=lambda p: p.name):
                 if entry.name.startswith('.'):
                     continue
@@ -495,7 +540,7 @@ def plan_turn_retirement(system, *, turns: list[str] | tuple[str, ...] | None = 
                     })
                     continue
                 info = entry.lstat()
-                if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                if not is_ordinary_dir_stat(info):
                     ineligible.append({
                         'turn': valid_name,
                         'reasons': ['symlink_or_non_directory'],
@@ -514,7 +559,7 @@ def plan_turn_retirement(system, *, turns: list[str] | tuple[str, ...] | None = 
                 info = turn_dir.lstat()
             except FileNotFoundError:
                 raise ValueError(f'unknown turn working directory: {turn}') from None
-            require(not stat.S_ISLNK(info.st_mode) and stat.S_ISDIR(info.st_mode),
+            require(is_ordinary_dir_stat(info),
                     f'ordinary turn working directory required (symlinks refused): {turn}')
             nominated_turns.append(turn)
             candidates.append((turn, turn_dir))
@@ -667,9 +712,9 @@ def execute_turn_retirement(system, *, plan: dict[str, Any], expected_plan: str,
 
     receipt_dir = system.ex.path(RECEIPT_DIRECTORY)
     receipt_path = system.ex.path(f'{RECEIPT_DIRECTORY}/{plan_sha}.json')
-    if receipt_path.exists() or receipt_path.is_symlink():
-        info = receipt_path.lstat()
-        require(not stat.S_ISLNK(info.st_mode) and stat.S_ISREG(info.st_mode),
+    receipt_info = _lstat_or_none(receipt_path)
+    if receipt_info is not None:
+        require(is_ordinary_file_stat(receipt_info),
                 'ordinary turn retirement receipt required: ' + str(receipt_path))
         existing = _read_strict_file(receipt_path)
         if existing.get('complete'):
@@ -700,9 +745,9 @@ def execute_turn_retirement(system, *, plan: dict[str, Any], expected_plan: str,
                 f'turn transport is not returned in native status: {turn}')
 
     # Write durable in-progress receipt before removing working directories.
-    if receipt_dir.exists() or receipt_dir.is_symlink():
-        rinfo = receipt_dir.lstat()
-        require(not stat.S_ISLNK(rinfo.st_mode) and stat.S_ISDIR(rinfo.st_mode),
+    rdir_info = _lstat_or_none(receipt_dir)
+    if rdir_info is not None:
+        require(is_ordinary_dir_stat(rdir_info),
                 'ordinary turn retirement receipt directory required')
     receipt_dir.mkdir(parents=True, exist_ok=True)
     sync_dir(receipt_dir.parent)
@@ -738,7 +783,7 @@ def execute_turn_retirement(system, *, plan: dict[str, Any], expected_plan: str,
         turn = expected_row['turn']
         _safe_remove_turn_dir(system, turn)
         remaining = turns_root / turn
-        require(not remaining.exists() and not remaining.is_symlink(),
+        require(_lstat_or_none(remaining) is None,
                 f'turn working directory remained after removal: {turn}')
 
         view_doc = system.view(turn)

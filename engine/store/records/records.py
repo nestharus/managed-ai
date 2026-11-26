@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import stat
 
+from core.formats import COMPOSITION_FORMAT
 from core.ownership import packet_id, relative_path
 from core.storage import (
     MAX_BYTES,
@@ -83,6 +84,7 @@ class RecordStore:
         self.retention_policy = 'append-history'
         self.content_addressed_basis_prefixes = tuple(content_addressed_basis_prefixes)
         self._deferred_index_ids: list[str] | None = None
+        self._deferred_index_entries: dict[str, dict] | None = None
 
     @contextmanager
     def batch_index_updates(self):
@@ -91,13 +93,17 @@ class RecordStore:
             yield
             return
         self._deferred_index_ids = []
+        self._deferred_index_entries = {}
         try:
             yield
         finally:
-            pending = list(dict.fromkeys(self._deferred_index_ids))
+            pending_ids = list(dict.fromkeys(self._deferred_index_ids))
+            prebuilt = dict(self._deferred_index_entries)
             self._deferred_index_ids = None
-            if pending:
-                self.refresh_index_entries(pending)
+            self._deferred_index_entries = None
+            missing_ids = [ident for ident in pending_ids if ident not in prebuilt]
+            if prebuilt or missing_ids:
+                self.refresh_index_entries(missing_ids, prebuilt=prebuilt)
 
     @staticmethod
     def goal_record(goal: dict) -> dict:
@@ -121,7 +127,34 @@ class RecordStore:
         return self.path(ident).relative_to(self.work).as_posix()
 
     def size(self, ident: str) -> int:
-        return self.path(ident).stat().st_size
+        path = self.path(ident)
+        if hasattr(os, 'O_NOFOLLOW'):
+            try:
+                fd = os.open(path, _OPEN_RO_NOFOLLOW)
+            except FileNotFoundError:
+                if self.cold_archive.has(ident):
+                    return len(self.cold_archive.read(ident)[1])
+                raise
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
+                    raise ValueError(f'ordinary JSON file required: {path}') from None
+                raise
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError(f'ordinary JSON file required: {path}')
+                return info.st_size
+            finally:
+                os.close(fd)
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            if self.cold_archive.has(ident):
+                return len(self.cold_archive.read(ident)[1])
+            raise
+        if not is_ordinary_file_stat(info):
+            raise ValueError(f'ordinary JSON file required: {path}')
+        return info.st_size
 
     def has_record(self, ident: str) -> bool:
         try:
@@ -248,6 +281,51 @@ class RecordStore:
                 return summary
         return self.show(ident)
 
+    @staticmethod
+    def _chunk_map(items: list, fn, *, max_workers: int = 8, min_parallel: int = 16) -> list:
+        if len(items) < min_parallel:
+            return fn(items)
+        workers = min(max_workers, len(items))
+        step = (len(items) + workers - 1) // workers
+        chunks = [items[i:i + step] for i in range(0, len(items), step)]
+        if len(chunks) <= 1:
+            return fn(items)
+        out: list = []
+        with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+            for batch in pool.map(fn, chunks):
+                out.extend(batch)
+        return out
+
+    def _validated_records_dir_win(self) -> tuple[Path, str]:
+        records_dir = self.ex.path('records')
+        try:
+            dir_info = records_dir.lstat()
+        except OSError:
+            raise ValueError(f'ordinary records directory required: {records_dir}') from None
+        if not is_ordinary_dir_stat(dir_info):
+            raise ValueError(f'ordinary records directory required: {records_dir}')
+        return records_dir, str(records_dir)
+
+    def _read_verified_win(self, dir_str: str, ident: str, *, allow_cold: bool = True) -> tuple[dict, bytes, os.stat_result | None]:
+        filename = packet_id(ident) + '.json'
+        full_str = dir_str + os.sep + filename
+        try:
+            info = os.lstat(full_str)
+        except FileNotFoundError:
+            if allow_cold and self.cold_archive.has(ident):
+                record, raw = self.cold_archive.read(ident)
+                return record, raw, None
+            raise ValueError(f'ordinary JSON file required: {full_str}') from None
+        except OSError:
+            raise ValueError(f'ordinary JSON file required: {full_str}') from None
+        if not is_ordinary_file_stat(info):
+            raise ValueError(f'ordinary JSON file required: {full_str}')
+        with open(full_str, 'rb') as stream:
+            raw = stream.read()
+        record = parse_input_bytes(raw, Path(full_str))
+        self._verify_record(ident, record, raw)
+        return record, raw, info
+
     def scoped_heads(self, needs_body, *, max_workers: int = 16):
         """Yield cryptographically verified scope/status fields and full records for nominated roles."""
         idents = self.ids()
@@ -256,19 +334,41 @@ class RecordStore:
         indexed = self.index.load(self.format)
         if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
             with self.ex.open_workspace_dir('records') as records_fd:
-                if len(idents) >= 16:
-                    with ThreadPoolExecutor(max_workers=min(max_workers, len(idents))) as pool:
-                        results = list(pool.map(
-                            lambda ident: self._read_scoped_one(ident, needs_body, indexed, records_fd),
-                            idents,
-                        ))
-                    yield from results
-                else:
-                    for ident in idents:
-                        yield self._read_scoped_one(ident, needs_body, indexed, records_fd)
+                results = self._chunk_map(
+                    idents,
+                    lambda chunk: [self._read_scoped_one(i, needs_body, indexed, records_fd) for i in chunk],
+                    max_workers=min(max_workers, 8),
+                )
+            yield from results
             return
-        for ident in idents:
-            yield self._read_scoped_one(ident, needs_body, indexed, None)
+        _, dir_str = self._validated_records_dir_win()
+
+        def scoped_win_chunk(chunk):
+            out = []
+            for ident in chunk:
+                entry = indexed.get(ident) if indexed is not None else None
+                if entry is not None and not needs_body(ident, entry['kind']):
+                    full_str = dir_str + os.sep + ident + '.json'
+                    try:
+                        info = os.lstat(full_str)
+                    except OSError:
+                        raise ValueError(f'ordinary JSON file required: {full_str}') from None
+                    if not is_ordinary_file_stat(info):
+                        raise ValueError(f'ordinary JSON file required: {full_str}')
+                    with open(full_str, 'rb') as stream:
+                        raw = stream.read()
+                    if hmac.compare_digest(sha(raw), entry['raw_sha256']):
+                        out.append({k: entry[k] for k in ('format', 'id', 'kind', 'sha256', 'revision', 'basis', 'active')})
+                        continue
+                    record = parse_input_bytes(raw, Path(full_str))
+                    self._verify_record(ident, record, raw)
+                    out.append(record)
+                    continue
+                record, _, _ = self._read_verified_win(dir_str, ident, allow_cold=False)
+                out.append(record)
+            return out
+
+        yield from self._chunk_map(idents, scoped_win_chunk, max_workers=min(max_workers, 8))
 
     def indexed_summaries_with_format(self, *, max_workers: int = 16) -> tuple[dict[str, dict], str] | None:
         """Return (verified_entries, index_format) or None if unindexed (works on POSIX and Windows)."""
@@ -282,78 +382,96 @@ class RecordStore:
 
         if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
             with self.ex.open_workspace_dir('records') as records_fd:
-                def check_one_posix(ident):
-                    filename = packet_id(ident) + '.json'
-                    full_path = self.work / 'records' / filename
-                    try:
-                        info = os.stat(filename, dir_fd=records_fd, follow_symlinks=False)
-                    except OSError as exc:
-                        if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR):
-                            raise ValueError(f'ordinary JSON file required: {full_path}') from None
-                        raise
-                    if not stat.S_ISREG(info.st_mode):
-                        raise ValueError(f'ordinary JSON file required: {full_path}')
-                    entry = indexed.get(ident)
-                    if (entry is not None
-                            and entry.get('format') == self.format
-                            and entry.get('id') == ident
-                            and entry.get('size') == info.st_size
-                            and entry.get('mtime_ns') == info.st_mtime_ns
-                            and entry.get('ino') == info.st_ino):
-                        return ident, entry
-                    record, raw = self.read(ident, dir_fd=records_fd)
-                    return ident, build_entry(record, raw, info)
+                def check_chunk_posix(chunk):
+                    out = []
+                    for ident in chunk:
+                        entry = indexed.get(ident)
+                        filename = (ident if entry is not None else packet_id(ident)) + '.json'
+                        full_path = self.work / 'records' / filename
+                        try:
+                            info = os.stat(filename, dir_fd=records_fd, follow_symlinks=False)
+                        except OSError as exc:
+                            if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR):
+                                raise ValueError(f'ordinary JSON file required: {full_path}') from None
+                            raise
+                        if not stat.S_ISREG(info.st_mode):
+                            raise ValueError(f'ordinary JSON file required: {full_path}')
+                        if (entry is not None
+                                and entry.get('format') == self.format
+                                and entry.get('id') == ident
+                                and entry.get('size') == info.st_size
+                                and entry.get('mtime_ns') == info.st_mtime_ns):
+                            if entry.get('ino') == info.st_ino and entry.get('platform', os.name) == os.name:
+                                out.append((ident, entry))
+                                continue
+                            # Cross-OS st_ino mismatch (e.g. Windows <-> WSL drvfs): verify raw SHA-256
+                            # against the HMAC-authenticated index entry to skip JSON parse & re-encoding.
+                            try:
+                                fd = os.open(filename, _OPEN_RO_NOFOLLOW, dir_fd=records_fd)
+                            except OSError as exc:
+                                if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
+                                    raise ValueError(f'ordinary JSON file required: {full_path}') from None
+                                raise
+                            try:
+                                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                                    raise ValueError(f'ordinary JSON file required: {full_path}')
+                                stream = os.fdopen(fd, 'rb')
+                            except BaseException:
+                                os.close(fd)
+                                raise
+                            with stream:
+                                raw = stream.read()
+                            if hmac.compare_digest(sha(raw), entry['raw_sha256']):
+                                out.append((ident, entry))
+                                continue
+                            record = parse_input_bytes(raw, full_path)
+                            self._verify_record(ident, record, raw)
+                            out.append((ident, build_entry(record, raw, info)))
+                            continue
+                        record, raw = self.read(ident, dir_fd=records_fd)
+                        out.append((ident, build_entry(record, raw, info)))
+                    return out
 
-                if len(idents) >= 16:
-                    workers = min(max_workers, len(idents))
-                    step = (len(idents) + workers - 1) // workers
-                    chunks = [idents[i:i + step] for i in range(0, len(idents), step)]
-                    pairs = []
-                    with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
-                        for batch in pool.map(lambda c: [check_one_posix(i) for i in c], chunks):
-                            pairs.extend(batch)
-                else:
-                    pairs = [check_one_posix(ident) for ident in idents]
+                pairs = self._chunk_map(idents, check_chunk_posix, max_workers=min(max_workers, 8))
             return dict(pairs), index_format
 
-        # Native Windows fallback: verify records/ directory once, then stat+match in parallel chunks.
-        records_dir = self.ex.path('records')
-        try:
-            dir_info = records_dir.lstat()
-        except OSError:
-            raise ValueError(f'ordinary records directory required: {records_dir}') from None
-        if not is_ordinary_dir_stat(dir_info):
-            raise ValueError(f'ordinary records directory required: {records_dir}')
+        # Native Windows: verify records/ directory once, then stat+match via str paths in 8 chunked workers.
+        _, dir_str = self._validated_records_dir_win()
 
-        def check_one_win(ident):
-            full_path = records_dir / (packet_id(ident) + '.json')
-            try:
-                info = full_path.lstat()
-            except OSError:
-                raise ValueError(f'ordinary JSON file required: {full_path}') from None
-            if not is_ordinary_file_stat(info):
-                raise ValueError(f'ordinary JSON file required: {full_path}')
-            entry = indexed.get(ident)
-            if (entry is not None
-                    and entry.get('format') == self.format
-                    and entry.get('id') == ident
-                    and entry.get('size') == info.st_size
-                    and entry.get('mtime_ns') == info.st_mtime_ns
-                    and entry.get('ino') == info.st_ino):
-                return ident, entry
-            record, raw = self.read(ident)
-            return ident, build_entry(record, raw, info)
+        def check_chunk_win(chunk):
+            out = []
+            for ident in chunk:
+                entry = indexed.get(ident)
+                filename = (ident if entry is not None else packet_id(ident)) + '.json'
+                full_str = dir_str + os.sep + filename
+                try:
+                    info = os.lstat(full_str)
+                except OSError:
+                    raise ValueError(f'ordinary JSON file required: {full_str}') from None
+                if not is_ordinary_file_stat(info):
+                    raise ValueError(f'ordinary JSON file required: {full_str}')
+                if (entry is not None
+                        and entry.get('format') == self.format
+                        and entry.get('id') == ident
+                        and entry.get('size') == info.st_size
+                        and entry.get('mtime_ns') == info.st_mtime_ns):
+                    if entry.get('ino') == info.st_ino and entry.get('platform', os.name) == os.name:
+                        out.append((ident, entry))
+                        continue
+                    with open(full_str, 'rb') as stream:
+                        raw = stream.read()
+                    if hmac.compare_digest(sha(raw), entry['raw_sha256']):
+                        out.append((ident, entry))
+                        continue
+                    record = parse_input_bytes(raw, Path(full_str))
+                    self._verify_record(ident, record, raw)
+                    out.append((ident, build_entry(record, raw, info)))
+                    continue
+                record, raw, cur_info = self._read_verified_win(dir_str, ident, allow_cold=False)
+                out.append((ident, build_entry(record, raw, cur_info or info)))
+            return out
 
-        if len(idents) >= 16:
-            workers = min(max_workers, len(idents))
-            step = (len(idents) + workers - 1) // workers
-            chunks = [idents[i:i + step] for i in range(0, len(idents), step)]
-            pairs = []
-            with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
-                for batch in pool.map(lambda c: [check_one_win(i) for i in c], chunks):
-                    pairs.extend(batch)
-        else:
-            pairs = [check_one_win(ident) for ident in idents]
+        pairs = self._chunk_map(idents, check_chunk_win, max_workers=min(max_workers, 8))
         return dict(pairs), index_format
 
     def indexed_summaries(self, *, max_workers: int = 16) -> dict[str, dict] | None:
@@ -366,27 +484,23 @@ class RecordStore:
         return None if loaded is None else loaded[0]
 
     def scan_records(self, idents=None, *, max_workers: int = 16) -> list[dict]:
-        """Read and cryptographically verify nominated records (or all records) via openat."""
+        """Read and cryptographically verify nominated records (or all records) in parallel."""
         target_ids = self.ids() if idents is None else list(idents)
         if not target_ids:
             return []
         if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
             with self.ex.open_workspace_dir('records') as records_fd:
-                if len(target_ids) >= 16:
-                    workers = min(max_workers, len(target_ids))
-                    step = (len(target_ids) + workers - 1) // workers
-                    chunks = [target_ids[i:i + step] for i in range(0, len(target_ids), step)]
-
-                    def read_chunk(chunk):
-                        return [self.read(ident, dir_fd=records_fd)[0] for ident in chunk]
-
-                    out: list[dict] = []
-                    with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
-                        for batch in pool.map(read_chunk, chunks):
-                            out.extend(batch)
-                    return out
-                return [self.read(ident, dir_fd=records_fd)[0] for ident in target_ids]
-        return [self.show(ident) for ident in target_ids]
+                return self._chunk_map(
+                    target_ids,
+                    lambda chunk: [self.read(ident, dir_fd=records_fd)[0] for ident in chunk],
+                    max_workers=min(max_workers, 8),
+                )
+        _, dir_str = self._validated_records_dir_win()
+        return self._chunk_map(
+            target_ids,
+            lambda chunk: [self._read_verified_win(dir_str, ident, allow_cold=True)[0] for ident in chunk],
+            max_workers=min(max_workers, 8),
+        )
 
     def reindex(self, *, max_workers: int = 16) -> dict:
         """Rebuild the HMAC-verified store-local head index under an exclusive owner lock."""
@@ -395,40 +509,49 @@ class RecordStore:
         if idents:
             if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
                 with self.ex.open_workspace_dir('records') as records_fd:
-                    def index_one(ident):
+                    def index_chunk_posix(chunk):
+                        out = []
+                        for ident in chunk:
+                            filename = packet_id(ident) + '.json'
+                            record, raw = self.read(ident, dir_fd=records_fd)
+                            info = os.stat(filename, dir_fd=records_fd, follow_symlinks=False)
+                            out.append((ident, build_entry(record, raw, info)))
+                        return out
+
+                    pairs = self._chunk_map(idents, index_chunk_posix, max_workers=min(max_workers, 8))
+                    entries = dict(pairs)
+            else:
+                _, dir_str = self._validated_records_dir_win()
+
+                def index_chunk_win(chunk):
+                    out = []
+                    for ident in chunk:
+                        record, raw, info = self._read_verified_win(dir_str, ident, allow_cold=False)
+                        out.append((ident, build_entry(record, raw, info)))
+                    return out
+
+                pairs = self._chunk_map(idents, index_chunk_win, max_workers=min(max_workers, 8))
+                entries = dict(pairs)
+        return self.index.save(self.format, entries, create_key=True)
+
+    def refresh_index_entries(self, idents: list[str], *, prebuilt: dict[str, dict] | None = None) -> bool:
+        """Batch-update existing HMAC head index entries for freshly committed records."""
+        if (not idents and not prebuilt) or not self.index.path.exists():
+            return False
+        updates: dict[str, dict] = dict(prebuilt) if prebuilt else {}
+        if idents:
+            if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
+                with self.ex.open_workspace_dir('records') as records_fd:
+                    for ident in idents:
                         filename = packet_id(ident) + '.json'
                         record, raw = self.read(ident, dir_fd=records_fd)
                         info = os.stat(filename, dir_fd=records_fd, follow_symlinks=False)
-                        return ident, build_entry(record, raw, info)
-
-                    if len(idents) >= 16:
-                        with ThreadPoolExecutor(max_workers=min(max_workers, len(idents))) as pool:
-                            pairs = list(pool.map(index_one, idents))
-                    else:
-                        pairs = [index_one(ident) for ident in idents]
-                    entries = dict(pairs)
+                        updates[ident] = build_entry(record, raw, info)
             else:
+                _, dir_str = self._validated_records_dir_win()
                 for ident in idents:
-                    record, raw = self.read(ident)
-                    entries[ident] = build_entry(record, raw, self.path(ident).lstat())
-        return self.index.save(self.format, entries, create_key=True)
-
-    def refresh_index_entries(self, idents: list[str]) -> bool:
-        """Batch-update existing HMAC head index entries for freshly committed records."""
-        if not idents or not self.index.path.exists():
-            return False
-        updates: dict[str, dict] = {}
-        if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
-            with self.ex.open_workspace_dir('records') as records_fd:
-                for ident in idents:
-                    filename = packet_id(ident) + '.json'
-                    record, raw = self.read(ident, dir_fd=records_fd)
-                    info = os.stat(filename, dir_fd=records_fd, follow_symlinks=False)
+                    record, raw, info = self._read_verified_win(dir_str, ident, allow_cold=False)
                     updates[ident] = build_entry(record, raw, info)
-        else:
-            for ident in idents:
-                record, raw = self.read(ident)
-                updates[ident] = build_entry(record, raw, self.path(ident).lstat())
         return self.index.update_if_present(self.format, updates)
 
     def index_scope(self, ident):
@@ -472,7 +595,8 @@ class RecordStore:
         content['obligations'] = list(merged.values())
 
     def _normalize_record(self, record: dict, previous: dict | None, *, retain_basis=True,
-                          preserve_basis: list | None = None) -> dict:
+                          preserve_basis: list | None = None,
+                          verify_preserved_objects: bool = True) -> dict:
         json.dumps(record, allow_nan=False)
         fields(record, {'id', 'kind', 'content', 'relations', 'basis', 'active'}, 'record')
         ident, kind = packet_id(record.get('id', '')), text(record.get('kind'), 'record kind')
@@ -503,8 +627,9 @@ class RecordStore:
             content = dict(content)
             self._obligations(content, previous)
         if preserve_basis is not None:
-            require(all(row['sha256'] is None or self.objects.has(row['sha256'])
-                        for row in preserve_basis), 'preserved basis object is unavailable')
+            if verify_preserved_objects:
+                require(all(row['sha256'] is None or self.objects.has(row['sha256'])
+                            for row in preserve_basis), 'preserved basis object is unavailable')
             basis = preserve_basis
         elif prior_owed and owed and 'basis' not in record:
             basis = previous['basis']
@@ -575,18 +700,26 @@ class RecordStore:
 
     def _replace(self, record: dict, expected: int, *, information_mode: str | None = None,
                  feedback_write: bool = False, observation_write: bool = False, reviewed_basis: list | None = None,
-                 preserve_basis: list | None = None, verify=None, _defer_index_update: bool = False) -> dict:
+                 preserve_basis: list | None = None, verify=None, _defer_index_update: bool = False,
+                 _preloaded: tuple[dict | None, bytes | None] | None = None,
+                 _prepared: tuple[dict, bytes] | None = None) -> dict:
         integer(expected, 'expected revision')
         path = self.path(record.get('id', ''))
-        if not path.exists() and self.cold_archive.has(record.get('id', '')):
-            raise ValueError(f"record {record['id']} is in cold archive; restore explicitly before modifying")
-        previous, previous_raw = self.read(record['id']) if path.exists() else (None, None)
+        if _preloaded is not None:
+            previous, previous_raw = _preloaded
+        else:
+            if not path.exists() and self.cold_archive.has(record.get('id', '')):
+                raise ValueError(f"record {record['id']} is in cold archive; restore explicitly before modifying")
+            previous, previous_raw = self.read(record['id']) if path.exists() else (None, None)
         revision = previous['revision'] if previous else 0
         if revision != expected:
             raise ValueError(f'record revision conflict: expected {expected}, current {revision}')
-        body, raw = self._prepare_write(record, previous, previous_raw, information_mode=information_mode,
-                                        feedback_write=feedback_write, observation_write=observation_write,
-                                        retain_basis=reviewed_basis is None, preserve_basis=preserve_basis)
+        if _prepared is not None:
+            body, raw = _prepared
+        else:
+            body, raw = self._prepare_write(record, previous, previous_raw, information_mode=information_mode,
+                                            feedback_write=feedback_write, observation_write=observation_write,
+                                            retain_basis=reviewed_basis is None, preserve_basis=preserve_basis)
         if reviewed_basis is not None:
             require(body['basis'] == reviewed_basis, 'captured workspace basis changed at publication')
             # Reuse the incumbent's already captured objects. A rejected write
@@ -608,6 +741,8 @@ class RecordStore:
         if not _defer_index_update:
             if self._deferred_index_ids is not None:
                 self._deferred_index_ids.append(body['id'])
+                if self._deferred_index_entries is not None and self.index.path.exists():
+                    self._deferred_index_entries[body['id']] = build_entry(body, raw, path.lstat())
             elif self.index.path.exists():
                 self.index.update_if_present(self.format, {body['id']: build_entry(body, raw, path.lstat())})
         return {'id': body['id'], 'revision': body['revision'], 'sha256': body['sha256'],
@@ -615,12 +750,16 @@ class RecordStore:
 
     def _validate_payload(self, record, previous, *, information_mode=None):
         self.envelope.validate_write(record, previous, mode=information_mode)
+        content = record.get('content')
+        if isinstance(content, dict) and content.get('format') == COMPOSITION_FORMAT:
+            from store.composition.composition import Composition
+            Composition(None).profile(record)
         if self.payload_validator is not None:
             self.payload_validator(record, previous)
 
     def _prepare_write(self, record, previous, previous_raw, *, information_mode=None,
                        feedback_write=False, observation_write=False, retain_basis=True,
-                       preserve_basis: list | None = None):
+                       preserve_basis: list | None = None, verify_preserved_objects: bool = True):
         if previous is None and self.cold_archive.has(record.get('id', '')):
             raise ValueError(f"record {record['id']} is in cold archive; restore explicitly before modifying")
         if (record.get('kind') == FEEDBACK_KIND or (previous and previous['kind'] == FEEDBACK_KIND)) and not feedback_write:
@@ -629,7 +768,8 @@ class RecordStore:
             raise ValueError('cross-instance observations must be received through transfer operations')
         self._validate_payload(record, previous, information_mode=information_mode)
         normalized = self._normalize_record(record, previous, retain_basis=retain_basis,
-                                            preserve_basis=preserve_basis)
+                                            preserve_basis=preserve_basis,
+                                            verify_preserved_objects=verify_preserved_objects)
         revision = previous['revision'] if previous else 0
         if normalized['kind'] == FEEDBACK_KIND and self.retention_policy == 'current-use':
             if any(row.get('route') not in {'work', 'hold'} for row in normalized['content'].get('carried_returns', [])):
@@ -687,8 +827,7 @@ class RecordStore:
         return current
 
     def pin(self, record: dict) -> dict:
-        data = self.path(record['id']).read_bytes()
-        parsed = strict_json(data)
+        parsed, data = self.read(record['id'])
         require(parsed == record, 'information record changed during pinning')
         if len(data) <= MAX_BYTES:
             obj = self.objects.put(data)

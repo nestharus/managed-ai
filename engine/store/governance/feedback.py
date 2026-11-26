@@ -189,7 +189,7 @@ class Feedback:
         require(isinstance(observed, str) and observed.strip(),
                 'feedback evidence content.observed must be nonempty text describing the returned result. '
                 'Keep structured output in content.details. Revise the evidence record and retry with its new pin. '
-                'See RUNTIME.md#record-a-structured-result.')
+                'See engine/store/README.md.')
         require(source['updated_at'] >= content['forecast_at'], 'observation predates the prospective forecast')
         route = spec['route']
         require(route in ('work', 'hold', 'progress', 'review'), 'unknown feedback route')

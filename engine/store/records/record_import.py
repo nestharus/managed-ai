@@ -2,7 +2,7 @@
 import stat
 
 from core.ownership import packet_id
-from core.storage import encode, sha, sync_dir, write_json
+from core.storage import check_ordinary_ancestors, encode, is_ordinary_file_stat, sha, sync_dir, write_json
 from store.protocol.identities import digest, exact_fields, identity, record_identity, require, strict_json
 
 from core.formats import IMPORT_FORMAT, IMPORT_RECEIPT_FORMAT as RECEIPT_FORMAT
@@ -25,11 +25,13 @@ def _receipt_path(system, ident):
 
 
 def _load_receipt(path):
+    if path.parent.exists():
+        check_ordinary_ancestors(path.parent, expect_dir=True, error_prefix='ordinary native import receipt required')
     try:
-        mode = path.stat().st_mode
+        info = path.lstat()
     except FileNotFoundError:
         return None
-    require(stat.S_ISREG(mode), 'ordinary native import receipt required: ' + str(path))
+    require(is_ordinary_file_stat(info), 'ordinary native import receipt required: ' + str(path))
     return strict_json(path.read_bytes())
 
 

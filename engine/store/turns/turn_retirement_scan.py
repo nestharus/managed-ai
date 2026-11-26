@@ -12,6 +12,7 @@ from typing import Any
 from core.storage import (
     _OPEN_RO_NOFOLLOW,
     encode,
+    is_ordinary_dir_stat,
     is_ordinary_file_stat,
     is_reparse_or_symlink,
     sha,
@@ -79,10 +80,11 @@ def _collect_record_references(system, candidate_set: set[str]) -> tuple[dict[st
     if not candidate_set:
         return refs, errors
     records_dir = system.ex.path('records')
-    if not records_dir.exists():
+    try:
+        dir_info = records_dir.lstat()
+    except FileNotFoundError:
         return refs, errors
-    require(not records_dir.is_symlink() and records_dir.is_dir(),
-            'ordinary records directory required')
+    require(is_ordinary_dir_stat(dir_info), 'ordinary records directory required')
     filenames = sorted(p.name for p in records_dir.iterdir()
                        if p.name.endswith('.json') and not p.name.startswith('.'))
     if not filenames:

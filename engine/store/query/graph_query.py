@@ -35,27 +35,10 @@ def _load_graph_nodes(system) -> tuple[dict[str, dict], set[str], bool]:
     if loaded is not None:
         summaries, index_format = loaded
         if index_format == HEAD_INDEX_FORMAT:
-            nodes = {}
-            for ident, entry in summaries.items():
-                g = entry['graph']
-                nodes[ident] = {
-                    'id': ident,
-                    'kind': entry['kind'],
-                    'revision': entry['revision'],
-                    'sha256': entry['sha256'],
-                    'active': entry['active'],
-                    'relations': g.get('relations', []),
-                    'duplicate_relations': g.get('duplicate_relations', []),
-                    'content_links': g.get('content_links', {}),
-                    'title': g.get('title', ''),
-                    'selection_state': g.get('selection_state', ''),
-                    'question_norm': g.get('question_norm'),
-                }
-            return nodes, set(nodes.keys()) | cold_ids, True
+            return summaries, set(summaries.keys()) | cold_ids, True
 
     nodes = {}
     for rec in store.scan_records():
-        g = extract_graph_hints(rec)
         ident = rec['id']
         nodes[ident] = {
             'id': ident,
@@ -63,12 +46,7 @@ def _load_graph_nodes(system) -> tuple[dict[str, dict], set[str], bool]:
             'revision': rec['revision'],
             'sha256': rec['sha256'],
             'active': rec['active'],
-            'relations': g['relations'],
-            'duplicate_relations': g.get('duplicate_relations', []),
-            'content_links': g['content_links'],
-            'title': g['title'],
-            'selection_state': g['selection_state'],
-            'question_norm': g.get('question_norm'),
+            'graph': extract_graph_hints(rec),
         }
     return nodes, set(nodes.keys()) | cold_ids, False
 
@@ -83,18 +61,30 @@ def _node_pin(node: dict) -> dict:
     }
 
 
-def _build_adjacency(nodes: dict[str, dict]):
-    outgoing: dict[str, list[tuple[str, str]]] = {ident: [] for ident in nodes}
+def _node_relations(node: dict) -> list:
+    return node['graph'].get('relations', ())
+
+
+def _build_outgoing(nodes: dict[str, dict]) -> dict[str, list[tuple[str, str]]]:
+    outgoing: dict[str, list[tuple[str, str]]] = {}
+    for src, node in nodes.items():
+        rels = [(label, target) for label, target in _node_relations(node)]
+        if len(rels) > 1:
+            rels.sort()
+        outgoing[src] = rels
+    return outgoing
+
+
+def _build_incoming(nodes: dict[str, dict], *, targets: set[str] | None = None) -> dict[str, list[tuple[str, str]]]:
     incoming: dict[str, list[tuple[str, str]]] = {}
     for src, node in nodes.items():
-        for label, target in node['relations']:
-            outgoing[src].append((label, target))
-            incoming.setdefault(target, []).append((label, src))
-    for edges in outgoing.values():
-        edges.sort()
+        for label, target in _node_relations(node):
+            if targets is None or target in targets:
+                incoming.setdefault(target, []).append((label, src))
     for edges in incoming.values():
-        edges.sort()
-    return outgoing, incoming
+        if len(edges) > 1:
+            edges.sort()
+    return incoming
 
 
 def neighbors(system, record_id: str, *, direction: str = 'both', hops: int = 1,
@@ -109,7 +99,19 @@ def neighbors(system, record_id: str, *, direction: str = 'both', hops: int = 1,
 
     nodes, all_ids, indexed = _load_graph_nodes(system)
     require(record_id in nodes, 'record not found in hot graph: ' + record_id)
-    outgoing, incoming = _build_adjacency(nodes)
+    outgoing_cache: dict[str, list[tuple[str, str]]] = {}
+    incoming = _build_incoming(nodes) if direction in ('in', 'both') else {}
+
+    def get_outgoing(ident: str) -> list[tuple[str, str]]:
+        cached = outgoing_cache.get(ident)
+        if cached is not None:
+            return cached
+        node = nodes.get(ident)
+        rels = [(label, target) for label, target in _node_relations(node)] if node is not None else []
+        if len(rels) > 1:
+            rels.sort()
+        outgoing_cache[ident] = rels
+        return rels
 
     visited = {record_id: 0}
     queue = deque([(record_id, 0)])
@@ -123,7 +125,7 @@ def neighbors(system, record_id: str, *, direction: str = 'both', hops: int = 1,
             continue
         step_edges: list[tuple[str, str, str, str]] = []
         if direction in ('out', 'both'):
-            for label, target in outgoing.get(cur, ()):
+            for label, target in get_outgoing(cur):
                 step_edges.append((cur, target, label, 'out'))
         if direction in ('in', 'both'):
             for label, src in incoming.get(cur, ()):
@@ -174,19 +176,21 @@ def links(system, *, target: str, relations: list[str] | tuple[str, ...] = (),
     rel_filter = set(strings(list(relations), 'relations')) if relations else None
 
     nodes, _, indexed = _load_graph_nodes(system)
-    _, incoming = _build_adjacency(nodes)
-    rows: list[dict] = []
-    for label, src in incoming.get(target, ()):
-        if rel_filter is not None and label not in rel_filter:
+    matched_edges: list[tuple[str, str]] = []
+    for src, node in nodes.items():
+        if active_only and not node['active']:
             continue
-        src_node = nodes[src]
-        if active_only and not src_node['active']:
-            continue
-        rows.append({
-            'from': _node_pin(src_node),
-            'relation': label,
-            'to': target,
-        })
+        for label, dst in _node_relations(node):
+            if dst != target:
+                continue
+            if rel_filter is not None and label not in rel_filter:
+                continue
+            matched_edges.append((label, src))
+    matched_edges.sort()
+    rows = [
+        {'from': _node_pin(nodes[src]), 'relation': label, 'to': target}
+        for label, src in matched_edges
+    ]
     return {
         'format': GRAPH_LINKS_FORMAT,
         'instance_id': system.instance_id,
@@ -211,7 +215,6 @@ def shortest_path(system, src: str, dst: str, *, max_hops: int = 6,
     nodes, _, indexed = _load_graph_nodes(system)
     require(src in nodes, 'source record not found: ' + src)
     require(dst in nodes, 'destination record not found: ' + dst)
-    outgoing, _ = _build_adjacency(nodes)
 
     if active_only and (not nodes[src]['active'] or not nodes[dst]['active']):
         return {
@@ -252,15 +255,16 @@ def shortest_path(system, src: str, dst: str, *, max_hops: int = 6,
         cur_depth = depth_map[cur]
         if cur_depth >= max_hops:
             continue
-        for label, nxt in outgoing.get(cur, ()):
+        cur_edges = [(label, nxt) for label, nxt in _node_relations(nodes[cur])]
+        if len(cur_edges) > 1:
+            cur_edges.sort()
+        for label, nxt in cur_edges:
             if rel_filter is not None and label not in rel_filter:
                 continue
             nxt_node = nodes.get(nxt)
             if nxt_node is None:
                 continue
-            if active_only and nxt != dst and not nxt_node['active']:
-                continue
-            if active_only and nxt == dst and not nxt_node['active']:
+            if active_only and not nxt_node['active']:
                 continue
             if nxt in depth_map:
                 continue
@@ -316,7 +320,12 @@ def shortest_path(system, src: str, dst: str, *, max_hops: int = 6,
 def lint(system) -> dict:
     """Detect structural graph anomalies using domain-neutral rules and optional domain relation_vocabulary."""
     nodes, all_ids, indexed = _load_graph_nodes(system)
-    outgoing, incoming = _build_adjacency(nodes)
+    open_question_ids = {
+        ident for ident, node in nodes.items()
+        if node['kind'] == 'question' and node['active']
+        and node['graph'].get('selection_state', '') in _OPEN_QUESTION_STATES
+    }
+    incoming = _build_incoming(nodes, targets=open_question_ids) if open_question_ids else {}
 
     vocab = getattr(system.domain_selection, 'relation_vocabulary', {}) or {}
     declared_predicates = set(vocab.get('predicates', ()))
@@ -334,11 +343,12 @@ def lint(system) -> dict:
 
     for ident in sorted(nodes):
         node = nodes[ident]
-        rel_list = node['relations']
+        g = node['graph']
+        rel_list = g.get('relations', ())
         rel_targets = {target for _, target in rel_list}
 
         # 1. Exact duplicate relation rows, self-loops, dangling record-like targets, controlled vocabulary
-        for dup_label, dup_target in node.get('duplicate_relations', ()):
+        for dup_label, dup_target in g.get('duplicate_relations', ()):
             duplicate_edges.append({'id': ident, 'relation': dup_label, 'target': dup_target})
         for label, target in rel_list:
             if target == ident:
@@ -357,34 +367,37 @@ def lint(system) -> dict:
                     uncontrolled_predicates.append({'id': ident, 'relation': label, 'target': target})
 
         # 2. Content FK fields: non-ID prose detection + content <-> relations drift
-        for field_name, values in sorted(node['content_links'].items()):
-            for val in values:
-                if not _RECORD_ID_RE.fullmatch(val):
-                    non_id_content_refs.append({'id': ident, 'field': field_name, 'value': val[:160]})
-                elif val in all_ids and val != ident and val not in rel_targets:
-                    content_relation_drift.append({'id': ident, 'field': field_name, 'target': val})
+        content_links = g.get('content_links')
+        if content_links:
+            for field_name, values in sorted(content_links.items()):
+                for val in values:
+                    if not _RECORD_ID_RE.fullmatch(val):
+                        non_id_content_refs.append({'id': ident, 'field': field_name, 'value': val[:160]})
+                    elif val in all_ids and val != ident and val not in rel_targets:
+                        content_relation_drift.append({'id': ident, 'field': field_name, 'target': val})
 
         # 3. Open question duplicate clusters & answered-yet-open checks
-        if node['kind'] == 'question' and node['active']:
-            state = node['selection_state']
-            if state in _OPEN_QUESTION_STATES:
-                qnorm = node.get('question_norm')
-                if qnorm:
-                    question_groups.setdefault(qnorm, []).append(ident)
-                answer_edges = [
-                    {'from': src, 'relation': label}
-                    for label, src in incoming.get(ident, ())
-                    if label in _ANSWER_RELATION_LABELS
-                ]
-                answer_edges.extend(
-                    {'to': dst, 'relation': label}
-                    for label, dst in outgoing.get(ident, ())
-                    if label in ('answered-by', 'settled-by')
-                )
-                if answer_edges:
-                    answered_open_questions.append({
-                        'id': ident, 'selection_state': state, 'answer_edges': answer_edges,
-                    })
+        if ident in open_question_ids:
+            state = g.get('selection_state', '')
+            qnorm = g.get('question_norm')
+            if qnorm:
+                question_groups.setdefault(qnorm, []).append(ident)
+            answer_edges = [
+                {'from': src, 'relation': label}
+                for label, src in incoming.get(ident, ())
+                if label in _ANSWER_RELATION_LABELS
+            ]
+            out_answers = sorted(
+                (label, dst) for label, dst in rel_list if label in ('answered-by', 'settled-by')
+            )
+            answer_edges.extend(
+                {'to': dst, 'relation': label}
+                for label, dst in out_answers
+            )
+            if answer_edges:
+                answered_open_questions.append({
+                    'id': ident, 'selection_state': state, 'answer_edges': answer_edges,
+                })
 
     duplicate_open_questions = [
         {'question': qnorm[:200], 'ids': sorted(ids)}

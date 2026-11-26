@@ -5,7 +5,7 @@ from pathlib import Path
 
 from core.formats import SOURCE_OBSERVATION_FORMAT, TRANSFER_FORMAT
 from core.ownership import packet_id
-from core.storage import atomic_bytes, encode, sha
+from core.storage import atomic_bytes, check_ordinary_ancestors, encode, is_ordinary_file_stat, is_reparse_or_symlink, sha
 from store.protocol.identities import identity, record_identity, require, strict_json
 from store.selection.domain_selection import load_json
 
@@ -31,6 +31,21 @@ def unpack_transfer(bundle, records):
     return source, record, raw
 
 
+def _check_output_ancestors(output: Path) -> None:
+    """Reject symlinks/NTFS junctions along any existing ancestor or target of output."""
+    if output.anchor and not output.is_absolute():
+        raise ValueError(f'ordinary transfer output required: {output}')
+    for candidate in (output, *output.parents):
+        try:
+            info = candidate.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            raise ValueError(f'ordinary transfer output required: {candidate}') from None
+        if is_reparse_or_symlink(info):
+            raise ValueError(f'ordinary transfer output required: {candidate}')
+
+
 def export(system, ident, output):
     record, raw = system.record_store.read(ident)
     source = {'instance_id': system.instance_id, 'record_id': record['id'],
@@ -42,11 +57,20 @@ def export(system, ident, output):
               'body_base64': base64.b64encode(raw).decode('ascii'),
               'scope': 'Exact captured record from the named source instance; no receiving adoption or current-head claim after export.'}
     output = Path(output)
-    if output.exists() and output.read_bytes() != encode(bundle):
-        raise ValueError('transfer output contains another body')
+    _check_output_ancestors(output)
+    encoded = encode(bundle)
+    try:
+        out_info = output.lstat()
+    except FileNotFoundError:
+        out_info = None
+    if out_info is not None:
+        require(is_ordinary_file_stat(out_info), f'ordinary transfer output required: {output}')
+        if output.read_bytes() != encoded:
+            raise ValueError('transfer output contains another body')
     output.parent.mkdir(parents=True, exist_ok=True)
-    atomic_bytes(output, encode(bundle))
-    return {'source': source, 'bundle': str(output), 'sha256': sha(encode(bundle))}
+    check_ordinary_ancestors(output.parent, expect_dir=True, error_prefix='ordinary transfer output required')
+    atomic_bytes(output, encoded)
+    return {'source': source, 'bundle': str(output), 'sha256': sha(encoded)}
 
 
 def receive(system, path, ident, account, expected):
@@ -58,26 +82,46 @@ def receive(system, path, ident, account, expected):
     if source['instance_id'] == system.instance_id:
         raise ValueError('observation requires a distinct declared source instance')
     bundle_sha = sha(encode(bundle))
-    old = system.record_store.show(ident) if system.record_store.path(ident).exists() else None
+    hot_path = system.record_store.path(ident)
+    if not hot_path.exists() and system.record_store.cold_archive.has(ident):
+        raise ValueError(f'record {ident} is in cold archive; restore explicitly before modifying')
+    old = system.record_store.show(ident) if hot_path.exists() else None
     if old and old['kind'] == 'source-observation' and old['content'].get('transfer_sha256') == bundle_sha:
         return {'replayed': True, 'record': {k: old[k] for k in ('id', 'revision', 'sha256')}, 'source': source}
     current_revision = old['revision'] if old else 0
     if current_revision != expected:
         raise ValueError('receiving observation revision conflict')
-    key = system.ex.objects.put(raw)
+    key = sha(raw)
     relative = 'sources/received/' + key + '.json'
-    target = system.work / relative
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if not target.exists():
-        atomic_bytes(target, raw)
-    elif target.read_bytes() != raw:
-        raise ValueError('retained observation body changed')
+    target = system.ex.path(relative)
+    try:
+        target_info = target.lstat()
+    except FileNotFoundError:
+        target_info = None
+    if target_info is not None:
+        require(is_ordinary_file_stat(target_info), f'ordinary observation target required: {target}')
+        if target.read_bytes() != raw:
+            raise ValueError('retained observation body changed')
     value = {'id': ident, 'kind': 'source-observation', 'content': {
         'format': SOURCE_OBSERVATION_FORMAT, 'source': source, 'object_sha256': key,
         'transfer_sha256': bundle_sha, 'account': account,
         'scope': 'Receiver-owned observation of exact supplied source bytes. The source instance retains ownership; arrival does not accept the finding or close its duty.'},
         'basis': [relative]}
-    result = system.record_store._replace(value, expected, observation_write=True)
+    # Pre-validate the write against store/domain/envelope constraints BEFORE creating any file or object.
+    previous, previous_raw = system.record_store.read(ident) if hot_path.exists() else (None, None)
+    prepared = system.record_store._prepare_write(
+        value, previous, previous_raw, observation_write=True, retain_basis=False,
+        preserve_basis=[{'path': relative, 'sha256': key, 'bytes': len(raw)}],
+        verify_preserved_objects=False,
+    )
+    key = system.ex.objects.put(raw)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target_info is None:
+        atomic_bytes(target, raw)
+    result = system.record_store._replace(
+        value, expected, observation_write=True,
+        _preloaded=(previous, previous_raw), _prepared=prepared,
+    )
     return {'replayed': False, 'record': result, 'source': source}
 
 
@@ -85,5 +129,5 @@ def inspect(system, ident):
     observation = system.record_store.show(ident)
     if observation['kind'] != 'source-observation':
         raise ValueError('record is not a cross-instance observation')
-    raw = system.ex.objects.read(observation['content']['object_sha256'])
-    return {'observation': observation, 'source_record': json.loads(raw)}
+    raw = system.ex.objects.read(observation['content']['object_sha256'], retained=True)
+    return {'observation': observation, 'source_record': strict_json(raw)}

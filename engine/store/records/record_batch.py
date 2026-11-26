@@ -6,7 +6,7 @@ import json
 import stat
 
 from core.ownership import packet_id
-from core.storage import encode, sha, sync_dir, write_json
+from core.storage import MAX_BYTES, check_ordinary_ancestors, encode, is_ordinary_file_stat, sha, sync_dir, write_json
 from store.protocol.identities import digest, exact_fields, nonempty, require, strict_json
 from store.protocol.inputs import integer, strings
 
@@ -55,11 +55,13 @@ def _receipt_path(system, ident):
 
 
 def _load_receipt(path):
+    if path.parent.exists():
+        check_ordinary_ancestors(path.parent, expect_dir=True, error_prefix='ordinary batch update receipt required')
     try:
-        mode = path.lstat().st_mode
+        info = path.lstat()
     except FileNotFoundError:
         return None
-    require(stat.S_ISREG(mode), 'ordinary batch update receipt required: ' + str(path))
+    require(is_ordinary_file_stat(info), 'ordinary batch update receipt required: ' + str(path))
     return strict_json(path.read_bytes())
 
 
@@ -270,12 +272,24 @@ def put_batch(system, spec):
         if index == 0 and pending_entry is not None:
             already_committed = _reconcile_pending(store, op, pending_entry, previous, pin_predecessors)
         if already_committed is not None:
-            prepared.append((op, None, None, None, None, already_committed))
+            prepared.append((op, None, None, None, None, None, None, already_committed))
             continue
         candidate, preserve_basis = _build_candidate(op, previous)
-        preview_body, _ = store._prepare_write(candidate, previous, previous_raw, retain_basis=False,
-                                               preserve_basis=preserve_basis)
-        prepared.append((op, candidate, previous, preserve_basis, _fields_digest(preview_body), None))
+        preview_body, preview_raw = store._prepare_write(candidate, previous, previous_raw, retain_basis=False,
+                                                         preserve_basis=preserve_basis)
+        # When preserve_basis is set or no new basis files require snapshotting, preview_body/raw are
+        # already final and can be committed directly under the same exclusive owner.lock.
+        can_reuse_prepared = preserve_basis is not None or not candidate.get('basis')
+        prepared.append((
+            op,
+            candidate,
+            previous,
+            previous_raw,
+            preserve_basis,
+            _fields_digest(preview_body),
+            (preview_body, preview_raw) if can_reuse_prepared else None,
+            None,
+        ))
 
     # Phase 2: Commit durable incomplete receipt, then apply operations sequentially with WAL pending entry.
     result = {
@@ -296,40 +310,56 @@ def put_batch(system, spec):
             # Ensure earlier committed prefix entries are also fresh in HeadIndex even if resume fails again.
             for row in result['records']:
                 store._deferred_index_ids.append(row['id'])
-        for op, candidate, previous, preserve_basis, fields_sha, already_committed in prepared:
-            if already_committed is not None:
-                result['records'].append(already_committed)
-                store._deferred_index_ids.append(already_committed['id'])
-                write_json(receipt, dict(result, complete=False))
-                continue
-            pinned_object = None
-            if pin_predecessors and previous is not None:
-                pinned_object = store.pin(previous)['object']
-            before_rev = previous['revision'] if previous is not None else 0
-            before_sha = previous['sha256'] if previous is not None else None
-            pending = {
-                'id': op['id'],
-                'before_revision': before_rev,
-                'before_sha256': before_sha,
-                'pinned_object': pinned_object,
-                'expected_after_revision': before_rev + 1,
-                'expected_fields_sha256': fields_sha,
-            }
-            write_json(receipt, dict(result, complete=False, pending=pending))
-            written = store._replace(
-                candidate,
-                op['expected_revision'],
-                preserve_basis=preserve_basis,
-            )
-            result['records'].append({
-                'id': op['id'],
-                'before_revision': before_rev,
-                'before_sha256': before_sha,
-                'pinned_object': pinned_object,
-                'after_revision': written['revision'],
-                'after_sha256': written['sha256'],
-            })
-            write_json(receipt, dict(result, complete=False))
+        try:
+            for op, candidate, previous, previous_raw, preserve_basis, fields_sha, ready_write, already_committed in prepared:
+                if already_committed is not None:
+                    result['records'].append(already_committed)
+                    store._deferred_index_ids.append(already_committed['id'])
+                    write_json(receipt, dict(result, complete=False))
+                    continue
+                pinned_object = None
+                if pin_predecessors and previous is not None:
+                    if previous_raw is not None:
+                        if len(previous_raw) <= MAX_BYTES:
+                            pinned_object = store.objects.put(previous_raw)
+                        else:
+                            pinned_object = store.objects.put_retained(previous_raw, max_bytes=len(previous_raw))
+                    else:
+                        pinned_object = store.pin(previous)['object']
+                before_rev = previous['revision'] if previous is not None else 0
+                before_sha = previous['sha256'] if previous is not None else None
+                pending = {
+                    'id': op['id'],
+                    'before_revision': before_rev,
+                    'before_sha256': before_sha,
+                    'pinned_object': pinned_object,
+                    'expected_after_revision': before_rev + 1,
+                    'expected_fields_sha256': fields_sha,
+                }
+                write_json(receipt, dict(result, complete=False, pending=pending))
+                written = store._replace(
+                    candidate,
+                    op['expected_revision'],
+                    preserve_basis=preserve_basis,
+                    _preloaded=(previous, previous_raw),
+                    _prepared=ready_write,
+                )
+                result['records'].append({
+                    'id': op['id'],
+                    'before_revision': before_rev,
+                    'before_sha256': before_sha,
+                    'pinned_object': pinned_object,
+                    'after_revision': written['revision'],
+                    'after_sha256': written['sha256'],
+                })
+        except BaseException:
+            # Persist completed prefix before propagating any failure.
+            if result['records']:
+                try:
+                    write_json(receipt, dict(result, complete=False))
+                except OSError:
+                    pass
+            raise
 
     result['complete'] = True
     write_json(receipt, result)

@@ -111,7 +111,20 @@ def construct(root, overlay, spec, edition):
     return raw, objects
 
 
+def _sync_dir(directory: Path) -> None:
+    if os.name != 'posix':
+        return
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def publish(root, overlay, spec, edition, output):
+    import os
+    import shutil
+    import uuid
     raw, objects = construct(root, overlay, spec, edition)
     output = knowledge.ordinary(output)
     knowledge.need(output.parent.is_dir(), 'existing output parent required')
@@ -123,9 +136,32 @@ def publish(root, overlay, spec, edition, output):
         knowledge.need(actual == expected, 'existing publication has unexpected members')
         status = 'already-present-verified'
     else:
-        output.mkdir(); (output / 'objects').mkdir()
-        for name, body in {'catalogue.json': raw, **objects}.items():
-            with (output / name).open('xb') as stream: stream.write(body)
+        staging = output.parent / ('.publish-' + output.name + '-' + uuid.uuid4().hex)
+        try:
+            staging.mkdir()
+            (staging / 'objects').mkdir()
+            for name, body in {'catalogue.json': raw, **objects}.items():
+                with (staging / name).open('xb') as stream:
+                    stream.write(body)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            if os.name == 'posix':
+                for d in (staging / 'objects', staging):
+                    fd = os.open(d, os.O_RDONLY)
+                    try:
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+            os.rename(staging, output)
+            if os.name == 'posix':
+                fd = os.open(output.parent, os.O_RDONLY)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
         status = 'published-data'
     result = knowledge.Library(output).verify()
     result['status'] = status; result['library'] = str(output)
@@ -164,13 +200,13 @@ def audit(root, overlay, library, spec=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--overlay', type=Path)
     parser.add_argument('--source-map', type=Path, default=Path(__file__).resolve().parents[1] / 'source-map.json')
     sub = parser.add_subparsers(dest='action', required=True)
-    pub = sub.add_parser('publish'); pub.add_argument('--edition', required=True); pub.add_argument('--output', type=Path, required=True)
-    check = sub.add_parser('audit'); check.add_argument('--library', type=Path, default=Path(__file__).resolve().parents[1] / 'library')
+    pub = sub.add_parser('publish', allow_abbrev=False); pub.add_argument('--edition', required=True); pub.add_argument('--output', type=Path, required=True)
+    check = sub.add_parser('audit', allow_abbrev=False); check.add_argument('--library', type=Path, default=Path(__file__).resolve().parents[1] / 'library')
     args = parser.parse_args()
     try:
         spec = source_map(args.source_map)

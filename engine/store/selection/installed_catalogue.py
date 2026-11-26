@@ -1,11 +1,12 @@
 """Verified access to the installed knowledge catalogue and operation archives."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import uuid
 
 from core.ownership import packet_id, relative_path
-from core.storage import sha
+from core.storage import is_ordinary_file_stat, sha
 from core.formats import INSTALLED_CATALOGUE_FORMAT
 from store.protocol.inputs import bounded_source_bytes, integer, read
 
@@ -42,9 +43,17 @@ class InstalledCatalogue:
     @staticmethod
     def _resolve_names(entries, aliases):
         """Primary IDs win. A compatibility name can expose one selected primary."""
-        primary = {entry['id']: entry for entry in entries}
-        if len(primary) != len(entries):
-            raise ValueError('core/domain/store source identity collision')
+        primary = {}
+        collisions = []
+        for entry in entries:
+            ident = entry['id']
+            if ident in primary and ident not in collisions:
+                collisions.append(ident)
+            primary[ident] = entry
+        if collisions:
+            sample = ', '.join(sorted(collisions)[:5])
+            suffix = f' (+{len(collisions) - 5} more)' if len(collisions) > 5 else ''
+            raise ValueError(f'core/domain/store source identity collision: {sample}{suffix}')
         targets = {}
         for alias in aliases:
             name, target = alias['id'], alias['target']
@@ -66,19 +75,58 @@ class InstalledCatalogue:
             if limit > 200:
                 raise ValueError('catalogue limit must be <= 200; use offset to continue')
             terms = query.casefold().split()
-            body_cache, matches = {}, []
-            for entry in entries:
+            meta_hits: list[tuple[int, dict, str, bool]] = []
+            need_body: dict[str, dict] = {}
+            for idx, entry in enumerate(entries):
                 if kind is not None and entry.get('kind') != kind:
                     continue
                 searchable = ' '.join(str(entry.get(k, '')) for k in
                                       ('id', 'title', 'kind', 'family', 'source_path', 'purpose')).casefold()
-                if content and terms and entry.get('availability') != 'sealed':
+                matched_meta = all(term in searchable for term in terms)
+                meta_hits.append((idx, entry, searchable, matched_meta))
+                if not matched_meta and content and terms and entry.get('availability') != 'sealed':
                     key = entry['sha256']
-                    if key not in body_cache:
-                        body_cache[key] = self.body(entry).decode('utf-8').casefold()
-                    searchable += '\n' + body_cache[key]
-                if all(term in searchable for term in terms):
+                    if key not in need_body:
+                        need_body[key] = entry
+
+            body_cache: dict[str, str] = {}
+            if need_body:
+                from store.selection.domain_selection import _verify_ordinary_dir
+                validated_roots: set[str] = set()
+                if self.selection is not None:
+                    validated_roots.update(getattr(self.selection, '_validated_roots', ()))
+                for entry in need_body.values():
+                    if entry.get('body_role') == 'complete-current-source-reference':
+                        sr = entry.get('source_root')
+                        if sr and sr not in validated_roots:
+                            _verify_ordinary_dir(Path(sr))
+                            validated_roots.add(sr)
+
+                items = list(need_body.items())
+
+                def fetch_chunk(chunk):
+                    return [(k, self.body(e, validated_root=True).decode('utf-8').casefold()) for k, e in chunk]
+
+                if len(items) >= 8:
+                    workers = min(8, len(items))
+                    step = (len(items) + workers - 1) // workers
+                    chunks = [items[i:i + step] for i in range(0, len(items), step)]
+                    with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+                        for sub in pool.map(fetch_chunk, chunks):
+                            for k, text_cf in sub:
+                                body_cache[k] = text_cf
+                else:
+                    for k, text_cf in fetch_chunk(items):
+                        body_cache[k] = text_cf
+
+            matches = []
+            for _, entry, searchable, matched_meta in meta_hits:
+                if matched_meta:
                     matches.append(entry)
+                elif content and terms and entry.get('availability') != 'sealed':
+                    body_cf = body_cache.get(entry['sha256'])
+                    if body_cf is not None and all(term in searchable or term in body_cf for term in terms):
+                        matches.append(entry)
             page = matches[offset:offset + limit]
             return {'format': catalogue.get('format'), 'total_entries': len(entries),
                     'query': query, 'kind': kind, 'content_search': content, 'matches': len(matches),
@@ -92,12 +140,18 @@ class InstalledCatalogue:
         source = self.body(entry)
         return dict(entry, body=source.decode('utf-8'))
 
-    def body(self, entry: dict, *, byte_limit: int | None = None) -> bytes:
+    def body(self, entry: dict, *, byte_limit: int | None = None, validated_root: bool = False) -> bytes:
         if entry.get('body_role') == 'complete-current-source-reference':
             from store.selection.domain_selection import read_selected_body
-            return read_selected_body(entry, byte_limit=byte_limit)
+            if not validated_root and self.selection is not None:
+                validated_root = entry.get('source_root') in getattr(self.selection, '_validated_roots', ())
+            return read_selected_body(entry, byte_limit=byte_limit, validated_root=validated_root)
         source = self.root / relative_path(entry['body_path'])
-        if source.is_symlink() or not source.resolve().is_relative_to(self.root):
+        try:
+            info = source.lstat()
+        except OSError:
+            raise ValueError('technique body path escapes the installed app') from None
+        if not is_ordinary_file_stat(info) or not source.resolve().is_relative_to(self.root):
             raise ValueError('technique body path escapes the installed app')
         data = source.read_bytes() if byte_limit is None else bounded_source_bytes(source, byte_limit)
         if sha(data) != entry['sha256']:

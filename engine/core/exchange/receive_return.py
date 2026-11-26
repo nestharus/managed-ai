@@ -105,21 +105,47 @@ class PacketReceiving:
         write_json(directory / 'return.json', record)
         return record
 
-    def validate_return(self, directory: Path, record: dict[str, Any]) -> None:
+    def validate_return(self, directory: Path, record: dict[str, Any], *,
+                        request_sha256: str | None = None,
+                        _verified_objects: dict[str, int] | set[str] | None = None,
+                        _objects_fd: int | None = None,
+                        _memo_lock=None) -> None:
         if (directory / 'transport-outcome.json').exists():
             raise ValueError('packet contains both a return and a terminal outcome')
         if record['return_sha256'] != sha(encode({k: v for k, v in record.items() if k != 'return_sha256'})):
             raise ValueError('return record changed')
-        request = read_json(directory / 'request.json')
-        if record['request_sha256'] != sha(encode(request)):
+        if request_sha256 is None:
+            request = read_json(directory / 'request.json')
+            request_sha256 = sha(encode(request))
+        if record['request_sha256'] != request_sha256:
             raise ValueError('return belongs to another request')
+
+        def verify_object(key: str, expected_bytes: int) -> None:
+            if isinstance(_verified_objects, dict):
+                if _memo_lock is not None:
+                    with _memo_lock:
+                        known = _verified_objects.get(key)
+                else:
+                    known = _verified_objects.get(key)
+                if known is not None:
+                    if known != expected_bytes:
+                        raise ValueError('content object changed (length changed)')
+                    return
+            self.objects.read(key, expected_bytes=expected_bytes, dir_fd=_objects_fd)
+            if isinstance(_verified_objects, dict):
+                if _memo_lock is not None:
+                    with _memo_lock:
+                        _verified_objects[key] = expected_bytes
+                else:
+                    _verified_objects[key] = expected_bytes
+
         if type(record['reply_bytes']) is not int or record['reply_bytes'] < 0:
             raise ValueError('invalid reply length')
-        self.objects.read(record['reply_sha256'], expected_bytes=record['reply_bytes'])
+        verify_object(record['reply_sha256'], record['reply_bytes'])
         for row in record['proposals']:
             if type(row['bytes']) is not int or row['bytes'] < 0:
                 raise ValueError('invalid proposal length')
-            self.objects.read(row['sha256'], expected_bytes=row['bytes'])
+            verify_object(row['sha256'], row['bytes'])
         view = transport_view(self, record['transport'])
         if view is not None:
             stdout = view['streams']['stdout']

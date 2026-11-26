@@ -33,6 +33,7 @@ from ._platform import (
 )
 
 MAX_BYTES = 2 * 1024 * 1024
+_ORIG_PATH_OPEN = Path.open
 
 
 def now() -> str:
@@ -135,18 +136,65 @@ def owner_admission(acquire, *, timeout=None, deadline=None):
         interval = min(interval * 2, 2.0)
 
 
-@contextmanager
-def exclusive(path: Path, *, allow_readonly_open: bool = False) -> Iterator[None]:
+def _open_lock_stream(path: Path, *, allow_readonly_open: bool):
+    """Open a lock file without following symlinks or Windows NTFS junctions/reparse points."""
+    target = Path(path)
+    parent = target.parent
     try:
-        stream = path.open("a+b")
+        parent_info = parent.lstat()
+    except FileNotFoundError:
+        raise
+    except OSError:
+        raise ValueError(f'ordinary lock directory required: {parent}') from None
+    if not is_ordinary_dir_stat(parent_info):
+        raise ValueError(f'ordinary lock directory required: {parent}')
+    check_ordinary_ancestors(parent, expect_dir=True, error_prefix='ordinary lock directory required')
+    if hasattr(os, 'O_NOFOLLOW') and Path.open is _ORIG_PATH_OPEN:
+        flags = os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | getattr(os, 'O_CLOEXEC', 0)
+        mode = 'a+b'
+        try:
+            fd = os.open(target, flags, 0o666)
+        except OSError as open_error:
+            if open_error.errno in (errno.ELOOP, errno.EISDIR, errno.ENOTDIR, errno.ENXIO):
+                raise ValueError(f'ordinary lock file required: {target}') from None
+            if not allow_readonly_open or open_error.errno not in (errno.EACCES, errno.EPERM, errno.EROFS):
+                raise
+            try:
+                fd = os.open(target, _OPEN_RO_NOFOLLOW | getattr(os, 'O_CLOEXEC', 0))
+                mode = 'rb'
+            except OSError as read_error:
+                if read_error.errno in (errno.ELOOP, errno.EISDIR, errno.ENOTDIR, errno.ENXIO):
+                    raise ValueError(f'ordinary lock file required: {target}') from None
+                raise open_error from read_error
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ValueError(f'ordinary lock file required: {target}')
+            return os.fdopen(fd, mode)
+        except BaseException:
+            os.close(fd)
+            raise
+    try:
+        leaf_info = target.lstat()
+    except FileNotFoundError:
+        leaf_info = None
+    except OSError:
+        raise ValueError(f'ordinary lock file required: {target}') from None
+    if leaf_info is not None and not is_ordinary_file_stat(leaf_info):
+        raise ValueError(f'ordinary lock file required: {target}')
+    try:
+        return target.open('a+b')
     except OSError as open_error:
         if not allow_readonly_open or open_error.errno not in (errno.EACCES, errno.EPERM, errno.EROFS):
             raise
         try:
-            stream = path.open("rb")
+            return target.open('rb')
         except OSError as read_error:
             raise open_error from read_error
-    with stream:
+
+
+@contextmanager
+def exclusive(path: Path, *, allow_readonly_open: bool = False) -> Iterator[None]:
+    with _open_lock_stream(path, allow_readonly_open=allow_readonly_open) as stream:
         try:
             lock_file_nonblocking(stream, exclusive=True)
         except BlockingIOError as exc:
@@ -160,16 +208,7 @@ def exclusive(path: Path, *, allow_readonly_open: bool = False) -> Iterator[None
 @contextmanager
 def shared(path: Path, *, allow_readonly_open: bool = True) -> Iterator[None]:
     """Share a cooperative observation guard; retain existing lock-file creation."""
-    try:
-        stream = path.open("a+b")
-    except OSError as open_error:
-        if not allow_readonly_open or open_error.errno not in (errno.EACCES, errno.EPERM, errno.EROFS):
-            raise
-        try:
-            stream = path.open("rb")
-        except OSError as read_error:
-            raise open_error from read_error
-    with stream:
+    with _open_lock_stream(path, allow_readonly_open=allow_readonly_open) as stream:
         try:
             lock_file_nonblocking(stream, exclusive=False)
         except BlockingIOError as exc:
@@ -418,7 +457,13 @@ class ObjectStore:
                     limit = expected_bytes if retained else min(expected_bytes, MAX_BYTES)
                 else:
                     limit = size if retained else MAX_BYTES
-                data = read_bytes(path, limit)
+                if read_bytes is _READ_BYTES:
+                    with path.open('rb') as stream:
+                        data = stream.read(limit + 1)
+                    if len(data) > limit:
+                        raise ValueError(f'file exceeds {limit} bytes: {path}')
+                else:
+                    data = read_bytes(path, limit)
         if expected_bytes is not None and len(data) != expected_bytes:
             raise ValueError('content object changed (length changed)')
         if sha(data) != key:

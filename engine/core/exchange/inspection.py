@@ -89,8 +89,9 @@ class PacketInspection:
 
     def list(self, consumer: str | None = None) -> list[dict[str, Any]]:
         """Expose retained occasions without inventing a semantic completion flag."""
-        verified_objects: set[str] = set()
+        verified_objects: dict[str, int] = {}
         validated_returns: dict[str, dict[str, Any]] = {}
+        request_shas: dict[str, str] = {}
         memo_lock = threading.Lock()
         objects_fd = None
         if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
@@ -107,6 +108,7 @@ class PacketInspection:
                     _validated_returns=validated_returns,
                     _objects_fd=objects_fd,
                     _memo_lock=memo_lock,
+                    _request_shas=request_shas,
                 )
                 if consumer is not None and request['consumer'] != consumer:
                     return None
@@ -114,9 +116,16 @@ class PacketInspection:
                 if has_return:
                     with memo_lock:
                         cached = directory.name in validated_returns
+                        req_sha = request_shas.get(directory.name)
                     if not cached:
                         record = read_json(directory / 'return.json')
-                        self.validate_return(directory, record)
+                        self.validate_return(
+                            directory, record,
+                            request_sha256=req_sha,
+                            _verified_objects=verified_objects,
+                            _objects_fd=objects_fd,
+                            _memo_lock=memo_lock,
+                        )
                         with memo_lock:
                             validated_returns[directory.name] = record
                 outcome = transport_outcome(self, directory, request)

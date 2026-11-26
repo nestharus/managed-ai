@@ -78,6 +78,15 @@ def _execute_catalogue_action(catalogue, args):
             continue
         raw = catalogue.body(entry)
         verified.append({'id': entry['id'], 'sha256': entry['sha256'], 'bytes': len(raw)})
+    if getattr(args, 'summary', False):
+        return {
+            'status': 'verified',
+            'verified_count': len(verified),
+            'verified_bytes': sum(row['bytes'] for row in verified),
+            'sealed_count': len(sealed),
+            'sealed_without_body_read': sealed,
+            'scope': 'Exact canonical byte custody; no participant acquisition or semantic acceptance is inferred.',
+        }
     return {
         'status': 'verified',
         'sources': verified,
@@ -105,7 +114,9 @@ def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--store', type=Path)
     sub = parser.add_subparsers(dest='action', required=True)
-    sub.add_parser('verify', allow_abbrev=False)
+    verify_cmd = sub.add_parser('verify', allow_abbrev=False)
+    verify_cmd.add_argument('--summary', action='store_true',
+                            help='Return verified/sealed counts and byte totals instead of listing every source')
     show = sub.add_parser('show', allow_abbrev=False)
     show.add_argument('identity')
     show.add_argument('--text', action='store_true')

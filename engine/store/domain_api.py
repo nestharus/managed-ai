@@ -31,6 +31,7 @@ from deployment.controller import (
     open_admitted_store,
     read_descriptor_bytes,
     report_admission,
+    runtime_binding,
 )
 from store.composition.composition import Composition
 from store.composition.composition_opportunities import routes
@@ -103,6 +104,7 @@ __all__ = [
     'require',
     'revise',
     'routes',
+    'runtime_binding',
     'safe_relpath',
     'sha',
     'shared',

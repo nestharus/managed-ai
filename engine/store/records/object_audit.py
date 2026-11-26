@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 import errno
 import json
 import os
@@ -17,7 +18,9 @@ from core.storage import (
     encode,
     is_ordinary_dir_stat,
     is_ordinary_file_stat,
+    is_reparse_or_symlink,
     now,
+    open_directory,
     read_json,
     sha,
     sync_dir,
@@ -36,7 +39,19 @@ from store.protocol.inputs import integer, text
 
 
 _SHA_RE = re.compile(r'^[0-9a-f]{64}$')
+_BYTE_HEX64_RE = re.compile(rb'"([0-9a-f]{64})"')
 _CONTENT_ADDRESSED_NAME_RE = re.compile(r'^([0-9a-f]{2})/([0-9a-f]{64})\.([A-Za-z0-9._-]+)$')
+
+
+def _verify_ordinary_file(path: Path, message: str) -> os.stat_result:
+    """Verify path exists and is an ordinary non-symlink/non-reparse regular file."""
+    try:
+        info = path.lstat()
+    except OSError:
+        raise ValueError(f'{message}: {path}') from None
+    if not is_ordinary_file_stat(info):
+        raise ValueError(f'{message}: {path}')
+    return info
 
 
 def _read_ordinary_unbounded(path: Path) -> bytes:
@@ -268,9 +283,7 @@ def plan_compact_objects(system, *, min_savings_bytes: int = 64) -> dict:
             existing = objects.read(key, retained=True, expected_bytes=len(raw))
             require(existing == raw, f'conflicting raw and compressed object: {key}')
             deflate_path = objects.directory / (key + '.deflate')
-            info = deflate_path.lstat()
-            require(not stat.S_ISLNK(info.st_mode) and stat.S_ISREG(info.st_mode),
-                    f'ordinary compressed object file required: {deflate_path}')
+            info = _verify_ordinary_file(deflate_path, 'ordinary compressed object file required')
             comp_bytes = info.st_size
             if comp_bytes < len(raw) and len(raw) >= min_savings_bytes:
                 candidates.append({
@@ -351,9 +364,7 @@ def execute_compact_objects(system, *, plan: dict, expected_plan: str, reason: s
         require(len(raw) == row['raw_bytes'] and sha(raw) == key,
                 'object changed since compaction plan: ' + key)
         if row['already_deflated']:
-            info = deflate_path.lstat()
-            require(not stat.S_ISLNK(info.st_mode) and stat.S_ISREG(info.st_mode),
-                    'existing compressed object required: ' + key)
+            info = _verify_ordinary_file(deflate_path, 'existing compressed object required')
             require(info.st_size == row['compressed_bytes'] and info.st_size < len(raw)
                     and row['saved_bytes'] == len(raw),
                     'dual-file compressed object changed since compaction plan: ' + key)
@@ -363,8 +374,12 @@ def execute_compact_objects(system, *, plan: dict, expected_plan: str, reason: s
                     'existing .deflate verification failed: ' + key)
             to_compact.append((key, raw_path, deflate_path, raw, None, info.st_size, len(raw)))
         else:
-            require(not deflate_path.exists() and not deflate_path.is_symlink(),
-                    'object state changed since compaction plan: ' + key)
+            try:
+                deflate_path.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                raise ValueError('object state changed since compaction plan: ' + key)
             compressed = zlib.compress(raw, level=6)
             require(len(compressed) < len(raw), 'object no longer compresses smaller: ' + key)
             require(len(compressed) == row['compressed_bytes']
@@ -414,18 +429,69 @@ def execute_compact_objects(system, *, plan: dict, expected_plan: str, reason: s
 # ---------------------------------------------------------------------------
 
 def _extract_object_hashes(value, known_objects: set[str], out: set[str]) -> None:
-    """Recursively find all 64-hex strings in parsed JSON that correspond to stored exchange objects."""
+    """Recursively find all stored exchange object digests referenced in parsed JSON."""
     if isinstance(value, str):
-        if len(value) == 64 and _SHA_RE.match(value) and value in known_objects:
+        if value in known_objects:
             out.add(value)
     elif isinstance(value, list):
         for item in value:
             _extract_object_hashes(item, known_objects, out)
     elif isinstance(value, dict):
         for k, v in value.items():
-            if isinstance(k, str) and len(k) == 64 and _SHA_RE.match(k) and k in known_objects:
+            if k in known_objects:
                 out.add(k)
             _extract_object_hashes(v, known_objects, out)
+
+
+def _expand_object_wave(objects, keys: list[str], known: set[str], known_bytes: set[bytes],
+                        reachable_bytes: set[bytes], objects_fd: int | None) -> tuple[set[str], set[str]]:
+    """Read, SHA-verify, and extract newly referenced hashes for one BFS frontier in parallel."""
+    def inspect_chunk(chunk: list[str]) -> tuple[set[str], set[str]]:
+        found: set[str] = set()
+        fvo_found: set[str] = set()
+        for key in chunk:
+            raw = objects.read(key, retained=True, dir_fd=objects_fd)
+            stripped = raw.lstrip()
+            if stripped[:1] not in (b'{', b'['):
+                continue
+            has_escape = b'\\u' in raw
+            has_fvo = b'"full_view_object"' in raw
+            if not has_escape and not has_fvo:
+                # Fast byte prefilter: if no quoted 64-hex string hits an unvisited known object,
+                # skip json.loads and recursive AST traversal completely.
+                needs_parse = False
+                for match in _BYTE_HEX64_RE.finditer(raw):
+                    token = match.group(1)
+                    if token in known_bytes and token not in reachable_bytes:
+                        needs_parse = True
+                        break
+                if not needs_parse:
+                    continue
+            try:
+                doc = json.loads(raw.decode('utf-8'))
+            except (UnicodeDecodeError, ValueError):
+                continue
+            if not isinstance(doc, (dict, list)):
+                continue
+            _extract_object_hashes(doc, known, found)
+            if isinstance(doc, dict):
+                fvo = doc.get('full_view_object')
+                if isinstance(fvo, str) and fvo in known:
+                    fvo_found.add(fvo)
+        return found, fvo_found
+
+    if len(keys) < 16:
+        return inspect_chunk(keys)
+    workers = min(8, len(keys))
+    step = (len(keys) + workers - 1) // workers
+    chunks = [keys[i:i + step] for i in range(0, len(keys), step)]
+    discovered: set[str] = set()
+    fvo_all: set[str] = set()
+    with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+        for sub_found, sub_fvo in pool.map(inspect_chunk, chunks):
+            discovered.update(sub_found)
+            fvo_all.update(sub_fvo)
+    return discovered, fvo_all
 
 
 def _scan_json_tree(directory: Path, known_objects: set[str], out: set[str]) -> None:
@@ -550,35 +616,40 @@ def audit_objects(system) -> dict:
     _scan_json_tree(system.work / '.system/retirements', known, layer_sets['turns_and_carrier'])
     _scan_json_tree(system.ex.root / 'carrier', known, layer_sets['turns_and_carrier'])
 
-    # Fixed-point transitive closure over reached JSON objects (previous_object chains, attention objects, pinned heads, views)
+    # Fixed-point transitive closure over reached JSON objects (parallel wave-BFS with byte prefilter)
     reachable: set[str] = set()
     for s in layer_sets.values():
         reachable.update(s)
-    queue = deque(sorted(reachable))
+    known_bytes = {k.encode('ascii') for k in known}
+    reachable_bytes = {k.encode('ascii') for k in reachable}
+    frontier = sorted(reachable)
     visited_expansion: set[str] = set()
-    while queue:
-        key = queue.popleft()
-        if key in visited_expansion:
-            continue
-        visited_expansion.add(key)
-        raw = objects.read(key, retained=True)
-        stripped = raw.lstrip()
-        if stripped[:1] not in (b'{', b'['):
-            continue
+    objects_fd = None
+    if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY') and objects.directory.is_dir():
         try:
-            doc = json.loads(raw.decode('utf-8'))
-        except (UnicodeDecodeError, ValueError):
-            continue
-        if not isinstance(doc, (dict, list)):
-            continue
-        discovered: set[str] = set()
-        _extract_object_hashes(doc, known, discovered)
-        if isinstance(doc, dict) and isinstance(doc.get('full_view_object'), str) and doc['full_view_object'] in known:
-            layer_sets['packets_transitive_exposure'].add(doc['full_view_object'])
-        for child in sorted(discovered - reachable):
-            reachable.add(child)
-            layer_sets['transitive_objects'].add(child)
-            queue.append(child)
+            objects_fd = open_directory(objects.directory)
+        except OSError:
+            objects_fd = None
+    try:
+        while frontier:
+            wave = [key for key in frontier if key not in visited_expansion]
+            if not wave:
+                break
+            visited_expansion.update(wave)
+            discovered, fvo_found = _expand_object_wave(
+                objects, wave, known, known_bytes, reachable_bytes, objects_fd,
+            )
+            if fvo_found:
+                layer_sets['packets_transitive_exposure'].update(fvo_found)
+            new_children = sorted(discovered - reachable)
+            for child in new_children:
+                reachable.add(child)
+                reachable_bytes.add(child.encode('ascii'))
+                layer_sets['transitive_objects'].add(child)
+            frontier = new_children
+    finally:
+        if objects_fd is not None:
+            os.close(objects_fd)
 
     unreachable_keys = sorted(known - reachable)
     unreachable = [obj_info[k] for k in unreachable_keys]
@@ -642,13 +713,16 @@ def gc_objects(system, *, plan: dict, expected_plan: str, reason: str) -> dict:
         removed_any = False
         for suffix in ('', '.deflate'):
             candidate = objects.directory / (key + suffix)
-            if candidate.is_symlink():
+            try:
+                info = candidate.lstat()
+            except FileNotFoundError:
+                continue
+            if not is_ordinary_file_stat(info):
                 raise ValueError(f'ordinary object file required: {candidate}')
-            if candidate.is_file():
-                size = candidate.stat().st_size
-                candidate.unlink()
-                reclaimed += size
-                removed_any = True
+            size = info.st_size
+            candidate.unlink()
+            reclaimed += size
+            removed_any = True
         require(removed_any, f'object missing during gc: {key}')
         removed.append({'object': key, 'reclaimed_bytes': live_unreachable[key]['disk_bytes']})
     sync_dir(objects.directory)

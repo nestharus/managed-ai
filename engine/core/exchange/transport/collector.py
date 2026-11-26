@@ -3,7 +3,7 @@
 
 Admit records a request; resume dispatches it at most once; receive returns actual
 bytes and a conservative outcome. No shell, automatic retry, semantic acceptance,
-or follow-up command execution is provided. See CORE.md for the support scope.
+or follow-up command execution is provided. See engine/core/README.md for the support scope.
 """
 from __future__ import annotations
 
@@ -293,22 +293,22 @@ class Collector:
 
 
 def main(*, validate_root=None) -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--admission-deadline", type=float, help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="command", required=True)
-    admit = sub.add_parser("admit", help="explicitly admit one local argv job")
+    admit = sub.add_parser("admit", allow_abbrev=False, help="explicitly admit one local argv job")
     admit.add_argument("job_id")
     admit.add_argument("--consumer", required=True)
     admit.add_argument("--cwd", type=Path, required=True)
     admit.add_argument("--brief", type=Path, required=True)
     admit.add_argument("argv", nargs=argparse.REMAINDER)
-    sub.add_parser("resume", help="start only admitted jobs with no recorded attempt")
-    sub.add_parser("list", help="show all work and actual stream snapshots")
-    receive = sub.add_parser("receive", help="show actual material for a named consumer")
+    sub.add_parser("resume", allow_abbrev=False, help="start only admitted jobs with no recorded attempt")
+    sub.add_parser("list", allow_abbrev=False, help="show all work and actual stream snapshots")
+    receive = sub.add_parser("receive", allow_abbrev=False, help="show actual material for a named consumer")
     receive.add_argument("consumer")
     receive.add_argument("--current-brief", type=Path)
-    internal = sub.add_parser("_worker", help=argparse.SUPPRESS)
+    internal = sub.add_parser("_worker", allow_abbrev=False, help=argparse.SUPPRESS)
     internal.add_argument("key")
     internal.add_argument("token")
     args = parser.parse_args()

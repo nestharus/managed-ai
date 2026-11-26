@@ -5,7 +5,7 @@ import hmac
 import json
 import os
 
-from core.storage import encode, sha
+from core.storage import atomic_bytes, encode, is_ordinary_file_stat, sha
 
 ATTRIBUTE = 'user.g60.scope.v1'
 DOMAIN = b'g60/verified-record-scope/1\0'
@@ -21,16 +21,38 @@ class HeadReceipts:
 
     def _key(self, create=False):
         try:
-            if create and not self.key_path.exists():
-                try:
-                    fd = os.open(self.key_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-                except FileExistsError:
-                    pass
+            try:
+                info = self.key_path.lstat()
+            except FileNotFoundError:
+                info = None
+            if info is not None and not is_ordinary_file_stat(info):
+                return None
+            if create and (info is None or info.st_size == 0):
+                raw_key = os.urandom(32)
+                if info is None:
+                    try:
+                        fd = os.open(self.key_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                    except FileExistsError:
+                        pass
+                    else:
+                        with os.fdopen(fd, 'wb') as key:
+                            key.write(raw_key)
+                            key.flush()
+                            os.fsync(key.fileno())
                 else:
-                    with os.fdopen(fd, 'wb') as key:
-                        key.write(os.urandom(32))
+                    # Repair a 0-byte key left by an interrupted prior creation.
+                    atomic_bytes(self.key_path, raw_key)
+                    if os.name != 'nt':
+                        try:
+                            os.chmod(self.key_path, 0o600)
+                        except OSError:
+                            pass
             # Kept in the exchange, outside the mutable record/artifact workspace.
-            if self.key_path.is_symlink() or not self.key_path.is_file():
+            try:
+                info = self.key_path.lstat()
+            except FileNotFoundError:
+                return None
+            if not is_ordinary_file_stat(info):
                 return None
             with self.key_path.open('rb') as key:
                 value = key.read(33)
@@ -86,7 +108,10 @@ class HeadReceipts:
     def matches(path, expected):
         # Avoid a contiguous file-sized allocation. Existing canonical input and
         # checksum validation was attested by the owner that issued the projection.
-        if path.is_symlink() or not path.is_file():
+        try:
+            if not is_ordinary_file_stat(path.lstat()):
+                return False
+        except OSError:
             return False
         digest = hashlib.sha256()
         with path.open('rb') as source:

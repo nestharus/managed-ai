@@ -52,25 +52,42 @@ def _integer(value, name, maximum, minimum=1):
     return value
 
 
-class _ViewBudget:
-    """Count encoder chunks before admitting another returned collection.
+_VIEW_ENCODER = json.JSONEncoder(ensure_ascii=False, indent=2, allow_nan=False)
+_PROFILE_ENCODER = json.JSONEncoder(ensure_ascii=False, allow_nan=False)
 
-    The margin covers the small final counters/saturation labels. A single pair
-    is charged inside its actual nesting, conservatively repeating its wrapper.
-    No complete expanded JSON string is built to discover that it is too large.
-    """
+
+class _ViewBudget:
+    """Measure UTF-8 encoded JSON bytes with C-accelerated json.JSONEncoder.encode()."""
     def __init__(self):
         self.used = 1024
 
     def include(self, value):
-        size = 0
-        encoder = json.JSONEncoder(ensure_ascii=False, indent=2, allow_nan=False)
-        for chunk in encoder.iterencode(value):
-            size += len(chunk.encode('utf-8'))
-            if self.used + size > MAX_VIEW_BYTES:
-                return False
+        size = len(_VIEW_ENCODER.encode(value).encode('utf-8'))
+        if self.used + size > MAX_VIEW_BYTES:
+            return False
         self.used += size
         return True
+
+
+def _bounded_profile_bytes(body: dict) -> int:
+    """Measure profile UTF-8 JSON bytes using C-accelerated encoding with early per-row ceiling check."""
+    # Check each top-level collection item boundedly before full encode to prevent huge allocations.
+    total = 2
+    for key, val in body.items():
+        if key in COLLECTIONS and isinstance(val, list):
+            total += len(key.encode('utf-8')) + 6
+            for row in val:
+                total += len(_PROFILE_ENCODER.encode(row).encode('utf-8')) + 2
+                if total > MAX_PROFILE_BYTES + 4096:
+                    raise ValueError('composition profile exceeds the 2 MiB view input bound')
+        else:
+            total += len(key.encode('utf-8')) + len(_PROFILE_ENCODER.encode(val).encode('utf-8')) + 4
+            if total > MAX_PROFILE_BYTES + 4096:
+                raise ValueError('composition profile exceeds the 2 MiB view input bound')
+    exact = len(_PROFILE_ENCODER.encode(body).encode('utf-8'))
+    if exact > MAX_PROFILE_BYTES:
+        raise ValueError('composition profile exceeds the 2 MiB view input bound')
+    return exact
 
 
 class Composition:
@@ -84,11 +101,7 @@ class Composition:
                              '; information envelopes are not implicitly unwrapped')
         _fields(body, {'format', 'purpose', *COLLECTIONS, 'unknowns', 'coverage', 'content'}, 'composition')
         _text(body.get('purpose'), 'composition purpose')
-        input_bytes = 0
-        for chunk in json.JSONEncoder(ensure_ascii=False, allow_nan=False).iterencode(body):
-            input_bytes += len(chunk.encode('utf-8'))
-            if input_bytes > MAX_PROFILE_BYTES:
-                raise ValueError('composition profile exceeds the 2 MiB view input bound')
+        input_bytes = _bounded_profile_bytes(body)
         _strings(body.get('unknowns', []), 'composition unknowns')
         if 'coverage' in body and not isinstance(body['coverage'], (str, dict, list)):
             raise ValueError('composition coverage must be text, an object or a list')
@@ -151,6 +164,7 @@ class Composition:
         return body, rows, input_bytes, references
 
     def _basis(self, record):
+        from core.storage import is_ordinary_file_stat
         from store.records.records import is_content_addressed_basis
 
         captured, used = {}, 0
@@ -167,7 +181,15 @@ class Composition:
                         'current_sha256': None, 'status': 'unavailable'}
             try:
                 path = None if name.startswith('object:') else self.system.ex.path(name)
-                if path is None or not path.is_file():
+                info = None
+                if path is not None:
+                    try:
+                        st = path.lstat()
+                        if is_ordinary_file_stat(st):
+                            info = st
+                    except OSError:
+                        info = None
+                if info is None:
                     prefixes = getattr(getattr(self.system, 'record_store', None), 'content_addressed_basis_prefixes', ())
                     if (is_content_addressed_basis(row, prefixes=prefixes)
                             and self.system.ex.objects.has(row['sha256'])):
@@ -186,9 +208,9 @@ class Composition:
                             observed['custody'] = 'exchange-object'
                     else:
                         observed['status'] = 'missing'
-                elif path.stat().st_size > MAX_PROFILE_BYTES:
+                elif info.st_size > MAX_PROFILE_BYTES:
                     observed['status'] = 'per-source-byte-bound'
-                elif used + path.stat().st_size > MAX_BASIS_BYTES:
+                elif used + info.st_size > MAX_BASIS_BYTES:
                     observed['status'] = 'total-source-byte-bound'
                 else:
                     with path.open('rb') as source:
@@ -269,43 +291,30 @@ class Composition:
                 coverage['omitted_by_bytes'] += 1
         return result
 
-    def inspect(self, record_id, focus=None, limit=20, pair_limit=200):
-        _integer(limit, 'composition limit', 200)
-        _integer(pair_limit, 'composition pair_limit', 20000, minimum=0)
-        if focus is not None:
-            _text(focus, 'composition focus')
-        record = self.system.show(record_id)
-        body, rows, input_bytes, reference_count = self.profile(record)
-        basis, basis_bytes = self._basis(record)
-        known = {PREFIXES[c] + ':' + ident for c in COLLECTIONS for ident in rows[c]}
-        unresolved, unresolved_keys = [], set()
-
-        def missing(ref, owner):
-            item = {'ref': ref, 'declared_in': owner}
-            if (ref, owner) not in unresolved_keys:
-                unresolved_keys.add((ref, owner))
-                unresolved.append(item)
-            return ref
-
-        if focus is not None and focus not in known:
-            missing(focus, 'requested-focus')
+    def _evaluate_premises(self, rows, basis):
         premises = {}
         for ident, row in rows['premises'].items():
             support = self._support(row.get('basis', []), basis)
             declared = row.get('disposition', 'unassessed')
             availability = 'unassessed' if support['status'] == 'needs-qualification' else declared
             premises[ident] = dict(row, ref='premise:' + ident, disposition=declared,
-                                  availability=availability, support=support,
-                                  scope='Caller-supplied availability, qualified by nominated current source bindings.')
+                                   availability=availability, support=support,
+                                   scope='Caller-supplied availability, qualified by nominated current source bindings.')
+        return premises
+
+    def _evaluate_relations(self, rows, basis, known, missing):
         relations = {}
         for ident, row in rows['relations'].items():
             ref = 'relation:' + ident
             endpoints = ['element:' + value for key in ('from', 'to') for value in row.get(key, [])]
             unknown = [missing(value, ref) for value in endpoints if value not in known]
             relations[ident] = dict(row, ref=ref, observation=row.get('observation', 'unassessed'),
-                                   support=self._support(row.get('basis', []), basis),
-                                   unresolved_refs=unknown,
-                                   observation_scope='Caller-authored observation; no truth or alignment judgment inferred.')
+                                    support=self._support(row.get('basis', []), basis),
+                                    unresolved_refs=unknown,
+                                    observation_scope='Caller-authored observation; no truth or alignment judgment inferred.')
+        return relations
+
+    def _evaluate_opportunities(self, rows, premises, known, missing):
         opportunities = {}
         for ident, row in rows['opportunities'].items():
             ref = 'opportunity:' + ident
@@ -336,10 +345,89 @@ class Composition:
             if unknown:
                 availability = 'needs-qualification'
             opportunities[ident] = dict(row, ref=ref, disposition=row.get('disposition', 'open'),
-                                       phase=row.get('phase', 'unknown'), footprint=row.get('footprint', 'unknown'),
-                                       availability=availability, premise_alternatives=alternatives,
-                                       unresolved_refs=unknown,
-                                       footprint_scope='Declared resources are partial claims; implicit context/publication dependencies are not inferred.')
+                                        phase=row.get('phase', 'unknown'), footprint=row.get('footprint', 'unknown'),
+                                        availability=availability, premise_alternatives=alternatives,
+                                        unresolved_refs=unknown,
+                                        footprint_scope='Declared resources are partial claims; implicit context/publication dependencies are not inferred.')
+        return opportunities
+
+    @staticmethod
+    def _collect_pairs(all_opportunities, pair_limit, budget):
+        pairs = []
+        reads_sets = [frozenset(o.get('reads', ())) for o in all_opportunities]
+        writes_sets = [frozenset(o.get('writes', ())) for o in all_opportunities]
+        conflicts_sets = [frozenset(o.get('conflicts', ())) for o in all_opportunities]
+        byte_saturated = False
+        for index, left in enumerate(all_opportunities):
+            if len(pairs) >= pair_limit or byte_saturated:
+                break
+            l_id = left['id']
+            l_ref = left['ref']
+            l_reads, l_writes, l_conflicts = reads_sets[index], writes_sets[index], conflicts_sets[index]
+            l_unknown = left['footprint'] == 'unknown'
+            for j in range(index + 1, len(all_opportunities)):
+                if len(pairs) >= pair_limit:
+                    break
+                right = all_opportunities[j]
+                reasons = []
+                if right['id'] in l_conflicts or l_id in conflicts_sets[j]:
+                    reasons.append({'kind': 'explicit-conflict'})
+                r_reads, r_writes = reads_sets[j], writes_sets[j]
+                if l_writes and r_writes:
+                    common = l_writes & r_writes
+                    if common:
+                        reasons.append({'kind': 'write-write', 'resources': sorted(common)})
+                if l_writes and r_reads:
+                    common = l_writes & r_reads
+                    if common:
+                        reasons.append({'kind': 'left-write-right-read', 'resources': sorted(common)})
+                if l_reads and r_writes:
+                    common = l_reads & r_writes
+                    if common:
+                        reasons.append({'kind': 'left-read-right-write', 'resources': sorted(common)})
+                unknown = l_unknown or right['footprint'] == 'unknown'
+                pair = {'left': l_ref, 'right': right['ref'],
+                        'phase_refs': [{'opportunity': l_ref, 'field': 'phase'},
+                                       {'opportunity': right['ref'], 'field': 'phase'}],
+                        'interactions': reasons,
+                        'status': ('declared-interaction' if reasons else
+                                   'unknown-footprint' if unknown else 'no-declared-interaction'),
+                        'unknown_footprint': unknown,
+                        'scope': 'No declared interaction is not actual independence; context and effect contracts still apply.'}
+                if not budget.include({'interactions': [pair]}):
+                    byte_saturated = True
+                    break
+                pairs.append(pair)
+        return pairs, byte_saturated
+
+    def inspect(self, record_id, focus=None, limit=20, pair_limit=200):
+        _integer(limit, 'composition limit', 200)
+        _integer(pair_limit, 'composition pair_limit', 20000, minimum=0)
+        if focus is not None:
+            _text(focus, 'composition focus')
+        record = self.system.show(record_id)
+        body, rows, input_bytes, reference_count = self.profile(record)
+        basis, basis_bytes = self._basis(record)
+        known = {PREFIXES[c] + ':' + ident for c in COLLECTIONS for ident in rows[c]}
+        # Unambiguously resolve a bare ID supplied to --focus (e.g. 'pkg-engine-store' -> 'element:pkg-engine-store').
+        if focus is not None and ':' not in focus:
+            matches = [PREFIXES[c] + ':' + focus for c in COLLECTIONS if focus in rows[c]]
+            if len(matches) == 1:
+                focus = matches[0]
+        unresolved, unresolved_keys = [], set()
+
+        def missing(ref, owner):
+            item = {'ref': ref, 'declared_in': owner}
+            if (ref, owner) not in unresolved_keys:
+                unresolved_keys.add((ref, owner))
+                unresolved.append(item)
+            return ref
+
+        if focus is not None and focus not in known:
+            missing(focus, 'requested-focus')
+        premises = self._evaluate_premises(rows, basis)
+        relations = self._evaluate_relations(rows, basis, known, missing)
+        opportunities = self._evaluate_opportunities(rows, premises, known, missing)
 
         focus_refs = {focus} if focus is not None else set()
         if focus is not None and focus.startswith('element:'):
@@ -399,38 +487,8 @@ class Composition:
         if not budget.include(result):
             raise ValueError('composition base view exceeds the 1 MiB returned-view byte bound; '
                              'reduce limit, narrow the nominated composition, or read its exact body with show')
-        # Pair comparisons concern the whole nominated opportunity collection,
-        # ordered focus-first, not just the displayed detail rows. Stop before
-        # accumulation would exceed either the count or returned byte bound.
-        byte_saturated = False
-        for index, left in enumerate(all_opportunities):
-            if len(pairs) >= pair_limit or byte_saturated:
-                break
-            for right in all_opportunities[index + 1:]:
-                if len(pairs) >= pair_limit:
-                    break
-                reasons = []
-                if right['id'] in left.get('conflicts', []) or left['id'] in right.get('conflicts', []):
-                    reasons.append({'kind': 'explicit-conflict'})
-                for kind, first, second in [('write-write', 'writes', 'writes'),
-                                            ('left-write-right-read', 'writes', 'reads'),
-                                            ('left-read-right-write', 'reads', 'writes')]:
-                    common = sorted(set(left.get(first, [])) & set(right.get(second, [])))
-                    if common:
-                        reasons.append({'kind': kind, 'resources': common})
-                unknown = left['footprint'] == 'unknown' or right['footprint'] == 'unknown'
-                pair = {'left': left['ref'], 'right': right['ref'],
-                        'phase_refs': [{'opportunity': left['ref'], 'field': 'phase'},
-                                       {'opportunity': right['ref'], 'field': 'phase'}],
-                        'interactions': reasons,
-                        'status': ('declared-interaction' if reasons else
-                                   'unknown-footprint' if unknown else 'no-declared-interaction'),
-                        'unknown_footprint': unknown,
-                        'scope': 'No declared interaction is not actual independence; context and effect contracts still apply.'}
-                if not budget.include({'interactions': [pair]}):
-                    byte_saturated = True
-                    break
-                pairs.append(pair)
+        collected, byte_saturated = self._collect_pairs(all_opportunities, pair_limit, budget)
+        pairs.extend(collected)
         pair_coverage = result['coverage']['pairs']
         pair_coverage.update(examined=len(pairs), omitted=count - len(pairs))
         if byte_saturated:

@@ -106,6 +106,8 @@ def _store_commands(sub):
     status = sub.add_parser('status', allow_abbrev=False)
     status.add_argument('--verify-all-basis', action='store_true',
                         help='Cryptographically verify basis files for inactive non-duty records too')
+    status.add_argument('--summary', action='store_true',
+                        help='Return a compact status summary (counts, current goal, gaps) instead of full arrays')
     dedup = sub.add_parser('deduplicate-originals', allow_abbrev=False,
                            help='plan or execute deduplication of object-backed content-addressed originals').add_subparsers(
                                dest='dedup_action', required=True)
@@ -279,7 +281,18 @@ def _source_and_composition_commands(sub):
     materialize = sub.add_parser('materialize', allow_abbrev=False)
     materialize.add_argument('operation')
     discovery = sub.add_parser('discover', allow_abbrev=False)
-    discovery.add_argument('--request', required=True, type=Path)
+    discovery.add_argument('--request', type=Path,
+                           help='Discovery request JSON file (optional when inline flags such as --query are supplied)')
+    discovery.add_argument('--query', help='Inline lexical discovery query')
+    discovery.add_argument('--scope', action='append', dest='scopes', choices=('records', 'project', 'techniques'),
+                           help='Limit discovery scope (repeatable)')
+    discovery.add_argument('--anchor', action='append', dest='anchors',
+                           help='Relation traversal anchor ref, e.g. record:ID (repeatable)')
+    discovery.add_argument('--content', action='store_true', help='Also search full bodies for lexical queries')
+    discovery.add_argument('--direction', choices=('outgoing', 'incoming', 'both'))
+    discovery.add_argument('--hops', type=int)
+    discovery.add_argument('--limit', type=int)
+    discovery.add_argument('--records-only', action='store_true')
     composition = sub.add_parser('compose', allow_abbrev=False)
     composition.add_argument('--record', required=True)
     composition.add_argument('--interaction-map', action='store_true', help='group declared interactions by resource and explicit conflict')

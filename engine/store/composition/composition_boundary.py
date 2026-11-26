@@ -2,6 +2,7 @@
 import hashlib
 import json
 
+from core.storage import is_ordinary_file_stat
 from store.query.information import CONTRACT_KIND
 from store.protocol.identities import exact_fields, identity, record_identity, require, strict_json
 from store.composition.composition import Composition, MAX_PROFILE_BYTES, MAX_VIEW_BYTES, _integer, _strings, _text
@@ -131,7 +132,11 @@ def inspect_boundary(system, ident, relation_id, limit):
         raise ValueError('record and relation must bind the observations path')
     # Read exactly the bytes whose identity is checked. A changed file requires a new binding.
     path = system.ex.path(name)
-    if not path.is_file() or path.is_symlink():
+    try:
+        info = path.lstat()
+    except OSError:
+        raise ValueError('observations require an ordinary file') from None
+    if not is_ordinary_file_stat(info):
         raise ValueError('observations require an ordinary file')
     with path.open('rb') as src:
         data = src.read(MAX_PROFILE_BYTES+1)
@@ -148,6 +153,6 @@ def inspect_boundary(system, ident, relation_id, limit):
     result = analyze(trial, limit, definition)
     report = dict(format=BOUNDARY_VIEW_V2 if definition else BOUNDARY_VIEW_V1, binding=binding, record={k:record[k] for k in ('id','revision','sha256')},
                 relation=relation_id, prediction=relation['prediction'], basis=basis[name], **result)
-    if len(json.dumps(report, indent=2)) > MAX_VIEW_BYTES:
+    if len(json.dumps(report, indent=2, ensure_ascii=False, allow_nan=False).encode('utf-8')) > MAX_VIEW_BYTES:
         raise ValueError('boundary report exceeds 1 MiB; reduce detail or scope')
     return report

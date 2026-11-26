@@ -16,6 +16,8 @@ from core.storage import (
     _OPEN_RO_NOFOLLOW,
     check_ordinary_ancestors,
     encode,
+    is_ordinary_dir_stat,
+    is_ordinary_file_stat,
     open_directory,
     safe_relpath,
     sha,
@@ -41,27 +43,23 @@ def ordinary(path):
 def _is_safe_member_relpath(name: str) -> bool:
     if not isinstance(name, str) or not name or '\0' in name or '\\' in name:
         return False
-    rel = Path(name)
-    if rel.is_absolute() or rel.anchor or '..' in rel.parts:
+    if name.startswith('/') or (len(name) >= 2 and name[1] == ':'):
         return False
-    from pathlib import PureWindowsPath
-    if PureWindowsPath(name).drive:
-        return False
-    if any(len(part) >= 2 and part[1] == ':' for part in name.split('/')):
-        return False
+    for part in name.split('/'):
+        if part == '..' or (len(part) >= 2 and part[1] == ':'):
+            return False
     return True
 
 
 def _read_ordinary_under(root: Path, name: str, *, byte_limit: int | None = None,
                          validated_root: bool = False, root_fd: int | None = None) -> bytes:
-    """Read an ordinary non-symlink file relative to root using O_NOFOLLOW dir-FD traversal."""
+    """Read an ordinary non-symlink file relative to root using O_NOFOLLOW dir-FD or Windows lstat."""
     if not _is_safe_member_relpath(name):
         raise ValueError('invalid selected member path: ' + str(name))
-    rel = Path(name)
-    parts = [part for part in rel.parts if part not in ('', '.')]
+    parts = [part for part in name.split('/') if part not in ('', '.')]
     if not parts:
         raise ValueError('invalid selected member path: ' + str(name))
-    display = root / rel
+    display = root.joinpath(*parts)
     if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
         opened_fds: list[int] = []
         try:
@@ -112,10 +110,33 @@ def _read_ordinary_under(root: Path, name: str, *, byte_limit: int | None = None
         finally:
             for fd in reversed(opened_fds):
                 os.close(fd)
-    path = source_path(root, name)
-    if byte_limit is not None and path.stat().st_size > byte_limit:
+    if not validated_root:
+        _verify_ordinary_dir(root)
+    cur_str = str(root)
+    for segment in parts[:-1]:
+        cur_str = cur_str + os.sep + segment
+        try:
+            seg_info = os.lstat(cur_str)
+        except OSError:
+            raise ValueError('ordinary selected source required: ' + str(display)) from None
+        if not is_ordinary_dir_stat(seg_info):
+            raise ValueError('ordinary selected source required: ' + str(display))
+    leaf_str = cur_str + os.sep + parts[-1]
+    try:
+        leaf_info = os.lstat(leaf_str)
+    except OSError:
+        raise ValueError('ordinary selected source required: ' + str(display)) from None
+    if not is_ordinary_file_stat(leaf_info):
+        raise ValueError('ordinary selected source required: ' + str(display))
+    if byte_limit is not None and leaf_info.st_size > byte_limit:
         raise ValueError('source body exceeds the requested acquisition bound')
-    return path.read_bytes()
+    with open(leaf_str, 'rb') as stream:
+        if byte_limit is not None:
+            raw = stream.read(byte_limit + 1)
+            if len(raw) > byte_limit:
+                raise ValueError('source body exceeds the requested acquisition bound')
+            return raw
+        return stream.read()
 
 
 def source_path(root, name):
@@ -464,9 +485,18 @@ class DomainSelection:
                                    source_root=(path.parent / domain.get('source_root', '.')).resolve())
         for binding in descriptor.get('catalogues', []):
             self.add_catalogue(self.root / binding['path'], binding['sha256'])
-        ids = [e['id'] for e in self.entries]
-        if len(ids) != len(set(ids)):
-            raise ValueError('selected source identity collision')
+        seen_ids: set[str] = set()
+        collisions: list[str] = []
+        for entry in self.entries:
+            ident = entry['id']
+            if ident in seen_ids and ident not in collisions:
+                collisions.append(ident)
+            seen_ids.add(ident)
+        if collisions:
+            sample = ', '.join(sorted(collisions)[:5])
+            suffix = f' (+{len(collisions) - 5} more)' if len(collisions) > 5 else ''
+            hint = ' (note: selected domain manifests auto-load their declared catalogues; omit duplicate --catalogue flags)' if descriptor.get('catalogues') else ''
+            raise ValueError(f'selected source identity collision: {sample}{suffix}{hint}')
         if required_domains - set(self.domains):
             raise ValueError('required domains are not selected: ' + ', '.join(sorted(required_domains - set(self.domains))))
         if len({tool['id'] for tool in self.tools}) != len(self.tools):

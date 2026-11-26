@@ -17,6 +17,7 @@ import json
 import os
 import runpy
 import stat
+import subprocess
 import sys
 
 HERE = Path(__file__).resolve().parent
@@ -104,68 +105,124 @@ def _is_test_module_name(name: str) -> bool:
     return lower.endswith('.py') and (lower.startswith('test_') or lower.endswith('_test.py'))
 
 
+def _git_provenance(engine: Path) -> dict[str, object] | None:
+    """Return optional Git commit/clean provenance for a checkout, or None outside Git."""
+    probe = engine
+    has_git = False
+    for candidate in (probe, *probe.parents):
+        if (candidate / '.git').exists():
+            has_git = True
+            break
+    if not has_git:
+        return None
+    env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+    try:
+        head = subprocess.run(
+            ['git', '-C', str(engine), 'rev-parse', '--verify', 'HEAD'],
+            capture_output=True, text=True, encoding='utf-8', env=env, timeout=3.0,
+        )
+        if head.returncode != 0:
+            return None
+        commit = head.stdout.strip()
+        if len(commit) != 40 or any(c not in '0123456789abcdef' for c in commit.lower()):
+            return None
+        status = subprocess.run(
+            ['git', '-C', str(engine), 'status', '--porcelain', '--', '.'],
+            capture_output=True, text=True, encoding='utf-8', env=env, timeout=3.0,
+        )
+        if status.returncode != 0:
+            return None
+        return {'git_commit': commit.lower(), 'git_clean': not bool(status.stdout.strip())}
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _engine_record(engine: Path, root: Path, code_sha: str) -> dict[str, object]:
+    record: dict[str, object] = {
+        'path': safe_relpath(engine, root),
+        'code_sha256': code_sha,
+        'engine_api': ENGINE_API,
+    }
+    prov = _git_provenance(engine)
+    if prov is not None:
+        record.update(prov)
+    return record
+
+
+def _status_payload(root: Path, engine: Path, runtime: Path, config: dict, descriptor_sha256: str) -> dict:
+    store = config['store']
+    eng = config['engine']
+    payload = {
+        'format': FORMAT,
+        'deployment': str(root),
+        'engine': str(engine),
+        'engine_code_sha256': eng['code_sha256'],
+        'store': str(runtime),
+        'instance_id': store['instance_id'],
+        'store_schema': store['store_schema'],
+        'engine_api': store['engine_api'],
+        'descriptor_sha256': descriptor_sha256,
+        'scope': 'One shared code tree; explicit store and data-domain selection. No copied runtime.',
+    }
+    if 'git_commit' in eng:
+        payload['engine_git_commit'] = eng['git_commit']
+    if 'git_clean' in eng:
+        payload['engine_git_clean'] = eng['git_clean']
+    return payload
+
+
+def _ordinary_dir(path: Path, error_prefix: str = 'ordinary deployment, engine and store directories required') -> Path:
+    return check_ordinary_ancestors(Path(path), expect_dir=True, error_prefix=error_prefix).resolve(strict=True)
+
+
 def code_identity(engine):
     """Hash executable Python source modules under engine/ (excluding tests, examples, patterns)."""
     engine = _engine_directory(engine)
-
-    def scan_subtree(start_dir, start_cache):
-        found = []
-        pending = [(start_dir, start_cache)]
-        while pending:
-            directory, cache = pending.pop()
-            with os.scandir(directory) as entries:
-                for entry in entries:
-                    path = directory / entry.name
-                    mode = _ordinary_mode(path, entry.stat(follow_symlinks=False))
-                    if stat.S_ISDIR(mode):
-                        if entry.name.casefold() in CODE_IDENTITY_EXCLUDED_DIRS:
-                            continue
-                        pending.append((path, cache or path.name.casefold() == '__pycache__'))
-                    elif cache:
-                        if path.suffix.lower() != '.pyc':
-                            raise ValueError(f'ordinary bytecode cache files required below __pycache__: {path}')
-                    elif path.name.lower().endswith(NON_SOURCE_SUFFIXES):
+    paths: list[Path] = []
+    pending: list[tuple[Path, bool]] = [(engine, False)]
+    while pending:
+        directory, cache = pending.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                name = entry.name
+                path = directory / name
+                mode = _ordinary_mode(path, entry.stat(follow_symlinks=False))
+                if stat.S_ISDIR(mode):
+                    lower = name.casefold()
+                    if lower in CODE_IDENTITY_EXCLUDED_DIRS:
+                        continue
+                    pending.append((path, cache or lower == '__pycache__'))
+                elif cache:
+                    if not name.lower().endswith('.pyc'):
+                        raise ValueError(f'ordinary bytecode cache files required below __pycache__: {path}')
+                else:
+                    lower = name.lower()
+                    if lower.endswith(NON_SOURCE_SUFFIXES):
                         raise ValueError(f'shared engine requires Python source for executable modules: {path}')
-                    elif path.match('*.py') and not _is_test_module_name(entry.name):
-                        found.append(path)
-        return found
-
-    paths = []
-    top_subdirs = []
-    with os.scandir(engine) as entries:
-        for entry in entries:
-            path = engine / entry.name
-            mode = _ordinary_mode(path, entry.stat(follow_symlinks=False))
-            if stat.S_ISDIR(mode):
-                if entry.name.casefold() in CODE_IDENTITY_EXCLUDED_DIRS:
-                    continue
-                top_subdirs.append((path, path.name.casefold() == '__pycache__'))
-            elif path.name.lower().endswith(NON_SOURCE_SUFFIXES):
-                raise ValueError(f'shared engine requires Python source for executable modules: {path}')
-            elif path.match('*.py') and not _is_test_module_name(entry.name):
-                paths.append(path)
-    if len(top_subdirs) >= 2:
-        with ThreadPoolExecutor(max_workers=min(8, len(top_subdirs))) as pool:
-            for sub_paths in pool.map(lambda item: scan_subtree(*item), top_subdirs):
-                paths.extend(sub_paths)
-    else:
-        for sub_dir, sub_cache in top_subdirs:
-            paths.extend(scan_subtree(sub_dir, sub_cache))
+                    if lower.endswith('.py') and not _is_test_module_name(name):
+                        paths.append(path)
     sorted_paths = sorted(paths)
     interfaces = [(NATIVE_ENTRY, NATIVE_CONTRACT)]
     declaration_paths = {path for pair in interfaces for path in pair}
 
-    def hash_one(path):
-        relative = path.relative_to(engine)
-        raw = path.read_bytes()
-        return relative, {'path': relative.as_posix(), 'sha256': sha(raw)}, (raw if relative in declaration_paths else None)
+    def hash_chunk(chunk: list[Path]):
+        out = []
+        for path in chunk:
+            relative = path.relative_to(engine)
+            raw = path.read_bytes()
+            out.append((relative, {'path': relative.as_posix(), 'sha256': sha(raw)},
+                        raw if relative in declaration_paths else None))
+        return out
 
     rows, declarations = [], {}
-    if len(sorted_paths) >= 16:
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            hashed = list(pool.map(hash_one, sorted_paths))
+    if len(sorted_paths) >= 32:
+        workers = min(8, (len(sorted_paths) + 15) // 16)
+        step = (len(sorted_paths) + workers - 1) // workers
+        chunks = [sorted_paths[i:i + step] for i in range(0, len(sorted_paths), step)]
+        with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+            hashed = [item for sub in pool.map(hash_chunk, chunks) for item in sub]
     else:
-        hashed = [hash_one(path) for path in sorted_paths]
+        hashed = hash_chunk(sorted_paths)
     for relative, row, raw in hashed:
         rows.append(row)
         if raw is not None:
@@ -272,7 +329,7 @@ class DeploymentSelection:
     """Read or replace deployment metadata, including when the incumbent code has drifted."""
 
     def __init__(self, root, *, descriptor=None):
-        self.root = Path(root).resolve()
+        self.root = _ordinary_dir(root)
         path = self.root / 'deployment.json'
         raw = _descriptor_bytes(path) if descriptor is None else descriptor
         self.config = _descriptor_object(path, raw)
@@ -284,20 +341,35 @@ class DeploymentSelection:
         if sha(_descriptor_bytes(self.root / 'deployment.json')) != self.descriptor_sha256:
             raise ValueError('deployment selection revision conflict; reopen the deployment')
 
-    def stage(self, edition, engine):
+    def stage(self, edition, engine, *, from_head: bool = False):
         self._require_current()
-        packet_id(edition)
         engine = _engine_directory(engine)
+        if from_head:
+            if edition is not None:
+                raise ValueError('supply either an explicit edition or --from-head, not both')
+            prov = _git_provenance(engine)
+            if prov is None:
+                raise ValueError('stage --from-head requires an engine inside a Git checkout')
+            suffix = '' if prov['git_clean'] else '-dirty'
+            edition = f"commit-{prov['git_commit'][:12]}{suffix}"
+        if edition is None:
+            raise ValueError('edition name or --from-head is required')
+        packet_id(edition)
         store = self.config.get('store')
         if isinstance(store, dict) and isinstance(store.get('path'), str):
             store = dict(store, path=store['path'].replace('\\', '/'))
+        code_sha = code_identity(engine)
         value = dict(self.config, edition=edition,
-                     engine={'path': safe_relpath(engine, self.root), 'code_sha256': code_identity(engine),
-                             'engine_api': ENGINE_API})
+                     engine=_engine_record(engine, self.root, code_sha))
         if store is not None:
             value['store'] = store
-        atomic_bytes(self.root / 'candidate.json', encode(value))
-        return {'edition': edition, 'candidate_sha256': sha(encode(value)), 'engine': str(engine)}
+        encoded = encode(value)
+        atomic_bytes(self.root / 'candidate.json', encoded)
+        result = {'edition': edition, 'candidate_sha256': sha(encoded), 'engine': str(engine)}
+        if 'git_commit' in value['engine']:
+            result['engine_git_commit'] = value['engine']['git_commit']
+            result['engine_git_clean'] = value['engine']['git_clean']
+        return result
 
     def activate(self, edition, expected, manifest_sha, reason):
         if sha(_descriptor_bytes(self.root / 'deployment.json')) != expected:
@@ -315,19 +387,23 @@ class DeploymentSelection:
         engine = _engine_directory(self.root / candidate['engine']['path'])
         if code_identity(engine) != candidate['engine']['code_sha256']:
             raise ValueError('staged code changed')
-        binding = runtime_binding((self.root / candidate['store']['path']).resolve())
+        store_root = _ordinary_dir(self.root / candidate['store']['path'])
+        binding = runtime_binding(store_root)
         if any(candidate['store'].get(k) != v for k, v in binding.items()):
             raise ValueError('candidate selects an incompatible or different store')
         candidate['account'] = reason
         descriptor_bytes = encode(candidate)
+        descriptor_sha = sha(descriptor_bytes)
         atomic_bytes(self.root / 'deployment.json', descriptor_bytes)
         step = 'candidate_cleanup'
         try:
             (self.root / 'candidate.json').unlink()
             step = 'status_readback'
-            return Deployment.current_status(self.root)
+            readback_raw = _descriptor_bytes(self.root / 'deployment.json')
+            readback_cfg = _descriptor_object(self.root / 'deployment.json', readback_raw)
+            return _status_payload(self.root, engine, store_root, readback_cfg, sha(readback_raw))
         except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
-            raise ActivationIncomplete(step, sha(descriptor_bytes), exc) from exc
+            raise ActivationIncomplete(step, descriptor_sha, exc) from exc
 
 
 def _check_required_domain(runtime: Path, required_domain: str):
@@ -363,28 +439,38 @@ class Deployment(DeploymentSelection):
     def __init__(self, root, *, descriptor=None):
         super().__init__(root, descriptor=descriptor)
         self.engine = _engine_directory(self.root / self.config['engine']['path'])
-        self.runtime = (self.root / self.config['store']['path']).resolve()
-        if any(p.is_symlink() for p in (self.root, self.engine, self.runtime)):
-            raise ValueError('ordinary deployment, engine and store directories required')
+        self.runtime = _ordinary_dir(self.root / self.config['store']['path'])
         self._verify_binding()
 
     @classmethod
     def initialize(cls, root, runtime, engine=None):
-        root, runtime = Path(root).resolve(), Path(runtime).resolve()
+        raw_root = Path(root)
+        for existing in (raw_root, *raw_root.parents):
+            try:
+                info = existing.lstat()
+            except FileNotFoundError:
+                continue
+            if is_reparse_or_symlink(info):
+                raise ValueError(f'ordinary deployment, engine and store directories required: {existing}')
+        runtime = _ordinary_dir(runtime)
         engine = _engine_directory(engine or ENGINE_ROOT)
-        if root == runtime or root.is_relative_to(runtime) or root == engine or root.is_relative_to(engine):
+        resolved_root = Path(os.path.abspath(raw_root))
+        if (resolved_root == runtime or resolved_root.is_relative_to(runtime)
+                or resolved_root == engine or resolved_root.is_relative_to(engine)):
             raise ValueError('deployment metadata must be separate from store and engine')
-        if (root / 'deployment.json').exists():
+        if (resolved_root / 'deployment.json').exists():
             raise ValueError('deployment already exists; stage and activate an explicit new selection')
         binding = runtime_binding(runtime)
+        raw_root.mkdir(parents=True, exist_ok=True)
+        root_dir = _ordinary_dir(raw_root)
+        code_sha = code_identity(engine)
         value = {'format': FORMAT, 'controller_version': VERSION,
-                 'engine': {'path': safe_relpath(engine, root), 'code_sha256': code_identity(engine),
-                            'engine_api': ENGINE_API},
-                 'store': {'path': safe_relpath(runtime, root), **binding},
+                 'engine': _engine_record(engine, root_dir, code_sha),
+                 'store': {'path': safe_relpath(runtime, root_dir), **binding},
                  'account': 'Initial explicit shared engine/store selection.'}
-        root.mkdir(parents=True, exist_ok=True)
-        atomic_bytes(root / 'deployment.json', encode(value))
-        return cls.current_status(root)
+        encoded = encode(value)
+        atomic_bytes(root_dir / 'deployment.json', encoded)
+        return _status_payload(root_dir, engine, runtime, value, sha(encoded))
 
     def _verify_engine(self):
         if self.config['engine'].get('engine_api') != ENGINE_API:
@@ -408,9 +494,9 @@ class Deployment(DeploymentSelection):
     def admitted(cls, root, *, engine=None, instance=None, deployment_sha=None, read_only=True,
                  store_sha=None, extra_stores=(), extra_read_only=False, require_domain=None, deadline=None):
         """Enter a pinned domain operation under shared deployment.lock, then sorted store owner.locks."""
-        root = Path(root).resolve()
-        expected_engine = None if engine is None else Path(engine).resolve()
-        extra_resolved = tuple(Path(p).resolve(strict=True) for p in extra_stores)
+        root = _ordinary_dir(root)
+        expected_engine = None if engine is None else _engine_directory(engine)
+        extra_resolved = tuple(_ordinary_dir(p) for p in extra_stores)
         store_guard = shared if read_only else exclusive
 
         def acquire(guards):
@@ -419,12 +505,12 @@ class Deployment(DeploymentSelection):
             selection = DeploymentSelection(root, descriptor=descriptor)
             if deployment_sha is not None and selection.descriptor_sha256 != deployment_sha:
                 raise ValueError('deployment descriptor differs')
-            actual_engine = (root / selection.config['engine']['path']).resolve()
+            actual_engine = _engine_directory(root / selection.config['engine']['path'])
             if expected_engine is not None and actual_engine != expected_engine:
                 raise ValueError('selected native engine differs')
             if instance is not None and selection.config['store']['instance_id'] != instance:
                 raise ValueError('recipient instance differs')
-            runtime = (root / selection.config['store']['path']).resolve()
+            runtime = _ordinary_dir(root / selection.config['store']['path'])
             all_stores = sorted({runtime, *extra_resolved}, key=lambda p: str(p))
             for store_root in all_stores:
                 if store_root == runtime or not extra_read_only:
@@ -447,20 +533,29 @@ class Deployment(DeploymentSelection):
     @classmethod
     def current_status(cls, root):
         selected = cls(root)
-        store = selected.config['store']
-        return {'format': FORMAT, 'deployment': str(selected.root), 'engine': str(selected.engine),
-                'engine_code_sha256': selected.config['engine']['code_sha256'],
-                'store': str(selected.runtime), 'instance_id': store['instance_id'],
-                'store_schema': store['store_schema'], 'engine_api': store['engine_api'],
-                'descriptor_sha256': selected.descriptor_sha256,
-                'scope': 'One shared code tree; explicit store and data-domain selection. No copied runtime.'}
+        return _status_payload(selected.root, selected.engine, selected.runtime,
+                               selected.config, selected.descriptor_sha256)
 
     def status(self):
-        return type(self).current_status(self.root)
+        return Deployment.current_status(self.root)
 
     @classmethod
     def dispatch_current(cls, root, arguments):
-        return cls(root)._dispatch(arguments)
+        root_dir = _ordinary_dir(root)
+        if arguments[:1] == ['explain-context']:
+            selected = cls(root_dir)
+            return selected._dispatch(arguments, already_admitted=True)
+        descriptor = read_descriptor_bytes(root_dir / 'deployment.json')
+        selection = DeploymentSelection(root_dir, descriptor=descriptor)
+        engine = _engine_directory(root_dir / selection.config['engine']['path'])
+        runtime = _ordinary_dir(root_dir / selection.config['store']['path'])
+        instance = selection.config['store']['instance_id']
+        read_only, extra_stores = _precheck_local_system_args(engine, runtime, arguments)
+        with cls.admitted(
+                root_dir, engine=engine, instance=instance,
+                deployment_sha=selection.descriptor_sha256, read_only=read_only,
+                extra_stores=extra_stores, extra_read_only=bool(extra_stores)) as bound:
+            return bound._dispatch(arguments, already_admitted=True, proof_store_locked=bool(extra_stores))
 
     def system(self, arguments):
         self._require_current()
@@ -599,7 +694,7 @@ def parser():
     init = sub.add_parser('init', allow_abbrev=False); init.add_argument('--runtime', '--store', dest='runtime', required=True, type=Path)
     init.add_argument('--engine', type=Path)
     sub.add_parser('status', allow_abbrev=False); sub.add_parser('verify', allow_abbrev=False)
-    stage = sub.add_parser('stage', allow_abbrev=False); stage.add_argument('edition'); stage.add_argument('--engine', required=True, type=Path)
+    stage = sub.add_parser('stage', allow_abbrev=False); stage.add_argument('edition', nargs='?'); stage.add_argument('--engine', required=True, type=Path); stage.add_argument('--from-head', action='store_true', help='Derive edition name from the Git HEAD commit of --engine')
     activate = sub.add_parser('activate', allow_abbrev=False); activate.add_argument('edition'); activate.add_argument('--expected', required=True)
     activate.add_argument('--manifest-sha256', required=True); activate.add_argument('--reason', required=True)
     system = sub.add_parser('system', allow_abbrev=False); system.add_argument('arguments', nargs=argparse.REMAINDER)
@@ -653,10 +748,11 @@ def _precheck_local_system_args(engine, runtime, arguments):
 
 def main():
     args = parser().parse_args()
-    root = args.deployment.resolve()
+    raw_root = args.deployment
     try:
         if args.action == 'system' and args.arguments[:1] == ['explain-context']:
             # Read frozen evidence without creating deployment or store lock files (single code_identity).
+            root = _ordinary_dir(raw_root)
             selected = Deployment(root)
             if args.expected_descriptor is not None and selected.descriptor_sha256 != args.expected_descriptor:
                 raise ValueError('deployment descriptor differs')
@@ -666,12 +762,13 @@ def main():
             ep.emit(result, app_args)
             return
         if args.action == 'system':
+            root = _ordinary_dir(raw_root)
             descriptor = read_descriptor_bytes(root / 'deployment.json')
             selection = DeploymentSelection(root, descriptor=descriptor)
             if args.expected_descriptor is not None and selection.descriptor_sha256 != args.expected_descriptor:
                 raise ValueError('deployment descriptor differs')
             engine = _engine_directory(root / selection.config['engine']['path'])
-            runtime = (root / selection.config['store']['path']).resolve()
+            runtime = _ordinary_dir(root / selection.config['store']['path'])
             instance = selection.config['store']['instance_id']
             read_only, extra_stores = _precheck_local_system_args(engine, runtime, args.arguments)
             with report_admission(args.action), Deployment.admitted(
@@ -684,7 +781,14 @@ def main():
             ep.emit(result, app_args)
             return
         if args.action == 'init':
-            root.mkdir(parents=True, exist_ok=True)
+            for existing in (raw_root, *raw_root.parents):
+                try:
+                    if is_reparse_or_symlink(existing.lstat()):
+                        raise ValueError(f'ordinary deployment, engine and store directories required: {existing}')
+                except FileNotFoundError:
+                    continue
+            raw_root.mkdir(parents=True, exist_ok=True)
+        root = _ordinary_dir(raw_root)
         lock = root / 'deployment.lock'
         guard = shared if args.action in {'status', 'verify'} else exclusive
         admission = observation_guard(guard, lock, deadline=args.admission_deadline)
@@ -694,20 +798,15 @@ def main():
             if args.action == 'init':
                 result = Deployment.initialize(root, args.runtime, args.engine)
             elif args.action == 'stage':
-                result = DeploymentSelection(root).stage(args.edition, args.engine)
+                result = DeploymentSelection(root).stage(args.edition, args.engine, from_head=args.from_head)
             elif args.action == 'activate':
                 result = DeploymentSelection(root).activate(args.edition, args.expected, args.manifest_sha256, args.reason)
             elif args.action in {'status', 'verify'}:
                 selected = Deployment(root)
                 if args.require_domain is not None:
                     _check_required_domain(selected.runtime, args.require_domain)
-                store = selected.config['store']
-                result = {'format': FORMAT, 'deployment': str(selected.root), 'engine': str(selected.engine),
-                          'engine_code_sha256': selected.config['engine']['code_sha256'],
-                          'store': str(selected.runtime), 'instance_id': store['instance_id'],
-                          'store_schema': store['store_schema'], 'engine_api': store['engine_api'],
-                          'descriptor_sha256': selected.descriptor_sha256,
-                          'scope': 'One shared code tree; explicit store and data-domain selection. No copied runtime.'}
+                result = _status_payload(selected.root, selected.engine, selected.runtime,
+                                         selected.config, selected.descriptor_sha256)
         print(json.dumps(result, indent=2))
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         failure = {'status': 'unresolved', 'operation': args.action, 'error': str(exc)}

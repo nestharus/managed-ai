@@ -1,9 +1,16 @@
 """Catalogue format, validation and bounded file access for the source library."""
 import hashlib
 import json
-from pathlib import Path, PurePosixPath
+import os
+from pathlib import Path
 import re
 import stat
+
+_REPARSE_ATTR = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)
+
+
+def _is_reparse_or_symlink(info):
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, 'st_file_attributes', 0) & _REPARSE_ATTR)
 
 
 FORMAT = 'knowledge-library/1'
@@ -48,14 +55,17 @@ def decoded(data):
 def ordinary(path):
     path = Path(path).expanduser().absolute()
     for part in (*reversed(path.parents), path):
-        need(not part.is_symlink(), 'symlink path is unsupported: ' + str(part))
+        try:
+            info = part.lstat()
+        except FileNotFoundError:
+            continue
+        need(not _is_reparse_or_symlink(info), 'symlink path is unsupported: ' + str(part))
     return path
 
 
-def read_bytes(path, limit):
-    path = ordinary(path)
-    need(path.is_file() and stat.S_ISREG(path.stat().st_mode), 'ordinary file required: ' + str(path))
-    need(path.stat().st_size <= limit, 'file exceeds byte bound: ' + str(path))
+def _read_stream_bounded(path, info, limit):
+    need(not _is_reparse_or_symlink(info) and stat.S_ISREG(info.st_mode), 'ordinary file required: ' + str(path))
+    need(info.st_size <= limit, 'file exceeds byte bound: ' + str(path))
     with path.open('rb') as stream:
         # A read(limit + 1) can allocate the entire allowed bound even for a
         # small file. Bound each allocation while still detecting growth past
@@ -70,12 +80,41 @@ def read_bytes(path, limit):
     return body
 
 
+def read_bytes(path, limit):
+    path = ordinary(path)
+    try:
+        info = path.lstat()
+    except OSError:
+        raise ValueError('ordinary file required: ' + str(path)) from None
+    return _read_stream_bounded(path, info, limit)
+
+
+def read_bytes_under(validated_root, rel_path, limit):
+    """Read an ordinary file below an already-validated root, checking every descendant segment."""
+    parts = [p for p in str(rel_path).split('/') if p not in ('', '.')]
+    need(bool(parts) and all(p != '..' for p in parts), 'unsafe relative identity')
+    cur = Path(validated_root)
+    for segment in parts[:-1]:
+        cur = cur / segment
+        try:
+            info = cur.lstat()
+        except OSError:
+            raise ValueError('ordinary file required: ' + str(cur)) from None
+        need(not _is_reparse_or_symlink(info) and stat.S_ISDIR(info.st_mode), 'symlink path is unsupported: ' + str(cur))
+    leaf = cur / parts[-1]
+    try:
+        info = leaf.lstat()
+    except OSError:
+        raise ValueError('ordinary file required: ' + str(leaf)) from None
+    return _read_stream_bounded(leaf, info, limit)
+
+
 def relative(value):
-    from pathlib import PureWindowsPath
     need(isinstance(value, str) and IDENT.fullmatch(value), 'invalid relative identity')
     need(
-        not PurePosixPath(value).is_absolute()
-        and not PureWindowsPath(value).drive
+        not value.startswith('/')
+        and '\\' not in value
+        and not (len(value) >= 2 and value[1] == ':')
         and all(x not in {'', '.', '..'} and not (len(x) >= 2 and x[1] == ':') for x in value.split('/')),
         'unsafe relative identity',
     )

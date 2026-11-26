@@ -27,8 +27,9 @@ if not __package__:
 from .library_format import (FORMAT, IDENT, MAX_ARCHIVE, MAX_BODIES, MAX_BODY,
                              MAX_MANIFEST, MAX_MODULES, MAX_PACKAGE, SELECTION,
                              SHA, check_manifest, decoded, digest, encoded,
-                             integer, need, ordinary, read_bytes, relative, sha,
+                             integer, need, ordinary, read_bytes, read_bytes_under, relative, sha,
                              text, unique)
+_DEFAULT_READ_BYTES = read_bytes
 from ..search.lexical_search import FtsAnalyzer, SEARCH_POLICY, SQLITE_ERRORS, STOPWORDS, TOKEN, search_query, sqlite3
 from ..bundles.product_bundle import (bundle_bytes, context, export, import_bundle as _import_bundle,
                                       inspect_bundle, product, resolve)
@@ -40,12 +41,14 @@ MAX_BATCH_INPUT = 128 * 1024
 MAX_BATCH_RESULT = 8 * 1024 * 1024
 
 
+_BATCH_ENCODER = json.JSONEncoder(sort_keys=True, ensure_ascii=False, indent=2, allow_nan=False)
+
+
 def batch_json_size(value, maximum, extra_indent=0):
-    """Count the actual indented UTF-8 representation without a second large buffer."""
-    size = extra_indent
-    for chunk in json.JSONEncoder(sort_keys=True, ensure_ascii=False, indent=2).iterencode(value):
-        size += len(chunk.encode()) + extra_indent * chunk.count('\n')
-        need(size <= maximum, 'discovery batch exceeds its JSON byte bound')
+    """Count the actual indented UTF-8 representation using C-accelerated encoding."""
+    rendered = _BATCH_ENCODER.encode(value)
+    size = extra_indent + len(rendered.encode('utf-8')) + extra_indent * rendered.count('\n')
+    need(size <= maximum, 'discovery batch exceeds its JSON byte bound')
     return size
 
 
@@ -213,7 +216,10 @@ class Library:
     def body(self, ident):
         need(ident in self.bodies, 'body unavailable in this library: ' + ident)
         row = self.bodies[ident]
-        data = read_bytes(self.directory / row['object'], MAX_BODY)
+        if read_bytes is _DEFAULT_READ_BYTES:
+            data = read_bytes_under(self.directory, row['object'], MAX_BODY)
+        else:
+            data = read_bytes(self.directory / row['object'], MAX_BODY)
         need(len(data) == row['bytes'] and digest(data) == row['sha256'], 'body differs from declared source: ' + ident)
         data.decode('utf-8')
         return data
@@ -494,34 +500,34 @@ def import_bundle(path, store):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--library', action='append', type=Path)
     sub = parser.add_subparsers(dest='action', required=True)
-    sub.add_parser('verify'); sub.add_parser('modules')
-    show = sub.add_parser('show'); show.add_argument('identity'); show.add_argument('--text', action='store_true')
-    discover = sub.add_parser('discover'); discover.add_argument('--query', required=True)
+    sub.add_parser('verify', allow_abbrev=False); sub.add_parser('modules', allow_abbrev=False)
+    show = sub.add_parser('show', allow_abbrev=False); show.add_argument('identity'); show.add_argument('--text', action='store_true')
+    discover = sub.add_parser('discover', allow_abbrev=False); discover.add_argument('--query', required=True)
     discover.add_argument('--limit', type=int, default=20); discover.add_argument('--scan-limit', type=int, default=512)
     discover.add_argument('--max-bytes', type=int, default=8 * 1024 * 1024)
     discover.add_argument('--backend', choices=('bm25', 'fts5', 'literal'), default='bm25')
     discover.add_argument('--index', type=Path, help='Nominate from this prepared derivative without rereading canonical bodies; requires FTS5 and expected digest')
     discover.add_argument('--index-sha256', help='Exact expected digest from the selected prepare-index receipt')
-    batch = sub.add_parser('discover-batch', help='Share one verified prepared image across a bounded JSON array of questions')
+    batch = sub.add_parser('discover-batch', allow_abbrev=False, help='Share one verified prepared image across a bounded JSON array of questions')
     batch.add_argument('--queries', type=Path, required=True, help='UTF-8 JSON array of 1 to 32 query strings')
     batch.add_argument('--index', type=Path, required=True)
     batch.add_argument('--index-sha256', required=True)
     batch.add_argument('--limit', type=int, default=20); batch.add_argument('--scan-limit', type=int, default=512)
     batch.add_argument('--max-bytes', type=int, default=8 * 1024 * 1024)
     batch.add_argument('--max-result-bytes', type=int, default=MAX_BATCH_RESULT)
-    prepare = sub.add_parser('prepare-index', help='Verify selected sources and build an immutable contentless FTS5 derivative')
+    prepare = sub.add_parser('prepare-index', allow_abbrev=False, help='Verify selected sources and build an immutable contentless FTS5 derivative')
     prepare.add_argument('--output', type=Path, required=True)
     prepare.add_argument('--scan-limit', type=int, default=512)
     prepare.add_argument('--max-bytes', type=int, default=8 * 1024 * 1024)
-    ctx = sub.add_parser('context'); ctx.add_argument('--selection', type=Path, required=True)
+    ctx = sub.add_parser('context', allow_abbrev=False); ctx.add_argument('--selection', type=Path, required=True)
     ctx.add_argument('--max-bytes', type=int, default=8 * 1024 * 1024)
-    exp = sub.add_parser('export'); exp.add_argument('--selection', type=Path, required=True)
+    exp = sub.add_parser('export', allow_abbrev=False); exp.add_argument('--selection', type=Path, required=True)
     exp.add_argument('--edition', required=True); exp.add_argument('--output', type=Path, required=True)
-    ins = sub.add_parser('inspect'); ins.add_argument('--bundle', type=Path, required=True)
-    imp = sub.add_parser('import'); imp.add_argument('--bundle', type=Path, required=True); imp.add_argument('--store', type=Path, required=True)
+    ins = sub.add_parser('inspect', allow_abbrev=False); ins.add_argument('--bundle', type=Path, required=True)
+    imp = sub.add_parser('import', allow_abbrev=False); imp.add_argument('--bundle', type=Path, required=True); imp.add_argument('--store', type=Path, required=True)
     args = parser.parse_args()
     try:
         if args.action == 'inspect': result = inspect_bundle(args.bundle)

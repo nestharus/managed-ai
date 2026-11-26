@@ -144,23 +144,87 @@ class PacketContext:
             return {}
         unique = list(dict.fromkeys(_relative(p) for p in paths))
         if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
-            from ..storage import is_ordinary_file_stat
+            from ..storage import is_ordinary_dir_stat, is_ordinary_file_stat, is_reparse_or_symlink
 
-            def hash_win_one(rel):
-                path = self.path(rel)
-                try:
-                    info = path.lstat()
-                except (FileNotFoundError, NotADirectoryError):
-                    return rel, None
-                if not is_ordinary_file_stat(info):
-                    raise ValueError('workspace symlinks are not supported')
-                with path.open('rb') as stream:
-                    return rel, hashlib.file_digest(stream, 'sha256').hexdigest()
+            by_dir_win: dict[str, list[tuple[str, str]]] = {}
+            for rel in unique:
+                parent, _, name = rel.rpartition('/')
+                by_dir_win.setdefault(parent, []).append((rel, name))
 
-            if len(unique) >= 16:
-                with ThreadPoolExecutor(max_workers=min(max_workers, len(unique))) as pool:
-                    return dict(pool.map(hash_win_one, unique))
-            return dict(hash_win_one(rel) for rel in unique)
+            results_win: dict[str, str | None] = {}
+            validated_dirs: dict[str, str | None] = {'': str(self.workspace)}
+            work_root_str = str(self.workspace)
+
+            def resolve_parent_dir(parent_rel: str) -> str | None:
+                if parent_rel in validated_dirs:
+                    return validated_dirs[parent_rel]
+                cur_rel = ''
+                cur_str = work_root_str
+                for part in parent_rel.split('/'):
+                    nxt_rel = f'{cur_rel}/{part}' if cur_rel else part
+                    if nxt_rel in validated_dirs:
+                        cached = validated_dirs[nxt_rel]
+                        if cached is None:
+                            validated_dirs[parent_rel] = None
+                            return None
+                        cur_rel, cur_str = nxt_rel, cached
+                        continue
+                    nxt_str = cur_str + os.sep + part
+                    try:
+                        info = os.lstat(nxt_str)
+                    except (FileNotFoundError, NotADirectoryError):
+                        validated_dirs[nxt_rel] = None
+                        validated_dirs[parent_rel] = None
+                        return None
+                    if is_reparse_or_symlink(info):
+                        raise ValueError('workspace symlinks are not supported')
+                    if not is_ordinary_dir_stat(info):
+                        validated_dirs[nxt_rel] = None
+                        validated_dirs[parent_rel] = None
+                        return None
+                    validated_dirs[nxt_rel] = nxt_str
+                    cur_rel, cur_str = nxt_rel, nxt_str
+                return cur_str
+
+            work_items: list[tuple[str, str]] = []
+            for parent_rel, members in by_dir_win.items():
+                dir_str = resolve_parent_dir(parent_rel)
+                if dir_str is None:
+                    for rel, _ in members:
+                        results_win[rel] = None
+                else:
+                    for rel, name in members:
+                        work_items.append((rel, dir_str + os.sep + name))
+
+            def hash_win_chunk(chunk: list[tuple[str, str]]) -> list[tuple[str, str | None]]:
+                out: list[tuple[str, str | None]] = []
+                for rel, full_str in chunk:
+                    try:
+                        info = os.lstat(full_str)
+                    except (FileNotFoundError, NotADirectoryError):
+                        out.append((rel, None))
+                        continue
+                    if is_reparse_or_symlink(info):
+                        raise ValueError('workspace symlinks are not supported')
+                    if not is_ordinary_file_stat(info):
+                        out.append((rel, None))
+                        continue
+                    with open(full_str, 'rb') as stream:
+                        out.append((rel, hashlib.file_digest(stream, 'sha256').hexdigest()))
+                return out
+
+            if len(work_items) >= 16:
+                workers = min(8, max_workers, len(work_items))
+                step = (len(work_items) + workers - 1) // workers
+                chunks = [work_items[i:i + step] for i in range(0, len(work_items), step)]
+                with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+                    for chunk_out in pool.map(hash_win_chunk, chunks):
+                        for rel, digest_hex in chunk_out:
+                            results_win[rel] = digest_hex
+            elif work_items:
+                for rel, digest_hex in hash_win_chunk(work_items):
+                    results_win[rel] = digest_hex
+            return results_win
         by_dir: dict[str, list[tuple[str, str]]] = {}
         for rel in unique:
             parent, _, name = rel.rpartition('/')
@@ -248,16 +312,24 @@ class PacketContext:
         return self._load_directory(self.directory(packet))
 
     def _load_directory(self, directory: Path, *,
-                        _verified_objects: set[str] | None = None,
+                        _verified_objects: dict[str, int] | set[str] | None = None,
                         _validated_returns: dict[str, dict[str, Any]] | None = None,
                         _objects_fd: int | None = None,
-                        _memo_lock=None) -> tuple[Path, dict[str, Any]]:
+                        _memo_lock=None,
+                        _request_shas: dict[str, str] | None = None) -> tuple[Path, dict[str, Any]]:
         binding = read_json(directory / 'binding.json')
         if binding.get('format') not in (None, 'managed-ai-packet-binding/1'):
             raise ValueError('unsupported packet binding format')
         request = read_json(directory / 'request.json')
-        if sha(encode(request)) != binding['request_sha256'] or sha(_bytes(directory / 'context.md', MAX_PACKET_BYTES)) != binding['context_sha256']:
+        request_sha = sha(encode(request))
+        if request_sha != binding['request_sha256'] or sha(_bytes(directory / 'context.md', MAX_PACKET_BYTES)) != binding['context_sha256']:
             raise ValueError('frozen request/context changed')
+        if _request_shas is not None:
+            if _memo_lock is not None:
+                with _memo_lock:
+                    _request_shas[directory.name] = request_sha
+            else:
+                _request_shas[directory.name] = request_sha
         direct_objects = (type(self).get is PacketContext.get and 'get' not in self.__dict__)
         for entry in [request['brief'], *request['methods'], *request['materials'], *request['targets'], *request['returns'], *request.get('artifacts', [])]:
             key = entry['sha256']
@@ -271,15 +343,21 @@ class PacketContext:
                     if seen:
                         continue
                 if direct_objects and _objects_fd is not None:
-                    self.objects.read(key, dir_fd=_objects_fd)
+                    raw_obj = self.objects.read(key, dir_fd=_objects_fd)
                 else:
-                    self.get(key)
+                    raw_obj = self.get(key)
                 if _verified_objects is not None:
                     if _memo_lock is not None:
                         with _memo_lock:
-                            _verified_objects.add(key)
+                            if isinstance(_verified_objects, dict):
+                                _verified_objects[key] = len(raw_obj)
+                            else:
+                                _verified_objects.add(key)
                     else:
-                        _verified_objects.add(key)
+                        if isinstance(_verified_objects, dict):
+                            _verified_objects[key] = len(raw_obj)
+                        else:
+                            _verified_objects.add(key)
 
         def load_validated_return(packet_name: str) -> dict[str, Any]:
             if _validated_returns is not None:
@@ -292,7 +370,20 @@ class PacketContext:
                     return cached
             prior_dir = self.directory(packet_name)
             prior = read_json(prior_dir / 'return.json')
-            self.validate_return(prior_dir, prior)
+            prior_req_sha = None
+            if _request_shas is not None:
+                if _memo_lock is not None:
+                    with _memo_lock:
+                        prior_req_sha = _request_shas.get(packet_name)
+                else:
+                    prior_req_sha = _request_shas.get(packet_name)
+            self.validate_return(
+                prior_dir, prior,
+                request_sha256=prior_req_sha,
+                _verified_objects=_verified_objects,
+                _objects_fd=_objects_fd,
+                _memo_lock=_memo_lock,
+            )
             if _validated_returns is not None:
                 if _memo_lock is not None:
                     with _memo_lock:

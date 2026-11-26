@@ -234,19 +234,19 @@ class ContextExplanationChecks(unittest.TestCase):
         prose = 'A supplied interpretation belongs in an explanatory account.'
         body = {'format': 'g60-composition/1', 'purpose': 'Inspect a bounded interpretation.',
                 'relations': [{'id': 'receiving-link', 'prediction': 'A useful selected effect.', 'observation': prose}]}
-        record = self.system.put({'id': 'bad-profile', 'kind': 'note', 'content': body}, 0)
         with self.assertRaisesRegex(ValueError, "receiving-link.*observation.*account"):
-            Composition(self.system).inspect(record['id'])
+            self.system.put({'id': 'bad-profile', 'kind': 'note', 'content': body}, 0)
+        with self.assertRaisesRegex(ValueError, "receiving-link.*observation.*account"):
+            Composition(None).profile({'id': 'bad-profile', 'kind': 'note', 'content': body})
         body['relations'][0].update(observation='unassessed', account=prose)
-        self.system.put({'id': record['id'], 'kind': 'note', 'content': body}, 1)
+        record = self.system.put({'id': 'bad-profile', 'kind': 'note', 'content': body}, 0)
         self.assertEqual(Composition(self.system).inspect(record['id'])['relations'][0]['account'], prose)
         body['relations'][0]['observation'] = 'supported'
         body['relations'][0].pop('account')
-        self.system.put({'id': record['id'], 'kind': 'note', 'content': body}, 2)
         with self.assertRaisesRegex(ValueError, "receiving-link.*account"):
-            Composition(self.system).inspect(record['id'])
+            self.system.put({'id': record['id'], 'kind': 'note', 'content': body}, 1)
         body['relations'][0]['account'] = prose
-        self.system.put({'id': record['id'], 'kind': 'note', 'content': body}, 3)
+        self.system.put({'id': record['id'], 'kind': 'note', 'content': body}, 1)
         self.assertEqual(Composition(self.system).inspect(record['id'])['relations'][0]['observation'], 'supported')
         ordinary = {'observation': prose, 'unanticipated': [True, None]}
         self.system.put({'id': 'open-content', 'kind': 'unanticipated-kind', 'content': ordinary}, 0)
