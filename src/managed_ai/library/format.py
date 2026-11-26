@@ -3,13 +3,11 @@
 Depends only on Python stdlib and managed_ai.platform (zero imports from core,
 store, or deployment).
 """
-from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
 import re
-import stat
+from pathlib import Path
 from typing import Any
 
 from managed_ai.platform import (
@@ -118,8 +116,12 @@ def read_bytes_under(validated_root: Path | str, rel_path: str, limit: int) -> b
         msg = str(exc)
         if "unsafe" in msg or "relative" in msg or "reserved" in msg or "trailing" in msg:
             raise ValueError("unsafe relative identity") from exc
-        if "directory" in msg and is_reparse_or_symlink(Path(validated_root) / Path(rel_path).parent):
-            raise ValueError("symlink path is unsupported: " + str(Path(validated_root) / rel_path)) from exc
+        if "directory" in msg and is_reparse_or_symlink(
+            Path(validated_root) / Path(rel_path).parent
+        ):
+            raise ValueError(
+                "symlink path is unsupported: " + str(Path(validated_root) / rel_path)
+            ) from exc
         raise ValueError("ordinary file required: " + str(Path(validated_root) / rel_path)) from exc
 
     try:
@@ -153,9 +155,14 @@ def relative(value: Any) -> str:
     return value
 
 
-def text(value: Any, label: str, maximum: int = DEFAULT_LIBRARY_CONFIG.limits.max_text_bytes) -> str:
+def text(
+    value: Any, label: str, maximum: int = DEFAULT_LIBRARY_CONFIG.limits.max_text_bytes
+) -> str:
     """Validate a nonempty UTF-8 string bounded in encoded bytes."""
-    need(isinstance(value, str) and value.strip() and len(value.encode("utf-8")) <= maximum, "invalid " + label)
+    need(
+        isinstance(value, str) and value.strip() and len(value.encode("utf-8")) <= maximum,
+        "invalid " + label,
+    )
     return value
 
 
@@ -173,7 +180,17 @@ def integer(value: Any, label: str, low: int, high: int) -> int:
 
 def _validate_body_row(row: Any, by_id: dict[str, dict[str, Any]], config: LibraryConfig) -> None:
     limits = config.limits
-    expected_keys = {"id", "title", "summary", "object", "sha256", "bytes", "source", "link_base", "references"}
+    expected_keys = {
+        "id",
+        "title",
+        "summary",
+        "object",
+        "sha256",
+        "bytes",
+        "source",
+        "link_base",
+        "references",
+    }
     need(isinstance(row, dict) and set(row) == expected_keys, "invalid body fields")
 
     ident = relative(row["id"])
@@ -185,18 +202,32 @@ def _validate_body_row(row: Any, by_id: dict[str, dict[str, Any]], config: Libra
     need(row["object"] == "objects/" + h + ".txt", "body object is not content-addressed")
     integer(row["bytes"], "body bytes", 0, limits.max_body_bytes)
 
-    need(isinstance(row["source"], dict) and set(row["source"]) == {"path", "sha256"}, "invalid body source")
+    need(
+        isinstance(row["source"], dict) and set(row["source"]) == {"path", "sha256"},
+        "invalid body source",
+    )
     relative(row["source"]["path"])
     relative(row["link_base"])
     need(row["source"]["sha256"] == h, "complete copied source must have the body digest")
 
     refs = row["references"]
-    need(isinstance(refs, list) and len(refs) <= limits.max_references_per_body, "invalid references")
+    need(
+        isinstance(refs, list) and len(refs) <= limits.max_references_per_body, "invalid references"
+    )
     for ref in refs:
-        need(isinstance(ref, dict) and set(ref) == {"target", "anchor", "kind"}, "invalid reference")
+        need(
+            isinstance(ref, dict) and set(ref) == {"target", "anchor", "kind"}, "invalid reference"
+        )
         text(ref["target"], "reference target", limits.max_reference_target_bytes)
-        need(isinstance(ref["anchor"], str) and len(ref["anchor"]) <= limits.max_reference_anchor_bytes, "invalid reference anchor")
-        need(isinstance(ref["kind"], str) and ref["kind"] in {"source", "url"}, "invalid reference kind")
+        need(
+            isinstance(ref["anchor"], str)
+            and len(ref["anchor"]) <= limits.max_reference_anchor_bytes,
+            "invalid reference anchor",
+        )
+        need(
+            isinstance(ref["kind"], str) and ref["kind"] in {"source", "url"},
+            "invalid reference kind",
+        )
 
     by_id[ident] = row
 
@@ -208,7 +239,15 @@ def _validate_module_row(
     config: LibraryConfig,
 ) -> None:
     limits = config.limits
-    expected_keys = {"id", "title", "purpose", "members", "requires", "parents", "external_participation"}
+    expected_keys = {
+        "id",
+        "title",
+        "purpose",
+        "members",
+        "requires",
+        "parents",
+        "external_participation",
+    }
     need(isinstance(row, dict) and set(row) == expected_keys, "invalid module fields")
 
     ident = relative(row["id"])
@@ -219,22 +258,33 @@ def _validate_module_row(
     text(row["purpose"], "module purpose", limits.max_text_bytes)
 
     for key in ("members", "requires"):
-        need(isinstance(row[key], list) and len(row[key]) <= limits.max_bodies, "invalid module " + key)
+        need(
+            isinstance(row[key], list) and len(row[key]) <= limits.max_bodies,
+            "invalid module " + key,
+        )
         for member in row[key]:
             relative(member)
         need(len(row[key]) == len(set(row[key])), "duplicate module " + key)
 
     need(row["members"], "a module needs at least one complete member body")
-    need(all(x in by_id for x in row["members"]), "module has an unavailable required body: " + ident)
+    need(
+        all(x in by_id for x in row["members"]), "module has an unavailable required body: " + ident
+    )
 
-    need(isinstance(row["parents"], list) and len(row["parents"]) <= limits.max_modules, "invalid parents")
+    need(
+        isinstance(row["parents"], list) and len(row["parents"]) <= limits.max_modules,
+        "invalid parents",
+    )
     for parent in row["parents"]:
         need(isinstance(parent, dict) and set(parent) == {"id", "role"}, "invalid parent relation")
         relative(parent["id"])
         text(parent["role"], "parent role", limits.max_parent_role_bytes)
 
     ext = row["external_participation"]
-    need(isinstance(ext, list) and len(ext) <= limits.max_external_participation, "invalid external participation")
+    need(
+        isinstance(ext, list) and len(ext) <= limits.max_external_participation,
+        "invalid external participation",
+    )
     for item in ext:
         text(item, "external participation", limits.max_text_bytes)
 
@@ -243,10 +293,14 @@ def check_manifest(value: Any, config: LibraryConfig = DEFAULT_LIBRARY_CONFIG) -
     """Validate a complete library catalogue manifest against schema and byte bounds."""
     limits = config.limits
     need(
-        isinstance(value, dict) and set(value) == {"format", "edition", "bodies", "modules", "provenance"},
+        isinstance(value, dict)
+        and set(value) == {"format", "edition", "bodies", "modules", "provenance"},
         "invalid library fields",
     )
-    need(value["format"] == config.library_format, "unsupported library format; explicit migration required")
+    need(
+        value["format"] == config.library_format,
+        "unsupported library format; explicit migration required",
+    )
     text(value["edition"], "edition", limits.max_edition_bytes)
     need(isinstance(value["provenance"], dict), "provenance must be an object")
 
@@ -259,13 +313,19 @@ def check_manifest(value: Any, config: LibraryConfig = DEFAULT_LIBRARY_CONFIG) -
     for row in bodies:
         _validate_body_row(row, by_id, config)
 
-    need(sum(row["bytes"] for row in bodies) <= limits.max_package_bytes, "library exceeds declared total body byte bound")
+    need(
+        sum(row["bytes"] for row in bodies) <= limits.max_package_bytes,
+        "library exceeds declared total body byte bound",
+    )
 
     module_ids: set[str] = set()
     for row in modules:
         _validate_module_row(row, by_id, module_ids, config)
 
     for row in modules:
-        need(all(x in module_ids for x in row["requires"]), "module has an unavailable required module: " + row["id"])
+        need(
+            all(x in module_ids for x in row["requires"]),
+            "module has an unavailable required module: " + row["id"],
+        )
 
     return value

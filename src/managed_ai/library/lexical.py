@@ -1,11 +1,10 @@
 """Query interpretation and the shared FTS5 analyzer for lexical nomination."""
-from __future__ import annotations
 
 import hashlib
 import json
 import re
-from typing import Any
 import unicodedata
+from typing import Any, ClassVar
 
 from .config import DEFAULT_LIBRARY_CONFIG, SearchConfig
 
@@ -18,12 +17,72 @@ SQLITE_ERRORS: tuple[type[BaseException], ...] = (sqlite3.Error,) if sqlite3 is 
 
 SEARCH_POLICY = DEFAULT_LIBRARY_CONFIG.search.policy
 STOPWORDS = frozenset(
-    (
-        "a an and are as at be been being but by can could did do does "
-        "for from had has have how i if in into is it its may me my of on or our should "
-        "so than that the their them then there these they this those to was we were "
-        "what when where which who why will with would you your"
-    ).split()
+    [
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "been",
+        "being",
+        "but",
+        "by",
+        "can",
+        "could",
+        "did",
+        "do",
+        "does",
+        "for",
+        "from",
+        "had",
+        "has",
+        "have",
+        "how",
+        "i",
+        "if",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "may",
+        "me",
+        "my",
+        "of",
+        "on",
+        "or",
+        "our",
+        "should",
+        "so",
+        "than",
+        "that",
+        "the",
+        "their",
+        "them",
+        "then",
+        "there",
+        "these",
+        "they",
+        "this",
+        "those",
+        "to",
+        "was",
+        "we",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "who",
+        "why",
+        "will",
+        "with",
+        "would",
+        "you",
+        "your",
+    ]
 )
 TOKEN = re.compile(r"\w+")
 
@@ -99,10 +158,12 @@ class FtsAnalyzer:
 
     weights = DEFAULT_LIBRARY_CONFIG.search.fts_weights
     tokenizer = DEFAULT_LIBRARY_CONFIG.search.fts_tokenizer
-    keys = {"docs": "id", "body_docs": "rowid", "module_docs": "rowid"}
+    keys: ClassVar[dict[str, str]] = {"docs": "id", "body_docs": "rowid", "module_docs": "rowid"}
 
     @classmethod
     def identity(cls, config: SearchConfig = DEFAULT_LIBRARY_CONFIG.search) -> dict[str, Any]:
+        if sqlite3 is None:
+            raise ValueError("SQLite support unavailable; use ordinary BM25 discovery")
         return {
             "tokenizer": config.fts_tokenizer,
             "weights": list(config.fts_weights),
@@ -115,11 +176,14 @@ class FtsAnalyzer:
         }
 
     @classmethod
-    def create(cls, db: Any, table: str, config: SearchConfig = DEFAULT_LIBRARY_CONFIG.search) -> None:
+    def create(
+        cls, db: Any, table: str, config: SearchConfig = DEFAULT_LIBRARY_CONFIG.search
+    ) -> None:
         key = cls.keys[table]
         content = ",content=''" if key == "rowid" else ""
         db.execute(
-            f"CREATE VIRTUAL TABLE {table} USING fts5(id,title,summary,body{content},tokenize='{config.fts_tokenizer}')"
+            f"CREATE VIRTUAL TABLE {table} USING fts5("
+            f"id,title,summary,body{content},tokenize='{config.fts_tokenizer}')"
         )
 
     @classmethod
@@ -134,13 +198,14 @@ class FtsAnalyzer:
         quoted = ['"' + term.replace('"', '""') + '"' for term in units]
         condition = f" FROM {table} WHERE {table} MATCH ?"
         weights = ",".join(str(w) for w in config.fts_weights)
-        rows = db.execute(f"SELECT {key},bm25({table},{weights})" + condition, (" OR ".join(quoted),))
+        rows = db.execute(
+            f"SELECT {key},bm25({table},{weights})" + condition, (" OR ".join(quoted),)
+        )
         hits: dict[Any, dict[str, Any]] = {
-            ident: {"score": -score, "matched_terms": []}
-            for ident, score in rows
+            ident: {"score": -score, "matched_terms": []} for ident, score in rows
         }
 
-        for term, expression in zip(units, quoted):
+        for term, expression in zip(units, quoted, strict=True):
             for (ident,) in db.execute(f"SELECT {key}" + condition, (expression,)):
                 hits[ident]["matched_terms"].append(term)
 

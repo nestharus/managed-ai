@@ -10,21 +10,22 @@ Canonical store/manage_store.py implementations qualify through:
 
 Frozen LEGACY_NATIVE_PROFILES remain strictly for historical pre-Wave-4 engine/runtime/ replay.
 """
-from __future__ import annotations
 
 import argparse
 import ast
-from contextlib import contextmanager
+import contextlib
 import hashlib
 import importlib
-from importlib.machinery import EXTENSION_SUFFIXES
 import importlib.util
 import json
 import os
-from pathlib import Path
 import re
 import stat
 import sys
+from collections.abc import Generator
+from contextlib import contextmanager
+from importlib.machinery import EXTENSION_SUFFIXES
+from pathlib import Path
 from typing import Any
 
 HERE = Path(__file__).resolve().parent
@@ -32,7 +33,7 @@ SRC_ROOT = HERE.parents[2]
 if __package__ in (None, "") and str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.host.continuing_work.occurrence_files import (
+from managed_ai.host.continuing_work.occurrence_files import (  # noqa: E402
     check_unfollowed_ancestors,
     is_reparse_or_symlink,
     loads_strict,
@@ -93,12 +94,16 @@ def _profile_digest(programs: dict[str, str]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _scan_ordinary_programs(base: Path, roots: tuple[Path, ...], *, exclude_tests: bool) -> dict[str, str]:
+def _scan_ordinary_programs(
+    base: Path, roots: tuple[Path, ...], *, exclude_tests: bool
+) -> dict[str, str]:
     programs: dict[str, str] = {}
 
     for folder in roots:
         if is_reparse_or_symlink(folder):
-            raise ValueError(f"Native engine tree must not contain symlinks or reparse points: {folder}")
+            raise ValueError(
+                f"Native engine tree must not contain symlinks or reparse points: {folder}"
+            )
         if not folder.is_dir():
             continue
 
@@ -129,7 +134,9 @@ def _scan_ordinary_programs(base: Path, roots: tuple[Path, ...], *, exclude_test
                     raise ValueError(f"Native engine source must be an ordinary file: {fpath}")
                 if exclude_tests and _is_test_module(fname):
                     continue
-                programs[fpath.relative_to(base).as_posix()] = hashlib.sha256(fpath.read_bytes()).hexdigest()
+                programs[fpath.relative_to(base).as_posix()] = hashlib.sha256(
+                    fpath.read_bytes()
+                ).hexdigest()
 
     return programs
 
@@ -145,7 +152,9 @@ def _native_sources_with_layout(entry: Path) -> tuple[Path, dict[str, str], str]
     if resolved == engine / "store/manage_store.py" and (engine / "store/system.py").is_file():
         native = engine / "store/system.py"
         if is_reparse_or_symlink(native):
-            raise ValueError(f"Native engine entry must not be a symlink or reparse point: {native}")
+            raise ValueError(
+                f"Native engine entry must not be a symlink or reparse point: {native}"
+            )
         roots = tuple(
             engine / name
             for name in ("deployment", "core", "store", "platform")
@@ -154,10 +163,15 @@ def _native_sources_with_layout(entry: Path) -> tuple[Path, dict[str, str], str]
         programs = _scan_ordinary_programs(engine, roots, exclude_tests=True)
         return native, programs, "canonical"
 
-    if resolved == engine / "runtime/manage_store.py" and (engine / "runtime/native/system.py").is_file():
+    if (
+        resolved == engine / "runtime/manage_store.py"
+        and (engine / "runtime/native/system.py").is_file()
+    ):
         native = engine / "runtime/native/system.py"
         if is_reparse_or_symlink(native):
-            raise ValueError(f"Native engine entry must not be a symlink or reparse point: {native}")
+            raise ValueError(
+                f"Native engine entry must not be a symlink or reparse point: {native}"
+            )
         programs = _scan_ordinary_programs(engine, (engine / "runtime",), exclude_tests=False)
         return native, programs, "legacy"
 
@@ -232,11 +246,13 @@ def _engine_code_identity(engine_root: Path) -> str:
         for path in chunk:
             relative = path.relative_to(engine)
             raw = path.read_bytes()
-            out.append((
-                relative,
-                {"path": relative.as_posix(), "sha256": hashlib.sha256(raw).hexdigest()},
-                raw if relative in declaration_paths else None,
-            ))
+            out.append(
+                (
+                    relative,
+                    {"path": relative.as_posix(), "sha256": hashlib.sha256(raw).hexdigest()},
+                    raw if relative in declaration_paths else None,
+                )
+            )
         return out
 
     if len(sorted_paths) >= 16:
@@ -258,20 +274,26 @@ def _engine_code_identity(engine_root: Path) -> str:
             declarations[relative] = raw
 
     if declaration_paths != declarations.keys():
-        raise ValueError("select the current engine root containing its native entry and API declarations")
+        raise ValueError(
+            "select the current engine root containing its native entry and API declarations"
+        )
 
     def declared(rel: Path) -> dict[str, Any]:
         result: dict[str, Any] = {}
         try:
             tree = ast.parse(declarations[rel], filename=str(engine / rel))
         except SyntaxError as exc:
-            raise ValueError(f"invalid engine API declaration in {engine / rel}: {exc.msg}") from exc
+            raise ValueError(
+                f"invalid engine API declaration in {engine / rel}: {exc.msg}"
+            ) from exc
         for node in tree.body:
-            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-                try:
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            ):
+                with contextlib.suppress(ValueError, TypeError):
                     result[node.targets[0].id] = ast.literal_eval(node.value)
-                except (ValueError, TypeError):
-                    pass
         return result
 
     contract = declared(native_contract)
@@ -391,7 +413,7 @@ def _git_head_commit(engine_root: Path) -> str | None:
                         and re.fullmatch(r"[0-9a-f]{40}", parts[0])
                     ):
                         return parts[0]
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return None
 
     return None
@@ -435,7 +457,9 @@ def _is_colocated_engine(resolved_entry: Path) -> bool:
 
 
 @contextmanager
-def _mount_external_managed_ai_package(path: Path, resolved_engine: Path, init_file: Path):
+def _mount_external_managed_ai_package(
+    path: Path, resolved_engine: Path, init_file: Path
+) -> Generator[Any]:
     """Temporarily mount an external managed_ai package copy in an isolated sys.modules snapshot."""
     colocated_src = COLOCATED_ENGINE_ROOT.resolve().parent
     saved_path = list(sys.path)
@@ -480,8 +504,10 @@ def _mount_external_managed_ai_package(path: Path, resolved_engine: Path, init_f
 
 
 @contextmanager
-def _mount_legacy_engine_layout(path: Path, resolved_engine: Path):
-    """Temporarily mount a non-package legacy engine/ layout with core/store/deployment on sys.path."""
+def _mount_legacy_engine_layout(path: Path, resolved_engine: Path) -> Generator[Any]:
+    """Temporarily mount a non-package legacy engine/ layout with core/store/deployment on
+    sys.path.
+    """
     saved_path = list(sys.path)
     saved_legacy = {
         name: sys.modules.pop(name)
@@ -521,7 +547,7 @@ def _mount_legacy_engine_layout(path: Path, resolved_engine: Path):
 
 
 @contextmanager
-def _mount_canonical_module(path: Path, engine_root: Path):
+def _mount_canonical_module(path: Path, engine_root: Path) -> Generator[Any]:
     """Mount store/system.py from a canonical src/managed_ai package or legacy engine/ layout."""
     resolved_engine = engine_root.resolve()
     init_file = resolved_engine / "__init__.py"
@@ -555,16 +581,17 @@ def qualified_engine(
     *,
     expected_profile: str | None = None,
     deployment: Path | None = None,
-):
+) -> Generator[Any]:
     """Qualify and mount a native implementation for the duration of an operation."""
     path, programs, layout = _native_sources_with_layout(engine)
     profile = _profile_digest(programs)
     resolved_entry = Path(engine).resolve(strict=True)
     engine_root = path.parents[1]
 
-    if expected_profile is not None:
-        if not isinstance(expected_profile, str) or not _SHA256_RE.fullmatch(expected_profile):
-            raise ValueError("expected_profile must be a 64-character lowercase SHA-256 hex digest")
+    if expected_profile is not None and (
+        not isinstance(expected_profile, str) or not _SHA256_RE.fullmatch(expected_profile)
+    ):
+        raise ValueError("expected_profile must be a 64-character lowercase SHA-256 hex digest")
 
     if layout == "legacy":
         if profile not in LEGACY_NATIVE_PROFILES:
@@ -655,7 +682,9 @@ def legacy_packet_summary(
     returned: bool,
     outcome: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Fallback packet summary for admitted predecessor engines predating Exchange.packet_summary."""
+    """Fallback packet summary for admitted predecessor engines predating
+    Exchange.packet_summary.
+    """
     attempted = exchange.transport.has_attempt(directory)
     transport = "returned" if returned else ("dispatch-attempted" if attempted else "prepared")
     row: dict[str, Any] = {
@@ -706,14 +735,18 @@ def turn_summary(system: Any, turn: str, observed: dict[str, Any] | None = None)
 
 
 def _exchange_root(native: Any, root: Path) -> tuple[Path, Path]:
-    resolved_root = native.external(root) if hasattr(native, "external") else root.expanduser().resolve()
+    resolved_root = (
+        native.external(root) if hasattr(native, "external") else root.expanduser().resolve()
+    )
     raw_exchange = (
         native.NativeLayout(resolved_root).exchange
         if hasattr(native, "NativeLayout")
         else resolved_root / "exchange"
     )
     exchange_root = (
-        native.external(raw_exchange) if hasattr(native, "external") else raw_exchange.expanduser().resolve()
+        native.external(raw_exchange)
+        if hasattr(native, "external")
+        else raw_exchange.expanduser().resolve()
     )
     return resolved_root, exchange_root
 
@@ -834,7 +867,9 @@ def main(argv: list[str] | None = None) -> None:
             with native.exclusive(exchange_root / "owner.lock"):
                 system = native.System(root)
                 if system.ex.root.resolve() != exchange_root.resolve():
-                    raise ValueError("native exchange lock root differs from selected system exchange")
+                    raise ValueError(
+                        "native exchange lock root differs from selected system exchange"
+                    )
 
                 if args.action == "inspect-turn":
                     result: dict[str, Any] = {"turn": turn_summary(system, args.turn)}
@@ -861,7 +896,9 @@ def main(argv: list[str] | None = None) -> None:
                 adapter_meta: dict[str, Any] = {
                     "native_profile_sha256": info["profile"],
                     "admission": info["admission"],
-                    "scope": "Selected native assessment and turn only; no global status computation.",
+                    "scope": (
+                        "Selected native assessment and turn only; no global status computation."
+                    ),
                 }
                 if info.get("git_head_commit") is not None:
                     adapter_meta["git_head_commit"] = info["git_head_commit"]

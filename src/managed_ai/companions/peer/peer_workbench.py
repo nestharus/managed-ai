@@ -3,16 +3,15 @@
 
 See docs/PEER-CONTRACT.md. This module owns no scheduler or model inference.
 """
-from __future__ import annotations
 
 import argparse
 import base64
 import importlib.util
 import json
 import math
-from pathlib import Path
 import sys
 import time
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -25,23 +24,33 @@ from managed_ai.companions.peer.peer_protocol import (
     OWNER_STATUSES,
     REQUEST_SCHEMA,
     RETURN_SCHEMA,
-    WORKBENCH_CONFIG_SCHEMA as CONFIG_SCHEMA,
-    WORKBENCH_STATE_SCHEMA as STATE_SCHEMA,
     atomic_write_json,
     canonical,
-    canonical_absolute as absolute,
     detached,
     digest,
     fields,
     identifier,
     identity,
     integer,
-    loads_strict as decode_json,
     need,
     path_conflicts,
     scoped_file,
-    target_path as relative,
     validate_peer_entry,
+)
+from managed_ai.companions.peer.peer_protocol import (
+    WORKBENCH_CONFIG_SCHEMA as CONFIG_SCHEMA,
+)
+from managed_ai.companions.peer.peer_protocol import (
+    WORKBENCH_STATE_SCHEMA as STATE_SCHEMA,
+)
+from managed_ai.companions.peer.peer_protocol import (
+    canonical_absolute as absolute,
+)
+from managed_ai.companions.peer.peer_protocol import (
+    loads_strict as decode_json,
+)
+from managed_ai.companions.peer.peer_protocol import (
+    target_path as relative,
 )
 
 HERE = Path(__file__).resolve().parent
@@ -92,7 +101,9 @@ def _verify_component_manifest() -> tuple[dict[str, Path], dict[str, Any]]:
     for name, item in manifest["files"].items():
         need(isinstance(item, dict), "Component entry must be an object: " + str(name))
         fields(item, ("source",), ("identity",))
-        need(item["source"] == name, "Component source path differs from manifest key: " + str(name))
+        need(
+            item["source"] == name, "Component source path differs from manifest key: " + str(name)
+        )
 
         path = scoped_file(COMPANIONS_ROOT, name)
         live_identity = identity(path.read_bytes())
@@ -128,6 +139,8 @@ def _load_component_namespace(aliases: dict[str, Path]) -> dict[str, ModuleType]
         for name in _COMPONENT_ROLES:
             mod_name = f"{pkg_root}.{name}"
             spec = importlib.util.spec_from_file_location(mod_name, aliases[name])
+            if spec is None or spec.loader is None:
+                raise ImportError(f"Unable to load peer component {name} from {aliases[name]}")
             module = importlib.util.module_from_spec(spec)
             sys.modules[mod_name] = module
             spec.loader.exec_module(module)
@@ -144,7 +157,9 @@ def _load_component_namespace(aliases: dict[str, Path]) -> dict[str, ModuleType]
 
 
 def components() -> tuple[dict[str, ModuleType], dict[str, Any]]:
-    """Load declared workbench modules in an isolated package namespace and measure live identities."""
+    """Load declared workbench modules in an isolated package namespace and measure live
+    identities.
+    """
     global _MODULES
     aliases, effective_manifest = _verify_component_manifest()
     basis = (COMPANIONS_ROOT, digest(canonical(effective_manifest["files"])))
@@ -172,7 +187,8 @@ def _validate_worker_config(config: dict[str, Any]) -> None:
         "sources must map strings to complete strings",
     )
     need(
-        not {"peer-request", "peer-workbench-contract", "workbench-tool-contract"} & config["sources"].keys(),
+        not {"peer-request", "peer-workbench-contract", "workbench-tool-contract"}
+        & config["sources"].keys(),
         "Reserved entry source identity",
     )
 
@@ -204,7 +220,10 @@ def _validate_worker_config(config: dict[str, Any]) -> None:
         raise ValueError("model.kind must be mailbox or command")
 
     timeout = model.get("timeout_seconds", 900)
-    need(type(timeout) in (int, float) and math.isfinite(timeout) and timeout > 0, "Invalid model timeout")
+    need(
+        type(timeout) in (int, float) and math.isfinite(timeout) and timeout > 0,
+        "Invalid model timeout",
+    )
 
 
 def _validate_peer_request(
@@ -229,16 +248,24 @@ def _validate_peer_request(
         ),
     )
     need(
-        request["schema"] == REQUEST_SCHEMA and isinstance(request["run_id"], str) and bool(request["run_id"]),
+        request["schema"] == REQUEST_SCHEMA
+        and isinstance(request["run_id"], str)
+        and bool(request["run_id"]),
         "Invalid peer request schema/run",
     )
     need(identifier(request["owner"]), "Invalid request owner")
-    need(integer(request["turn"], 1) and integer(request["revision"], 1), "Invalid request turn/revision")
+    need(
+        integer(request["turn"], 1) and integer(request["revision"], 1),
+        "Invalid request turn/revision",
+    )
 
     workspace = absolute(request["workspace"], "workspace", directory=True)
     corpus = absolute(config["corpus_root"], "corpus_root", directory=True)
     evidence = absolute(config["evidence_root"], "evidence_root")
-    need(not evidence.is_relative_to(workspace), "Evidence must remain outside the editable workspace")
+    need(
+        not evidence.is_relative_to(workspace),
+        "Evidence must remain outside the editable workspace",
+    )
     need(not evidence.is_relative_to(corpus), "Evidence must remain outside the source corpus")
     need(
         not workspace.is_relative_to(corpus) and not corpus.is_relative_to(workspace),
@@ -265,7 +292,9 @@ def _validate_peer_request(
         validate_peer_entry(peer_entry)
 
     limits = request["limits_remaining"]
-    fields(limits, ("wall_seconds", "turns", "turn_seconds", "max_output_bytes", "max_artifact_bytes"))
+    fields(
+        limits, ("wall_seconds", "turns", "turn_seconds", "max_output_bytes", "max_artifact_bytes")
+    )
     need(
         integer(limits["turns"])
         and integer(limits["max_output_bytes"], 1)
@@ -312,13 +341,17 @@ def _validate_prior_state(
         and previous["revision"] == request["revision"] - 1,
         "Prior adapter state belongs to another owner/revision",
     )
-    need(previous["worker_config_sha256"] == config_sha, "Worker configuration changed across owner turns")
+    need(
+        previous["worker_config_sha256"] == config_sha,
+        "Worker configuration changed across owner turns",
+    )
     need(
         canonical(previous["continuing_duties"]) == canonical(config.get("obligations", [])),
         "Continuing duty objects changed",
     )
     need(
-        integer(previous["completed_turns"], 1) and previous["completed_turns"] == request["revision"] - 1,
+        integer(previous["completed_turns"], 1)
+        and previous["completed_turns"] == request["revision"] - 1,
         "Prior completed-turn account is invalid",
     )
     fields(previous["accounting"], COUNT_KEYS)
@@ -458,15 +491,27 @@ class PeerTools:
                 "response_identity": identity(response_body),
                 "manifest_identity": identity(manifest_body),
                 "files": {},
-                "scope": "captured structurally accepted peer contribution; no semantic acceptance or latest-currentness claim",
+                "scope": (
+                    "captured structurally accepted peer contribution; no semantic acceptance or "
+                    "latest-currentness claim"
+                ),
             }
             for name in paths:
                 need(name in entries, "Selected path is absent from the captured manifest: " + name)
-                need(entries[name]["bytes"] <= self.max_file, "Selected peer body exceeds per-file bound: " + name)
+                need(
+                    entries[name]["bytes"] <= self.max_file,
+                    "Selected peer body exceeds per-file bound: " + name,
+                )
                 path = scoped_file(artifacts_dir, name)
-                need(path.stat().st_size <= self.max_file, "Selected captured file exceeds per-file bound: " + name)
+                need(
+                    path.stat().st_size <= self.max_file,
+                    "Selected captured file exceeds per-file bound: " + name,
+                )
                 body = observed(path)
-                need(body == decoded[name], "Captured file body differs from accepted returned bytes: " + name)
+                need(
+                    body == decoded[name],
+                    "Captured file body differs from accepted returned bytes: " + name,
+                )
                 record["selected_body_bytes"] += len(body)
 
                 item = identity(body)
@@ -505,7 +550,9 @@ class PeerTools:
 
         ack = arguments["ack"]
         need(
-            isinstance(ack, list) and all(isinstance(x, str) for x in ack) and len(ack) == len(set(ack)),
+            isinstance(ack, list)
+            and all(isinstance(x, str) for x in ack)
+            and len(ack) == len(set(ack)),
             "ack must be a unique string array",
         )
         need(
@@ -532,7 +579,9 @@ class PeerTools:
 
         names = arguments["files"]
         need(
-            isinstance(names, list) and all(isinstance(x, str) for x in names) and len(names) == len(set(names)),
+            isinstance(names, list)
+            and all(isinstance(x, str) for x in names)
+            and len(names) == len(set(names)),
             "files must be a unique string array",
         )
         for name in names:
@@ -544,7 +593,9 @@ class PeerTools:
         total = 0
         for name in names:
             path = scoped_file(self.workbench.workspace, name)
-            need(path.stat().st_size <= self.max_file, "Staged file exceeds per-file bound: " + name)
+            need(
+                path.stat().st_size <= self.max_file, "Staged file exceeds per-file bound: " + name
+            )
             body = path.read_bytes()
             need(len(body) <= self.max_file, "Staged file exceeds per-file bound: " + name)
             total += len(body)
@@ -563,13 +614,18 @@ class PeerTools:
             "acknowledgments": len(ack),
             "messages": len(sends),
             "files": pins,
-            "scope": "candidate only; messages/acknowledgments take effect only through host acceptance of a successful return",
+            "scope": (
+                "candidate only; messages/acknowledgments take effect only through host acceptance "
+                "of a successful return"
+            ),
         }
 
     def finish(self, result: dict[str, Any], config_sha: str) -> dict[str, Any]:
         need(result["status"] == "complete", "Model turn did not complete: " + result["status"])
         need(self.staged is not None, "Completed model turn has no staged peer return")
         staged = self.staged
+        if staged is None:
+            raise RuntimeError("Completed model turn has no staged peer return")
 
         for name, body in staged["captured"].items():
             need(
@@ -578,7 +634,9 @@ class PeerTools:
             )
 
         previous = self.request["state"]
-        accounting = {k: 0 for k in COUNT_KEYS} if previous is None else dict(previous["accounting"])
+        accounting = (
+            dict.fromkeys(COUNT_KEYS, 0) if previous is None else dict(previous["accounting"])
+        )
         accounting["model_calls"] += result["model_calls"]
         accounting["tool_calls"] += result["tool_calls"]
         accounting["peer_read_calls"] += sum(entry["successful"] for entry in self.reads)
@@ -611,7 +669,10 @@ class PeerTools:
             "obligations": staged["arguments"]["obligations"],
             "ack": staged["arguments"]["ack"],
             "send": staged["arguments"]["send"],
-            "files": {name: base64.b64encode(body).decode("ascii") for name, body in staged["captured"].items()},
+            "files": {
+                name: base64.b64encode(body).decode("ascii")
+                for name, body in staged["captured"].items()
+            },
         }
 
 
@@ -637,7 +698,9 @@ def _build_turn_report(
         "tool_calls": result["tool_calls"],
         "peer_read_attempts": len(reads),
         "peer_read_calls": sum(entry["successful"] for entry in reads),
-        "peer_read_bytes": sum(entry["selected_body_bytes"] for entry in reads if entry["successful"]),
+        "peer_read_bytes": sum(
+            entry["selected_body_bytes"] for entry in reads if entry["successful"]
+        ),
         "peer_read_io_bytes_all_attempts": sum(entry["io_bytes"] for entry in reads),
         "source_stats": workbench.source_service.stats() if workbench is not None else None,
         "accepted_artifacts": workbench.accepted if workbench is not None else [],
@@ -650,7 +713,11 @@ def _build_turn_report(
         "run_wide_model_limit_enforced": False,
         "elapsed_seconds": time.monotonic() - started,
         "error": error,
-        "scope": "local model/tool observations and prepared peer return; harness admission and semantic whole-use receiving are subsequent",
+        "scope": (
+            "local model/tool observations and prepared peer return; harness admission and "
+            "semantic "
+            "whole-use receiving are subsequent"
+        ),
         "provider_inference_calls": None,
         "provider_tokens": None,
         "provider_prices": None,
@@ -775,7 +842,9 @@ def run_peer_turn(
             )
             peer = PeerTools(config_copy, request_copy, workbench, directory)
             tools = workbench.tools()
-            tools.update(peer_context=peer.context, peer_read=peer.read, peer_stage_return=peer.stage)
+            tools.update(
+                peer_context=peer.context, peer_read=peer.read, peer_stage_return=peer.stage
+            )
 
             result = modules["agent_runtime"].run_agent(
                 task=config_copy["task"],
@@ -811,7 +880,12 @@ def run_peer_turn(
             started=started,
         )
         write_json(directory / "adapter-result.json", report)
-        return {"ok": report["ok"], "response": response, "report": report, "evidence_dir": str(directory)}
+        return {
+            "ok": report["ok"],
+            "response": response,
+            "report": report,
+            "evidence_dir": str(directory),
+        }
     finally:
         if source is not None:
             source.close()

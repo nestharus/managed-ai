@@ -1,16 +1,19 @@
 """Engine code identity, descriptor reading, Git provenance, and store binding verification."""
-from __future__ import annotations
 
 import ast
-from importlib.machinery import EXTENSION_SUFFIXES
+import contextlib
 import os
-from pathlib import Path
+import shutil
 import stat
 import subprocess
+from importlib.machinery import EXTENSION_SUFFIXES
+from pathlib import Path
 from typing import Any
 
 from managed_ai.core.formats import (
     DEPLOYMENT_FORMAT as FORMAT,
+)
+from managed_ai.core.formats import (
     ENGINE_API,
     STORE_FORMAT,
     STORE_SCHEMA,
@@ -33,11 +36,15 @@ VERSION = "0.3.0"
 NATIVE_ENTRY = Path("store/system.py")
 NATIVE_CONTRACT = Path("store/selection/domain_selection.py")
 NON_SOURCE_SUFFIXES = (".pyc", ".pyo", ".pyd", ".so", *EXTENSION_SUFFIXES)
-CODE_IDENTITY_EXCLUDED_DIRS = frozenset({"tests", "examples", "patterns", "companions", "collective"})
+CODE_IDENTITY_EXCLUDED_DIRS = frozenset(
+    {"tests", "examples", "patterns", "companions", "collective"}
+)
 
 
 def read_descriptor_bytes(path: Path | str) -> bytes:
-    ordinary = check_ordinary_ancestors(Path(path), expect_dir=False, error_prefix="ordinary descriptor required")
+    ordinary = check_ordinary_ancestors(
+        Path(path), expect_dir=False, error_prefix="ordinary descriptor required"
+    )
     return ordinary.read_bytes()
 
 
@@ -89,7 +96,9 @@ def _ordinary_dir(
     path: Path | str,
     error_prefix: str = "ordinary deployment, engine and store directories required",
 ) -> Path:
-    return check_ordinary_ancestors(Path(path), expect_dir=True, error_prefix=error_prefix).resolve(strict=True)
+    return check_ordinary_ancestors(Path(path), expect_dir=True, error_prefix=error_prefix).resolve(
+        strict=True
+    )
 
 
 def _is_test_module_name(name: str) -> bool:
@@ -103,10 +112,14 @@ def _git_provenance(engine: Path) -> dict[str, object] | None:
     if not has_git:
         return None
 
+    git_exe = shutil.which("git")
+    if git_exe is None:
+        return None
+
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     try:
-        head = subprocess.run(
-            ["git", "-C", str(engine), "rev-parse", "--verify", "HEAD"],
+        head = subprocess.run(  # noqa: S603
+            [git_exe, "-C", str(engine), "rev-parse", "--verify", "HEAD"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -120,8 +133,8 @@ def _git_provenance(engine: Path) -> dict[str, object] | None:
         if len(commit) != 40 or any(c not in "0123456789abcdef" for c in commit.lower()):
             return None
 
-        status = subprocess.run(
-            ["git", "-C", str(engine), "status", "--porcelain", "--", "."],
+        status = subprocess.run(  # noqa: S603
+            [git_exe, "-C", str(engine), "status", "--porcelain", "--", "."],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -132,7 +145,7 @@ def _git_provenance(engine: Path) -> dict[str, object] | None:
             return None
 
         return {"git_commit": commit.lower(), "git_clean": not bool(status.stdout.strip())}
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return None
 
 
@@ -167,7 +180,9 @@ def _status_payload(
         "store_schema": store["store_schema"],
         "engine_api": store["engine_api"],
         "descriptor_sha256": descriptor_sha256,
-        "scope": "One shared code tree; explicit store and data-domain selection. No copied runtime.",
+        "scope": (
+            "One shared code tree; explicit store and data-domain selection. No copied runtime."
+        ),
     }
     if "git_commit" in eng:
         payload["engine_git_commit"] = eng["git_commit"]
@@ -194,11 +209,15 @@ def _scan_engine_subtree(root_dir: Path, initial_cache: bool) -> list[Path]:
                     pending.append((path, cache or lower == "__pycache__"))
                 elif cache:
                     if not name.lower().endswith(".pyc"):
-                        raise ValueError(f"ordinary bytecode cache files required below __pycache__: {path}")
+                        raise ValueError(
+                            f"ordinary bytecode cache files required below __pycache__: {path}"
+                        )
                 else:
                     lower = name.lower()
                     if lower.endswith(NON_SOURCE_SUFFIXES):
-                        raise ValueError(f"shared engine requires Python source for executable modules: {path}")
+                        raise ValueError(
+                            f"shared engine requires Python source for executable modules: {path}"
+                        )
                     if lower.endswith(".py") and not _is_test_module_name(name):
                         paths.append(path)
 
@@ -222,7 +241,9 @@ def _collect_engine_modules(engine: Path) -> list[Path]:
             else:
                 lower = name.lower()
                 if lower.endswith(NON_SOURCE_SUFFIXES):
-                    raise ValueError(f"shared engine requires Python source for executable modules: {path}")
+                    raise ValueError(
+                        f"shared engine requires Python source for executable modules: {path}"
+                    )
                 if lower.endswith(".py") and not _is_test_module_name(name):
                     paths.append(path)
 
@@ -249,11 +270,13 @@ def _hash_engine_modules(
         for path in chunk:
             relative = path.relative_to(engine)
             raw = path.read_bytes()
-            out.append((
-                relative,
-                {"path": relative.as_posix(), "sha256": sha(raw)},
-                raw if relative in declaration_paths else None,
-            ))
+            out.append(
+                (
+                    relative,
+                    {"path": relative.as_posix(), "sha256": sha(raw)},
+                    raw if relative in declaration_paths else None,
+                )
+            )
         return out
 
     if len(sorted_paths) >= 16:
@@ -281,21 +304,27 @@ def _verify_api_declarations(engine: Path, declarations: dict[Path, bytes]) -> N
     interfaces = ((NATIVE_ENTRY, NATIVE_CONTRACT),)
     declaration_paths = {path for pair in interfaces for path in pair}
     if declaration_paths != declarations.keys():
-        raise ValueError("select the current engine root containing its native entry and API declarations")
+        raise ValueError(
+            "select the current engine root containing its native entry and API declarations"
+        )
 
     def declared(path: Path) -> dict[str, Any]:
         result: dict[str, Any] = {}
         try:
             declaration = ast.parse(declarations[path], filename=str(engine / path))
         except SyntaxError as exc:
-            raise ValueError(f"invalid engine API declaration in {engine / path}: {exc.msg}") from exc
+            raise ValueError(
+                f"invalid engine API declaration in {engine / path}: {exc.msg}"
+            ) from exc
 
         for node in declaration.body:
-            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-                try:
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            ):
+                with contextlib.suppress(ValueError, TypeError):
                     result[node.targets[0].id] = ast.literal_eval(node.value)
-                except (ValueError, TypeError):
-                    pass
         return result
 
     for entry, schema in interfaces:
@@ -327,7 +356,9 @@ def runtime_binding(root: Path) -> dict[str, str]:
         or config.get("store_schema") != STORE_SCHEMA
         or config.get("engine_api") != ENGINE_API
     ):
-        raise ValueError("store/engine schema incompatibility; explicit import or migration required")
+        raise ValueError(
+            "store/engine schema incompatibility; explicit import or migration required"
+        )
 
     packet_id(config["instance_id"])
     if (

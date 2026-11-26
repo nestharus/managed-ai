@@ -1,16 +1,18 @@
-"""Cooperative locking, strict JSON codecs, reparse/path guards, and durability for material_retention."""
-from __future__ import annotations
+"""Cooperative locking, strict JSON codecs, reparse/path guards, and durability for
+material_retention.
+"""
 
-from contextlib import contextmanager
 import datetime as dt
 import errno
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath, PureWindowsPath
 import stat
-from typing import Any
 import zlib
+from collections.abc import Generator
+from contextlib import contextmanager
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import Any
 
 from ._platform_bridge import platform
 from .config import FORMAT, IMMUTABLE_RECORD_DIRS, RAW_BODY_KINDS
@@ -31,7 +33,9 @@ def sha(raw: bytes | bytearray | memoryview) -> str:
 
 
 def sha256_file_checked(path: Path | str, *, label: str = "File") -> str:
-    """Compute a streaming SHA-256 of an ordinary non-reparse file with uniform errors across OSes."""
+    """Compute a streaming SHA-256 of an ordinary non-reparse file with uniform errors across
+    OSes.
+    """
     target = Path(path)
     require(
         not is_reparse_or_symlink(target),
@@ -45,7 +49,8 @@ def sha256_file_checked(path: Path | str, *, label: str = "File") -> str:
 
 def loads_json(raw: bytes | bytearray | str) -> Any:
     """Parse UTF-8 JSON strictly, rejecting duplicate keys and nonfinite constants."""
-    return platform.strict_json_loads(raw, label="Managed material JSON", require_object=False)
+    payload: bytes | str = bytes(raw) if isinstance(raw, bytearray) else raw
+    return platform.strict_json_loads(payload, label="Managed material JSON", require_object=False)
 
 
 def js(value: Any) -> bytes:
@@ -62,7 +67,7 @@ def js(value: Any) -> bytes:
 
 def utc() -> str:
     """Return the current UTC timestamp as an ISO-8601 string."""
-    return dt.datetime.now(dt.timezone.utc).isoformat()
+    return dt.datetime.now(dt.UTC).isoformat()
 
 
 def require(ok: Any, message: str) -> None:
@@ -99,7 +104,9 @@ def _open_store_lock_stream(root: Path, lock_path: Path, *, shared: bool) -> Any
 
 
 @contextmanager
-def store_lock(root: Path | str, *, shared: bool = False, nonblocking: bool = False):
+def store_lock(
+    root: Path | str, *, shared: bool = False, nonblocking: bool = False
+) -> Generator[None]:
     """Cooperative store lock serializing index/CURRENT mutations across processes and threads."""
     checked_root = check_unfollowed_ancestors(root, "Store root", include_target=True)
     entry = _LOCK_POOL.get(checked_root.resolve())
@@ -107,13 +114,17 @@ def store_lock(root: Path | str, *, shared: bool = False, nonblocking: bool = Fa
     state = entry.local
 
     if not rlock.acquire(blocking=not nonblocking):
-        raise BlockingIOError("Managed material store is busy: " + str(checked_root / ".store.lock"))
+        raise BlockingIOError(
+            "Managed material store is busy: " + str(checked_root / ".store.lock")
+        )
 
     try:
         depth = getattr(state, "depth", 0)
         if depth > 0:
             if not shared and not getattr(state, "exclusive", False):
-                raise RuntimeError("Cannot upgrade a shared managed-material store lock to exclusive")
+                raise RuntimeError(
+                    "Cannot upgrade a shared managed-material store lock to exclusive"
+                )
             state.depth = depth + 1
             try:
                 yield
@@ -216,9 +227,10 @@ def immutable(path: Path | str, raw: bytes) -> None:
 
 def immutable_below(validated_root: Path, rel_path: PurePosixPath | Path | str, raw: bytes) -> None:
     """Write an immutable file below an already-validated root without quadratic ancestor lstats."""
+    rel_arg: Path | str = rel_path.as_posix() if isinstance(rel_path, PurePosixPath) else rel_path
     checked = check_unfollowed_descendant(
         validated_root,
-        rel_path,
+        rel_arg,
         allow_missing_leaf=True,
         role="Immutable object",
     )

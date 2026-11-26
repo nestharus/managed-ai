@@ -1,12 +1,11 @@
 """Native subprocess bridge, durable event/object custody, and candidate capture reconciliation."""
-from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import stat
 import subprocess
 import sys
+from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
@@ -40,8 +39,11 @@ SAFE_CAPTURE_ERRORS = frozenset(
         "invalid assessment fields",
         "nonempty bounded assessments required",
         "Native return already exists; use its retained body or a new current occurrence",
-        "Selected native engine does not match the reviewed capture adapter; requalify this adapter before capture",
-        "External native engine requires explicit --expected-profile or verified --deployment pin before capture",
+        "Selected native engine does not match the reviewed capture adapter; requalify this "
+        "adapter "
+        "before capture",
+        "External native engine requires explicit --expected-profile or verified --deployment pin "
+        "before capture",
         "Selected native engine does not satisfy the required capture adapter contract",
     },
 )
@@ -54,8 +56,11 @@ _PRECOMMIT_CLEANUP_ERRORS = frozenset(
         "invalid assessment fields",
         "nonempty bounded assessments required",
         "Native return already exists; use its retained body or a new current occurrence",
-        "Selected native engine does not match the reviewed capture adapter; requalify this adapter before capture",
-        "External native engine requires explicit --expected-profile or verified --deployment pin before capture",
+        "Selected native engine does not match the reviewed capture adapter; requalify this "
+        "adapter "
+        "before capture",
+        "External native engine requires explicit --expected-profile or verified --deployment pin "
+        "before capture",
         "Selected native engine does not satisfy the required capture adapter contract",
     },
 )
@@ -79,7 +84,7 @@ def capture_error(raw: str) -> str:
     try:
         parsed = loads_strict(raw)
         detail = parsed.get("error") if isinstance(parsed, dict) else None
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         detail = None
 
     if isinstance(detail, str) and detail in SAFE_CAPTURE_ERRORS:
@@ -93,7 +98,9 @@ def capture_error(raw: str) -> str:
 
 def _temp_receipt_file(directory: Path, body: bytes) -> Path:
     """Write a closed temporary JSON file readable by child processes on all platforms."""
-    checked_dir = check_unfollowed_ancestors(directory, "Temporary request directory", include_target=True)
+    checked_dir = check_unfollowed_ancestors(
+        directory, "Temporary request directory", include_target=True
+    )
     checked_dir.mkdir(parents=True, exist_ok=True)
     with NamedTemporaryFile(dir=checked_dir, suffix=".json", delete=False) as selected:
         selected.write(body)
@@ -102,7 +109,9 @@ def _temp_receipt_file(directory: Path, body: bytes) -> Path:
 
 
 def resolve_sibling_cli(engine_entry: Path, canonical_rel: str, legacy_name: str) -> Path:
-    """Resolve an engine CLI relative to store/manage_store.py or historical runtime/manage_store.py."""
+    """Resolve an engine CLI relative to store/manage_store.py or historical
+    runtime/manage_store.py.
+    """
     entry = check_unfollowed_ancestors(engine_entry, "Engine entry", include_target=True).resolve()
     if entry.parent.name == "store":
         candidate = entry.parents[1] / canonical_rel
@@ -135,7 +144,9 @@ def build_sibling_cli_command(
 
 
 class NativeBridge:
-    """Collaborator owning durable object/event custody, native subprocesses, and capture reconciliation."""
+    """Collaborator owning durable object/event custody, native subprocesses, and capture
+    reconciliation.
+    """
 
     def __init__(self, host: Any) -> None:
         self._host = host
@@ -222,15 +233,24 @@ class NativeBridge:
         ):
             raise ValueError("attached native store identity changed")
 
-        argv = [sys.executable, "-B", self._host.engine, "--root", str(self._host.native), *map(str, args)]
-        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8")
+        argv = [
+            sys.executable,
+            "-B",
+            self._host.engine,
+            "--root",
+            str(self._host.native),
+            *map(str, args),
+        ]
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8")  # noqa: S603
         self._host.event(
             "native-call",
             {"argv": argv, "exit": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr},
         )
         if proc.returncode:
             raise ValueError(
-                capture_error(proc.stderr or proc.stdout) if scoped_errors else (proc.stderr or proc.stdout),
+                capture_error(proc.stderr or proc.stdout)
+                if scoped_errors
+                else (proc.stderr or proc.stdout),
             )
         return loads_strict(proc.stdout)
 
@@ -245,14 +265,16 @@ class NativeBridge:
             "inspect",
             ident(sid),
         )
-        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", env=env)
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", env=env)  # noqa: S603
         self._host.event(
             "native-inspection",
             {"argv": argv, "exit": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr},
         )
         if proc.returncode:
             raise ValueError(
-                capture_error(proc.stderr or proc.stdout) if scoped_errors else (proc.stderr or proc.stdout),
+                capture_error(proc.stderr or proc.stdout)
+                if scoped_errors
+                else (proc.stderr or proc.stdout),
             )
         return loads_strict(proc.stdout)
 
@@ -284,7 +306,7 @@ class NativeBridge:
             "--producer",
             producer,
         ]
-        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8")
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8")  # noqa: S603
         self._host.event(
             "native-call",
             {
@@ -299,7 +321,9 @@ class NativeBridge:
             raise ValueError(capture_error(proc.stderr or proc.stdout))
         return loads_strict(proc.stdout)
 
-    def reconcile_capture_native(self, sid: str, receipt: Path | str, producer: str) -> dict[str, Any]:
+    def reconcile_capture_native(
+        self, sid: str, receipt: Path | str, producer: str
+    ) -> dict[str, Any]:
         """Verify an already-committed native Attention receipt for crash recovery."""
         adapter = HERE / "capture_native.py"
         argv = [
@@ -318,7 +342,7 @@ class NativeBridge:
             "--producer",
             producer,
         ]
-        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8")
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8")  # noqa: S603
         self._host.event(
             "native-capture-reconciliation",
             {
@@ -402,7 +426,9 @@ class NativeBridge:
             obj_path = self._host.root / pending["receipt_object"]
             if is_reparse_or_symlink(obj_path) or not obj_path.is_file():
                 raise ValueError(f"Retained pending receipt object is unavailable: {rid}")
-            check_unfollowed_ancestors(obj_path, "Retained pending receipt object", include_target=True)
+            check_unfollowed_ancestors(
+                obj_path, "Retained pending receipt object", include_target=True
+            )
             body = obj_path.read_bytes()
             if digest(body) != pending["receipt_sha256"]:
                 raise ValueError(f"Retained pending receipt object integrity mismatch: {rid}")
@@ -494,7 +520,9 @@ class NativeBridge:
                     if old_obj.is_file() and not is_reparse_or_symlink(old_obj)
                     else None
                 )
-                if old_body is not None and digest(old_body) == existing_pending.get("receipt_sha256"):
+                if old_body is not None and digest(old_body) == existing_pending.get(
+                    "receipt_sha256"
+                ):
                     prior_path = _temp_receipt_file(requests_dir, old_body)
                     try:
                         try:
@@ -504,7 +532,10 @@ class NativeBridge:
                                 existing_pending["producer"],
                             )
                         except ValueError as prior_exc:
-                            if str(prior_exc) == "receipt identity not recorded in native Attention":
+                            if (
+                                str(prior_exc)
+                                == "receipt identity not recorded in native Attention"
+                            ):
                                 created_pending = True
                         else:
                             raise ValueError("receipt identity already used")
@@ -545,7 +576,10 @@ class NativeBridge:
                         try:
                             self._host.reconcile_capture_native(sid, selected_path, producer)
                         except ValueError as probe_exc:
-                            if str(probe_exc) == "receipt identity not recorded in native Attention":
+                            if (
+                                str(probe_exc)
+                                == "receipt identity not recorded in native Attention"
+                            ):
                                 pending_path.unlink(missing_ok=True)
                 raise
 

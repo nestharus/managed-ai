@@ -4,14 +4,13 @@
 No model client, semantic scheduler, universal ontology, or inferred completeness.
 Uses the existing native runtime for context, Attention, receive/adopt, and goal use.
 """
-from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import stat
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 HERE = Path(__file__).resolve().parent
@@ -19,21 +18,31 @@ SRC_ROOT = HERE.parents[2]
 if __package__ in (None, "") and str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.host.continuing_work.capture_native import native_sources
-from managed_ai.host.continuing_work.contract import (
-    ContinuingWorkService,
+from managed_ai.host.continuing_work.capture_native import native_sources  # noqa: E402
+from managed_ai.host.continuing_work.contract import (  # noqa: E402
     DEFAULT_HOST_CONFIG,
     HostConfig,
 )
-from managed_ai.host.continuing_work.native_bridge import (
-    MAX_EVENT_LINE_BYTES,
-    MAX_EVENT_STREAM_BYTES,
-    NativeBridge,
-    _safe_jsonl,
-    build_sibling_cli_command,
-    capture_error,
+from managed_ai.host.continuing_work.contract import (  # noqa: E402
+    ContinuingWorkService as ContinuingWorkService,
 )
-from managed_ai.host.continuing_work.occurrence_files import (
+from managed_ai.host.continuing_work.native_bridge import (  # noqa: E402
+    MAX_EVENT_LINE_BYTES as MAX_EVENT_LINE_BYTES,
+)
+from managed_ai.host.continuing_work.native_bridge import (  # noqa: E402
+    MAX_EVENT_STREAM_BYTES as MAX_EVENT_STREAM_BYTES,
+)
+from managed_ai.host.continuing_work.native_bridge import (  # noqa: E402
+    NativeBridge,
+    build_sibling_cli_command,
+)
+from managed_ai.host.continuing_work.native_bridge import (  # noqa: E402
+    _safe_jsonl as _safe_jsonl,
+)
+from managed_ai.host.continuing_work.native_bridge import (  # noqa: E402
+    capture_error as capture_error,
+)
+from managed_ai.host.continuing_work.occurrence_files import (  # noqa: E402
     atomic_bytes,
     check_unfollowed_ancestors,
     digest,
@@ -44,26 +53,36 @@ from managed_ai.host.continuing_work.occurrence_files import (
     nonempty,
     now,
     read,
-    sync_dir,
     write,
 )
-from managed_ai.host.continuing_work.repair_custody import RepairCustody
-from managed_ai.host.continuing_work.scope_lifecycle import (
+from managed_ai.host.continuing_work.occurrence_files import (  # noqa: E402
+    sync_dir as sync_dir,
+)
+from managed_ai.host.continuing_work.repair_custody import RepairCustody  # noqa: E402
+from managed_ai.host.continuing_work.scope_lifecycle import (  # noqa: E402
     ScopeLifecycle,
     operation_guide_path,
-    overlap_rows,
-    prepare_attention_selection,
-    prepare_questions,
 )
-from managed_ai.platform import safe_relpath as _safe_relpath
+from managed_ai.host.continuing_work.scope_lifecycle import (  # noqa: E402
+    overlap_rows as overlap_rows,
+)
+from managed_ai.host.continuing_work.scope_lifecycle import (  # noqa: E402
+    prepare_attention_selection as prepare_attention_selection,
+)
+from managed_ai.host.continuing_work.scope_lifecycle import (  # noqa: E402
+    prepare_questions as prepare_questions,
+)
+from managed_ai.platform import safe_relpath as _safe_relpath  # noqa: E402
 
 _FIELD_TEXT = (
-    "The full commission remains active. A local contribution may finish while other duties remain owed. "
+    "The full commission remains active. A local contribution may finish while other duties remain "
+    "owed. "
     "Reopen broader alternatives when evidence changes the useful contribution. "
     "Discover unrepresented relationships; the host only routes nominated ones.\n"
 )
 _START_RECEIPT_TEXT = (
-    "Host initialized exact commission, explicit duties and the continuing commission Attention item. "
+    "Host initialized exact commission, explicit duties and the continuing commission Attention "
+    "item. "
     "This is enrollment, not a model reading or semantic completion claim.\n"
 )
 _PRODUCER_DEPENDENCY_FILES = (
@@ -130,7 +149,9 @@ class Host:
     def capture_native(self, sid: str, receipt: Path | str, producer: str) -> dict[str, Any]:
         return self.bridge.capture_native(sid, receipt, producer)
 
-    def reconcile_capture_native(self, sid: str, receipt: Path | str, producer: str) -> dict[str, Any]:
+    def reconcile_capture_native(
+        self, sid: str, receipt: Path | str, producer: str
+    ) -> dict[str, Any]:
         return self.bridge.reconcile_capture_native(sid, receipt, producer)
 
     def temp(self, name: str, value: Any) -> Path:
@@ -163,9 +184,14 @@ class Host:
     def status(self) -> dict[str, Any]:
         return self.lifecycle.status()
 
+    def _require_config(self) -> dict[str, Any]:
+        if self.config is None:
+            raise ValueError("Host is not initialized; run init first")
+        return self.config
+
     @property
     def engine(self) -> str:
-        return str((self.root / self.config["engine"]).resolve())
+        return str((self.root / self._require_config()["engine"]).resolve())
 
     def producer_dependencies(self) -> list[dict[str, Any]]:
         return [self.pin(HERE / name) for name in _PRODUCER_DEPENDENCY_FILES]
@@ -184,8 +210,8 @@ class Host:
                 {"label": label, "captured": pin, "current_sha256": actual},
             )
             raise ValueError(
-                label
-                + " changed outside this captured occurrence; preserve the proposal and prepare current work",
+                label + " changed outside this captured occurrence; "
+                "preserve the proposal and prepare current work",
             )
 
     def received_outputs(self, scope: dict[str, Any]) -> list[dict[str, Any]]:
@@ -194,7 +220,11 @@ class Host:
         for pin in scope["result"]["outputs"]:
             self.current(pin, "Received output " + scope["id"])
             obj = self.root / pin["object"]
-            if is_reparse_or_symlink(obj) or not obj.is_file() or digest(obj.read_bytes()) != pin["sha256"]:
+            if (
+                is_reparse_or_symlink(obj)
+                or not obj.is_file()
+                or digest(obj.read_bytes()) != pin["sha256"]
+            ):
                 raise ValueError("Retained received-output object differs")
         return scope["result"]["outputs"]
 
@@ -333,7 +363,8 @@ class Host:
                 "items": [
                     {
                         "id": "continuing-commission",
-                        "question": "Which commissioned effects remain owed beyond this local contribution?",
+                        "question": "Which commissioned effects remain owed beyond this local "
+                        "contribution?",
                         "use": "Keep current work aligned with the containing commission.",
                         "basis": ["sources/host/COMMISSION.md", "records/goal.json"],
                         "groups": ["continuation"],
@@ -343,7 +374,14 @@ class Host:
             self.call("track", "--spec", self.temp("initial-attention.json", question))
             reply = self.root / "requests/start-receipt.md"
             atomic_bytes(reply, _START_RECEIPT_TEXT.encode("utf-8"))
-            self.call("receive", "start", "--reply", reply, "--producer", "continuing-work enrollment adapter")
+            self.call(
+                "receive",
+                "start",
+                "--reply",
+                reply,
+                "--producer",
+                "continuing-work enrollment adapter",
+            )
             final_goal = self.goal()
             self._write(self.config_path, self.config)
         except BaseException:
@@ -359,10 +397,14 @@ class Host:
 
     def init(self, spec: dict[str, Any]) -> dict[str, Any]:
         """Initialize a new continuing-work host or attach an existing native store."""
-        engine, commission, commission_bytes, operation_bytes, duties = self._validate_init_spec(spec)
+        engine, commission, commission_bytes, operation_bytes, duties = self._validate_init_spec(
+            spec
+        )
         if spec.get("native_root"):
             return self._init_attached_host(spec, engine, commission, duties)
-        return self._init_new_native_host(engine, commission, commission_bytes, operation_bytes, duties)
+        return self._init_new_native_host(
+            engine, commission, commission_bytes, operation_bytes, duties
+        )
 
     def bind_continuation(self, spec: dict[str, Any]) -> dict[str, Any]:
         """Add current-goal dependency to an existing host-owned inquiry through native APIs."""
@@ -373,9 +415,11 @@ class Host:
         account = nonempty(spec["account"], "continuation binding account")
         destination = self.root / "continuation-bindings" / f"{operation}.json"
         if destination.exists():
-            raise ValueError("Retain the existing continuation binding; use a fresh operation identity")
+            raise ValueError(
+                "Retain the existing continuation binding; use a fresh operation identity"
+            )
 
-        self.current(self.config["commission"], "Current commission")
+        self.current(self._require_config()["commission"], "Current commission")
         goal = self.goal()
         if not (self.work / "records/goal.json").is_file():
             raise ValueError("Current native goal material is absent")
@@ -394,7 +438,9 @@ class Host:
             "--limit",
             "1",
         )
-        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", env=env)
+        result = subprocess.run(  # noqa: S603
+            command, capture_output=True, text=True, encoding="utf-8", env=env
+        )
         self.event(
             "continuation-binding-observation",
             {
@@ -414,7 +460,8 @@ class Host:
             or observed["delivered"][0]["id"] != "continuing-commission"
         ):
             raise ValueError(
-                "The continuing inquiry was not completely delivered; preserve the observation and inspect it",
+                "The continuing inquiry was not completely delivered; preserve the observation and "
+                "inspect it",
             )
 
         before = observed["delivered"][0]["spec"]
@@ -457,7 +504,8 @@ class Host:
 
     def commission(self, spec: dict[str, Any]) -> dict[str, Any]:
         """Explicitly revise current instructions while preserving earlier enrolled duties."""
-        old = self.config["commission"]
+        cfg = self._require_config()
+        old = cfg["commission"]
         account = nonempty(spec["account"], "commission continuation account")
         source_path, new_bytes = _read_ordinary_file_bytes(spec["path"], "Commission source")
         new_text = new_bytes.decode("utf-8")
@@ -469,7 +517,8 @@ class Host:
             nonempty(row["text"], "duty text")
             if rid in duties and duties[rid]["text"] != row["text"]:
                 raise ValueError(
-                    "Do not silently replace an earlier duty; add a new identity or reopen/account for it",
+                    "Do not silently replace an earlier duty; add a new identity or reopen/account "
+                    "for it",
                 )
             if rid not in duties:
                 duties[rid] = dict(row, disposition="open")
@@ -486,7 +535,12 @@ class Host:
                 "obligations": list(duties.values()),
                 "continuation_account": account,
             }
-            record = {"id": "goal", "kind": "goal", "content": content, "basis": ["sources/host/COMMISSION.md"]}
+            record = {
+                "id": "goal",
+                "kind": "goal",
+                "content": content,
+                "basis": ["sources/host/COMMISSION.md"],
+            }
             result = self.call(
                 "put",
                 "--record",
@@ -501,8 +555,8 @@ class Host:
                 target.unlink(missing_ok=True)
             raise
 
-        self.config["commission"] = new
-        self._write(self.config_path, self.config)
+        cfg["commission"] = new
+        self._write(self.config_path, cfg)
         self.event(
             "commission-continued",
             {"before": old, "current": new, "account": account, "preserved_duties": list(duties)},
@@ -529,8 +583,9 @@ class Host:
 
         account = nonempty(spec["account"], "upgrade account")
         before = self.call("status")
-        previous = dict(self.config)
-        self.config = dict(self.config, engine=_safe_relpath(new, self.root))
+        cfg = self._require_config()
+        previous = dict(cfg)
+        self.config = dict(cfg, engine=_safe_relpath(new, self.root))
 
         try:
             after = self.call("status")
@@ -568,7 +623,9 @@ class Host:
             "parent_duties_unchanged": True,
         }
 
-    def refresh_resource(self, rid: str, source: Path | str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    def refresh_resource(
+        self, rid: str, source: Path | str
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         rid = ident(rid)
         old_path = self.root / "resources" / f"{rid}.json"
         previous = read(old_path) if old_path.exists() else None
@@ -578,7 +635,8 @@ class Host:
 
         if previous and previous["work_path"] != path:
             raise ValueError(
-                "A resource retains its file type/path; use a new identity for another interpretation",
+                "A resource retains its file type/path; use a new identity for another "
+                "interpretation",
             )
 
         target = self.work / path
@@ -597,7 +655,7 @@ class Host:
 
     def duty(self, spec: dict[str, Any]) -> dict[str, Any]:
         """Account for fulfilling or reopening an enrolled parent duty."""
-        self.current(self.config["commission"], "Current commission")
+        self.current(self._require_config()["commission"], "Current commission")
         goal = self.goal()
         rows = goal["content"]["obligations"]
         selected = next((row for row in rows if row["id"] == spec["id"]), None)
@@ -621,9 +679,10 @@ class Host:
             if evidence_set - published:
                 raise ValueError("Use actual current returned outputs as evidence")
             for scope in all_scopes:
-                if "result" in scope and {
-                    pub["path"] for pub in scope["result"]["publications"]
-                } & evidence_set:
+                if (
+                    "result" in scope
+                    and {pub["path"] for pub in scope["result"]["publications"]} & evidence_set
+                ):
                     self.received_outputs(scope)
             selected.update(
                 disposition="fulfilled",
@@ -636,7 +695,12 @@ class Host:
                 account=nonempty(spec["account"], "reopened duty account"),
             )
 
-        record = {"id": "goal", "kind": "goal", "content": goal["content"], "basis": ["sources/host/COMMISSION.md"]}
+        record = {
+            "id": "goal",
+            "kind": "goal",
+            "content": goal["content"],
+            "basis": ["sources/host/COMMISSION.md"],
+        }
         result = self.call(
             "put",
             "--record",
@@ -652,7 +716,7 @@ class Host:
 
     def finish(self, spec: dict[str, Any]) -> dict[str, Any]:
         """Record whole-goal completion once all parent duties are fulfilled or released."""
-        self.current(self.config["commission"], "Current commission")
+        self.current(self._require_config()["commission"], "Current commission")
         goal = self.goal()
         owed = [
             row["id"]

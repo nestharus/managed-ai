@@ -1,15 +1,17 @@
 """Shared canonical JSON, durable atomic I/O, and owner locking for the workbench."""
-from __future__ import annotations
 
-from contextlib import contextmanager
 import hashlib
 import json
 import math
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from managed_ai.platform import (
     atomic_bytes as _platform_atomic_bytes,
+)
+from managed_ai.platform import (
     is_reparse_or_symlink,
     lock_file_nonblocking,
     strict_json_loads,
@@ -25,7 +27,9 @@ class OwnerLockError(OSError):
 class BasisMismatchError(ValueError):
     """Raised by restore hooks when a continuation would mix incompatible bases."""
 
-    def __init__(self, message: str, *, code: str = "binding_mismatch", details: Any = None) -> None:
+    def __init__(
+        self, message: str, *, code: str = "binding_mismatch", details: Any = None
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.details = details
@@ -92,7 +96,8 @@ def loads_strict(raw: bytes | bytearray | str) -> Any:
     """Decode strict UTF-8 JSON, refusing duplicate object keys and nonfinite numbers."""
     if not isinstance(raw, (bytes, bytearray, str)):
         raise TypeError("JSON input must be bytes or str")
-    return strict_json_loads(raw, label="Workbench JSON", require_object=False)
+    payload: bytes | str = bytes(raw) if isinstance(raw, bytearray) else raw
+    return strict_json_loads(payload, label="Workbench JSON", require_object=False)
 
 
 def read_json_strict(path: Path | str) -> Any:
@@ -113,7 +118,7 @@ def atomic_json(path: Path | str, value: Any, *, exclusive: bool = False) -> Non
 
 
 @contextmanager
-def exclusive_lock(lock_path: Path | str):
+def exclusive_lock(lock_path: Path | str) -> Generator[None]:
     """Acquire a non-blocking cooperative exclusive lock via managed_ai.platform."""
     target = Path(lock_path)
     if is_reparse_or_symlink(target):

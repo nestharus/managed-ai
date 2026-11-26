@@ -1,5 +1,4 @@
 """Versioned target bodies and their exact source pins, within a caller's transaction."""
-from __future__ import annotations
 
 from typing import Any
 
@@ -32,23 +31,30 @@ class Revisions:
         byte_limit: int | None = None,
     ) -> dict[str, Any]:
         name(ident)
-        projection = (
-            "record"
-            if byte_limit is None
-            else "CASE WHEN length(CAST(record AS BLOB)) <= ? THEN record END"
-        )
-        budget = () if byte_limit is None else (byte_limit,)
-
         if revision is None:
-            row = self.db.execute(
-                "SELECT " + projection + " FROM artifacts WHERE id=?",
-                budget + (ident,),
-            ).fetchone()
+            if byte_limit is None:
+                row = self.db.execute(
+                    "SELECT record FROM artifacts WHERE id=?", (ident,)
+                ).fetchone()
+            else:
+                row = self.db.execute(
+                    "SELECT CASE WHEN length(CAST(record AS BLOB)) <= ? THEN record END FROM "
+                    "artifacts WHERE id=?",
+                    (byte_limit, ident),
+                ).fetchone()
         else:
-            row = self.db.execute(
-                "SELECT " + projection + " FROM versions WHERE id=? AND revision=?",
-                budget + (ident, integer(revision, "revision", 1)),
-            ).fetchone()
+            rev = integer(revision, "revision", 1)
+            if byte_limit is None:
+                row = self.db.execute(
+                    "SELECT record FROM versions WHERE id=? AND revision=?",
+                    (ident, rev),
+                ).fetchone()
+            else:
+                row = self.db.execute(
+                    "SELECT CASE WHEN length(CAST(record AS BLOB)) <= ? THEN record END "
+                    "FROM versions WHERE id=? AND revision=?",
+                    (byte_limit, ident, rev),
+                ).fetchone()
 
         require(row is not None, "missing-artifact", "Artifact or version is unavailable: " + ident)
         require(row[0] is not None, "context-bound", CONTEXT_DETAIL)
@@ -61,20 +67,40 @@ class Revisions:
         *,
         with_body: bool = False,
     ) -> dict[str, Any]:
-        """Read a bounded content slice or just its pin without expanding a revision's audit trail."""
+        """Read a bounded content slice or just its pin without expanding a revision's audit
+        trail.
+        """
         name(ident)
         if revision is None:
-            table, selector, params = "artifacts", "id=?", (ident,)
+            if with_body:
+                row = self.db.execute(
+                    "SELECT json_extract(record,'$.revision'),json_extract(record,'$.sha256'),"
+                    "json_extract(record,'$.owner'),record -> '$.body' FROM artifacts WHERE id=?",
+                    (ident,),
+                ).fetchone()
+            else:
+                row = self.db.execute(
+                    "SELECT json_extract(record,'$.revision'),json_extract(record,'$.sha256') "
+                    "FROM artifacts WHERE id=?",
+                    (ident,),
+                ).fetchone()
         else:
-            table = "versions"
-            selector = "id=? AND revision=?"
-            params = (ident, integer(revision, "revision", 1))
+            rev = integer(revision, "revision", 1)
+            if with_body:
+                row = self.db.execute(
+                    "SELECT json_extract(record,'$.revision'),json_extract(record,'$.sha256'),"
+                    "json_extract(record,'$.owner'),record -> '$.body' FROM versions WHERE id=? "
+                    "AND "
+                    "revision=?",
+                    (ident, rev),
+                ).fetchone()
+            else:
+                row = self.db.execute(
+                    "SELECT json_extract(record,'$.revision'),json_extract(record,'$.sha256') "
+                    "FROM versions WHERE id=? AND revision=?",
+                    (ident, rev),
+                ).fetchone()
 
-        project = "json_extract(record,'$.revision'),json_extract(record,'$.sha256')"
-        if with_body:
-            project += ",json_extract(record,'$.owner'),record -> '$.body'"
-
-        row = self.db.execute(f"SELECT {project} FROM {table} WHERE {selector}", params).fetchone()
         require(row is not None, "missing-artifact", "Artifact or version is unavailable: " + ident)
         value: dict[str, Any] = {"id": ident, "revision": row[0], "sha256": row[1]}
         if with_body:
@@ -98,7 +124,9 @@ class Revisions:
 
         for value in pins:
             fields(value, {"id", "revision", "sha256"})
-            require(set(value) == {"id", "revision", "sha256"}, "invalid-input", "Incomplete source pin")
+            require(
+                set(value) == {"id", "revision", "sha256"}, "invalid-input", "Incomplete source pin"
+            )
             name(value["id"], "source identity")
             integer(value["revision"], "source revision", 1)
             require(value["id"] not in seen, "invalid-input", "Duplicate basis identity")
@@ -120,10 +148,13 @@ class Revisions:
     def save(self, record: dict[str, Any]) -> None:
         raw = encoded(record)
         self.db.execute(
-            "INSERT INTO artifacts(id,record) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET record=excluded.record",
+            "INSERT INTO artifacts(id,record) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET "
+            "record=excluded.record",
             (record["id"], raw),
         )
-        self.db.execute("INSERT INTO versions VALUES (?,?,?)", (record["id"], record["revision"], raw))
+        self.db.execute(
+            "INSERT INTO versions VALUES (?,?,?)", (record["id"], record["revision"], raw)
+        )
 
     def successor(
         self,

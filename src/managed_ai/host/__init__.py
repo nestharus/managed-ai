@@ -1,5 +1,4 @@
 """Managed AI host adapters: continuing work, material retention, and signal field."""
-from __future__ import annotations
 
 import importlib
 from typing import Any

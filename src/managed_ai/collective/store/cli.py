@@ -1,14 +1,13 @@
 """Public command syntax for collective artifact work."""
-from __future__ import annotations
 
 import argparse
-from collections.abc import Callable
 import json
-from pathlib import Path
 import sqlite3
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
-from . import Collective, PRODUCT
+from . import PRODUCT, Collective
 from .contract import CONTEXT_LIMIT, loads_strict
 from .database import _require_ordinary_path
 

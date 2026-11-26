@@ -1,9 +1,8 @@
 """Configuration, service contract, and canonical strict JSON helpers for signal_field."""
-from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from managed_ai.platform import strict_json_loads
@@ -62,7 +61,9 @@ class SignalFieldService(Protocol):
 
     def retain(self, use_id: str, name: str) -> dict[str, Any]: ...
 
-    def pending(self, after: str = "", limit: int = 20, max_bytes: int = 65536) -> dict[str, Any]: ...
+    def pending(
+        self, after: str = "", limit: int = 20, max_bytes: int = 65536
+    ) -> dict[str, Any]: ...
 
     def inspect(
         self,
@@ -103,4 +104,5 @@ def require(ok: Any, message: str) -> None:
 
 def loads_strict(raw: bytes | bytearray | str) -> Any:
     """Parse strict UTF-8 JSON rejecting duplicate keys and nonfinite numbers."""
-    return strict_json_loads(raw, label="signal_field", require_object=False)
+    payload: bytes | str = bytes(raw) if isinstance(raw, bytearray) else raw
+    return strict_json_loads(payload, label="signal_field", require_object=False)

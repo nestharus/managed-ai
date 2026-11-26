@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Pure-stdlib static validator for Managed AI container, local compose, OpenTofu, and GitOps substrates."""
-from __future__ import annotations
+"""Pure-stdlib static validator for Managed AI container, local compose, OpenTofu, and GitOps
+substrates.
+"""
 
 import argparse
 import ipaddress
 import json
-from pathlib import Path
 import re
 import sys
 import tomllib
+from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -16,7 +17,7 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.platform import check_ordinary_ancestors, is_ordinary_file_stat
+from managed_ai.platform import check_ordinary_ancestors, is_ordinary_file_stat  # noqa: E402
 
 FORBIDDEN_WHEEL_DIRS = ("containers", "deploy", "infra", "gitops", ".buildkite", "scripts")
 REQUIRED_DOCKERIGNORE = (
@@ -47,7 +48,9 @@ REQUIRED_GITOPS_BASE = (
 )
 
 _LATEST_TAG_RE = re.compile(r":latest(?:\b|[\s\"'\]})])", re.IGNORECASE)
-_FROM_RE = re.compile(r"^\s*FROM\s+(?:--platform=\S+\s+)?(?P<image>\S+)(?:\s+AS\s+(?P<stage>\S+))?", re.IGNORECASE)
+_FROM_RE = re.compile(
+    r"^\s*FROM\s+(?:--platform=\S+\s+)?(?P<image>\S+)(?:\s+AS\s+(?P<stage>\S+))?", re.IGNORECASE
+)
 _USER_RE = re.compile(r"^\s*USER\s+(?P<spec>\S+)", re.IGNORECASE)
 _DIGEST_IMAGE_RE = re.compile(r"@sha256:[0-9a-f]{64}\b")
 _KUSTOMIZE_DIGEST_RE = re.compile(r"^\s*digest:\s*sha256:[0-9a-f]{64}\s*$")
@@ -59,7 +62,8 @@ _ALLOWED_IPV4_NETS = (
     ipaddress.IPv4Network("192.168.0.0/16"),
 )
 _SECRET_RE = re.compile(
-    r"(?:-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|AGE-SECRET-KEY-1[A-Z0-9]+|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})",
+    r"(?:-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|AGE-SECRET-KEY-1[A-Z0-9]+|ghp_[A-Za-z0-9]{20,}|"
+    r"github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})",
 )
 
 
@@ -199,7 +203,7 @@ def _check_no_secrets_or_public_ips(rel: str, text: str, errors: list[str]) -> N
             except ValueError:
                 continue
 
-            if addr_text == "0.0.0.0":
+            if addr.is_unspecified:
                 if '!= "0.0.0.0/0"' in stripped or "never 0.0.0.0/0" in stripped:
                     continue
                 errors.append(f"{rel}:{line_no}: wildcard bind/CIDR {match.group(0)} is prohibited")
@@ -209,7 +213,9 @@ def _check_no_secrets_or_public_ips(rel: str, text: str, errors: list[str]) -> N
                 continue
 
             if prefix_text is not None or not stripped.startswith("version"):
-                errors.append(f"{rel}:{line_no}: hardcoded non-RFC1918 IPv4 literal {addr_text} is prohibited")
+                errors.append(
+                    f"{rel}:{line_no}: hardcoded non-RFC1918 IPv4 literal {addr_text} is prohibited"
+                )
 
 
 def validate_containerfile(root: Path, errors: list[str]) -> None:
@@ -226,7 +232,10 @@ def validate_containerfile(root: Path, errors: list[str]) -> None:
                 stage = m_from.group("stage") or ""
                 from_stages.append((img, stage))
                 if _LATEST_TAG_RE.search(img) or (":" not in img and "@sha256:" not in img):
-                    errors.append(f"containers/Containerfile: base image must be pinned (never :latest): {img}")
+                    errors.append(
+                        "containers/Containerfile: base image must be pinned "
+                        f"(never :latest): {img}"
+                    )
 
             m_user = _USER_RE.match(line)
             if m_user:
@@ -238,10 +247,14 @@ def validate_containerfile(root: Path, errors: list[str]) -> None:
         if not users:
             errors.append("containers/Containerfile: explicit non-root USER directive required")
         elif users[-1].lower() in ("0", "0:0", "root", "root:root"):
-            errors.append(f"containers/Containerfile: final USER must be non-root (got {users[-1]!r})")
+            errors.append(
+                f"containers/Containerfile: final USER must be non-root (got {users[-1]!r})"
+            )
 
         if "setuptools==" not in text:
-            errors.append("containers/Containerfile: builder stage must install pinned setuptools==")
+            errors.append(
+                "containers/Containerfile: builder stage must install pinned setuptools=="
+            )
 
         if "--no-deps" not in text:
             errors.append("containers/Containerfile: wheel build/install must use --no-deps")
@@ -257,7 +270,11 @@ def validate_containerfile(root: Path, errors: list[str]) -> None:
 
     ignore_text = _read_ordinary_text(root, ".dockerignore", errors)
     if ignore_text is not None:
-        entries = {line.strip() for line in ignore_text.splitlines() if line.strip() and not line.strip().startswith("#")}
+        entries = {
+            line.strip()
+            for line in ignore_text.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        }
         for item in REQUIRED_DOCKERIGNORE:
             if item not in entries:
                 errors.append(f".dockerignore: missing required exclusion {item!r}")
@@ -284,31 +301,50 @@ def validate_local_compose(root: Path, errors: list[str]) -> None:
         else:
             worker_text = "\n".join(worker)
             if any(line.strip().startswith("ports:") for line in worker):
-                errors.append("deploy/local/compose.yaml: managed-ai worker must NOT publish host ports")
+                errors.append(
+                    "deploy/local/compose.yaml: managed-ai worker must NOT publish host ports"
+                )
             if "read_only: true" not in worker_text:
-                errors.append("deploy/local/compose.yaml: managed-ai worker requires read_only: true")
+                errors.append(
+                    "deploy/local/compose.yaml: managed-ai worker requires read_only: true"
+                )
             if "no-new-privileges:true" not in worker_text:
-                errors.append("deploy/local/compose.yaml: managed-ai worker requires no-new-privileges:true")
+                errors.append(
+                    "deploy/local/compose.yaml: managed-ai worker requires no-new-privileges:true"
+                )
             if "ALL" not in worker_text or "cap_drop:" not in worker_text:
                 errors.append("deploy/local/compose.yaml: managed-ai worker requires cap_drop: ALL")
             if "managed_ai_store:/var/lib/managed-ai" not in worker_text:
-                errors.append("deploy/local/compose.yaml: managed-ai worker must mount managed_ai_store at /var/lib/managed-ai")
+                errors.append(
+                    "deploy/local/compose.yaml: managed-ai worker must mount managed_ai_store at "
+                    "/var/lib/managed-ai"
+                )
             if "managed_ai_edge" in worker_text:
-                errors.append("deploy/local/compose.yaml: managed-ai worker must stay exclusively on managed_ai_internal")
+                errors.append(
+                    "deploy/local/compose.yaml: managed-ai worker must stay exclusively on "
+                    "managed_ai_internal"
+                )
 
         if not any(line.strip() == "internal: true" for line in internal_net):
-            errors.append("deploy/local/compose.yaml: managed_ai_internal network must declare internal: true")
+            errors.append(
+                "deploy/local/compose.yaml: managed_ai_internal network must declare internal: true"
+            )
 
         if not gateway:
             errors.append("deploy/local/compose.yaml: missing gateway service")
         else:
             gw_ports = _yaml_subblock_lines(gateway, "ports", indent=4)
             if not gw_ports:
-                errors.append("deploy/local/compose.yaml: gateway must publish a loopback control port")
+                errors.append(
+                    "deploy/local/compose.yaml: gateway must publish a loopback control port"
+                )
             for p_line in gw_ports:
                 val = p_line.strip().lstrip("-").strip().strip('"').strip("'")
                 if not val.startswith("127.0.0.1:"):
-                    errors.append(f"deploy/local/compose.yaml: gateway port must bind 127.0.0.1 only (got {val!r})")
+                    errors.append(
+                        "deploy/local/compose.yaml: gateway port must bind "
+                        f"127.0.0.1 only (got {val!r})"
+                    )
 
     gw_conf = _read_ordinary_text(root, "deploy/local/gateway.conf", errors)
     if gw_conf is not None:
@@ -349,9 +385,10 @@ def validate_infra(root: Path, errors: list[str]) -> None:
             _check_no_secrets_or_public_ips(rel, text, errors)
             if _LATEST_TAG_RE.search(text):
                 errors.append(f"{rel}: :latest tags are prohibited")
-            if fname == "main.tf":
-                if "required_version" not in text or "required_providers" not in text:
-                    errors.append(f"{rel}: missing pinned required_version / required_providers block")
+            if fname == "main.tf" and (
+                "required_version" not in text or "required_providers" not in text
+            ):
+                errors.append(f"{rel}: missing pinned required_version / required_providers block")
             if fname == "variables.tf" and "validation {" not in text:
                 errors.append(f"{rel}: missing explicit variable validation block")
 
@@ -367,8 +404,13 @@ def validate_gitops(root: Path, errors: list[str]) -> None:
         if _LATEST_TAG_RE.search(text):
             errors.append(f"{rel}: :latest image tags are prohibited")
 
-        if fname == "namespace.yaml" and "pod-security.kubernetes.io/enforce: restricted" not in text:
-            errors.append(f"{rel}: namespace must enforce Pod Security Standards restricted profile")
+        if (
+            fname == "namespace.yaml"
+            and "pod-security.kubernetes.io/enforce: restricted" not in text
+        ):
+            errors.append(
+                f"{rel}: namespace must enforce Pod Security Standards restricted profile"
+            )
 
         if fname == "networkpolicy.yaml":
             if "podSelector: {}" not in text or "- Ingress" not in text or "- Egress" not in text:
@@ -401,7 +443,10 @@ def validate_gitops(root: Path, errors: list[str]) -> None:
         if _LATEST_TAG_RE.search(text):
             errors.append(f"{rel}: :latest image tags are prohibited")
         if "commonLabels:" in text:
-            errors.append(f"{rel}: deprecated commonLabels is prohibited; use Kustomize v5+ labels with includeSelectors: false")
+            errors.append(
+                f"{rel}: deprecated commonLabels is prohibited; "
+                "use Kustomize v5+ labels with includeSelectors: false"
+            )
         if "../../base" not in text:
             errors.append(f"{rel}: channel overlay must reference ../../base")
         if not any(_KUSTOMIZE_DIGEST_RE.match(line) for line in text.splitlines()):
@@ -430,19 +475,27 @@ def validate_wheel_exclusions(root: Path, errors: list[str]) -> None:
     if deps:
         errors.append(f"pyproject.toml: runtime dependencies must stay empty (got {deps!r})")
 
-    find_where = doc.get("tool", {}).get("setuptools", {}).get("packages", {}).get("find", {}).get("where")
+    find_where = (
+        doc.get("tool", {}).get("setuptools", {}).get("packages", {}).get("find", {}).get("where")
+    )
     if find_where != ["src"]:
-        errors.append(f"pyproject.toml: setuptools packages.find.where must be ['src'] (got {find_where!r})")
+        errors.append(
+            f"pyproject.toml: setuptools packages.find.where must be ['src'] (got {find_where!r})"
+        )
 
     src_pkg = root / "src" / "managed_ai"
     for forbidden in FORBIDDEN_WHEEL_DIRS:
         if (src_pkg / forbidden).exists():
-            errors.append(f"src/managed_ai/{forbidden}: forbidden deploy/CI directory inside wheel package")
+            errors.append(
+                f"src/managed_ai/{forbidden}: forbidden deploy/CI directory inside wheel package"
+            )
 
 
 def validate_repository(root: Path) -> dict[str, Any]:
     """Run all static container, compose, OpenTofu, GitOps, and wheel-exclusion checks."""
-    checked_root = check_ordinary_ancestors(root, expect_dir=True, error_prefix="ordinary repository root required")
+    checked_root = check_ordinary_ancestors(
+        root, expect_dir=True, error_prefix="ordinary repository root required"
+    )
     resolved_root = checked_root.resolve(strict=True)
     errors: list[str] = []
 
@@ -463,7 +516,10 @@ def validate_repository(root: Path) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Static validator for Managed AI containers, local compose, OpenTofu, and GitOps manifests.",
+        description=(
+            "Static validator for Managed AI containers, local compose, OpenTofu, and GitOps "
+            "manifests."
+        ),
         allow_abbrev=False,
     )
     parser.add_argument(

@@ -1,12 +1,12 @@
 """SQLite schema, path boundary validation, and read-only planning snapshots for signal_field."""
-from __future__ import annotations
 
 import hashlib
 import os
-from pathlib import Path
 import sqlite3
 import stat
-from typing import Any, Callable
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
 from managed_ai.platform import (
     check_unfollowed_ancestors,
@@ -76,11 +76,9 @@ def inside_product(path: Path, product: Path | None = None) -> bool:
     if resolved == root or resolved.is_relative_to(root):
         return True
 
-    if (root.parent / "CURRENT-RELEASE.json").is_file():
-        if resolved == root.parent or resolved.is_relative_to(root.parent):
-            return True
-
-    return False
+    return (root.parent / "CURRENT-RELEASE.json").is_file() and (
+        resolved == root.parent or resolved.is_relative_to(root.parent)
+    )
 
 
 def require_ordinary_non_symlink(
@@ -92,7 +90,10 @@ def require_ordinary_non_symlink(
     """Verify path and all ancestors are ordinary, unfollowed, non-reparse entries."""
     expanded = Path(path).expanduser()
     abs_path = check_unfollowed_ancestors(expanded, role, include_target=False)
-    require(not is_reparse_or_symlink(abs_path), f"{role} must not be a symlink or reparse point: {abs_path}")
+    require(
+        not is_reparse_or_symlink(abs_path),
+        f"{role} must not be a symlink or reparse point: {abs_path}",
+    )
 
     try:
         info = abs_path.lstat()
@@ -106,7 +107,9 @@ def require_ordinary_non_symlink(
 
 
 def validate_db_path(path: Path | str, *, product: Path | None = None) -> Path:
-    """Validate that a signal-field SQLite path and its sidecars are ordinary and outside the package."""
+    """Validate that a signal-field SQLite path and its sidecars are ordinary and outside the
+    package.
+    """
     require(
         isinstance(path, (str, Path)) and str(path).strip() and "\0" not in str(path),
         "database path must be a valid nonempty path",
@@ -115,13 +118,16 @@ def validate_db_path(path: Path | str, *, product: Path | None = None) -> Path:
     raw = Path(path).expanduser()
     resolved = raw.resolve()
     require(
-        not inside_product(resolved, product) and not inside_product(Path(os.path.abspath(raw)), product),
+        not inside_product(resolved, product)
+        and not inside_product(Path(os.path.abspath(raw)), product),
         "database must be outside the product directory",
     )
 
     abs_db = require_ordinary_non_symlink(raw, "database file", must_exist=False)
     for suffix in ("-journal", "-wal", "-shm"):
-        require_ordinary_non_symlink(Path(str(abs_db) + suffix), "database journal file", must_exist=False)
+        require_ordinary_non_symlink(
+            Path(str(abs_db) + suffix), "database journal file", must_exist=False
+        )
 
     if abs_db.parent.exists():
         require(
@@ -158,7 +164,9 @@ def open_signal_database(
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
             if "worker_outcome" not in columns:
                 conn.execute("ALTER TABLE jobs ADD COLUMN worker_outcome TEXT")
-            conn.execute("INSERT OR IGNORE INTO meta VALUES (?,?)", ("format", config.format_version))
+            conn.execute(
+                "INSERT OR IGNORE INTO meta VALUES (?,?)", ("format", config.format_version)
+            )
             conn.execute("INSERT OR IGNORE INTO meta VALUES (?,?)", ("sequence", "0"))
             conn.commit()
         except BaseException:
@@ -177,7 +185,9 @@ def open_signal_database(
 
 
 def _verify_snapshot_unchanged(path: Path, expected_sha: str, expected_bytes: int) -> None:
-    """Verify the underlying rollback-journal DB stayed byte-identical without buffering it in RAM."""
+    """Verify the underlying rollback-journal DB stayed byte-identical without buffering it in
+    RAM.
+    """
     info = path.lstat()
     require(
         not is_reparse_or_symlink(info) and stat.S_ISREG(info.st_mode),
@@ -250,12 +260,19 @@ def planning_snapshot(
             (row["source"], row["use_id"])
             for row in db.execute("SELECT source, use_id FROM dependencies ORDER BY source, use_id")
         }
-        expected_deps = {(source, ident) for ident, spec in uses.items() for source in spec["sources"]}
-        require(dependencies == expected_deps, "host dependency rows differ from declared use definitions")
+        expected_deps = {
+            (source, ident) for ident, spec in uses.items() for source in spec["sources"]
+        }
+        require(
+            dependencies == expected_deps,
+            "host dependency rows differ from declared use definitions",
+        )
 
         jobs = [
             dict(row)
-            for row in db.execute("SELECT id, use_id, generation, ticket, token, gap FROM jobs ORDER BY id")
+            for row in db.execute(
+                "SELECT id, use_id, generation, ticket, token, gap FROM jobs ORDER BY id"
+            )
         ]
         _verify_snapshot_unchanged(checked, expected_sha, expected_bytes)
     except sqlite3.Error as exc:

@@ -5,38 +5,48 @@ observe complete bodies without preparing search. Discovery/inventory requests
 prepare an explicit complete view; refresh() supplies a new current observation.
 Text is returned as evidence, never executed. No semantic acceptance is inferred.
 """
-from __future__ import annotations
 
 import builtins
-from collections import OrderedDict
-from copy import deepcopy
+import contextlib
 import json
 import math
 import os
-from pathlib import Path, PurePosixPath, PureWindowsPath
 import sqlite3
 import stat
 import sys
 import threading
 import time
+import uuid
+from collections import OrderedDict
+from copy import deepcopy
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import ModuleType
 from typing import Any
-import uuid
 
 from .io_utils import (
     canonical_bytes as encoded,
+)
+from .io_utils import (
     canonical_digest as identity,
+)
+from .io_utils import (
     is_reparse_or_symlink,
     loads_strict,
-    sha256_bytes as digest,
     sync_dir,
+)
+from .io_utils import (
+    sha256_bytes as digest,
 )
 
 VERSION = "g60-source-service/1"
 DEFAULT_EXCLUDED = {
-    "review/external-review-original.md": "External review is source data, not default construction guidance.",
-    "coverage/historical-material.md": "Locator catalogues are not locally retained argument bodies.",
-    "coverage/recent-historical-material.md": "Locator catalogues are not locally retained argument bodies.",
+    "review/external-review-original.md": "External review is source data, not "
+    "default construction guidance.",
+    "coverage/historical-material.md": "Locator catalogues are not locally "
+    "retained argument bodies.",
+    "coverage/recent-historical-material.md": (
+        "Locator catalogues are not locally retained argument bodies."
+    ),
 }
 PROTECTED_PREFIXES = ("evidence/fleet/D12/", "instruments/incident-corpus/D12/")
 _LEDGER_CATEGORIES = ("inventories", "selections", "sources", "uses")
@@ -129,13 +139,15 @@ def _library_root_for(entry: Path) -> Path:
 
 
 def _matches_cached_pins(implementation: SearchImplementation) -> bool:
-    """Verify every pinned file still matches its exact cryptographic digest and non-reparse guard."""
+    """Verify every pinned file still matches its exact cryptographic digest and non-reparse
+    guard.
+    """
     try:
         for path_str, expected in implementation.pins.items():
             raw = _search_bytes(path_str)
             if len(raw) != expected["bytes"] or digest(raw) != expected["sha256"]:
                 return False
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return False
     return True
 
@@ -203,7 +215,9 @@ class SearchImplementation:
 
     @classmethod
     def cached(cls, module_path: Path | str | None = None) -> SearchImplementation:
-        """Return a digest-verified cached SearchImplementation, recompiling immediately on any drift."""
+        """Return a digest-verified cached SearchImplementation, recompiling immediately on any
+        drift.
+        """
         repo_root = Path(__file__).resolve().parents[2]
         resolved_entry = Path(os.path.abspath(module_path or _default_runtime_entry(repo_root)))
         cache_key = str(resolved_entry)
@@ -227,7 +241,10 @@ class SearchImplementation:
         if abs_path in self.modules:
             return self.modules[abs_path]
 
-        need(not self._sealed, "Search cannot load a new code dependency after binding: " + abs_path.name)
+        need(
+            not self._sealed,
+            "Search cannot load a new code dependency after binding: " + abs_path.name,
+        )
         need(len(self.modules) < _MAX_SEARCH_FILES, "Search code exceeds dependency count bound.")
         if data is None:
             data = _search_bytes(abs_path)
@@ -239,18 +256,14 @@ class SearchImplementation:
         mod_name = f"{prefix}.{dotted}"
         module = ModuleType(mod_name)
         module.__file__ = str(abs_path)
-        module.__package__ = (
-            f"{prefix}." + ".".join(package_parts)
-            if package_parts
-            else prefix
-        )
+        module.__package__ = f"{prefix}." + ".".join(package_parts) if package_parts else prefix
         module.__dict__["__builtins__"] = {**vars(builtins), "__import__": self._import}
         self.modules[abs_path] = module
         self.pins[str(abs_path)] = {"bytes": len(data), "sha256": digest(data)}
 
         sys.modules[mod_name] = module
         try:
-            exec(compile(data, str(abs_path), "exec", dont_inherit=True), module.__dict__)
+            exec(compile(data, str(abs_path), "exec", dont_inherit=True), module.__dict__)  # noqa: S102
         except SyntaxError as exc:
             raise ValueError("Invalid lexical source: " + str(exc)) from exc
         finally:
@@ -275,6 +288,8 @@ class SearchImplementation:
                 isinstance(caller_file, str) and caller_file in self.pins,
                 "Relative search import originated outside verified source files.",
             )
+            if not isinstance(caller_file, str):
+                raise ValueError("Relative search import originated outside verified source files.")
             base = Path(caller_file).parent
             if level == 2:
                 base = base.parent
@@ -307,7 +322,8 @@ class SearchImplementation:
         )
         need(
             root in sys.stdlib_module_names,
-            "Search dependency must be standard library code or an explicit sibling import: " + name,
+            "Search dependency must be standard library code or an explicit sibling import: "
+            + name,
         )
         return builtins.__import__(name, globals, locals, fromlist, level)
 
@@ -330,9 +346,14 @@ class SourceService:
     ) -> None:
         self.db: sqlite3.Connection | None = None
         self.root = Path(corpus_root).absolute()
-        need(self.root.is_dir() and not self.root.is_symlink(), "Ordinary corpus directory required.")
+        need(
+            self.root.is_dir() and not self.root.is_symlink(), "Ordinary corpus directory required."
+        )
         self.state_dir = Path(state_dir).absolute()
-        need(not self.state_dir.is_relative_to(self.root), "State must remain outside the source corpus.")
+        need(
+            not self.state_dir.is_relative_to(self.root),
+            "State must remain outside the source corpus.",
+        )
         self.state_dir.mkdir(parents=True, exist_ok=True)
         need(not self.state_dir.is_symlink(), "Ordinary state directory required.")
         need(
@@ -387,12 +408,15 @@ class SourceService:
             "eligible_extension": ".md (case insensitive)",
             "default_excluded": DEFAULT_EXCLUDED,
             "protected_prefixes": list(PROTECTED_PREFIXES),
-            "candidate_match": "OR over parsed terms/phrases; ranked weighted BM25; path breaks ties",
+            "candidate_match": "OR over parsed terms/phrases; ranked "
+            "weighted BM25; path breaks ties",
             "preparation_policy": (
                 "Known-path acquisition before preparation observes that body only; "
                 "discover/inventory/refresh demand complete preparation."
             ),
-            "source_model": "Serialized cooperative source changes; complete explicit refresh observations.",
+            "source_model": (
+                "Serialized cooperative source changes; complete explicit refresh observations."
+            ),
         }
         self.selector_id = identity(self.selector)
 
@@ -497,7 +521,8 @@ class SourceService:
     def ledger(self) -> dict[str, Any]:
         if self._published is None:
             self.reopen_receipts()
-        assert self._published is not None
+        if self._published is None:
+            raise RuntimeError("Receipt ledger unavailable.")
         return self._published
 
     def _record(self, category: str, value: dict[str, Any]) -> str:
@@ -561,7 +586,9 @@ class SourceService:
 
                 data, text = self._body(rel, "preparation")
                 lines = text.splitlines()
-                heading = next((line.lstrip("#").strip() for line in lines if line.startswith("#")), rel)
+                heading = next(
+                    (line.lstrip("#").strip() for line in lines if line.startswith("#")), rel
+                )
                 title = heading[:512]
                 summary = next(
                     (line.strip() for line in lines if line.strip() and not line.startswith("#")),
@@ -613,8 +640,12 @@ class SourceService:
     def inventory(self, refresh: bool = False) -> dict[str, Any]:
         if refresh or self.db is None:
             return self.refresh()
-        assert self.inventory_id is not None
-        return {"receipt_id": self.inventory_id, **deepcopy(self.ledger["inventories"][self.inventory_id])}
+        if self.inventory_id is None:
+            raise RuntimeError("Inventory receipt unavailable.")
+        return {
+            "receipt_id": self.inventory_id,
+            **deepcopy(self.ledger["inventories"][self.inventory_id]),
+        }
 
     def discover(self, query: str, limit: int = 8) -> dict[str, Any]:
         """Nominate candidates from the last observed complete eligible inventory."""
@@ -765,13 +796,19 @@ class SourceService:
             isinstance(source_receipt_ids, list) and isinstance(selection_receipt_ids, list),
             "Receipt references must be lists.",
         )
-        for category, ids in (("sources", source_receipt_ids), ("selections", selection_receipt_ids)):
+        for category, ids in (
+            ("sources", source_receipt_ids),
+            ("selections", selection_receipt_ids),
+        ):
             need(
                 all(isinstance(ident, str) and ident in self.ledger[category] for ident in ids),
                 "Unknown " + category + " receipt.",
             )
 
-        need(isinstance(artifacts, dict) and bool(artifacts), "Accepted artifact identity mapping required.")
+        need(
+            isinstance(artifacts, dict) and bool(artifacts),
+            "Accepted artifact identity mapping required.",
+        )
         for path, record in artifacts.items():
             need(
                 isinstance(path, str) and bool(path) and isinstance(record, dict),
@@ -783,7 +820,9 @@ class SourceService:
             )
             sha = record.get("sha256")
             need(
-                isinstance(sha, str) and len(sha) == 64 and all(ch in "0123456789abcdef" for ch in sha),
+                isinstance(sha, str)
+                and len(sha) == 64
+                and all(ch in "0123456789abcdef" for ch in sha),
                 "Invalid artifact digest.",
             )
         need(isinstance(obligations, list), "Obligations must be a list.")
@@ -814,7 +853,9 @@ class SourceService:
         return deepcopy(self.ledger)
 
     def stats(self) -> dict[str, Any]:
-        page_count = self.db.execute("PRAGMA page_count").fetchone()[0] if self.db is not None else 0
+        page_count = (
+            self.db.execute("PRAGMA page_count").fetchone()[0] if self.db is not None else 0
+        )
         page_size = self.db.execute("PRAGMA page_size").fetchone()[0] if self.db is not None else 0
         return {
             **self._stats,
@@ -822,7 +863,9 @@ class SourceService:
             "cache_payload_bytes": self.cache_bytes,
             "cache_entries": len(self.cache),
             "index_db_page_bytes": page_count * page_size,
-            "receipt_file_bytes": self.ledger_path.stat().st_size if self.ledger_path.exists() else 0,
+            "receipt_file_bytes": self.ledger_path.stat().st_size
+            if self.ledger_path.exists()
+            else 0,
             "inventory_id": self.inventory_id,
             "search_prepared": self.db is not None,
             "preparation_policy": "on_demand",
@@ -842,10 +885,8 @@ class SourceService:
     def __del__(self) -> None:
         db = getattr(self, "db", None)
         if db is not None:
-            try:
+            with contextlib.suppress(sqlite3.Error, OSError):
                 db.close()
-            except Exception:
-                pass
             self.db = None
 
     def __enter__(self) -> SourceService:

@@ -1,14 +1,13 @@
 """Portable recovery archive export, verified restore, and store representation rebuild."""
-from __future__ import annotations
 
 import hashlib
 import json
 import os
-from pathlib import Path
 import stat
 import sys
-from typing import Any
 import zipfile
+from pathlib import Path
+from typing import Any
 
 from .config import DEFAULT_LIMITS, FORMAT, IMMUTABLE_RECORD_DIRS
 from .retention_closures import (
@@ -53,7 +52,9 @@ def _collect_export_entries(
 ) -> dict[str, bytes | Path]:
     """Assemble the verified portable archive entry map including miniature recovery package."""
     files: dict[str, bytes | Path] = {
-        "index.json": js({"format": FORMAT, "objects": {k: store.objects[k] for k in sorted(keys)}}),
+        "index.json": js(
+            {"format": FORMAT, "objects": {k: store.objects[k] for k in sorted(keys)}}
+        ),
         "manifests/" + key + ".json": manifest_raw,
         "occurrences/" + manifest["id"] + ".json": js(
             {
@@ -69,15 +70,18 @@ def _collect_export_entries(
             {
                 "format": "managed-material-recovery/1",
                 "manifest": key,
-                "verify": "python managed_material.py verify --store . --occurrence " + manifest["id"],
+                "verify": "python managed_material.py verify --store . --occurrence "
+                + manifest["id"],
                 "restore": (
                     "python managed_material.py restore --store . --occurrence "
                     + manifest["id"]
                     + " --output ../restored"
                 ),
                 "codec_boundary": (
-                    "Stored bodies decode with DEFLATE. Historical deflate-recipe parts require the "
-                    "recorded encoder or another encoder producing the same pinned compressed hash; "
+                    "Stored bodies decode with DEFLATE. Historical deflate-recipe parts require "
+                    "the "
+                    "recorded encoder or another encoder producing the same pinned compressed "
+                    "hash; "
                     "mismatch refuses exact replay."
                 ),
                 "verified": checked,
@@ -284,7 +288,7 @@ def restore(
             rel = safe_relative(row["path"])
             target = check_unfollowed_descendant(
                 checked_output,
-                rel,
+                rel.as_posix(),
                 allow_missing_leaf=True,
                 role="Restore target",
             )
@@ -516,7 +520,8 @@ def _publish_rebuild_transition(
         "source_representation_retired": False,
         "source_index_evidence": (
             "Exact old index is pinned here, not treated as an immutable view of a mutable index. "
-            "Retaining its full historical transport is a separate explicit input and measured cost."
+            "Retaining its full historical transport is a separate explicit input and measured "
+            "cost."
         ),
         "limits": (
             "New store is a received candidate until owner acceptance. No source-store cleanup, "
@@ -572,8 +577,12 @@ def rebuild(
     """Regenerate existing identities into a new physical store without modifying source."""
     resolved_hooks = resolve_hooks(hooks)
     immutable_fn = resolved_hooks["immutable"]
-    checked_source = check_unfollowed_ancestors(source_path, "Source store", include_target=True).resolve()
-    checked_output = check_unfollowed_ancestors(output, "Representation target", include_target=True)
+    checked_source = check_unfollowed_ancestors(
+        source_path, "Source store", include_target=True
+    ).resolve()
+    checked_output = check_unfollowed_ancestors(
+        output, "Representation target", include_target=True
+    )
 
     require(
         not checked_output.exists() and not is_reparse_or_symlink(checked_output),

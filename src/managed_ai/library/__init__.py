@@ -1,5 +1,4 @@
 """Published source library reader, lexical search engines, bundle interchange, and producer."""
-from __future__ import annotations
 
 import importlib
 from typing import Any

@@ -1,6 +1,6 @@
 """Memory-bounded subprocess execution for signal_field worker invocations."""
-from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import subprocess
@@ -45,17 +45,13 @@ def drain_stream(
 
             if capture.total_bytes > drain_limit:
                 capture.overflowed = True
-                try:
+                with contextlib.suppress(OSError):
                     proc.kill()
-                except OSError:
-                    pass
                 break
     finally:
         capture.sha256 = hasher.hexdigest()
-        try:
+        with contextlib.suppress(OSError):
             stream.close()
-        except OSError:
-            pass
 
 
 def feed_stdin(stream: Any, payload: bytes) -> None:
@@ -72,10 +68,8 @@ def feed_stdin(stream: Any, payload: bytes) -> None:
     except OSError:
         pass
     finally:
-        try:
+        with contextlib.suppress(OSError):
             stream.close()
-        except OSError:
-            pass
 
 
 def run_worker_bounded(
@@ -91,7 +85,7 @@ def run_worker_bounded(
     stdout_cap = StreamCapture(max_stdout_bytes)
     stderr_cap = StreamCapture(max_stderr_bytes)
 
-    proc = subprocess.Popen(
+    proc = subprocess.Popen(  # noqa: S603
         argv,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -122,14 +116,10 @@ def run_worker_bounded(
     except subprocess.TimeoutExpired as exc:
         timed_out = True
         timeout_error = str(exc)
-        try:
+        with contextlib.suppress(OSError):
             proc.kill()
-        except OSError:
-            pass
-        try:
+        with contextlib.suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            pass
 
     join_wait = 0.5 if timed_out else max(1.0, min(float(timeout), 5.0))
     deadline = time.monotonic() + join_wait

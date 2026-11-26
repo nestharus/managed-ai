@@ -1,5 +1,6 @@
-"""Managed AI companion adapters: peer harness, workbench, publication review, and representation."""
-from __future__ import annotations
+"""Managed AI companion adapters: peer harness, workbench, publication review, and
+representation.
+"""
 
 from .contracts import (
     ModelBridge,

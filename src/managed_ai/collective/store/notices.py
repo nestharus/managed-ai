@@ -1,5 +1,4 @@
 """Addressed notices, open announcements, subscription snapshots, and cursor views."""
-from __future__ import annotations
 
 from typing import Any
 
@@ -22,7 +21,9 @@ def decode_notice(row: Any) -> dict[str, Any]:
     value = dict(row)
     value["required"] = bool(value["required"])
     value["body"] = loads_strict(value["body"])
-    value["acknowledgment"] = loads_strict(value["acknowledgment"]) if value["acknowledgment"] else None
+    value["acknowledgment"] = (
+        loads_strict(value["acknowledgment"]) if value["acknowledgment"] else None
+    )
     value["receipt"] = loads_strict(value["receipt"]) if value["receipt"] else None
     return value
 
@@ -53,10 +54,13 @@ class NoticeBoard:
                 "event": seq,
                 "artifact": pin(record),
                 "reason": watch["reason"],
-                "meaning": "A declared followed artifact changed; applicability needs interpretation.",
+                "meaning": (
+                    "A declared followed artifact changed; applicability needs interpretation."
+                ),
             }
             self.db.execute(
-                "INSERT INTO notices(receiver,target,kind,required,body,state) VALUES (?,?,?,?,?,?)",
+                "INSERT INTO notices(receiver,target,kind,required,body,state) VALUES "
+                "(?,?,?,?,?,?)",
                 (watch["actor"], record["id"], "source-change", 0, encoded(payload), "pending"),
             )
         return seq
@@ -80,15 +84,26 @@ class NoticeBoard:
         }
         notice = self.db.execute(
             "INSERT INTO notices(receiver,target,kind,required,body,state) VALUES (?,?,?,?,?,?)",
-            (target["owner"], target["id"], "proposed-impact", int(required), encoded(payload), "pending"),
+            (
+                target["owner"],
+                target["id"],
+                "proposed-impact",
+                int(required),
+                encoded(payload),
+                "pending",
+            ),
         ).lastrowid
-        seq = self.emit("offered-impact", target["id"], r["actor"], {"notice": notice, "required": required})
+        seq = self.emit(
+            "offered-impact", target["id"], r["actor"], {"notice": notice, "required": required}
+        )
         return {
             "notice": notice,
             "receiver": target["owner"],
             "required": required,
             "event": seq,
-            "scope": "An attributed proposed relationship; delivery does not establish uptake or truth.",
+            "scope": (
+                "An attributed proposed relationship; delivery does not establish uptake or truth."
+            ),
         }
 
     def watch(self, r: dict[str, Any]) -> dict[str, Any]:
@@ -96,7 +111,8 @@ class NoticeBoard:
         subject = name(r.get("subject"))
         reason = account(r.get("reason"))
         self.db.execute(
-            "INSERT INTO watches VALUES (?,?,?) ON CONFLICT(actor,subject) DO UPDATE SET reason=excluded.reason",
+            "INSERT INTO watches VALUES (?,?,?) ON CONFLICT(actor,subject) DO UPDATE SET "
+            "reason=excluded.reason",
             (r["actor"], subject, reason),
         )
         snapshot = self.revisions.find(subject)
@@ -105,7 +121,10 @@ class NoticeBoard:
             "subject": subject,
             "snapshot": snapshot,
             "cursor": cursor,
-            "scope": "Subscription and snapshot share this transaction; subsequent accepted changes create durable notices.",
+            "scope": (
+                "Subscription and snapshot share this transaction; subsequent accepted changes "
+                "create durable notices."
+            ),
         }
 
     def announce(self, r: dict[str, Any]) -> dict[str, Any]:
@@ -114,11 +133,16 @@ class NoticeBoard:
         owned(record, r["actor"])
         note = account(r.get("account"))
         require(len(note.encode()) <= 2048, "account-bound", "An announcement must fit in 2 KiB")
-        seq = self.emit("open-encounter", record["id"], r["actor"], {"artifact": pin(record), "account": note})
+        seq = self.emit(
+            "open-encounter", record["id"], r["actor"], {"artifact": pin(record), "account": note}
+        )
         return {
             "event": seq,
             "artifact": pin(record),
-            "scope": "Available for inspection in this store. No addressed notice or acceptance decision.",
+            "scope": (
+                "Available for inspection in this store. No addressed notice or acceptance "
+                "decision."
+            ),
         }
 
     def acknowledge(self, r: dict[str, Any]) -> dict[str, Any]:
@@ -126,9 +150,17 @@ class NoticeBoard:
         no = integer(r.get("notice"), "notice", 1)
         why = account(r.get("account"))
         row = self.db.execute("SELECT * FROM notices WHERE id=?", (no,)).fetchone()
-        require(row is not None and row["receiver"] == r["actor"], "wrong-recipient", "Notice is addressed elsewhere")
+        require(
+            row is not None and row["receiver"] == r["actor"],
+            "wrong-recipient",
+            "Notice is addressed elsewhere",
+        )
         require(row["state"] == "pending", "notice-changed", "Notice already received")
-        require(row["acknowledgment"] is None, "already-acknowledged", "Delivery was already acknowledged")
+        require(
+            row["acknowledgment"] is None,
+            "already-acknowledged",
+            "Delivery was already acknowledged",
+        )
 
         acknowledgment = {
             "actor": r["actor"],
@@ -151,7 +183,9 @@ class NoticeBoard:
         require(row is not None, "missing-notice", "Notice is unavailable")
         return decode_notice(row)
 
-    def encounters(self, *, after: int = 0, limit: int = 20, scan_limit: int = 256) -> dict[str, Any]:
+    def encounters(
+        self, *, after: int = 0, limit: int = 20, scan_limit: int = 256
+    ) -> dict[str, Any]:
         """Return owner-selected accounts within a bounded traversal of the existing event log."""
         integer(after, "cursor")
         integer(limit, "limit", 1, 100)
@@ -169,21 +203,31 @@ class NoticeBoard:
             cursor = row["seq"]
             examined += 1
             if row["account"] is not None:
-                items.append({"event": cursor, "actor": row["actor"], **loads_strict(row["account"])})
+                items.append(
+                    {"event": cursor, "actor": row["actor"], **loads_strict(row["account"])}
+                )
                 if len(items) == limit:
                     break
 
-        more = self.db.execute("SELECT 1 FROM events WHERE seq>? LIMIT 1", (cursor,)).fetchone() is not None
+        more = (
+            self.db.execute("SELECT 1 FROM events WHERE seq>? LIMIT 1", (cursor,)).fetchone()
+            is not None
+        )
         return {
             "items": items,
             "after": after,
             "next_after": cursor,
             "examined_events": examined,
             "more_events": more,
-            "scope": "Owner-selected accounts at their recorded revisions. Inspect the source and current receiving use before acting.",
+            "scope": (
+                "Owner-selected accounts at their recorded revisions. Inspect the source and "
+                "current receiving use before acting."
+            ),
         }
 
-    def view(self, kind: str, *, actor: str | None = None, after: int = 0, limit: int = 20) -> dict[str, Any]:
+    def view(
+        self, kind: str, *, actor: str | None = None, after: int = 0, limit: int = 20
+    ) -> dict[str, Any]:
         integer(after, "cursor")
         integer(limit, "limit", 1, 100)
 
@@ -200,7 +244,9 @@ class NoticeBoard:
             values = [decode_notice(row) for row in rows]
             key = "id"
         elif kind == "changes":
-            total = self.db.execute("SELECT COUNT(*) FROM events WHERE seq>?", (after,)).fetchone()[0]
+            total = self.db.execute("SELECT COUNT(*) FROM events WHERE seq>?", (after,)).fetchone()[
+                0
+            ]
             rows = self.db.execute(
                 "SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT ?",
                 (after, limit),
@@ -225,7 +271,10 @@ class NoticeBoard:
             "next_after": selected[-1][key] if selected else after,
             "remaining_count": total - len(selected),
             "complete": total == len(selected),
-            "scope": "A bounded exact view of installed records; unknown relevance, unregistered routes and semantic completeness are not inferred.",
+            "scope": (
+                "A bounded exact view of installed records; unknown relevance, unregistered routes "
+                "and semantic completeness are not inferred."
+            ),
         }
 
     def select_for_capture(
@@ -239,7 +288,8 @@ class NoticeBoard:
             []
             if staged
             else self.db.execute(
-                "SELECT * FROM notices WHERE receiver=? AND target=? AND required=1 AND state='pending' LIMIT 129",
+                "SELECT * FROM notices WHERE receiver=? AND target=? AND required=1 AND "
+                "state='pending' LIMIT 129",
                 (actor, target),
             ).fetchall()
         )
@@ -259,14 +309,16 @@ class NoticeBoard:
         require(
             len(selected) <= 128,
             "context-bound",
-            "This bounded adapter cannot capture more than 128 selected notices; the unresolved receiving duty remains pending",
+            "This bounded adapter cannot capture more than 128 selected notices; the unresolved "
+            "receiving duty remains pending",
         )
         return list(selected.values())
 
     def has_pending_required(self, target: dict[str, Any]) -> bool:
         return (
             self.db.execute(
-                "SELECT 1 FROM notices WHERE target=? AND receiver=? AND required=1 AND state='pending' LIMIT 1",
+                "SELECT 1 FROM notices WHERE target=? AND receiver=? AND required=1 AND "
+                "state='pending' LIMIT 1",
                 (target["id"], target["owner"]),
             ).fetchone()
             is not None

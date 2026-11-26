@@ -3,14 +3,13 @@
 One cooperative local owner. Historical callback returns are replayed; effects
 are never blindly retried. A pending intent remains an unresolved outcome.
 """
-from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping
-from contextlib import contextmanager
 import json
-from pathlib import Path
 import sys
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 if __name__ == "__main__" and not __package__:
@@ -25,12 +24,20 @@ from .io_utils import (
     BasisMismatchError,
     OwnerLockError,
     atomic_json,
-    canonical_bytes as _canonical,
-    canonical_digest as _digest,
-    detached_json as _snapshot,
     exclusive_lock,
-    read_json_strict as _read,
     sha256_bytes,
+)
+from .io_utils import (
+    canonical_bytes as _canonical,
+)
+from .io_utils import (
+    canonical_digest as _digest,
+)
+from .io_utils import (
+    detached_json as _snapshot,
+)
+from .io_utils import (
+    read_json_strict as _read,
 )
 
 __all__ = [
@@ -65,7 +72,7 @@ def _write_new(path: Path, value: Any) -> None:
 
 
 @contextmanager
-def _lock(root: Path | str):
+def _lock(root: Path | str) -> Generator[None]:
     try:
         with exclusive_lock(Path(root) / ".owner.lock"):
             yield
@@ -73,7 +80,9 @@ def _lock(root: Path | str):
         raise _StateError(str(exc)) from exc
 
 
-def _counts(operations: list[dict[str, Any]]) -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
+def _counts(
+    operations: list[dict[str, Any]],
+) -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
     intents = {"model": 0, "tool": 0}
     completions = {"model": 0, "tool": 0}
     unresolved = {"model": 0, "tool": 0}
@@ -163,7 +172,9 @@ def _stats(
         "model_budget_limit": limit,
         "model_budget_charged": intents["model"],
         "model_budget_remaining": max(0, limit - intents["model"]),
-        "dispatch_evidence": "completed outcomes establish observations; pending intents do not prove invocation",
+        "dispatch_evidence": (
+            "completed outcomes establish observations; pending intents do not prove invocation"
+        ),
     }
 
 
@@ -230,7 +241,9 @@ def inspect_durable_state(state_dir: Path | str) -> dict[str, Any]:
     root = Path(state_dir).resolve()
     try:
         manifest, operations = _load_state(root)
-        pending = [_operation_summary(op["intent"]) for op in operations if op["completion"] is None]
+        pending = [
+            _operation_summary(op["intent"]) for op in operations if op["completion"] is None
+        ]
         latest = manifest["initial_checkpoint"]
         for op in operations:
             if op["completion"] is not None:
@@ -246,7 +259,9 @@ def inspect_durable_state(state_dir: Path | str) -> dict[str, Any]:
                 {
                     **_operation_summary(op["intent"]),
                     "status": "completed" if op["completion"] is not None else "unresolved",
-                    "completion_origin": op["completion"].get("origin") if op["completion"] else None,
+                    "completion_origin": op["completion"].get("origin")
+                    if op["completion"]
+                    else None,
                 }
                 for op in operations
             ],
@@ -420,7 +435,11 @@ def _validate_run_inputs(
     if not isinstance(resume, bool):
         raise TypeError("resume must be boolean")
 
-    for name, value in (("checkpoint", checkpoint), ("restore", restore), ("after_record", after_record)):
+    for name, value in (
+        ("checkpoint", checkpoint),
+        ("restore", restore),
+        ("after_record", after_record),
+    ):
         if value is not None and not callable(value):
             raise TypeError(name + " must be callable")
 
@@ -490,7 +509,9 @@ def _execute_replayed_controller(
     actual: dict[str, int],
     replayed: dict[str, int],
 ) -> dict[str, Any]:
-    journal = _CallbackJournal(root, operations, actual, replayed, max_steps, checkpoint, after_record)
+    journal = _CallbackJournal(
+        root, operations, actual, replayed, max_steps, checkpoint, after_record
+    )
     current_step = 0
 
     def durable_model(request: dict[str, Any]) -> Any:
@@ -619,8 +640,10 @@ def run_durable_agent(
                 resume=resume,
                 checkpoint=checkpoint_fn,
             )
-            if error_result is not None or manifest is None:
+            if error_result is not None:
                 return error_result
+            if manifest is None:
+                return _failure("state_error", "manifest unavailable")
 
             pending = [op for op in operations if op["completion"] is None]
             if pending:
@@ -632,7 +655,11 @@ def run_durable_agent(
                     operation=pending[0]["intent"],
                 )
 
-            latest = operations[-1]["completion"]["checkpoint"] if operations else manifest["initial_checkpoint"]
+            latest = (
+                operations[-1]["completion"]["checkpoint"]
+                if operations
+                else manifest["initial_checkpoint"]
+            )
             restore_fn(_snapshot(latest))
             return _execute_replayed_controller(
                 root,

@@ -1,16 +1,21 @@
 """Compatibility facade re-exporting snapshot, verification, export, restore, and rebuild ops."""
-from __future__ import annotations
 
 from .snapshot_ops import (
     PORTABLE_LAUNCHER_SOURCE,
-    default_hooks as _default_hooks,
     load_portable_bundle,
-    producer_dependencies as _producer_dependencies,
-    resolve_hooks as _resolve_hooks,
     retain_artifact,
     snapshot,
     verify,
     verify_loaded_closure,
+)
+from .snapshot_ops import (
+    default_hooks as _default_hooks,
+)
+from .snapshot_ops import (
+    producer_dependencies as _producer_dependencies,
+)
+from .snapshot_ops import (
+    resolve_hooks as _resolve_hooks,
 )
 from .transfer_ops import export, rebuild, restore
 

@@ -1,20 +1,19 @@
 """Read, identify, cooperatively lock, and atomically replace continuing-work occurrences."""
-from __future__ import annotations
 
-from contextlib import contextmanager
 import datetime as dt
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import stat
+from collections.abc import Generator
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 from managed_ai.platform import (
     KeyedLockPool,
     ThreadRWLock,
-    atomic_bytes as _platform_atomic_bytes,
     check_unfollowed_ancestors,
     is_reparse_or_symlink,
     is_reserved_windows_segment,
@@ -22,6 +21,9 @@ from managed_ai.platform import (
     strict_json_loads,
     sync_dir,
     unlock_file,
+)
+from managed_ai.platform import (
+    atomic_bytes as _platform_atomic_bytes,
 )
 
 _IDENT_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,100}")
@@ -35,7 +37,7 @@ def file_lock(
     shared: bool = False,
     nonblocking: bool = False,
     timeout: float = 60.0,
-):
+) -> Generator[Any]:
     """Cross-platform cooperative file lock with leak-free in-process RW serialization."""
     lock_path = check_unfollowed_ancestors(path, "Lock file", include_target=True)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -66,7 +68,7 @@ def file_lock(
 
 def now() -> str:
     """Return the current UTC timestamp in ISO-8601 format."""
-    return dt.datetime.now(dt.timezone.utc).isoformat()
+    return dt.datetime.now(dt.UTC).isoformat()
 
 
 def digest(raw: bytes | bytearray | memoryview) -> str:
@@ -76,7 +78,8 @@ def digest(raw: bytes | bytearray | memoryview) -> str:
 
 def loads_strict(raw: bytes | bytearray | str) -> Any:
     """Parse UTF-8 JSON strictly, rejecting duplicate keys and nonfinite constants."""
-    return strict_json_loads(raw, label="Continuing work JSON", require_object=False)
+    payload: bytes | str = bytes(raw) if isinstance(raw, bytearray) else raw
+    return strict_json_loads(payload, label="Continuing work JSON", require_object=False)
 
 
 def atomic_bytes(path: Path | str, data: bytes) -> None:
@@ -101,7 +104,9 @@ def write(path: Path | str, value: Any) -> None:
 
 
 def ident(value: Any) -> str:
-    """Validate a portable local identity, refusing Windows reserved names and trailing dot/space."""
+    """Validate a portable local identity, refusing Windows reserved names and trailing
+    dot/space.
+    """
     if (
         not isinstance(value, str)
         or not _IDENT_RE.fullmatch(value)

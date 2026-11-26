@@ -1,5 +1,6 @@
-"""Facade composing scope preparation, overlap indexing, receive/resume, supersession, and status."""
-from __future__ import annotations
+"""Facade composing scope preparation, overlap indexing, receive/resume, supersession, and
+status.
+"""
 
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,9 @@ from managed_ai.host.continuing_work.scope_receive import (
 
 
 class ScopeLifecycle:
-    """Composed collaborator owning scope preparation, receiving, resume, supersession, and status."""
+    """Composed collaborator owning scope preparation, receiving, resume, supersession, and
+    status.
+    """
 
     def __init__(self, host: Any) -> None:
         self._host = host

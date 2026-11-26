@@ -1,5 +1,4 @@
 """Optional SQLite-backed observing-use eligibility and scheduling queue."""
-from __future__ import annotations
 
 from .cli import OPERATIONS, dispatch_operation, main
 from .config import DEFAULT_CONFIG, SignalFieldConfig, SignalFieldService
@@ -8,8 +7,8 @@ from .storage import inside_product, no_journal, planning_snapshot, validate_db_
 
 __all__ = [
     "DEFAULT_CONFIG",
-    "Field",
     "OPERATIONS",
+    "Field",
     "SignalFieldConfig",
     "SignalFieldService",
     "dispatch_operation",

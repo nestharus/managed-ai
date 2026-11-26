@@ -4,12 +4,11 @@
 Python standard library only. This is a maintenance layer over existing byte
 identities, not a replacement host/native runtime or semantic acceptance tool.
 """
-from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
 
 if __name__ == "__main__" and not __package__:
@@ -30,19 +29,31 @@ if __name__ == "__main__" and not __package__:
 
 from . import (
     material_ops as _ops,
+)
+from . import (
     retention_closures as _closures,
+)
+from . import (
     retirement as _retirement,
+)
+from . import (
     snapshot_ops as _snapshot_ops,
+)
+from . import (
     store_core as _store_core,
+)
+from . import (
     store_io as _store_io,
+)
+from . import (
     transfer_ops as _transfer_ops,
 )
 from .config import (
     DEFAULT_LIMITS,
     FORMAT,
     IMMUTABLE_RECORD_DIRS,
-    MaterialRetentionService,
     RAW_BODY_KINDS,
+    MaterialRetentionService,
     RetentionLimits,
 )
 from .retention_closures import (
@@ -251,7 +262,12 @@ def _dispatch(args: argparse.Namespace) -> dict[str, Any]:
             )
             raw = store.materialize(args.object)
             immutable(output, raw)
-            return {"object": args.object, "output": str(output), "bytes": len(raw), "verified": True}
+            return {
+                "object": args.object,
+                "output": str(output),
+                "bytes": len(raw),
+                "verified": True,
+            }
         if args.command == "retirement-plan":
             return retirement_plan(store, args.spec, args.occurrence)
         return store.stats()
@@ -283,9 +299,9 @@ __all__ = [
     "MAX_MEMBER_BYTES",
     "MAX_ZIP_DEPTH",
     "MAX_ZIP_MEMBERS",
-    "MaterialRetentionService",
     "PORTABLE_LAUNCHER_SOURCE",
     "RAW_BODY_KINDS",
+    "MaterialRetentionService",
     "RetentionLimits",
     "Store",
     "_closures",

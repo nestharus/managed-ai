@@ -1,13 +1,12 @@
 """Content-addressed material retention host adapter."""
-from __future__ import annotations
 
 from . import managed_material
 from .config import (
     DEFAULT_LIMITS,
     FORMAT,
     IMMUTABLE_RECORD_DIRS,
-    MaterialRetentionService,
     RAW_BODY_KINDS,
+    MaterialRetentionService,
     RetentionLimits,
 )
 from .managed_material import (
@@ -27,8 +26,8 @@ __all__ = [
     "DEFAULT_LIMITS",
     "FORMAT",
     "IMMUTABLE_RECORD_DIRS",
-    "MaterialRetentionService",
     "RAW_BODY_KINDS",
+    "MaterialRetentionService",
     "RetentionLimits",
     "Store",
     "export",

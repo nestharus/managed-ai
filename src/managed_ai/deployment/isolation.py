@@ -1,16 +1,24 @@
 """External engine module isolation and verified entrypoint mounting."""
-from __future__ import annotations
 
-from contextlib import contextmanager
 import importlib
-from importlib.machinery import ModuleSpec
 import importlib.util
-from pathlib import Path
 import runpy
 import sys
+from collections.abc import Generator
+from contextlib import contextmanager
+from importlib.machinery import ModuleSpec
+from pathlib import Path
 from typing import Any
 
-from .identity import ENGINE_API, ENGINE_ROOT, FORMAT, HERE, NATIVE_ENTRY, SRC_ROOT, _engine_directory
+from .identity import (
+    ENGINE_API,
+    ENGINE_ROOT,
+    FORMAT,
+    HERE,
+    NATIVE_ENTRY,
+    SRC_ROOT,
+    _engine_directory,
+)
 
 _ISOLATED_ROOT_PACKAGES = frozenset({"managed_ai", "core", "store", "library", "deployment"})
 
@@ -58,8 +66,10 @@ def _bind_managed_ai_package(engine: Path, *, force: bool = False) -> None:
 
 
 @contextmanager
-def _isolated_engine(engine: Path):
-    """Mount an external engine cleanly in sys.modules for the context lifetime, restoring on exit."""
+def _isolated_engine(engine: Path) -> Generator[Path]:
+    """Mount an external engine cleanly in sys.modules for the context lifetime, restoring on
+    exit.
+    """
     resolved = _engine_directory(engine)
     is_pkg = (resolved / "__init__.py").is_file()
     if is_pkg and _is_package_mounted(resolved):
@@ -102,7 +112,7 @@ def _load_entrypoint(engine: Path) -> Any:
     if (resolved / "__init__.py").is_file():
         expected = (resolved / NATIVE_ENTRY).resolve(strict=True)
         mod = importlib.import_module("managed_ai.store.system")
-        if Path(mod.__file__).resolve(strict=True) != expected:
+        if mod.__file__ is None or Path(mod.__file__).resolve(strict=True) != expected:
             raise ValueError("loaded engine entrypoint differs from selected engine")
         ep = getattr(mod, "ENTRYPOINT", None)
     else:
@@ -128,7 +138,9 @@ def _attach_deployment_metadata(
             "project_root": str(system.work),
             "project_files": [],
             "project_file_count": 0,
-            "selection_scope": "Per-store catalogues and domains are selected by the native store descriptor.",
+            "selection_scope": (
+                "Per-store catalogues and domains are selected by the native store descriptor."
+            ),
         }
         system.command_prefix = [
             sys.executable,
@@ -148,7 +160,7 @@ def opened_admitted_store(
     deployment_root: Path | None = None,
     deployment_config: dict[str, Any] | None = None,
     selection_override: Any = None,
-):
+) -> Generator[Any]:
     """Open an admitted native store with external engine isolation held across the context."""
     resolved_engine = _engine_directory(engine)
     with _isolated_engine(resolved_engine):

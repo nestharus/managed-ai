@@ -1,15 +1,14 @@
 """Snapshot acquisition, closure verification, and historical artifact retention operations."""
-from __future__ import annotations
 
 import fnmatch
-from functools import lru_cache
 import os
-from pathlib import Path
 import platform as py_platform
 import stat
 import time
-from typing import Any
 import zlib
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
 
 from ._platform_bridge import platform
 from .config import PACKAGE_MODULES, PLATFORM_MODULES
@@ -40,7 +39,6 @@ from .store_io import (
 
 PORTABLE_LAUNCHER_SOURCE = """#!/usr/bin/env python3
 \"\"\"Standalone recovery launcher for an exported managed-material archive.\"\"\"
-from __future__ import annotations
 
 from pathlib import Path
 import sys
@@ -59,7 +57,9 @@ if __name__ == "__main__":
 
 @lru_cache(maxsize=1)
 def load_portable_bundle() -> tuple[bytes, dict[str, bytes], bytes]:
-    """Lazily read package and vendored stdlib platform modules for manifest pins and recovery ZIPs."""
+    """Lazily read package and vendored stdlib platform modules for manifest pins and recovery
+    ZIPs.
+    """
     here = Path(__file__).resolve().parent
     platform_dir = Path(platform.__file__).resolve().parent
     producer_bytes = (here / "managed_material.py").read_bytes()
@@ -100,7 +100,10 @@ def _validate_snapshot_spec(spec: Any) -> dict[str, Any]:
     """Validate structural types of a selection spec before acquiring any roots."""
     require(isinstance(spec, dict), "Selection spec must be a JSON object")
     require(spec.get("format") == "managed-material-selection/1", "Unknown selection spec")
-    require(isinstance(spec.get("id"), str) and bool(spec["id"]), "Explicit occurrence identity is required")
+    require(
+        isinstance(spec.get("id"), str) and bool(spec["id"]),
+        "Explicit occurrence identity is required",
+    )
     safe_relative(spec["id"])
 
     roots = spec.get("roots")
@@ -115,7 +118,9 @@ def _validate_snapshot_spec(spec: Any) -> dict[str, Any]:
 
     for list_field in ("current", "exclude", "materialization_groups", "lineage"):
         if list_field in spec:
-            require(isinstance(spec[list_field], list), f"Selection spec {list_field} must be a list")
+            require(
+                isinstance(spec[list_field], list), f"Selection spec {list_field} must be a list"
+            )
 
     return spec
 
@@ -140,9 +145,12 @@ def _snapshot_history(
     )
 
     history = list(history)
-    if policy == "append-history" and prior_selection is not None:
-        if prior_selection["manifest"] not in history:
-            history.insert(0, prior_selection["manifest"])
+    if (
+        policy == "append-history"
+        and prior_selection is not None
+        and prior_selection["manifest"] not in history
+    ):
+        history.insert(0, prior_selection["manifest"])
 
     effective_policy = policy or ("selected-history" if history else "current-use")
     history_account = spec.get("history_account")
@@ -210,14 +218,17 @@ def _acquire_snapshot_roots(
     for root in spec["roots"]:
         label = root["label"]
         safe_relative(label)
-        require(label not in labels and "/" not in label, "Unique single-component root labels required")
+        require(
+            label not in labels and "/" not in label, "Unique single-component root labels required"
+        )
         labels.add(label)
 
         base = check_unfollowed_ancestors(root["path"], "Selected root", include_target=False)
         require(base.exists() or base.is_symlink(), "Selected root absent: " + str(base))
         if is_reparse_or_symlink(base) and not base.is_symlink():
             raise ValueError(
-                "Special filesystem object or reparse point requires explicit handling: " + str(base),
+                "Special filesystem object or reparse point requires explicit handling: "
+                + str(base),
             )
 
         base_resolved = base.resolve()
@@ -248,7 +259,8 @@ def _acquire_snapshot_roots(
                 row.update({"type": "symlink", "object": key, "bytes": len(raw)})
             elif is_reparse_or_symlink(path):
                 raise ValueError(
-                    "Special filesystem object or reparse point requires explicit handling: " + str(path),
+                    "Special filesystem object or reparse point requires explicit handling: "
+                    + str(path),
                 )
             elif path.is_file():
                 raw = path.read_bytes()
@@ -260,7 +272,9 @@ def _acquire_snapshot_roots(
             elif path.is_dir():
                 row.update({"type": "directory"})
             else:
-                raise ValueError("Special filesystem object requires explicit handling: " + str(path))
+                raise ValueError(
+                    "Special filesystem object requires explicit handling: " + str(path)
+                )
             rows.append(row)
 
     return exclusions, source_checks
@@ -277,9 +291,11 @@ def _retain_snapshot(
     immutable_fn = hooks["immutable"]
     producer_object = store.blob(hooks["producer_bytes"])
     producer_deps = producer_dependencies(store, hooks)
-    history, effective_policy, history_account, retained_selection, prior_states = _snapshot_history(
-        store,
-        spec,
+    history, effective_policy, history_account, retained_selection, prior_states = (
+        _snapshot_history(
+            store,
+            spec,
+        )
     )
     exclusions, source_checks = _acquire_snapshot_roots(store, spec, rows)
 
@@ -294,6 +310,8 @@ def _retain_snapshot(
             selected is not None and "object" in selected,
             "Current choice absent from observed occurrence: " + current["path"],
         )
+        if selected is None:
+            raise ValueError("Current choice absent from observed occurrence: " + current["path"])
         if current.get("expected_sha256"):
             require(
                 selected["object"] == current["expected_sha256"],
@@ -337,7 +355,8 @@ def _retain_snapshot(
         },
         "observations": store.observations,
         "scope": (
-            "Per-file stable custody plus final identity recheck; not an atomic source transaction, "
+            "Per-file stable custody plus final identity recheck; not an atomic source "
+            "transaction, "
             "semantic acceptance, runtime relocation, or deletion authority."
         ),
     }
@@ -353,7 +372,9 @@ def _retain_snapshot(
     }
     if retained_selection is not None:
         selection["previous_selection"] = retained_selection
-    selection["materializations"] = observed_materialization_state(prior_states, manifest, manifest_hash)
+    selection["materializations"] = observed_materialization_state(
+        prior_states, manifest, manifest_hash
+    )
     selection_raw = js(selection)
     selection_hash = sha(selection_raw)
 
@@ -370,7 +391,9 @@ def _retain_snapshot(
     return manifest_hash, selection_hash, effective_policy
 
 
-def snapshot(store: Any, spec_path: Path | str, *, hooks: dict[str, Any] | None = None) -> dict[str, Any]:
+def snapshot(
+    store: Any, spec_path: Path | str, *, hooks: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Capture declared roots, commit immutable metadata, and publish CURRENT.json."""
     resolved_hooks = resolve_hooks(hooks)
     replace_fn = resolved_hooks["replace_json"]
@@ -423,7 +446,8 @@ def snapshot(store: Any, spec_path: Path | str, *, hooks: dict[str, Any] | None 
                 failure["selection"] = selection_hash
             if retained:
                 failure["recovery"] = (
-                    "Occurrence and selection were retained before CURRENT.json replacement failed; "
+                    "Occurrence and selection were retained before CURRENT.json replacement "
+                    "failed; "
                     "inspect the retained occurrence or select a new occurrence identity."
                 )
             store.event("snapshot-failed", failure)

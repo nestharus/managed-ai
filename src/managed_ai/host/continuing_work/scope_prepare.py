@@ -1,5 +1,4 @@
 """Scope preparation, overlap nomination indexing, and native context construction."""
-from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
@@ -275,7 +274,9 @@ def write_overlap_index(
         "delivered": len(overlaps),
         "omitted": len(all_overlaps) - len(overlaps),
         "limit": overlap_limit,
-        "omitted_scope_sample": [row["scope"] for row in all_overlaps[overlap_limit : overlap_limit + 20]],
+        "omitted_scope_sample": [
+            row["scope"] for row in all_overlaps[overlap_limit : overlap_limit + 20]
+        ],
         "complete_index": overlap_pin,
         "meaning": (
             "Nominations, not inferred conflicts, automatic scheduling or semantic completeness. "
@@ -303,7 +304,10 @@ def _validate_prepare_spec(host: Any, spec: dict[str, Any]) -> dict[str, Any]:
     attention = prepare_attention_selection(spec)
 
     overlap_limit = spec.get("overlap_limit", DEFAULT_HOST_CONFIG.default_overlap_limit)
-    if type(overlap_limit) is not int or not 1 <= overlap_limit <= DEFAULT_HOST_CONFIG.max_overlap_limit:
+    if (
+        type(overlap_limit) is not int
+        or not 1 <= overlap_limit <= DEFAULT_HOST_CONFIG.max_overlap_limit
+    ):
         raise ValueError("overlap_limit must be an integer from 1 through 200")
 
     outnames = [ident(name) for name in spec["outputs"]]
@@ -412,7 +416,9 @@ def _ensure_method_guide(host: Any) -> tuple[Path, str]:
 
 
 def prepare_scope(host: Any, spec: dict[str, Any]) -> dict[str, Any]:
-    """Prepare an immutable producing scope with overlap nominations, Attention tracking, and context."""
+    """Prepare an immutable producing scope with overlap nominations, Attention tracking, and
+    context.
+    """
     parsed = _validate_prepare_spec(host, spec)
     sid = parsed["sid"]
     saved = parsed["saved"]
@@ -454,7 +460,8 @@ def prepare_scope(host: Any, spec: dict[str, Any]) -> dict[str, Any]:
         "repairs": repairs,
         "receiving_question": spec.get(
             "receiving_question",
-            "Did the actual contribution produce the predicted useful effect under current sources?",
+            "Did the actual contribution produce the predicted useful effect under current "
+            "sources?",
         ),
     }
     note = "sources/host/" + sid + "-prospect.json"
@@ -475,11 +482,20 @@ def prepare_scope(host: Any, spec: dict[str, Any]) -> dict[str, Any]:
     request: dict[str, Any] = {
         "task": parsed["task"],
         "consumer": spec.get("consumer", sid),
-        "sources": ["sources/host/COMMISSION.md", method_path, note, *[row["work_path"] for row in sources]],
+        "sources": [
+            "sources/host/COMMISSION.md",
+            method_path,
+            note,
+            *[row["work_path"] for row in sources],
+        ],
         "targets": targets,
         "attention_items": list(
             dict.fromkeys(
-                ["continuing-commission", *[row["id"] for row in items], *attention["attention_items"]],
+                [
+                    "continuing-commission",
+                    *[row["id"] for row in items],
+                    *attention["attention_items"],
+                ],
             ),
         ),
         "attention_groups": attention["attention_groups"],
@@ -528,6 +544,8 @@ def prepare_scope(host: Any, spec: dict[str, Any]) -> dict[str, Any]:
         "overlap_nominations": len(overlaps),
         "targets": targets,
         "parent_owed": [
-            row["id"] for row in known.values() if row["disposition"] not in ("fulfilled", "released")
+            row["id"]
+            for row in known.values()
+            if row["disposition"] not in ("fulfilled", "released")
         ],
     }

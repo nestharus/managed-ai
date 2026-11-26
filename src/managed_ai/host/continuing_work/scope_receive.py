@@ -1,8 +1,7 @@
 """Guarded receive, crash/partial resume, supersession handoff, and status projection."""
-from __future__ import annotations
 
-from pathlib import Path
 import stat
+from pathlib import Path
 from typing import Any
 
 from managed_ai.host.continuing_work.occurrence_files import (
@@ -31,7 +30,9 @@ def record_partial_publication(
     failed_target: str | None = None,
     error: str | None = None,
 ) -> None:
-    """Persist partial multi-target publication progress so resume can settle or complete cleanly."""
+    """Persist partial multi-target publication progress so resume can settle or complete
+    cleanly.
+    """
     entry: dict[str, Any] = {
         "at_utc": now(),
         "producer": producer,
@@ -73,17 +74,21 @@ def _validate_receive_inputs(
     if "superseded" in scope:
         raise ValueError("This preparation was superseded; use its actual successor")
     if "result" in scope:
-        raise ValueError("Retain the completed occurrence; use native recovery for uncertain transport")
+        raise ValueError(
+            "Retain the completed occurrence; use native recovery for uncertain transport"
+        )
     if "supersession_request" in scope:
         successor = scope["supersession_request"]["successor"]
         raise ValueError(
-            f"{sid}: inspect the outstanding handoff to {successor} before receiving another return",
+            f"{sid}: inspect the outstanding handoff to {successor} "
+            "before receiving another return",
         )
 
     goal = host.goal()
     if goal["sha256"] != scope["parent_goal"]["sha256"]:
         raise ValueError(
-            "Parent commission/duties changed; retain the proposal and prepare a fresh receiving occasion",
+            "Parent commission/duties changed; retain the proposal and prepare a fresh receiving "
+            "occasion",
         )
 
     host.current(host.config["commission"], "Current commission")
@@ -134,7 +139,9 @@ def _adopt_receive_targets(
 
     for idx, target in enumerate(scope["targets"]):
         try:
-            publication = host.call("adopt", sid, "--target", target, "--reason", account)["publication"]
+            publication = host.call("adopt", sid, "--target", target, "--reason", account)[
+                "publication"
+            ]
         except Exception as exc:
             if publications:
                 record_partial_publication(
@@ -318,7 +325,8 @@ def _verify_resume_basis(
     try:
         if goal["sha256"] != scope["parent_goal"]["sha256"]:
             raise ValueError(
-                "Parent duty changed; preserve old return and prepare a new current receiving scope",
+                "Parent duty changed; preserve old return and prepare a new current receiving "
+                "scope",
             )
         host.current(host.config["commission"], "Current commission")
         for source in scope["sources"]:
@@ -360,7 +368,9 @@ def _adopt_remaining_targets(
     remaining_targets: list[str],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     pubs_by_target = {pub["path"]: pub for pub in completed_pubs}
-    outs_by_target = {pub["path"]: out for pub, out in zip(completed_pubs, completed_outputs)}
+    outs_by_target = {
+        pub["path"]: out for pub, out in zip(completed_pubs, completed_outputs, strict=True)
+    }
 
     for idx, target in enumerate(remaining_targets):
         (host.work / target).parent.mkdir(parents=True, exist_ok=True)
@@ -389,7 +399,8 @@ def _adopt_remaining_targets(
                 raise ValueError(
                     f"{sid}: partial publication recorded ({len(ordered_pubs)} published, "
                     f"{len(pending_targets)} pending) after {target} failed: {detail}; "
-                    "inspect and settle with settle_partial=true or prepare a fresh receiving scope",
+                    "inspect and settle with settle_partial=true or prepare a fresh receiving "
+                    "scope",
                 ) from exc
             raise
 
@@ -439,7 +450,11 @@ def resume_scope(host: Any, sid: str, spec: dict[str, Any]) -> dict[str, Any]:
         }
     if "result" in scope:
         host.received_outputs(scope)
-        out: dict[str, Any] = {"id": sid, "already_received": True, "outputs": scope["result"]["outputs"]}
+        out: dict[str, Any] = {
+            "id": sid,
+            "already_received": True,
+            "outputs": scope["result"]["outputs"],
+        }
         if scope["result"].get("partial"):
             out["partial"] = True
             out["unpublished_targets"] = scope["result"].get("unpublished_targets", [])
@@ -464,7 +479,9 @@ def resume_scope(host: Any, sid: str, spec: dict[str, Any]) -> dict[str, Any]:
                 "reconciled_captures": reconciled_captures,
                 "parent_duties_closed": False,
             }
-        raise ValueError("No native return exists; ordinary receive is still the appropriate operation")
+        raise ValueError(
+            "No native return exists; ordinary receive is still the appropriate operation"
+        )
 
     if handoff is not None:
         if returned["transport"]["kind"] != "local-command" or not returned["proposals"]:
@@ -656,8 +673,8 @@ def supersede_scope(host: Any, sid: str, spec: dict[str, Any]) -> dict[str, Any]
     }
     if "supersession_request" in scope and scope["supersession_request"] != request:
         raise ValueError(
-            f"{sid}: the outstanding handoff to {scope['supersession_request']['successor']} differs; "
-            "inspect the original request",
+            f"{sid}: the outstanding handoff to {scope['supersession_request']['successor']} "
+            "differs; inspect the original request",
         )
 
     atomic_bytes(reply, body)
@@ -668,7 +685,9 @@ def supersede_scope(host: Any, sid: str, spec: dict[str, Any]) -> dict[str, Any]
 
 
 def collect_status(host: Any) -> dict[str, Any]:
-    """Project native status alongside host scope states, partial publications, and pending captures."""
+    """Project native status alongside host scope states, partial publications, and pending
+    captures.
+    """
     native = host.call("status")
     transport = {row["packet"]: row for row in native["turns"]}
     scopes: list[dict[str, Any]] = []

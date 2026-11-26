@@ -3,16 +3,15 @@
 
 Usage: python3 -B inspect_config.py --config /absolute/config.json
 """
-from __future__ import annotations
 
 import argparse
 import json
 import math
 import os
-from pathlib import Path
 import shutil
 import sys
-from typing import Any
+from pathlib import Path
+from typing import Any, NoReturn, override
 
 if __package__ in (None, ""):
     _src_root = str(Path(__file__).resolve().parents[3])
@@ -115,7 +114,7 @@ class Inspection:
     def timeout(self, field: str, value: Any) -> None:
         try:
             valid = type(value) in (int, float) and math.isfinite(value) and value > 0
-        except (OverflowError, ValueError):
+        except OverflowError, ValueError:
             valid = False
         if not valid:
             self.issue(field, "Supply a finite positive numeric timeout in seconds.")
@@ -128,8 +127,10 @@ class Inspection:
             self.file(f"{field}[{index}]", item)
 
     def command(self, field: str, value: Any, receiver: bool = False) -> None:
-        if not isinstance(value, list) or not value or any(
-            not isinstance(x, str) or "\x00" in x for x in value
+        if (
+            not isinstance(value, list)
+            or not value
+            or any(not isinstance(x, str) or "\x00" in x for x in value)
         ):
             self.issue(
                 field,
@@ -144,7 +145,8 @@ class Inspection:
         if "{workspace}" in first or "{receiving_dir}" in first:
             self.issue(
                 field + "[0]",
-                "Name a fixed executable; executable binding happens before receiver path substitution.",
+                "Name a fixed executable; executable binding happens before receiver path "
+                "substitution.",
             )
             return
 
@@ -165,7 +167,9 @@ class Inspection:
         for index, argument in enumerate(value[1:], 1):
             if argument in ("-c", "-m"):
                 if index + 1 >= len(value) or not value[index + 1]:
-                    self.issue(f"{field}[{index}]", argument + " requires its code/module argument.")
+                    self.issue(
+                        f"{field}[{index}]", argument + " requires its code/module argument."
+                    )
                 break
             if argument.startswith("-"):
                 continue
@@ -205,7 +209,8 @@ class Inspection:
                     if current.is_symlink():
                         self.issue(
                             label,
-                            "Workspace artifact paths must not pass through symlinks: " + str(current),
+                            "Workspace artifact paths must not pass through symlinks: "
+                            + str(current),
                         )
                         break
                     if current.exists() and position < len(parts) - 1 and not current.is_dir():
@@ -230,18 +235,24 @@ class Inspection:
         ):
             self.issue(
                 "sources",
-                "Use an object mapping string IDs to complete string bodies, not filenames or arrays.",
+                "Use an object mapping string IDs to complete string bodies, not filenames or "
+                "arrays.",
             )
         elif "workbench-tool-contract" in sources:
             self.issue(
                 "sources.workbench-tool-contract",
-                "This source ID is reserved for the workbench's generated tool contract; rename the entry.",
+                "This source ID is reserved for the workbench's generated tool contract; rename "
+                "the "
+                "entry.",
             )
 
         if "run_id" in config and not isinstance(config["run_id"], str):
             self.issue("run_id", "Supply a string run identifier.")
         if not isinstance(config.get("obligations", []), list):
-            self.issue("obligations", "Use a list; keep independent outstanding duties in this retained list.")
+            self.issue(
+                "obligations",
+                "Use a list; keep independent outstanding duties in this retained list.",
+            )
 
         self.limit(config, "max_steps", 12, 0)
         self.limit(config, "max_cache_bytes", 65536, 0)
@@ -258,14 +269,18 @@ class Inspection:
         model = config.get("model")
         transport = None
         if not isinstance(model, dict):
-            self.issue("model", "Supply a model object with kind mailbox or command and an absolute directory.")
+            self.issue(
+                "model",
+                "Supply a model object with kind mailbox or command and an absolute directory.",
+            )
             return None
 
         kind = model.get("kind")
         if kind not in ("mailbox", "command"):
             self.issue(
                 "model.kind",
-                "Use mailbox or command. An injected callable needs a Python host and is outside this standalone CLI preflight.",
+                "Use mailbox or command. An injected callable needs a Python host and is outside "
+                "this standalone CLI preflight.",
             )
         if kind in ("mailbox", "command"):
             transport = self.directory("model.directory", model.get("directory"), future=True)
@@ -287,7 +302,8 @@ class Inspection:
         if not isinstance(receivers, dict):
             self.issue(
                 "receivers",
-                "Use an object mapping receiver names to command specifications, or an empty object.",
+                "Use an object mapping receiver names to command specifications, or an empty "
+                "object.",
             )
             return
 
@@ -296,7 +312,9 @@ class Inspection:
             if not name:
                 self.issue("receivers", "Give each receiver a nonempty name.")
             if not isinstance(spec, dict):
-                self.issue(field, "Supply an object with argv, fixed inputs and relative artifact paths.")
+                self.issue(
+                    field, "Supply an object with argv, fixed inputs and relative artifact paths."
+                )
                 continue
             self.command(field + ".argv", spec.get("argv"), receiver=True)
             self.inputs(field + ".inputs", spec.get("inputs", []))
@@ -325,15 +343,15 @@ class Inspection:
                 if path == workspace or path.is_relative_to(workspace):
                     self.issue(
                         field,
-                        "Move fixed code/input files outside the model-editable workspace: " + str(path),
+                        "Move fixed code/input files outside the model-editable workspace: "
+                        + str(path),
                     )
 
         protected: dict[str, Path | None] = {"corpus_root": corpus, "controller_dir": controller}
-        if controller is not None:
-            if (controller / "resumable_workbench.py").is_file():
-                protected["operating package"] = controller
-                for name in CORE_MODULES:
-                    self.file("operating package/" + name, str(controller / name))
+        if controller is not None and (controller / "resumable_workbench.py").is_file():
+            protected["operating package"] = controller
+            for name in CORE_MODULES:
+                self.file("operating package/" + name, str(controller / name))
 
         for field, target in {"workspace": workspace, **retained}.items():
             if target is None:
@@ -359,7 +377,9 @@ class Inspection:
         workspace = self.directory("workspace", config.get("workspace"), future=True)
         state = self.directory("state_dir", config.get("state_dir"), future=True)
         corpus = self.directory("corpus_root", config.get("corpus_root"))
-        controller = self.directory("controller_dir", config.get("controller_dir", str(DEFAULT_CONTROLLER_DIR)))
+        controller = self.directory(
+            "controller_dir", config.get("controller_dir", str(DEFAULT_CONTROLLER_DIR))
+        )
 
         if controller is not None:
             for name in ("agent_runtime.py", "evidence_support.py"):
@@ -405,14 +425,17 @@ class Inspection:
 
 
 class JsonParser(argparse.ArgumentParser):
-    def error(self, message: str) -> None:
+    @override
+    def error(self, message: str) -> NoReturn:
         raise ValueError(message)
 
 
 def main(argv: list[str] | None = None) -> int:
     check = Inspection()
     parser = JsonParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("--config", required=True, help="Absolute path to launch configuration JSON")
+    parser.add_argument(
+        "--config", required=True, help="Absolute path to launch configuration JSON"
+    )
 
     try:
         args = parser.parse_args(argv)
@@ -423,7 +446,9 @@ def main(argv: list[str] | None = None) -> int:
             config_path = check.path("config", args.config)
             if config_path is not None:
                 if not config_path.is_file():
-                    check.issue("config", "Supply an existing regular JSON file: " + str(config_path))
+                    check.issue(
+                        "config", "Supply an existing regular JSON file: " + str(config_path)
+                    )
                 else:
                     config = loads_strict(config_path.read_bytes())
                     canonical_bytes(config)

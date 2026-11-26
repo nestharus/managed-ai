@@ -1,12 +1,12 @@
 """Signal-field queue service operations: enrollment, change fan-out, scheduling, and inspection."""
-from __future__ import annotations
 
-from collections.abc import Iterable
-from contextlib import contextmanager
 import math
+import sqlite3
+import uuid
+from collections.abc import Generator, Iterable
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-import uuid
 
 from .config import (
     DEFAULT_CONFIG,
@@ -49,7 +49,7 @@ class Field:
         self.close()
 
     @contextmanager
-    def mutation(self):
+    def mutation(self) -> Generator[None]:
         self.execute("BEGIN IMMEDIATE")
         try:
             yield
@@ -58,16 +58,16 @@ class Field:
             self.db.rollback()
             raise
 
-    def execute(self, query: str, values: tuple[Any, ...] = ()):
+    def execute(self, query: str, values: tuple[Any, ...] = ()) -> sqlite3.Cursor:
         self.sql_calls += 1
         return self.db.execute(query, values)
 
-    def one(self, query: str, values: tuple[Any, ...] = ()):
+    def one(self, query: str, values: tuple[Any, ...] = ()) -> Any:
         row = self.execute(query, values).fetchone()
         self.rows_returned += int(row is not None)
         return row
 
-    def all(self, query: str, values: tuple[Any, ...] = ()):
+    def all(self, query: str, values: tuple[Any, ...] = ()) -> list[Any]:
         rows = self.execute(query, values).fetchall()
         self.rows_returned += len(rows)
         return rows
@@ -85,10 +85,10 @@ class Field:
         loaded: dict[str, dict[str, Any]] = {}
         for offset in range(0, len(unique), _SQL_IN_CHUNK):
             chunk = unique[offset : offset + _SQL_IN_CHUNK]
-            placeholders = ",".join("?" for _ in chunk)
             rows = self.all(
-                f"SELECT id, epoch, position, value FROM sources WHERE id IN ({placeholders})",
-                tuple(chunk),
+                "SELECT id, epoch, position, value FROM sources WHERE id IN (SELECT value FROM "
+                "json_each(?))",
+                (encoded(chunk),),
             )
             for row in rows:
                 loaded[row["id"]] = {
@@ -117,10 +117,9 @@ class Field:
         tickets: dict[str, int | None] = {}
         for offset in range(0, len(unique), _SQL_IN_CHUNK):
             chunk = unique[offset : offset + _SQL_IN_CHUNK]
-            placeholders = ",".join("?" for _ in chunk)
             rows = self.all(
-                f"SELECT id, ticket FROM jobs WHERE id IN ({placeholders})",
-                tuple(chunk),
+                "SELECT id, ticket FROM jobs WHERE id IN (SELECT value FROM json_each(?))",
+                (encoded(chunk),),
             )
             for row in rows:
                 tickets[row["id"]] = row["ticket"]
@@ -137,7 +136,9 @@ class Field:
         existing_ticket: int | None = None,
         ticket_known: bool = False,
     ) -> str:
-        key = ("occurrence:" + digest([use["id"], occurrence])) if occurrence else "use:" + use["id"]
+        key = (
+            ("occurrence:" + digest([use["id"], occurrence])) if occurrence else "use:" + use["id"]
+        )
         if ticket_known:
             ticket = existing_ticket if existing_ticket is not None else self.ticket()
         else:
@@ -145,7 +146,9 @@ class Field:
             ticket = old["ticket"] if old and old["ticket"] is not None else self.ticket()
 
         self.execute(
-            """INSERT INTO jobs (id, use_id, generation, basis, spec, ticket, token, gap, attempt, worker_outcome)
+            """INSERT INTO jobs (
+                id, use_id, generation, basis, spec, ticket, token, gap, attempt, worker_outcome
+            )
             VALUES (?,?,?,?,?,?,NULL,?,NULL,NULL)
             ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,
             basis=excluded.basis, spec=excluded.spec, ticket=excluded.ticket, gap=excluded.gap""",
@@ -168,7 +171,10 @@ class Field:
             "supply id, mode, question, purpose, sources, observer and scope",
         )
         require(
-            all(isinstance(spec[k], str) and spec[k].strip() for k in ("id", "mode", "question", "purpose")),
+            all(
+                isinstance(spec[k], str) and spec[k].strip()
+                for k in ("id", "mode", "question", "purpose")
+            ),
             "use identity, mode, question and purpose must be nonempty",
         )
         require(spec["mode"] in self.config.modes, "unsupported receiving lifetime")
@@ -231,8 +237,14 @@ class Field:
             )
             if old and old["epoch"] == epoch and position <= old["position"]:
                 if position == old["position"]:
-                    require(old["value"] == encoded(value), "same stream position has different content")
-                return {"source": source, "admitted": False, "reason": "already observed stream position"}
+                    require(
+                        old["value"] == encoded(value), "same stream position has different content"
+                    )
+                return {
+                    "source": source,
+                    "admitted": False,
+                    "reason": "already observed stream position",
+                }
 
             self.execute(
                 """INSERT INTO sources VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET
@@ -255,7 +267,9 @@ class Field:
 
             needed_sources = {name for _, spec in active_specs for name in spec["sources"]}
             source_map = self._sources_map(needed_sources)
-            live_job_ids = ["use:" + use["id"] for use, spec in active_specs if spec["mode"] == "live"]
+            live_job_ids = [
+                "use:" + use["id"] for use, spec in active_specs if spec["mode"] == "live"
+            ]
             tickets = self._existing_tickets(live_job_ids)
 
             live = 0
@@ -283,7 +297,11 @@ class Field:
                             "source": source,
                             "before": {"epoch": old["epoch"], "position": old["position"]},
                             "after": {"epoch": epoch, "position": position},
-                            "requires": "Recover missing owed occurrences or obtain a separately authorized change of duty.",
+                            "requires": (
+                                "Recover missing owed occurrences or obtain a separately "
+                                "authorized "
+                                "change of duty."
+                            ),
                         }
                         gaps += 1
                     self.queue(use, basis, occurrence=[source, epoch, position], gap=gap)
@@ -316,8 +334,10 @@ class Field:
             jobs_by_id: dict[str, Any] = {}
             for offset in range(0, len(live_job_ids), _SQL_IN_CHUNK):
                 chunk = live_job_ids[offset : offset + _SQL_IN_CHUNK]
-                placeholders = ",".join("?" for _ in chunk)
-                for row in self.all(f"SELECT * FROM jobs WHERE id IN ({placeholders})", tuple(chunk)):
+                for row in self.all(
+                    "SELECT * FROM jobs WHERE id IN (SELECT value FROM json_each(?))",
+                    (encoded(chunk),),
+                ):
                     jobs_by_id[row["id"]] = row
 
             for use, spec in live_entries:
@@ -342,7 +362,10 @@ class Field:
                 )
                 queued += 1
 
-        return {"live_rechecks_reconstructed": queued, "scope": "Current declared dependencies only."}
+        return {
+            "live_rechecks_reconstructed": queued,
+            "scope": "Current declared dependencies only.",
+        }
 
     def pull(self) -> dict[str, Any] | None:
         with self.mutation():
@@ -378,7 +401,9 @@ class Field:
         self.execute(
             "UPDATE uses SET last_rejected=? WHERE id=?",
             (
-                encoded({"generation": packet["generation"], "basis": packet["basis"], "result": result}),
+                encoded(
+                    {"generation": packet["generation"], "basis": packet["basis"], "result": result}
+                ),
                 use["id"],
             ),
         )
@@ -391,12 +416,16 @@ class Field:
             self.queue(use, current_basis)
 
         self.execute(
-            "UPDATE jobs SET token=NULL, attempt=NULL, worker_outcome=NULL, ticket=COALESCE(ticket,?) WHERE id=?",
+            "UPDATE jobs SET token=NULL, attempt=NULL, worker_outcome=NULL, "
+            "ticket=COALESCE(ticket,?) WHERE id=?",
             (self.ticket(), job["id"]),
         )
         return {
             "status": "stale",
-            "reason": "Returned work differs from current receiving basis; candidate retained separately by its native owner.",
+            "reason": (
+                "Returned work differs from current receiving basis; candidate retained separately "
+                "by its native owner."
+            ),
         }
 
     def receive(self, packet: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
@@ -415,7 +444,9 @@ class Field:
             "worker must return complete or blocked with its actual result",
         )
         require(
-            "account" in result and isinstance(result["account"], str) and result["account"].strip(),
+            "account" in result
+            and isinstance(result["account"], str)
+            and result["account"].strip(),
             "worker must supply an account; service is not semantic acceptance",
         )
 
@@ -424,7 +455,10 @@ class Field:
             if not job or job["token"] != packet["token"]:
                 return {"status": "refused", "reason": "unknown, completed or replaced attempt"}
             if job["attempt"] != encoded(packet):
-                return {"status": "refused", "reason": "packet differs from the actual captured attempt"}
+                return {
+                    "status": "refused",
+                    "reason": "packet differs from the actual captured attempt",
+                }
 
             use = self.one("SELECT * FROM uses WHERE id=?", (job["use_id"],))
             matches = (
@@ -434,7 +468,11 @@ class Field:
                 and loads_strict(job["basis"]) == packet["basis"]
             )
             if packet["spec"]["mode"] == "live":
-                matches = matches and use["spec"] == job["spec"] and self.basis(packet["spec"]) == packet["basis"]
+                matches = (
+                    matches
+                    and use["spec"] == job["spec"]
+                    and self.basis(packet["spec"]) == packet["basis"]
+                )
             if not matches:
                 return self._record_stale_return(job, use, packet, result)
 
@@ -451,7 +489,8 @@ class Field:
 
             if result["state"] == "blocked" and packet["spec"]["mode"] == "each-change":
                 self.execute(
-                    "UPDATE jobs SET token=NULL, attempt=NULL, worker_outcome=NULL, gap=? WHERE id=?",
+                    "UPDATE jobs SET token=NULL, attempt=NULL, worker_outcome=NULL, gap=? WHERE "
+                    "id=?",
                     (encoded({"requires": result["account"]}), job["id"]),
                 )
             else:
@@ -461,20 +500,28 @@ class Field:
                 "status": "received",
                 "service_state": result["state"],
                 "current_contract": current_contract,
-                "scope": "Attributed worker return, not an automatic observation-quality or whole-goal judgment.",
+                "scope": (
+                    "Attributed worker return, not an automatic observation-quality or whole-goal "
+                    "judgment."
+                ),
             }
 
     def retry(self, job_id: str, token: str) -> dict[str, Any]:
-        """Explicit host recovery fences the old worker. The effect owner must recover effects separately."""
+        """Explicit host recovery fences the old worker. The effect owner must recover effects
+        separately.
+        """
         require(
             isinstance(job_id, str) and job_id and isinstance(token, str) and token,
             "job_id and token must be nonempty strings",
         )
         with self.mutation():
             row = self.one("SELECT * FROM jobs WHERE id=?", (job_id,))
-            require(row is not None and row["token"] == token, "attempt is absent or already replaced")
+            require(
+                row is not None and row["token"] == token, "attempt is absent or already replaced"
+            )
             self.execute(
-                "UPDATE jobs SET token=NULL, attempt=NULL, worker_outcome=NULL, ticket=COALESCE(ticket,?) WHERE id=?",
+                "UPDATE jobs SET token=NULL, attempt=NULL, worker_outcome=NULL, "
+                "ticket=COALESCE(ticket,?) WHERE id=?",
                 (self.ticket(), job_id),
             )
         return {"retry_eligible": job_id, "old_worker_fenced": True}
@@ -492,7 +539,9 @@ class Field:
                 not previous or previous["snapshot"] == row["latest"],
                 "retained name identifies different historical observation",
             )
-            self.execute("INSERT OR IGNORE INTO selected_history VALUES (?,?)", (name, row["latest"]))
+            self.execute(
+                "INSERT OR IGNORE INTO selected_history VALUES (?,?)", (name, row["latest"])
+            )
         return {"retained": name, "scope": "Explicit historical cut; no current validity inferred."}
 
     @staticmethod
@@ -510,17 +559,23 @@ class Field:
         max_bytes: int = DEFAULT_CONFIG.default_pending_max_bytes,
     ) -> dict[str, Any]:
         require(
-            isinstance(after, str) and type(limit) is int and 1 <= limit <= self.config.max_pending_limit,
-            f"pending requires a string cursor and limit from 1 through {self.config.max_pending_limit}",
+            isinstance(after, str)
+            and type(limit) is int
+            and 1 <= limit <= self.config.max_pending_limit,
+            "pending requires a string cursor and limit from 1 through "
+            f"{self.config.max_pending_limit}",
         )
         require(
-            type(max_bytes) is int and self.config.min_max_bytes <= max_bytes <= self.config.max_inspect_bytes,
-            f"pending byte limit must be from {self.config.min_max_bytes} through {self.config.max_inspect_bytes}",
+            type(max_bytes) is int
+            and self.config.min_max_bytes <= max_bytes <= self.config.max_inspect_bytes,
+            f"pending byte limit must be from {self.config.min_max_bytes} through "
+            f"{self.config.max_inspect_bytes}",
         )
 
         rows = self.all("SELECT * FROM jobs WHERE id>? ORDER BY id LIMIT ?", (after, limit + 1))
         items: list[dict[str, Any]] = []
-        # Exact UTF-8 JSON array length: "[]" is 2 bytes, each subsequent element adds 1 byte for ",".
+        # Exact UTF-8 JSON array length: "[]" is 2 bytes, each subsequent element adds 1 byte for
+        # ",".
         running_bytes = 2
 
         for row in rows[:limit]:
@@ -537,7 +592,8 @@ class Field:
             summary = oversized_job_summary(row, candidate_bytes + 2)
             require(
                 len(encoded([summary]).encode("utf-8")) <= max_bytes,
-                "next pending job exceeds max_bytes and cannot be summarized within bound; request a larger max_bytes",
+                "next pending job exceeds max_bytes and cannot be summarized within bound; request "
+                "a larger max_bytes",
             )
             items.append(summary)
             break
@@ -547,7 +603,10 @@ class Field:
             "next_after": items[-1]["job"] if items else after,
             "more": len(rows) > len(items),
             "next_omitted": rows[len(items)]["id"] if len(rows) > len(items) else None,
-            "scope": "Trusted host recovery metadata, bounded output over enrolled jobs. The token supplies no external-effect authority.",
+            "scope": (
+                "Trusted host recovery metadata, bounded output over enrolled jobs. The token "
+                "supplies no external-effect authority."
+            ),
         }
 
     def inspect(
@@ -561,12 +620,18 @@ class Field:
             sum(x is not None for x in (use_id, job_id, history_name)) == 1,
             "inspect exactly one use, pending job or selected historical account",
         )
-        for label, value in (("use_id", use_id), ("job_id", job_id), ("history_name", history_name)):
+        for label, value in (
+            ("use_id", use_id),
+            ("job_id", job_id),
+            ("history_name", history_name),
+        ):
             if value is not None:
                 require(isinstance(value, str) and value.strip(), f"{label} must be nonempty text")
         require(
-            type(max_bytes) is int and self.config.min_max_bytes <= max_bytes <= self.config.max_inspect_bytes,
-            f"inspection byte limit must be from {self.config.min_max_bytes} through {self.config.max_inspect_bytes}",
+            type(max_bytes) is int
+            and self.config.min_max_bytes <= max_bytes <= self.config.max_inspect_bytes,
+            f"inspection byte limit must be from {self.config.min_max_bytes} through "
+            f"{self.config.max_inspect_bytes}",
         )
 
         if job_id is not None:
@@ -590,10 +655,15 @@ class Field:
                 "latest": latest,
                 "definition_matches": latest["signature"] == row["signature"] if latest else None,
                 "declared_basis_matches": latest["basis"] == basis if latest else None,
-                "last_rejected": loads_strict(row["last_rejected"]) if row["last_rejected"] else None,
+                "last_rejected": loads_strict(row["last_rejected"])
+                if row["last_rejected"]
+                else None,
             }
 
-        result["scope"] = "Observed bindings and retained accounts only; semantic validity and effect permission require their actual receivers."
+        result["scope"] = (
+            "Observed bindings and retained accounts only; semantic validity and effect permission "
+            "require their actual receivers."
+        )
         require(
             len(encoded(result).encode("utf-8")) <= max_bytes,
             "selected inspection exceeds output byte limit; request a larger explicit bound",
@@ -604,9 +674,15 @@ class Field:
         counts = self.one(
             """SELECT
                 COUNT(*) AS total,
-                COALESCE(SUM(CASE WHEN gap IS NOT NULL THEN 1 ELSE 0 END), 0) AS blocked_occurrences,
-                COALESCE(SUM(CASE WHEN gap IS NULL AND token IS NOT NULL THEN 1 ELSE 0 END), 0) AS in_flight,
-                COALESCE(SUM(CASE WHEN gap IS NULL AND token IS NULL THEN 1 ELSE 0 END), 0) AS eligible
+                COALESCE(
+                    SUM(CASE WHEN gap IS NOT NULL THEN 1 ELSE 0 END), 0
+                ) AS blocked_occurrences,
+                COALESCE(
+                    SUM(CASE WHEN gap IS NULL AND token IS NOT NULL THEN 1 ELSE 0 END), 0
+                ) AS in_flight,
+                COALESCE(
+                    SUM(CASE WHEN gap IS NULL AND token IS NULL THEN 1 ELSE 0 END), 0
+                ) AS eligible
             FROM jobs"""
         )
         blocked_live = self.one(
@@ -624,7 +700,9 @@ class Field:
             "blocked_occurrences": counts["blocked_occurrences"],
             "blocked_live_uses": blocked_live,
             "uses": self.one("SELECT COUNT(*) AS n FROM uses")["n"],
-            "selected_historical_observations": self.one("SELECT COUNT(*) AS n FROM selected_history")["n"],
+            "selected_historical_observations": self.one(
+                "SELECT COUNT(*) AS n FROM selected_history"
+            )["n"],
             "remaining_jobs": counts["total"],
             "sql_calls_this_connection": self.sql_calls,
             "rows_returned_this_connection": self.rows_returned,
@@ -658,7 +736,10 @@ class Field:
             "reason": reason,
             "in_flight_job": packet["job"],
             "worker": outcome,
-            "recovery": "Inspect the retained attempt and actual worker/native outcome before explicitly retrying.",
+            "recovery": (
+                "Inspect the retained attempt and actual worker/native outcome before explicitly "
+                "retrying."
+            ),
             "remaining": self.status(),
         }
 
@@ -679,7 +760,9 @@ class Field:
                 max_drain_bytes=self.config.max_worker_drain_bytes,
             )
         except OSError as exc:
-            outcome = worker_outcome("launch-error", returncode=None, error=str(exc), errno_value=exc.errno)
+            outcome = worker_outcome(
+                "launch-error", returncode=None, error=str(exc), errno_value=exc.errno
+            )
             return None, outcome, str(exc)
 
         if worker.timed_out:
@@ -706,7 +789,9 @@ class Field:
             return None, outcome, reason
 
         if worker.stdout.limit_exceeded:
-            reason = f"worker stdout exceeded {self.config.max_worker_stdout_bytes}-byte return limit"
+            reason = (
+                f"worker stdout exceeded {self.config.max_worker_stdout_bytes}-byte return limit"
+            )
             outcome = worker_outcome(
                 "invalid-return",
                 returncode=worker.returncode,
@@ -731,7 +816,9 @@ class Field:
 
     def run(self, argv: list[str], budget: int, timeout: int | float) -> dict[str, Any]:
         require(
-            isinstance(argv, list) and argv and all(isinstance(x, str) and x and "\0" not in x for x in argv),
+            isinstance(argv, list)
+            and argv
+            and all(isinstance(x, str) and x and "\0" not in x for x in argv),
             "worker requires explicit subprocess argv",
         )
         require(type(budget) is int and budget > 0, "positive invocation budget required")
@@ -753,7 +840,9 @@ class Field:
             packet_bytes += len(payload)
             invoked += 1
 
-            receipt, failure_outcome, failure_reason = self._invoke_one_packet(argv, packet, payload, timeout)
+            receipt, failure_outcome, failure_reason = self._invoke_one_packet(
+                argv, packet, payload, timeout
+            )
             if failure_outcome is not None:
                 return self._unresolved_run(
                     packet,
@@ -763,7 +852,8 @@ class Field:
                     received=received,
                     reason=failure_reason or "worker failed",
                 )
-            received.append(receipt)
+            if receipt is not None:
+                received.append(receipt)
 
         state = self.status()
         if state["eligible"]:
@@ -781,5 +871,8 @@ class Field:
             "packet_bytes": packet_bytes,
             "returns": received,
             "remaining": state,
-            "scope": "Actual configured worker calls. No provider/model or all-dimension semantic measurement is inferred.",
+            "scope": (
+                "Actual configured worker calls. No provider/model or all-dimension semantic "
+                "measurement is inferred."
+            ),
         }

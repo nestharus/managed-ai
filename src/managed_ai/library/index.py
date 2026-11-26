@@ -5,19 +5,19 @@ pinned external SQLite FTS5 derivative queries (PreparedIndex) from catalogue
 custody. Implements lazy phrase-surface materialization (P7-12) so BM25 term
 queries avoid retaining duplicated full-text field copies in RAM.
 """
-from __future__ import annotations
 
-from collections import Counter
 import math
-from pathlib import Path
 import re
 import tempfile
-from typing import Any, Callable
+from collections import Counter
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
 from .config import DEFAULT_LIBRARY_CONFIG, LibraryConfig
 from .contract import SearchScope
 from .format import decoded, digest, need, read_bytes, sha
-from .lexical import FtsAnalyzer, SQLITE_ERRORS, TOKEN, sqlite3
+from .lexical import SQLITE_ERRORS, TOKEN, FtsAnalyzer, sqlite3
 
 _UNSET: Any = object()
 
@@ -45,7 +45,8 @@ class SearchIndex:
         sql_errs = SQLITE_ERRORS if sqlite_errors is None else sqlite_errors
 
         if backend == "fts5":
-            need(sql is not None, "SQLite support unavailable; use --backend bm25")
+            if sql is None:
+                raise ValueError("SQLite support unavailable; use --backend bm25")
             try:
                 self.db = sql.connect(":memory:")
                 FtsAnalyzer.create(self.db, "docs", config=config.search)
@@ -55,7 +56,9 @@ class SearchIndex:
                 )
             except sql_errs as exc:
                 self.close()
-                raise ValueError("SQLite FTS5 preparation unavailable; use --backend bm25: " + str(exc)) from exc
+                raise ValueError(
+                    "SQLite FTS5 preparation unavailable; use --backend bm25: " + str(exc)
+                ) from exc
             return
 
         self.frequencies: dict[str, Counter[str]] = {}
@@ -171,7 +174,8 @@ class PreparedIndex:
         self.config = config
         sql = sqlite3 if sqlite_mod is _UNSET else sqlite_mod
 
-        need(sql is not None, "SQLite support unavailable; use ordinary BM25 discovery")
+        if sql is None:
+            raise ValueError("SQLite support unavailable; use ordinary BM25 discovery")
         data = reader(path, config.search.max_index_bytes)
         need(digest(data) == sha(expected_sha256), "prepared index differs from expected digest")
 
@@ -206,9 +210,15 @@ class PreparedIndex:
                 "prepared index basis differs; rebuild for this catalogue, analyzer and scope",
             )
 
-            for table, identities in (("body_docs", basis["bodies"]), ("module_docs", basis["modules"])):
-                found = [r[0] for r in self.db.execute("SELECT rowid FROM " + table + " ORDER BY rowid")]
-                need(found == list(range(1, len(identities) + 1)), "prepared index row coverage differs")
+            for query_sql, identities in (
+                ("SELECT rowid FROM body_docs ORDER BY rowid", basis["bodies"]),
+                ("SELECT rowid FROM module_docs ORDER BY rowid", basis["modules"]),
+            ):
+                found = [r[0] for r in self.db.execute(query_sql)]
+                need(
+                    found == list(range(1, len(identities) + 1)),
+                    "prepared index row coverage differs",
+                )
         except Exception:
             self.close()
             raise
@@ -222,7 +232,9 @@ class PreparedIndex:
         ids = self.basis["bodies" if table == "body_docs" else "modules"]
         return {
             ids[row - 1]: hit
-            for row, hit in FtsAnalyzer.search(self.db, table, units, config=self.config.search).items()
+            for row, hit in FtsAnalyzer.search(
+                self.db, table, units, config=self.config.search
+            ).items()
         }
 
     def close(self) -> None:
@@ -277,7 +289,9 @@ class RetainedSearch:
             self.bodies.close()
             raise
 
-    def search(self, parsed: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    def search(
+        self, parsed: dict[str, Any]
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
         return self.bodies.search(parsed), self.modules.search(parsed)
 
     def close(self) -> None:

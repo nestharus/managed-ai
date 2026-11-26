@@ -5,25 +5,26 @@ callback data, and the nonrecursive interaction history. They use no providers,
 external packages, or object representations for unsupported callback values.
 """
 
-from collections.abc import Mapping
 import hashlib
 import math
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 
 class JsonSnapshotError(ValueError):
     """A value cannot be represented by the finite JSON data model."""
 
 
-def detached_json(value):
+def detached_json(value: Any) -> Any:
     """Copy a finite JSON value without retaining any mutable input aliases.
 
     JSON objects require string keys. Tuples, nonfinite numbers, cycles and
     arbitrary objects are rejected instead of being silently transformed. Shared
     containers are copied separately at each occurrence, as JSON has no aliases.
     """
-    active = set()
+    active: set[int] = set()
 
-    def copy(item):
+    def copy(item: Any) -> Any:
         if item is None or isinstance(item, (str, bool, int)):
             return item
         if isinstance(item, float):
@@ -42,7 +43,7 @@ def detached_json(value):
         try:
             if isinstance(item, list):
                 return [copy(child) for child in item]
-            result = {}
+            result: dict[str, Any] = {}
             for key, child in item.items():
                 if not isinstance(key, str):
                     raise JsonSnapshotError("object key is not a string")
@@ -54,7 +55,7 @@ def detached_json(value):
     return copy(value)
 
 
-def capture_return(value):
+def capture_return(value: Any) -> tuple[Any, bool]:
     """Return ``(snapshot, True)`` or ``(type_level_diagnostic, False)``.
 
     The separate boolean prevents a diagnostic from being confused with an
@@ -73,7 +74,9 @@ def capture_return(value):
         }, False
 
 
-def source_snapshots(sources):
+def source_snapshots(
+    sources: Mapping[str, str],
+) -> tuple[dict[str, str], dict[str, dict[str, str]]]:
     """Return independent ``(source_bodies, trace_source_records)`` dictionaries.
 
     Source bodies are immutable strings and are hashed from their exact UTF-8
@@ -83,7 +86,7 @@ def source_snapshots(sources):
     if not isinstance(sources, Mapping):
         raise TypeError("sources must be a mapping of strings to strings")
     bodies = dict(sources)
-    records = {}
+    records: dict[str, dict[str, str]] = {}
     for source_id, body in bodies.items():
         if not isinstance(source_id, str) or not isinstance(body, str):
             raise TypeError("source IDs and bodies must be strings")
@@ -94,7 +97,10 @@ def source_snapshots(sources):
     return bodies, records
 
 
-def interaction_history(events):
+def interaction_history(events: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return detached interaction events, excluding all model requests."""
     retained = {"model_return", "tool_call", "tool_return", "callback_error"}
-    return detached_json([event for event in events if event.get("kind") in retained])
+    result: list[dict[str, Any]] = detached_json(
+        [event for event in events if event.get("kind") in retained]
+    )
+    return result

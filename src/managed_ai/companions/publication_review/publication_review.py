@@ -3,7 +3,6 @@
 The source owner supplies dependency meaning. This module nominates review; it
 never edits publications, discovers dependencies, or releases independent duties.
 """
-from __future__ import annotations
 
 import argparse
 import copy
@@ -11,12 +10,12 @@ import hashlib
 import importlib.util
 import json
 import os
-from pathlib import Path
 import shutil
 import stat
 import sys
-from typing import Any
 import uuid
+from pathlib import Path
+from typing import Any
 
 if __package__ in (None, ""):
     _src_root = str(Path(__file__).resolve().parents[3])
@@ -25,12 +24,20 @@ if __package__ in (None, ""):
 
 from managed_ai.companions.publication_review import (
     continuation_assessor as _default_assessor,
+)
+from managed_ai.companions.publication_review import (
     publication_observer as _default_observer,
 )
 from managed_ai.platform import (
     check_unfollowed_ancestors as _check_unfollowed_ancestors,
+)
+from managed_ai.platform import (
     is_reparse_or_symlink as _is_reparse_or_symlink,
+)
+from managed_ai.platform import (
     strict_json_loads,
+)
+from managed_ai.platform import (
     sync_dir as _sync_dir,
 )
 
@@ -47,7 +54,9 @@ def _check_unfollowed_ordinary_file(raw_path: Path | str) -> Path:
     try:
         info = abs_path.lstat()
     except FileNotFoundError as exc:
-        raise ValueError("Explicit assessor must be an existing ordinary file: " + str(abs_path)) from exc
+        raise ValueError(
+            "Explicit assessor must be an existing ordinary file: " + str(abs_path)
+        ) from exc
 
     if not stat.S_ISREG(info.st_mode):
         raise ValueError("Explicit assessor must be an existing ordinary file: " + str(abs_path))
@@ -172,7 +181,9 @@ def _json_text(value: Any) -> str:
 
 
 def _retain(output_dir: Path | str, previous: dict[str, Any], report: dict[str, Any]) -> str:
-    """Atomically publish one fresh occurrence directory without overwriting or leaving partial files."""
+    """Atomically publish one fresh occurrence directory without overwriting or leaving partial
+    files.
+    """
     target = _check_unfollowed_ancestors(output_dir, "Output directory", include_target=True)
     if target.exists() or _is_reparse_or_symlink(target):
         raise FileExistsError("Output directory already exists: " + str(target))
@@ -223,7 +234,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Override a named declaration root; repeat for different names",
     )
     parser.add_argument("--assessor", help="Optional explicit path to an assessor module")
-    parser.add_argument("--output-dir", help="Fresh requested directory; otherwise full report goes to stdout")
+    parser.add_argument(
+        "--output-dir", help="Fresh requested directory; otherwise full report goes to stdout"
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -249,7 +262,10 @@ def main(argv: list[str] | None = None) -> int:
                 "origins": _read_json(args.origins)
                 if args.origins
                 else {
-                    "scope": "Caller-supplied observations; origins were not provided or independently validated.",
+                    "scope": (
+                        "Caller-supplied observations; origins were not provided or independently "
+                        "validated."
+                    ),
                 },
             }
 

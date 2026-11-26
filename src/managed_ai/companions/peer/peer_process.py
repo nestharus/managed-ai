@@ -1,5 +1,4 @@
 """Platform-abstracted worker subprocess execution, pipe pumping, and process-group cleanup."""
-from __future__ import annotations
 
 import os
 import subprocess
@@ -52,9 +51,18 @@ def signal_group(item: dict[str, Any], kind: str) -> None:
     if kind not in ("term", "kill"):
         raise ValueError(f"unsupported process group signal kind: {kind!r}")
 
-    if kind == "term" and process.poll() is not None and not PLATFORM.should_signal_group_on_normal_exit:
+    if (
+        kind == "term"
+        and process.poll() is not None
+        and not PLATFORM.should_signal_group_on_normal_exit
+    ):
         return
-    if kind == "kill" and process.poll() is not None and not item["streams"] and not PLATFORM.should_signal_group_on_normal_exit:
+    if (
+        kind == "kill"
+        and process.poll() is not None
+        and not item["streams"]
+        and not PLATFORM.should_signal_group_on_normal_exit
+    ):
         return
 
     if signal_process_group(process, kind):
@@ -68,7 +76,7 @@ def spawn_worker_process(
     extra_env: dict[str, str],
     item: dict[str, Any],
     pipe_events: Any,
-) -> subprocess.Popen[bytes]:
+) -> subprocess.Popen[Any]:
     """Launch a worker in an isolated process group and start stdout/stderr reader threads."""
     popen_kwargs: dict[str, Any] = {
         "stdout": subprocess.PIPE,
@@ -79,7 +87,7 @@ def spawn_worker_process(
     }
 
     with request_path.open("rb") as incoming:
-        process = subprocess.Popen(command, stdin=incoming, **popen_kwargs)
+        process = subprocess.Popen(command, stdin=incoming, **popen_kwargs)  # noqa: S603
 
     item["process"] = process
     for channel in ("stdout", "stderr"):
@@ -99,7 +107,11 @@ def spawn_worker_process(
 def finish_worker_process(harness: Any, item: dict[str, Any], reason: str) -> None:
     """Terminate, reap, drain, and record a worker subprocess cleanly across platforms."""
     process = item["process"]
-    if PLATFORM.should_signal_group_on_normal_exit or reason != "completed" or process.poll() is None:
+    if (
+        PLATFORM.should_signal_group_on_normal_exit
+        or reason != "completed"
+        or process.poll() is None
+    ):
         signal_group(item, "term")
 
     grace = harness.limits["terminate_grace_seconds"]

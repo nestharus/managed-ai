@@ -4,12 +4,12 @@ Owns complete-body verification, precomputed module pins (P7-12), streaming
 prepared-index construction (P7-2), single-query discovery, and bounded batch
 discovery over a shared verified index image.
 """
-from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import tempfile
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from managed_ai.platform import publish_exclusive, sha256_file, sync_dir
@@ -30,7 +30,7 @@ from .format import (
     text,
 )
 from .index import PreparedIndex, RetainedSearch
-from .lexical import FtsAnalyzer, SEARCH_POLICY, SQLITE_ERRORS, search_query, sqlite3
+from .lexical import SEARCH_POLICY, SQLITE_ERRORS, FtsAnalyzer, search_query, sqlite3
 
 _DEFAULT_READ_BYTES = read_bytes
 _BATCH_ENCODER = json.JSONEncoder(sort_keys=True, ensure_ascii=False, indent=2, allow_nan=False)
@@ -42,7 +42,7 @@ MAX_BATCH_INPUT = DEFAULT_LIBRARY_CONFIG.batch.max_input_bytes
 MAX_BATCH_RESULT = DEFAULT_LIBRARY_CONFIG.batch.max_result_bytes
 
 
-def _resolve_read_bytes():
+def _resolve_read_bytes() -> Callable[[Path | str, int], bytes]:
     return read_bytes
 
 
@@ -173,7 +173,9 @@ class Library:
             "bodies": len(self.bodies),
             "modules": len(self.modules),
             "body_bytes": total,
-            "scope": "Exact complete bodies and declared required closure; no semantic adequacy claim.",
+            "scope": (
+                "Exact complete bodies and declared required closure; no semantic adequacy claim."
+            ),
         }
 
     def search_scope(self, scan_limit: int, max_bytes: int) -> tuple[list[str], list[str], int]:
@@ -210,6 +212,8 @@ class Library:
         }
 
     def _build_prepared_sqlite(self, staged: Path, basis: dict[str, Any]) -> None:
+        if sqlite3 is None:
+            raise ValueError("SQLite support unavailable; use ordinary BM25 discovery")
         max_index = self.config.search.max_index_bytes
         db = sqlite3.connect(staged)
 
@@ -217,7 +221,9 @@ class Library:
             db.execute("PRAGMA page_size=4096")
             db.execute("PRAGMA max_page_count=" + str(max_index // 4096))
             db.execute("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
-            db.execute("INSERT INTO metadata VALUES(?,?)", ("basis", encoded(basis).decode("utf-8")))
+            db.execute(
+                "INSERT INTO metadata VALUES(?,?)", ("basis", encoded(basis).decode("utf-8"))
+            )
 
             for table in ("body_docs", "module_docs"):
                 FtsAnalyzer.create(db, table, config=self.config.search)
@@ -240,7 +246,10 @@ class Library:
                 db.execute(f"INSERT INTO {table}({table}) VALUES('optimize')")
                 db.execute(f"INSERT INTO {table}({table}) VALUES('integrity-check')")
 
-            need(db.execute("PRAGMA integrity_check").fetchall() == [("ok",)], "prepared index integrity check failed")
+            need(
+                db.execute("PRAGMA integrity_check").fetchall() == [("ok",)],
+                "prepared index integrity check failed",
+            )
             db.commit()
             db.execute("VACUUM")
         finally:
@@ -273,7 +282,10 @@ class Library:
             self._build_prepared_sqlite(staged, basis)
 
             staged_size = staged.lstat().st_size
-            need(staged_size <= self.config.search.max_index_bytes, "file exceeds byte bound: " + str(staged))
+            need(
+                staged_size <= self.config.search.max_index_bytes,
+                "file exceeds byte bound: " + str(staged),
+            )
             index_sha = sha256_file(staged)
 
             with staged.open("r+b") as stream:
@@ -294,10 +306,13 @@ class Library:
                 },
                 "basis": basis,
                 "omitted_body_ids": omitted,
-                "source_verification": "Every indexed complete body read and hash-verified during this build.",
+                "source_verification": "Every indexed complete body read and "
+                "hash-verified during this build.",
                 "scope": (
-                    "Disposable lexical derivative, not source custody. Select this actual build receipt; "
-                    "a self-declared index digest does not warrant its construction. Exact acquisition still uses show."
+                    "Disposable lexical derivative, not source custody. Select this actual build "
+                    "receipt; "
+                    "a self-declared index digest does not warrant its construction. Exact "
+                    "acquisition still uses show."
                 ),
             }
         finally:
@@ -367,6 +382,10 @@ class Library:
         reader = _resolve_read_bytes()
 
         if index is not None:
+            if index_sha256 is None:
+                raise ValueError(
+                    "prepared index path and expected digest must be supplied together"
+                )
             prepared = PreparedIndex(
                 index,
                 index_sha256,
@@ -401,8 +420,10 @@ class Library:
                 config=self.config,
             )
 
-        assert self._search_cache is not None
-        body_hits, mod_hits = self._search_cache.search(parsed)
+        cache = self._search_cache
+        if cache is None:
+            raise RuntimeError("retained search cache was not initialized")
+        body_hits, mod_hits = cache.search(parsed)
         return body_hits, mod_hits, reusable, 0
 
     def _retained_preparation_metadata(self) -> dict[str, Any]:
@@ -417,7 +438,11 @@ class Library:
                 "retain bodies read and hash-verified when this catalogue and selected corpus were "
                 "prepared. Use show for fresh exact acquisition."
             ),
-            "lifetime": "Retained until a different corpus replaces this catalogue's index, or close() ends the instance.",
+            "lifetime": (
+                "Retained until a different corpus replaces this catalogue's index, or close() "
+                "ends "
+                "the instance."
+            ),
         }
 
     def _discover(
@@ -447,7 +472,11 @@ class Library:
             sha(index_sha256)
 
         parsed = search_query(query, backend, config=cfg)
-        searchable = bool(parsed["terms"] or parsed["phrases"]) or query in self.bodies or query in self.modules
+        searchable = (
+            bool(parsed["terms"] or parsed["phrases"])
+            or query in self.bodies
+            or query in self.modules
+        )
         examined, omitted, byte_count = (
             self.search_scope(scan_limit, max_bytes) if searchable else ([], list(self.bodies), 0)
         )
@@ -458,9 +487,19 @@ class Library:
         if allow_retained_scope and searchable and reusable and self._search_cache is not None:
             matches, module_matches = self._search_cache.search(parsed)
             return self._discovery_result(
-                query, parsed, matches, module_matches, examined, omitted, byte_count,
-                limit=limit, scan_limit=scan_limit, max_bytes=max_bytes, backend=backend,
-                preparation=self._retained_preparation_metadata(), indexed=True,
+                query,
+                parsed,
+                matches,
+                module_matches,
+                examined,
+                omitted,
+                byte_count,
+                limit=limit,
+                scan_limit=scan_limit,
+                max_bytes=max_bytes,
+                backend=backend,
+                preparation=self._retained_preparation_metadata(),
+                indexed=True,
             )
 
         documents: list[dict[str, Any]] = []
@@ -476,28 +515,51 @@ class Library:
         ]
 
         matches, module_matches, reused, index_bytes = self._run_search_backend(
-            parsed, scope, documents, module_documents,
-            searchable=searchable, reusable=reusable, backend=backend,
-            index=index, index_sha256=index_sha256, scan_limit=scan_limit, max_bytes=max_bytes,
+            parsed,
+            scope,
+            documents,
+            module_documents,
+            searchable=searchable,
+            reusable=reusable,
+            backend=backend,
+            index=index,
+            index_sha256=index_sha256,
+            scan_limit=scan_limit,
+            max_bytes=max_bytes,
         )
 
         preparation = {
-            "storage": "pinned external contentless index" if index is not None else "in-memory Library instance only",
+            "storage": "pinned external contentless index"
+            if index is not None
+            else "in-memory Library instance only",
             "reused": reused,
             "index_sha256": index_sha256,
             "index_read_bytes": index_bytes,
             "index_verified": bool(index_bytes),
             "source_verification": (
-                "No canonical source bodies read on this call. Indexed nomination relies on the selected build; "
-                "index_verified states whether its bytes and basis were checked. Use show or verify for current exact acquisition."
+                "No canonical source bodies read on this call. Indexed nomination relies on the "
+                "selected build; "
+                "index_verified states whether its bytes and basis were checked. Use show or "
+                "verify "
+                "for current exact acquisition."
                 if index is not None
                 else "Every examined complete body read and hash-verified on this call."
             ),
         }
         return self._discovery_result(
-            query, parsed, matches, module_matches, examined, omitted, byte_count,
-            limit=limit, scan_limit=scan_limit, max_bytes=max_bytes, backend=backend,
-            preparation=preparation, indexed=index is not None,
+            query,
+            parsed,
+            matches,
+            module_matches,
+            examined,
+            omitted,
+            byte_count,
+            limit=limit,
+            scan_limit=scan_limit,
+            max_bytes=max_bytes,
+            backend=backend,
+            preparation=preparation,
+            indexed=index is not None,
         )
 
     def _validate_batch_inputs(
@@ -528,7 +590,11 @@ class Library:
         for query in queries:
             text(query, "query", scfg.max_query_bytes)
             parsed = search_query(query, "fts5", config=scfg)
-            searchable = bool(parsed["terms"] or parsed["phrases"]) or query in self.bodies or query in self.modules
+            searchable = (
+                bool(parsed["terms"] or parsed["phrases"])
+                or query in self.bodies
+                or query in self.modules
+            )
             questions.append((query, parsed, searchable))
 
         batch_json_size(queries, bcfg.max_input_bytes - 1)
@@ -547,7 +613,13 @@ class Library:
     ) -> dict[str, Any]:
         """Nominate bounded questions from one explicitly shared, verified index image."""
         questions = self._validate_batch_inputs(
-            queries, index, index_sha256, limit, scan_limit, max_bytes, max_result_bytes,
+            queries,
+            index,
+            index_sha256,
+            limit,
+            scan_limit,
+            max_bytes,
+            max_result_bytes,
         )
 
         prepared: PreparedIndex | None = None
@@ -580,10 +652,13 @@ class Library:
                     "index_opens": int(prepared is not None),
                     "index_read_bytes": prepared.bytes if prepared is not None else 0,
                     "canonical_body_read_bytes": 0,
-                    "lifetime": "This call only; the shared image is closed before return or refusal.",
+                    "lifetime": "This call only; the shared image is "
+                    "closed before return or refusal.",
                     "source_verification": (
-                        "No canonical source bodies read. Searchable questions share one verified derivative "
-                        "and its exact catalogue/analyzer/scope basis. The selected build warrants the postings; "
+                        "No canonical source bodies read. Searchable questions share one verified "
+                        "derivative "
+                        "and its exact catalogue/analyzer/scope basis. The selected build warrants "
+                        "the postings; "
                         "use show or verify for current exact acquisition."
                     ),
                 },
@@ -616,17 +691,32 @@ class Library:
                     "index_acquisition": (
                         "Shared batch preparation; zero additional image reads for this question."
                         if searchable
-                        else "No searchable units or exact identity; this question did not require the image."
+                        else (
+                            "No searchable units or exact identity; this question did not require "
+                            "the image."
+                        )
                     ),
                     "source_verification": (
-                        "No canonical source bodies read. Image verification and acquisition, when needed, "
-                        "are accounted for once in the enclosing batch. Use show or verify for current exact acquisition."
+                        "No canonical source bodies read. Image verification and acquisition, when "
+                        "needed, "
+                        "are accounted for once in the enclosing batch. Use show or verify for "
+                        "current exact acquisition."
                     ),
                 }
                 found = self._discovery_result(
-                    query, parsed, matches, module_matches, examined, excluded, body_bytes,
-                    limit=limit, scan_limit=scan_limit, max_bytes=max_bytes,
-                    backend="fts5", preparation=preparation, indexed=True,
+                    query,
+                    parsed,
+                    matches,
+                    module_matches,
+                    examined,
+                    excluded,
+                    body_bytes,
+                    limit=limit,
+                    scan_limit=scan_limit,
+                    max_bytes=max_bytes,
+                    backend="fts5",
+                    preparation=preparation,
+                    indexed=True,
                 )
 
                 separator_bytes = 4 if not result["results"] else 2
@@ -668,14 +758,16 @@ class Library:
 
         for ident, match in matches.items():
             row = self.bodies[ident]
-            rows.append({
-                "pin": self.pin(row),
-                "title": row["title"],
-                "summary": row["summary"],
-                **match,
-                "bytes": row["bytes"],
-                "exact_identity": query == ident,
-            })
+            rows.append(
+                {
+                    "pin": self.pin(row),
+                    "title": row["title"],
+                    "summary": row["summary"],
+                    **match,
+                    "bytes": row["bytes"],
+                    "exact_identity": query == ident,
+                }
+            )
 
         rows.sort(key=lambda row: (not row["exact_identity"], -row["score"], row["pin"]["id"]))
         matched_ids = {row["pin"]["id"] for row in rows}
@@ -685,14 +777,16 @@ class Library:
             hits = [x for x in row["members"] if x in matched_ids]
             if hits or row["id"] in module_matches:
                 match = module_matches.get(row["id"], {"score": 0.0, "matched_terms": []})
-                modules.append({
-                    "pin": self.pin(row, "module"),
-                    "title": row["title"],
-                    "purpose": row["purpose"],
-                    "matching_members": hits,
-                    "members": len(row["members"]),
-                    **match,
-                })
+                modules.append(
+                    {
+                        "pin": self.pin(row, "module"),
+                        "title": row["title"],
+                        "purpose": row["purpose"],
+                        "matching_members": hits,
+                        "members": len(row["members"]),
+                        **match,
+                    }
+                )
 
         if backend != "literal":
             modules.sort(
@@ -720,7 +814,9 @@ class Library:
             "coverage": {
                 "examined_bodies": len(examined),
                 "examined_body_bytes": 0 if indexed else byte_count,
-                "body_examination": "prepared text-index representations" if indexed else "complete source bodies",
+                "body_examination": "prepared text-index representations"
+                if indexed
+                else "complete source bodies",
                 "indexed_body_bytes": byte_count if indexed else 0,
                 "verified_bodies": 0 if indexed else len(examined),
                 "matched_bodies": len(rows),
@@ -731,7 +827,9 @@ class Library:
                 "limits": {"results": limit, "bodies": scan_limit, "body_bytes": max_bytes},
             },
             "scope": (
-                "Ranked lexical candidates and authored module membership nominate routes within the examined scope. "
-                "Scores are not relevance probabilities. Complete-body reading, semantic fit and effect authority remain separate."
+                "Ranked lexical candidates and authored module membership nominate routes within "
+                "the examined scope. "
+                "Scores are not relevance probabilities. Complete-body reading, semantic fit and "
+                "effect authority remain separate."
             ),
         }
