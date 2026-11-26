@@ -3,11 +3,10 @@
 Owned directly by managed_ai.platform (stdlib-only leaf package) so every
 runtime layer shares one explicit, verifiable OS boundary.
 """
-from __future__ import annotations
 
+import os
 from collections.abc import Iterable, Mapping
 from enum import Enum
-import os
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 

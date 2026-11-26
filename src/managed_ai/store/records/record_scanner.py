@@ -1,12 +1,15 @@
 """Parallel and indexed record head scanners extracted from RecordStore."""
-from __future__ import annotations
 
 import errno
 import hashlib
 import hmac
+import mmap
 import os
-from pathlib import Path
 import stat
+from collections.abc import Callable, Iterable, Iterator
+from pathlib import Path
+from types import TracebackType
+from typing import Any
 
 from managed_ai.core.formats import HEAD_INDEX_FORMAT
 from managed_ai.core.ownership import packet_id
@@ -22,48 +25,54 @@ from managed_ai.store.records.head_index import build_entry
 from managed_ai.store.records.head_index_bin import HeadIndexView
 from managed_ai.store.records.head_receipts import MIN_BYTES
 
-_SUMMARY_KEYS = ('format', 'id', 'kind', 'sha256', 'revision', 'basis', 'active')
+_SUMMARY_KEYS = ("format", "id", "kind", "sha256", "revision", "basis", "active")
 
 
-def chunk_map(items: list, fn, *, max_workers: int = 8, min_parallel: int = 16) -> list:
+def chunk_map[T, R](
+    items: list[T],
+    fn: Callable[[list[T]], list[R]],
+    *,
+    max_workers: int = 8,
+    min_parallel: int = 16,
+) -> list[R]:
     if len(items) < min_parallel:
         return fn(items)
 
     workers = min(max_workers, len(items))
     step = (len(items) + workers - 1) // workers
-    chunks = [items[i:i + step] for i in range(0, len(items), step)]
+    chunks = [items[i : i + step] for i in range(0, len(items), step)]
     if len(chunks) <= 1:
         return fn(items)
 
     from concurrent.futures import ThreadPoolExecutor
 
-    out: list = []
+    out: list[R] = []
     with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
         for batch in pool.map(fn, chunks):
             out.extend(batch)
     return out
 
 
-def validated_records_dir_win(store) -> tuple[Path, str]:
-    records_dir = store.ex.path('records')
+def validated_records_dir_win(store: Any) -> tuple[Path, str]:
+    records_dir = store.ex.path("records")
     try:
         dir_info = records_dir.lstat()
     except OSError:
-        raise ValueError(f'ordinary records directory required: {records_dir}') from None
+        raise ValueError(f"ordinary records directory required: {records_dir}") from None
 
     if not is_ordinary_dir_stat(dir_info):
-        raise ValueError(f'ordinary records directory required: {records_dir}')
+        raise ValueError(f"ordinary records directory required: {records_dir}")
     return records_dir, str(records_dir)
 
 
 def read_verified_win(
-    store,
+    store: Any,
     dir_str: str,
     ident: str,
     *,
     allow_cold: bool = True,
-) -> tuple[dict, bytes, os.stat_result | None]:
-    filename = packet_id(ident) + '.json'
+) -> tuple[dict[str, Any], bytes, os.stat_result | None]:
+    filename = packet_id(ident) + ".json"
     full_str = dir_str + os.sep + filename
     try:
         info = os.lstat(full_str)
@@ -71,14 +80,14 @@ def read_verified_win(
         if allow_cold and store.cold_archive.has(ident):
             record, raw = store.cold_archive.read(ident)
             return record, raw, None
-        raise ValueError(f'ordinary JSON file required: {full_str}') from None
+        raise ValueError(f"ordinary JSON file required: {full_str}") from None
     except OSError:
-        raise ValueError(f'ordinary JSON file required: {full_str}') from None
+        raise ValueError(f"ordinary JSON file required: {full_str}") from None
 
     if not is_ordinary_file_stat(info):
-        raise ValueError(f'ordinary JSON file required: {full_str}')
+        raise ValueError(f"ordinary JSON file required: {full_str}")
 
-    with open(full_str, 'rb') as stream:
+    with open(full_str, "rb") as stream:
         raw = stream.read()
 
     record = parse_input_bytes(raw, Path(full_str))
@@ -86,19 +95,21 @@ def read_verified_win(
     return record, raw, info
 
 
-def _read_dir_fd_raw(filename: str, full_path: Path, records_fd: int) -> tuple[bytes, os.stat_result]:
+def _read_dir_fd_raw(
+    filename: str, full_path: Path, records_fd: int
+) -> tuple[bytes, os.stat_result]:
     try:
         fd = os.open(filename, _OPEN_RO_NOFOLLOW, dir_fd=records_fd)
     except OSError as exc:
         if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
-            raise ValueError(f'ordinary JSON file required: {full_path}') from None
+            raise ValueError(f"ordinary JSON file required: {full_path}") from None
         raise
 
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
-            raise ValueError(f'ordinary JSON file required: {full_path}')
-        stream = os.fdopen(fd, 'rb')
+            raise ValueError(f"ordinary JSON file required: {full_path}")
+        stream = os.fdopen(fd, "rb")
     except BaseException:
         os.close(fd)
         raise
@@ -107,9 +118,16 @@ def _read_dir_fd_raw(filename: str, full_path: Path, records_fd: int) -> tuple[b
         return stream.read(), info
 
 
-def read_scoped_one(store, ident: str, needs_body, indexed, records_fd: int | None, view: HeadIndexView | None = None):
-    filename = packet_id(ident) + '.json'
-    full_path = store.work / 'records' / filename
+def read_scoped_one(
+    store: Any,
+    ident: str,
+    needs_body: Callable[[str, str], bool],
+    indexed: dict[str, dict[str, Any]] | None,
+    records_fd: int | None,
+    view: HeadIndexView | None = None,
+) -> dict[str, Any]:
+    filename = packet_id(ident) + ".json"
+    full_path = store.work / "records" / filename
 
     if view is not None:
         entry = view.delta_puts.get(ident)
@@ -118,19 +136,19 @@ def read_scoped_one(store, ident: str, needs_body, indexed, records_fd: int | No
             slot = view.slot_for_id(ident)
 
         if entry is not None:
-            if not needs_body(ident, entry['kind']):
-                if hasattr(os, 'O_NOFOLLOW') and records_fd is not None:
+            if not needs_body(ident, entry["kind"]):
+                if hasattr(os, "O_NOFOLLOW") and records_fd is not None:
                     raw, _ = _read_dir_fd_raw(filename, full_path, records_fd)
                 else:
                     try:
                         info = full_path.lstat()
                     except OSError:
-                        raise ValueError(f'ordinary JSON file required: {full_path}') from None
+                        raise ValueError(f"ordinary JSON file required: {full_path}") from None
                     if not is_ordinary_file_stat(info):
-                        raise ValueError(f'ordinary JSON file required: {full_path}')
+                        raise ValueError(f"ordinary JSON file required: {full_path}")
                     raw = full_path.read_bytes()
 
-                if hmac.compare_digest(sha(raw), entry['raw_sha256']):
+                if hmac.compare_digest(sha(raw), entry["raw_sha256"]):
                     return {k: entry[k] for k in _SUMMARY_KEYS}
 
                 record = parse_input_bytes(raw, full_path)
@@ -139,15 +157,15 @@ def read_scoped_one(store, ident: str, needs_body, indexed, records_fd: int | No
         elif slot >= 0:
             kind = view.slot_kind_name(slot)
             if not needs_body(ident, kind):
-                if hasattr(os, 'O_NOFOLLOW') and records_fd is not None:
+                if hasattr(os, "O_NOFOLLOW") and records_fd is not None:
                     raw, _ = _read_dir_fd_raw(filename, full_path, records_fd)
                 else:
                     try:
                         info = full_path.lstat()
                     except OSError:
-                        raise ValueError(f'ordinary JSON file required: {full_path}') from None
+                        raise ValueError(f"ordinary JSON file required: {full_path}") from None
                     if not is_ordinary_file_stat(info):
-                        raise ValueError(f'ordinary JSON file required: {full_path}')
+                        raise ValueError(f"ordinary JSON file required: {full_path}")
                     raw = full_path.read_bytes()
 
                 raw_sha_bin = view.slot_tuple(slot)[19]
@@ -160,32 +178,36 @@ def read_scoped_one(store, ident: str, needs_body, indexed, records_fd: int | No
 
     if indexed is not None and ident in indexed:
         entry = indexed[ident]
-        if not needs_body(ident, entry['kind']):
-            if hasattr(os, 'O_NOFOLLOW') and records_fd is not None:
+        if not needs_body(ident, entry["kind"]):
+            if hasattr(os, "O_NOFOLLOW") and records_fd is not None:
                 raw, _ = _read_dir_fd_raw(filename, full_path, records_fd)
             else:
                 try:
                     info = full_path.lstat()
                 except OSError:
-                    raise ValueError(f'ordinary JSON file required: {full_path}') from None
+                    raise ValueError(f"ordinary JSON file required: {full_path}") from None
                 if not is_ordinary_file_stat(info):
-                    raise ValueError(f'ordinary JSON file required: {full_path}')
+                    raise ValueError(f"ordinary JSON file required: {full_path}")
                 raw = full_path.read_bytes()
 
-            if hmac.compare_digest(sha(raw), entry['raw_sha256']):
+            if hmac.compare_digest(sha(raw), entry["raw_sha256"]):
                 return {k: entry[k] for k in _SUMMARY_KEYS}
 
             record = parse_input_bytes(raw, full_path)
             store._verify_record(ident, record, raw)
             return record
 
-    if hasattr(os, 'O_NOFOLLOW') and records_fd is not None:
+    if hasattr(os, "O_NOFOLLOW") and records_fd is not None:
         raw, info = _read_dir_fd_raw(filename, full_path, records_fd)
         if info.st_size >= MIN_BYTES and not store.receipts._xattr_unsupported:
-            projection = store.receipts.projection(full_path, ident, store.format, size=info.st_size)
+            projection = store.receipts.projection(
+                full_path, ident, store.format, size=info.st_size
+            )
             if projection is not None:
                 summary, raw_digest = projection
-                if not needs_body(ident, summary['kind']) and hmac.compare_digest(sha(raw), raw_digest):
+                if not needs_body(ident, summary["kind"]) and hmac.compare_digest(
+                    sha(raw), raw_digest
+                ):
                     return summary
 
         record = parse_input_bytes(raw, full_path)
@@ -196,13 +218,15 @@ def read_scoped_one(store, ident: str, needs_body, indexed, records_fd: int | No
     projection = store.receipts.projection(path, ident, store.format)
     if projection is not None:
         summary, raw_digest = projection
-        if not needs_body(ident, summary['kind']) and store.receipts.matches(path, raw_digest):
+        if not needs_body(ident, summary["kind"]) and store.receipts.matches(path, raw_digest):
             return summary
 
     return store.show(ident)
 
 
-def scoped_heads(store, needs_body, *, max_workers: int = 16):
+def scoped_heads(
+    store: Any, needs_body: Callable[[str, str], bool], *, max_workers: int = 16
+) -> Iterator[dict[str, Any]]:
     """Yield cryptographically verified scope/status fields and full records for nominated roles."""
     idents = store.ids()
     if not idents:
@@ -211,11 +235,14 @@ def scoped_heads(store, needs_body, *, max_workers: int = 16):
     view = store.index.open_view(store.format)
     indexed = None if view is not None else store.index.load(store.format)
     try:
-        if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
-            with store.ex.open_workspace_dir('records') as records_fd:
+        if hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY"):
+            with store.ex.open_workspace_dir("records") as records_fd:
                 results = chunk_map(
                     idents,
-                    lambda chunk: [read_scoped_one(store, i, needs_body, indexed, records_fd, view) for i in chunk],
+                    lambda chunk: [
+                        read_scoped_one(store, i, needs_body, indexed, records_fd, view)
+                        for i in chunk
+                    ],
                     max_workers=min(max_workers, 8),
                 )
             yield from results
@@ -223,8 +250,8 @@ def scoped_heads(store, needs_body, *, max_workers: int = 16):
 
         _, dir_str = validated_records_dir_win(store)
 
-        def scoped_win_chunk(chunk):
-            out = []
+        def scoped_win_chunk(chunk: list[str]) -> list[dict[str, Any]]:
+            out: list[dict[str, Any]] = []
             for ident in chunk:
                 if view is not None:
                     entry = view.delta_puts.get(ident)
@@ -232,17 +259,17 @@ def scoped_heads(store, needs_body, *, max_workers: int = 16):
                     if entry is None and ident not in view.delta_dels:
                         slot = view.slot_for_id(ident)
 
-                    if entry is not None and not needs_body(ident, entry['kind']):
-                        full_str = dir_str + os.sep + ident + '.json'
+                    if entry is not None and not needs_body(ident, entry["kind"]):
+                        full_str = dir_str + os.sep + ident + ".json"
                         try:
                             info = os.lstat(full_str)
                         except OSError:
-                            raise ValueError(f'ordinary JSON file required: {full_str}') from None
+                            raise ValueError(f"ordinary JSON file required: {full_str}") from None
                         if not is_ordinary_file_stat(info):
-                            raise ValueError(f'ordinary JSON file required: {full_str}')
-                        with open(full_str, 'rb') as stream:
+                            raise ValueError(f"ordinary JSON file required: {full_str}")
+                        with open(full_str, "rb") as stream:
                             raw = stream.read()
-                        if hmac.compare_digest(sha(raw), entry['raw_sha256']):
+                        if hmac.compare_digest(sha(raw), entry["raw_sha256"]):
                             out.append({k: entry[k] for k in _SUMMARY_KEYS})
                             continue
                         record = parse_input_bytes(raw, Path(full_str))
@@ -251,14 +278,14 @@ def scoped_heads(store, needs_body, *, max_workers: int = 16):
                         continue
 
                     if slot >= 0 and not needs_body(ident, view.slot_kind_name(slot)):
-                        full_str = dir_str + os.sep + ident + '.json'
+                        full_str = dir_str + os.sep + ident + ".json"
                         try:
                             info = os.lstat(full_str)
                         except OSError:
-                            raise ValueError(f'ordinary JSON file required: {full_str}') from None
+                            raise ValueError(f"ordinary JSON file required: {full_str}") from None
                         if not is_ordinary_file_stat(info):
-                            raise ValueError(f'ordinary JSON file required: {full_str}')
-                        with open(full_str, 'rb') as stream:
+                            raise ValueError(f"ordinary JSON file required: {full_str}")
+                        with open(full_str, "rb") as stream:
                             raw = stream.read()
                         raw_sha_bin = view.slot_tuple(slot)[19]
                         if hmac.compare_digest(hashlib.sha256(raw).digest(), raw_sha_bin):
@@ -270,18 +297,18 @@ def scoped_heads(store, needs_body, *, max_workers: int = 16):
                         continue
 
                 entry = indexed.get(ident) if indexed is not None else None
-                if entry is not None and not needs_body(ident, entry['kind']):
-                    full_str = dir_str + os.sep + ident + '.json'
+                if entry is not None and not needs_body(ident, entry["kind"]):
+                    full_str = dir_str + os.sep + ident + ".json"
                     try:
                         info = os.lstat(full_str)
                     except OSError:
-                        raise ValueError(f'ordinary JSON file required: {full_str}') from None
+                        raise ValueError(f"ordinary JSON file required: {full_str}") from None
                     if not is_ordinary_file_stat(info):
-                        raise ValueError(f'ordinary JSON file required: {full_str}')
+                        raise ValueError(f"ordinary JSON file required: {full_str}")
 
-                    with open(full_str, 'rb') as stream:
+                    with open(full_str, "rb") as stream:
                         raw = stream.read()
-                    if hmac.compare_digest(sha(raw), entry['raw_sha256']):
+                    if hmac.compare_digest(sha(raw), entry["raw_sha256"]):
                         out.append({k: entry[k] for k in _SUMMARY_KEYS})
                         continue
 
@@ -320,7 +347,12 @@ class VerifiedIndexView:
     def __enter__(self) -> VerifiedIndexView:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         self.close()
 
     def close(self) -> None:
@@ -348,21 +380,21 @@ class VerifiedIndexView:
 
 
 def _advance_slot_cursor(
-    mm,
+    mm: mmap.mmap,
     slot_base: int,
     str_base: int,
     rec_count: int,
     cursor: int,
     target: bytes,
 ) -> tuple[int, int]:
-    """O(1) amortized sorted merge-walk over sorted 128B mmap slots; returns (matched_slot_or_neg1, next_cursor)."""
+    """O(1) amortized merge-walk over 128B mmap slots; returns (slot_or_neg1, next_cursor)."""
     from managed_ai.store.records.head_index_bin import _SLOT_ID_STRUCT, _SLOT_SIZE
 
     unpack_id = _SLOT_ID_STRUCT.unpack_from
     while cursor < rec_count:
         id_off, id_len = unpack_id(mm, slot_base + cursor * _SLOT_SIZE)
         start = str_base + id_off
-        cur = mm[start:start + id_len]
+        cur = mm[start : start + id_len]
         if cur < target:
             cursor += 1
         elif cur == target:
@@ -372,7 +404,9 @@ def _advance_slot_cursor(
     return -1, cursor
 
 
-def _verify_view_posix_chunk(store, view: HeadIndexView, records_fd: int, chunk: list[str]) -> list[tuple[str, dict]]:
+def _verify_view_posix_chunk(
+    store: Any, view: HeadIndexView, records_fd: int, chunk: list[str]
+) -> list[tuple[str, dict[str, Any]]]:
     if not chunk:
         return []
 
@@ -389,7 +423,11 @@ def _verify_view_posix_chunk(store, view: HeadIndexView, records_fd: int, chunk:
     )
 
     platform_key = PLATFORM.platform_key
-    expected_plat_code = _PLATFORM_POSIX if platform_key == 'posix' else (_PLATFORM_NT if platform_key == 'nt' else -1)
+    expected_plat_code = (
+        _PLATFORM_POSIX
+        if platform_key == "posix"
+        else (_PLATFORM_NT if platform_key == "nt" else -1)
+    )
     delta_puts = view.delta_puts
     delta_dels = view.delta_dels
     overrides: list[tuple[str, dict]] = []
@@ -407,27 +445,35 @@ def _verify_view_posix_chunk(store, view: HeadIndexView, records_fd: int, chunk:
         slot = -1
         if delta_entry is None and ident not in delta_dels:
             slot, cursor = _advance_slot_cursor(
-                mm, slot_base, str_base, rec_count, cursor, ident.encode('utf-8'),
+                mm,
+                slot_base,
+                str_base,
+                rec_count,
+                cursor,
+                ident.encode("utf-8"),
             )
 
-        filename = (ident if (delta_entry is not None or slot >= 0) else packet_id(ident)) + '.json'
-        full_path = store.work / 'records' / filename
+        filename = (ident if (delta_entry is not None or slot >= 0) else packet_id(ident)) + ".json"
+        full_path = store.work / "records" / filename
         try:
             info = os.stat(filename, dir_fd=records_fd, follow_symlinks=False)
         except OSError as exc:
             if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR):
-                raise ValueError(f'ordinary JSON file required: {full_path}') from None
+                raise ValueError(f"ordinary JSON file required: {full_path}") from None
             raise
 
         if not stat.S_ISREG(info.st_mode):
-            raise ValueError(f'ordinary JSON file required: {full_path}')
+            raise ValueError(f"ordinary JSON file required: {full_path}")
 
         if delta_entry is not None:
             if _entry_metadata_matches(store, ident, delta_entry, info):
-                if delta_entry.get('ino') == info.st_ino and delta_entry.get('platform', platform_key) == platform_key:
+                if (
+                    delta_entry.get("ino") == info.st_ino
+                    and delta_entry.get("platform", platform_key) == platform_key
+                ):
                     continue
                 raw, _ = _read_dir_fd_raw(filename, full_path, records_fd)
-                if hmac.compare_digest(sha(raw), delta_entry['raw_sha256']):
+                if hmac.compare_digest(sha(raw), delta_entry["raw_sha256"]):
                     continue
                 record = parse_input_bytes(raw, full_path)
                 store._verify_record(ident, record, raw)
@@ -441,7 +487,10 @@ def _verify_view_posix_chunk(store, view: HeadIndexView, records_fd: int, chunk:
                 plat_code = (slot_flags & _PLATFORM_MASK) >> _PLATFORM_SHIFT
                 if ino_val == info.st_ino and (
                     plat_code == expected_plat_code
-                    or (expected_plat_code < 0 and view.slot_platform(slot, slot_flags) == platform_key)
+                    or (
+                        expected_plat_code < 0
+                        and view.slot_platform(slot, slot_flags) == platform_key
+                    )
                 ):
                     continue
                 raw, _ = _read_dir_fd_raw(filename, full_path, records_fd)
@@ -458,7 +507,9 @@ def _verify_view_posix_chunk(store, view: HeadIndexView, records_fd: int, chunk:
     return overrides
 
 
-def _verify_view_win_chunk(store, view: HeadIndexView, dir_str: str, chunk: list[str]) -> list[tuple[str, dict]]:
+def _verify_view_win_chunk(
+    store: Any, view: HeadIndexView, dir_str: str, chunk: list[str]
+) -> list[tuple[str, dict[str, Any]]]:
     if not chunk:
         return []
 
@@ -475,7 +526,11 @@ def _verify_view_win_chunk(store, view: HeadIndexView, dir_str: str, chunk: list
     )
 
     platform_key = PLATFORM.platform_key
-    expected_plat_code = _PLATFORM_POSIX if platform_key == 'posix' else (_PLATFORM_NT if platform_key == 'nt' else -1)
+    expected_plat_code = (
+        _PLATFORM_POSIX
+        if platform_key == "posix"
+        else (_PLATFORM_NT if platform_key == "nt" else -1)
+    )
     delta_puts = view.delta_puts
     delta_dels = view.delta_dels
     overrides: list[tuple[str, dict]] = []
@@ -493,26 +548,34 @@ def _verify_view_win_chunk(store, view: HeadIndexView, dir_str: str, chunk: list
         slot = -1
         if delta_entry is None and ident not in delta_dels:
             slot, cursor = _advance_slot_cursor(
-                mm, slot_base, str_base, rec_count, cursor, ident.encode('utf-8'),
+                mm,
+                slot_base,
+                str_base,
+                rec_count,
+                cursor,
+                ident.encode("utf-8"),
             )
 
-        filename = (ident if (delta_entry is not None or slot >= 0) else packet_id(ident)) + '.json'
+        filename = (ident if (delta_entry is not None or slot >= 0) else packet_id(ident)) + ".json"
         full_str = dir_str + os.sep + filename
         try:
             info = os.lstat(full_str)
         except OSError:
-            raise ValueError(f'ordinary JSON file required: {full_str}') from None
+            raise ValueError(f"ordinary JSON file required: {full_str}") from None
 
         if not is_ordinary_file_stat(info):
-            raise ValueError(f'ordinary JSON file required: {full_str}')
+            raise ValueError(f"ordinary JSON file required: {full_str}")
 
         if delta_entry is not None:
             if _entry_metadata_matches(store, ident, delta_entry, info):
-                if delta_entry.get('ino') == info.st_ino and delta_entry.get('platform', platform_key) == platform_key:
+                if (
+                    delta_entry.get("ino") == info.st_ino
+                    and delta_entry.get("platform", platform_key) == platform_key
+                ):
                     continue
-                with open(full_str, 'rb') as stream:
+                with open(full_str, "rb") as stream:
                     raw = stream.read()
-                if hmac.compare_digest(sha(raw), delta_entry['raw_sha256']):
+                if hmac.compare_digest(sha(raw), delta_entry["raw_sha256"]):
                     continue
                 record = parse_input_bytes(raw, Path(full_str))
                 store._verify_record(ident, record, raw)
@@ -526,10 +589,13 @@ def _verify_view_win_chunk(store, view: HeadIndexView, dir_str: str, chunk: list
                 plat_code = (slot_flags & _PLATFORM_MASK) >> _PLATFORM_SHIFT
                 if ino_val == info.st_ino and (
                     plat_code == expected_plat_code
-                    or (expected_plat_code < 0 and view.slot_platform(slot, slot_flags) == platform_key)
+                    or (
+                        expected_plat_code < 0
+                        and view.slot_platform(slot, slot_flags) == platform_key
+                    )
                 ):
                     continue
-                with open(full_str, 'rb') as stream:
+                with open(full_str, "rb") as stream:
                     raw = stream.read()
                 if hmac.compare_digest(hashlib.sha256(raw).digest(), view.slot_raw_sha_bin(slot)):
                     continue
@@ -544,7 +610,7 @@ def _verify_view_win_chunk(store, view: HeadIndexView, dir_str: str, chunk: list
     return overrides
 
 
-def open_verified_index_view(store, *, max_workers: int = 16) -> VerifiedIndexView | None:
+def open_verified_index_view(store: Any, *, max_workers: int = 16) -> VerifiedIndexView | None:
     """Open a binary v3 HeadIndexView and verify hot record freshness in zero-copy mmap."""
     view = store.index.open_view(store.format)
     if view is None:
@@ -552,14 +618,14 @@ def open_verified_index_view(store, *, max_workers: int = 16) -> VerifiedIndexVi
 
     try:
         raw_idents = store.ids()
-        # HeadIndex v3 slots are sorted by UTF-8 bare ID (head_index_bin.py:build_binary_image), whereas
-        # RecordStore.ids() preserves legacy <id>.json filename order; sort for O(N) merge-walk while
-        # keeping raw_idents on VerifiedIndexView.live_ids for exact unindexed status() order parity.
-        sorted_idents = sorted(raw_idents, key=lambda ident: ident.encode('utf-8'))
+        # HeadIndex v3 slots are sorted by UTF-8 bare ID (build_binary_image), whereas
+        # RecordStore.ids() preserves legacy <id>.json filename order; sort for O(N) merge-walk
+        # while keeping raw_idents on VerifiedIndexView.live_ids for exact status() order parity.
+        sorted_idents = sorted(raw_idents, key=lambda ident: ident.encode("utf-8"))
         overrides: dict[str, dict] = {}
         if sorted_idents:
-            if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
-                with store.ex.open_workspace_dir('records') as records_fd:
+            if hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY"):
+                with store.ex.open_workspace_dir("records") as records_fd:
                     pairs = chunk_map(
                         sorted_idents,
                         lambda chunk: _verify_view_posix_chunk(store, view, records_fd, chunk),
@@ -586,7 +652,7 @@ def open_verified_index_view(store, *, max_workers: int = 16) -> VerifiedIndexVi
         raise
 
 
-def get_verified_entry(store, ident: str) -> dict | None:
+def get_verified_entry(store: Any, ident: str) -> dict[str, Any] | None:
     """O(log N) single-record stat + HMAC verified lookup via binary v3 mmap."""
     ident = packet_id(ident)
     view = store.index.open_view(store.format)
@@ -600,19 +666,22 @@ def get_verified_entry(store, ident: str) -> dict | None:
         except FileNotFoundError:
             return None
         except OSError:
-            raise ValueError(f'ordinary JSON file required: {path}') from None
+            raise ValueError(f"ordinary JSON file required: {path}") from None
 
         if not is_ordinary_file_stat(info):
-            raise ValueError(f'ordinary JSON file required: {path}')
+            raise ValueError(f"ordinary JSON file required: {path}")
 
         platform_key = PLATFORM.platform_key
         delta_entry = view.delta_puts.get(ident)
         if delta_entry is not None:
             if _entry_metadata_matches(store, ident, delta_entry, info):
-                if delta_entry.get('ino') == info.st_ino and delta_entry.get('platform', platform_key) == platform_key:
+                if (
+                    delta_entry.get("ino") == info.st_ino
+                    and delta_entry.get("platform", platform_key) == platform_key
+                ):
                     return dict(delta_entry)
                 raw = path.read_bytes()
-                if hmac.compare_digest(sha(raw), delta_entry['raw_sha256']):
+                if hmac.compare_digest(sha(raw), delta_entry["raw_sha256"]):
                     return dict(delta_entry)
         elif ident not in view.delta_dels:
             slot = view.slot_for_id(ident)
@@ -629,42 +698,49 @@ def get_verified_entry(store, ident: str) -> dict | None:
         return build_entry(record, raw, info)
 
 
-def _entry_metadata_matches(store, ident: str, entry: dict | None, info: os.stat_result) -> bool:
+def _entry_metadata_matches(
+    store: Any, ident: str, entry: dict[str, Any] | None, info: os.stat_result
+) -> bool:
     return (
         entry is not None
-        and entry.get('format') == store.format
-        and entry.get('id') == ident
-        and entry.get('size') == info.st_size
-        and entry.get('mtime_ns') == info.st_mtime_ns
+        and entry.get("format") == store.format
+        and entry.get("id") == ident
+        and entry.get("size") == info.st_size
+        and entry.get("mtime_ns") == info.st_mtime_ns
     )
 
 
-def _check_indexed_posix_chunk(store, indexed: dict[str, dict], records_fd: int, chunk: list[str]) -> list:
+def _check_indexed_posix_chunk(
+    store: Any, indexed: dict[str, dict[str, Any]], records_fd: int, chunk: list[str]
+) -> list[tuple[str, dict[str, Any]]]:
     platform_key = PLATFORM.platform_key
-    out = []
+    out: list[tuple[str, dict[str, Any]]] = []
 
     for ident in chunk:
         entry = indexed.get(ident)
-        filename = (ident if entry is not None else packet_id(ident)) + '.json'
-        full_path = store.work / 'records' / filename
+        filename = (ident if entry is not None else packet_id(ident)) + ".json"
+        full_path = store.work / "records" / filename
         try:
             info = os.stat(filename, dir_fd=records_fd, follow_symlinks=False)
         except OSError as exc:
             if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR):
-                raise ValueError(f'ordinary JSON file required: {full_path}') from None
+                raise ValueError(f"ordinary JSON file required: {full_path}") from None
             raise
 
         if not stat.S_ISREG(info.st_mode):
-            raise ValueError(f'ordinary JSON file required: {full_path}')
+            raise ValueError(f"ordinary JSON file required: {full_path}")
 
-        if _entry_metadata_matches(store, ident, entry, info):
-            if entry.get('ino') == info.st_ino and entry.get('platform', platform_key) == platform_key:
+        if entry is not None and _entry_metadata_matches(store, ident, entry, info):
+            if (
+                entry.get("ino") == info.st_ino
+                and entry.get("platform", platform_key) == platform_key
+            ):
                 out.append((ident, entry))
                 continue
 
             # Cross-OS st_ino mismatch (e.g. Windows <-> WSL): verify raw SHA-256 against HeadIndex.
             raw, _ = _read_dir_fd_raw(filename, full_path, records_fd)
-            if hmac.compare_digest(sha(raw), entry['raw_sha256']):
+            if hmac.compare_digest(sha(raw), entry["raw_sha256"]):
                 out.append((ident, entry))
                 continue
 
@@ -679,30 +755,35 @@ def _check_indexed_posix_chunk(store, indexed: dict[str, dict], records_fd: int,
     return out
 
 
-def _check_indexed_win_chunk(store, indexed: dict[str, dict], dir_str: str, chunk: list[str]) -> list:
+def _check_indexed_win_chunk(
+    store: Any, indexed: dict[str, dict[str, Any]], dir_str: str, chunk: list[str]
+) -> list[tuple[str, dict[str, Any]]]:
     platform_key = PLATFORM.platform_key
-    out = []
+    out: list[tuple[str, dict[str, Any]]] = []
 
     for ident in chunk:
         entry = indexed.get(ident)
-        filename = (ident if entry is not None else packet_id(ident)) + '.json'
+        filename = (ident if entry is not None else packet_id(ident)) + ".json"
         full_str = dir_str + os.sep + filename
         try:
             info = os.lstat(full_str)
         except OSError:
-            raise ValueError(f'ordinary JSON file required: {full_str}') from None
+            raise ValueError(f"ordinary JSON file required: {full_str}") from None
 
         if not is_ordinary_file_stat(info):
-            raise ValueError(f'ordinary JSON file required: {full_str}')
+            raise ValueError(f"ordinary JSON file required: {full_str}")
 
-        if _entry_metadata_matches(store, ident, entry, info):
-            if entry.get('ino') == info.st_ino and entry.get('platform', platform_key) == platform_key:
+        if entry is not None and _entry_metadata_matches(store, ident, entry, info):
+            if (
+                entry.get("ino") == info.st_ino
+                and entry.get("platform", platform_key) == platform_key
+            ):
                 out.append((ident, entry))
                 continue
 
-            with open(full_str, 'rb') as stream:
+            with open(full_str, "rb") as stream:
                 raw = stream.read()
-            if hmac.compare_digest(sha(raw), entry['raw_sha256']):
+            if hmac.compare_digest(sha(raw), entry["raw_sha256"]):
                 out.append((ident, entry))
                 continue
 
@@ -717,7 +798,9 @@ def _check_indexed_win_chunk(store, indexed: dict[str, dict], dir_str: str, chun
     return out
 
 
-def indexed_summaries_with_format(store, *, max_workers: int = 16) -> tuple[dict[str, dict], str] | None:
+def indexed_summaries_with_format(
+    store: Any, *, max_workers: int = 16
+) -> tuple[dict[str, dict[str, Any]], str] | None:
     """Return (verified_entries, index_format) or None if unindexed (works on POSIX and Windows)."""
     verified = open_verified_index_view(store, max_workers=max_workers)
     if verified is not None:
@@ -733,8 +816,8 @@ def indexed_summaries_with_format(store, *, max_workers: int = 16) -> tuple[dict
     if not idents:
         return {}, index_format
 
-    if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
-        with store.ex.open_workspace_dir('records') as records_fd:
+    if hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY"):
+        with store.ex.open_workspace_dir("records") as records_fd:
             pairs = chunk_map(
                 idents,
                 lambda chunk: _check_indexed_posix_chunk(store, indexed, records_fd, chunk),
@@ -751,15 +834,17 @@ def indexed_summaries_with_format(store, *, max_workers: int = 16) -> tuple[dict
     return dict(pairs), index_format
 
 
-def scan_records(store, idents=None, *, max_workers: int = 16) -> list[dict]:
+def scan_records(
+    store: Any, idents: Iterable[str] | None = None, *, max_workers: int = 16
+) -> list[dict[str, Any]]:
     """Read and cryptographically verify nominated records (or all records) in parallel."""
     target_ids = store.ids() if idents is None else list(idents)
     if not target_ids:
         return []
 
     with store.cold_archive.pack_session():
-        if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
-            with store.ex.open_workspace_dir('records') as records_fd:
+        if hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY"):
+            with store.ex.open_workspace_dir("records") as records_fd:
                 return chunk_map(
                     target_ids,
                     lambda chunk: [store.read(ident, dir_fd=records_fd)[0] for ident in chunk],
@@ -769,23 +854,26 @@ def scan_records(store, idents=None, *, max_workers: int = 16) -> list[dict]:
         _, dir_str = validated_records_dir_win(store)
         return chunk_map(
             target_ids,
-            lambda chunk: [read_verified_win(store, dir_str, ident, allow_cold=True)[0] for ident in chunk],
+            lambda chunk: [
+                read_verified_win(store, dir_str, ident, allow_cold=True)[0] for ident in chunk
+            ],
             max_workers=min(max_workers, 8),
         )
 
 
-def reindex(store, *, max_workers: int = 16) -> dict:
+def reindex(store: Any, *, max_workers: int = 16) -> dict[str, Any]:
     """Rebuild the HMAC-verified store-local head index under an exclusive owner lock."""
     idents = store.ids()
-    entries: dict[str, dict] = {}
+    entries: dict[str, dict[str, Any]] = {}
 
     if idents:
-        if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
-            with store.ex.open_workspace_dir('records') as records_fd:
-                def index_chunk_posix(chunk):
-                    out = []
+        if hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY"):
+            with store.ex.open_workspace_dir("records") as records_fd:
+
+                def index_chunk_posix(chunk: list[str]) -> list[tuple[str, dict[str, Any]]]:
+                    out: list[tuple[str, dict[str, Any]]] = []
                     for ident in chunk:
-                        filename = packet_id(ident) + '.json'
+                        filename = packet_id(ident) + ".json"
                         record, raw = store.read(ident, dir_fd=records_fd)
                         info = os.stat(filename, dir_fd=records_fd, follow_symlinks=False)
                         out.append((ident, build_entry(record, raw, info)))
@@ -796,10 +884,12 @@ def reindex(store, *, max_workers: int = 16) -> dict:
         else:
             _, dir_str = validated_records_dir_win(store)
 
-            def index_chunk_win(chunk):
-                out = []
+            def index_chunk_win(chunk: list[str]) -> list[tuple[str, dict[str, Any]]]:
+                out: list[tuple[str, dict[str, Any]]] = []
                 for ident in chunk:
                     record, raw, info = read_verified_win(store, dir_str, ident, allow_cold=False)
+                    if info is None:
+                        raise RuntimeError(f"missing stat metadata for hot record: {ident}")
                     out.append((ident, build_entry(record, raw, info)))
                 return out
 
@@ -809,24 +899,28 @@ def reindex(store, *, max_workers: int = 16) -> dict:
     return store.index.save(store.format, entries, create_key=True)
 
 
-def refresh_index_entries(store, idents: list[str], *, prebuilt: dict[str, dict] | None = None) -> bool:
+def refresh_index_entries(
+    store: Any, idents: list[str], *, prebuilt: dict[str, dict[str, Any]] | None = None
+) -> bool:
     """Batch-update existing HMAC head index entries for freshly committed records."""
     if (not idents and not prebuilt) or not store.index.exists():
         return False
 
-    updates: dict[str, dict] = dict(prebuilt) if prebuilt else {}
+    updates: dict[str, dict[str, Any]] = dict(prebuilt) if prebuilt else {}
     if idents:
-        if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
-            with store.ex.open_workspace_dir('records') as records_fd:
+        if hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY"):
+            with store.ex.open_workspace_dir("records") as records_fd:
                 for ident in idents:
-                    filename = packet_id(ident) + '.json'
+                    filename = packet_id(ident) + ".json"
                     record, raw = store.read(ident, dir_fd=records_fd)
                     info = os.stat(filename, dir_fd=records_fd, follow_symlinks=False)
                     updates[ident] = build_entry(record, raw, info)
         else:
             _, dir_str = validated_records_dir_win(store)
             for ident in idents:
-                record, raw, info = read_verified_win(store, dir_str, ident, allow_cold=False)
-                updates[ident] = build_entry(record, raw, info)
+                record, raw, win_info = read_verified_win(store, dir_str, ident, allow_cold=False)
+                if win_info is None:
+                    raise RuntimeError(f"missing stat metadata for hot record: {ident}")
+                updates[ident] = build_entry(record, raw, win_info)
 
     return store.index.update_if_present(store.format, updates)

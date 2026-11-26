@@ -1,47 +1,50 @@
 """Wire-format schema, struct layouts, and binary builder for HeadIndex v3."""
-from __future__ import annotations
 
-from array import array
 import hmac
 import re
 import struct
+from array import array
+from collections.abc import Callable
+from typing import Any
 
-HEAD_INDEX_FORMAT_V3 = 'managed-ai-head-index/3'
-BINARY_INDEX_DOMAIN = b'g60/verified-head-index-bin/3\0'
-_MAGIC = b'MAIHIDX3'
+HEAD_INDEX_FORMAT_V3 = "managed-ai-head-index/3"
+BINARY_INDEX_DOMAIN = b"g60/verified-head-index-bin/3\0"
+_MAGIC = b"MAIHIDX3"
 _VERSION = 3
-_GEN_FILE_RE = re.compile(r'^head-index\.gen([1-9][0-9]*)\.bin$')
-_HEX64_RE = re.compile(r'^[0-9a-f]{64}$')
-_OPEN_QUESTION_STATES = frozenset({'', 'open', 'qualified_unissued'})
+_GEN_FILE_RE = re.compile(r"^head-index\.gen([1-9][0-9]*)\.bin$")
+_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+_OPEN_QUESTION_STATES = frozenset({"", "open", "qualified_unissued"})
 
-# 192-byte little-endian header: magic(8), version(2), flags(2), 7 x u32 counts/reserved(28), 19 x u64 offsets(152).
-_HEADER_STRUCT = struct.Struct('<8sHHIIIIIII19Q')
+# 192-byte little-endian header:
+# magic(8), version(2), flags(2), 7 x u32 counts/reserved(28), 19 x u64 offsets(152).
+_HEADER_STRUCT = struct.Struct("<8sHHIIIIIII19Q")
 _HEADER_SIZE = _HEADER_STRUCT.size
-assert _HEADER_SIZE == 192
+if _HEADER_SIZE != 192:
+    raise RuntimeError(f"unexpected head index header size: {_HEADER_SIZE}")
 
 # 128-byte fixed-width record slot sorted lexicographically by UTF-8 record ID.
-_SLOT_STRUCT = struct.Struct('<IHHIIHHHHIHHHHIQqQ32s32s')
+_SLOT_STRUCT = struct.Struct("<IHHIIHHHHIHHHHIQqQ32s32s")
 _SLOT_SIZE = _SLOT_STRUCT.size
-assert _SLOT_SIZE == 128
-_SLOT_ID_STRUCT = struct.Struct('<IH')
-_SLOT_FLAGS_OFFSET = struct.calcsize('<IHHIIHHH')
-_SLOT_STAT_OFFSET = struct.calcsize('<IHHIIHHHHIHHHHI')
-_SLOT_STAT_STRUCT = struct.Struct('<QqQ')
-_SLOT_RAW_SHA_OFFSET = struct.calcsize('<IHHIIHHHHIHHHHIQqQ32s')
-assert _SLOT_FLAGS_OFFSET == 22
-assert _SLOT_STAT_OFFSET == 40
-assert _SLOT_RAW_SHA_OFFSET == 96
+if _SLOT_SIZE != 128:
+    raise RuntimeError(f"unexpected head index slot size: {_SLOT_SIZE}")
+_SLOT_ID_STRUCT = struct.Struct("<IH")
+_SLOT_FLAGS_OFFSET = struct.calcsize("<IHHIIHHH")
+_SLOT_STAT_OFFSET = struct.calcsize("<IHHIIHHHHIHHHHI")
+_SLOT_STAT_STRUCT = struct.Struct("<QqQ")
+_SLOT_RAW_SHA_OFFSET = struct.calcsize("<IHHIIHHHHIHHHHIQqQ32s")
+if (_SLOT_FLAGS_OFFSET, _SLOT_STAT_OFFSET, _SLOT_RAW_SHA_OFFSET) != (22, 40, 96):
+    raise RuntimeError("unexpected head index slot field offsets")
 
-_KIND_ENTRY_STRUCT = struct.Struct('<IIII')
-_REL_ENTRY_STRUCT = struct.Struct('<II')
-_FWD_EDGE_STRUCT = struct.Struct('<IiII')
-_REV_EDGE_STRUCT = struct.Struct('<II')
-_EXT_REV_EDGE_STRUCT = struct.Struct('<IIII')
-_U32_STRUCT = struct.Struct('<I')
-_U16_STRUCT = struct.Struct('<H')
-_PAIR_U32_STRUCT = struct.Struct('<II')
-_BASIS_HEAD_STRUCT = struct.Struct('<IIB')
-_U64_STRUCT = struct.Struct('<Q')
+_KIND_ENTRY_STRUCT = struct.Struct("<IIII")
+_REL_ENTRY_STRUCT = struct.Struct("<II")
+_FWD_EDGE_STRUCT = struct.Struct("<IiII")
+_REV_EDGE_STRUCT = struct.Struct("<II")
+_EXT_REV_EDGE_STRUCT = struct.Struct("<IIII")
+_U32_STRUCT = struct.Struct("<I")
+_U16_STRUCT = struct.Struct("<H")
+_PAIR_U32_STRUCT = struct.Struct("<II")
+_BASIS_HEAD_STRUCT = struct.Struct("<IIB")
+_U64_STRUCT = struct.Struct("<Q")
 
 # Bit flags stored in slot_flags (u16).
 FLAG_ACTIVE = 0x0001
@@ -78,7 +81,7 @@ class _StringPool:
         self._intern: dict[bytes, tuple[int, int]] = {}
 
     def add(self, text: str) -> tuple[int, int]:
-        raw = text.encode('utf-8')
+        raw = text.encode("utf-8")
         hit = self._intern.get(raw)
 
         if hit is not None:
@@ -88,7 +91,7 @@ class _StringPool:
         length = len(raw)
 
         if off + length >= 0xFFFFFFFF:
-            raise ValueError('head index string pool exceeds 4 GiB limit')
+            raise ValueError("head index string pool exceeds 4 GiB limit")
 
         self._buf.extend(raw)
         pair = (off, length)
@@ -102,7 +105,7 @@ class _StringPool:
 
 def _hex64_to_bytes(value: object, label: str) -> bytes:
     if not isinstance(value, str) or not _HEX64_RE.fullmatch(value):
-        raise ValueError(f'invalid 64-hex digest for {label}')
+        raise ValueError(f"invalid 64-hex digest for {label}")
 
     return bytes.fromhex(value)
 
@@ -118,22 +121,22 @@ def _encode_aux(
     parts = bytearray()
 
     if slot_flags & FLAG_HAS_BASIS:
-        basis = entry.get('basis', ())
+        basis = entry.get("basis", ())
         parts.extend(_U32_STRUCT.pack(len(basis)))
 
         for item in basis:
-            p_off, p_len = pool.add(str(item.get('path', '')))
-            item_sha = item.get('sha256')
+            p_off, p_len = pool.add(str(item.get("path", "")))
+            item_sha = item.get("sha256")
             if item_sha is None:
                 parts.extend(_BASIS_HEAD_STRUCT.pack(p_off, p_len, 0))
             else:
                 parts.extend(_BASIS_HEAD_STRUCT.pack(p_off, p_len, 1))
-                parts.extend(_hex64_to_bytes(item_sha, 'basis sha256'))
-            item_bytes = max(0, int(item.get('bytes', 0)))
+                parts.extend(_hex64_to_bytes(item_sha, "basis sha256"))
+            item_bytes = max(0, int(item.get("bytes", 0)))
             parts.extend(_U64_STRUCT.pack(item_bytes))
 
     if slot_flags & FLAG_HAS_CONTENT_LINKS:
-        items = sorted(graph.get('content_links', {}).items())
+        items = sorted(graph.get("content_links", {}).items())
         parts.extend(_U32_STRUCT.pack(len(items)))
 
         for field_name, values in items:
@@ -146,34 +149,34 @@ def _encode_aux(
                 parts.extend(_PAIR_U32_STRUCT.pack(v_off, v_len))
 
     if slot_flags & FLAG_HAS_DUP_RELS:
-        dups = graph.get('duplicate_relations', ())
+        dups = graph.get("duplicate_relations", ())
         parts.extend(_U32_STRUCT.pack(len(dups)))
 
         for dup_label, dup_target in dups:
             t_off, t_len = pool.add(dup_target)
-            parts.extend(struct.pack('<III', rel_to_id[dup_label], t_off, t_len))
+            parts.extend(struct.pack("<III", rel_to_id[dup_label], t_off, t_len))
 
     if slot_flags & FLAG_HAS_QUESTION_NORM:
-        q_off, q_len = pool.add(graph['question_norm'])
+        q_off, q_len = pool.add(graph["question_norm"])
         parts.extend(_PAIR_U32_STRUCT.pack(q_off, q_len))
 
     if slot_flags & FLAG_HAS_CONTENT_FORMAT:
-        c_off, c_len = pool.add(graph['content_format'])
+        c_off, c_len = pool.add(graph["content_format"])
         parts.extend(_PAIR_U32_STRUCT.pack(c_off, c_len))
 
     if plat_code == _PLATFORM_CUSTOM:
-        pl_off, pl_len = pool.add(str(entry.get('platform', '')))
+        pl_off, pl_len = pool.add(str(entry.get("platform", "")))
         parts.extend(_PAIR_U32_STRUCT.pack(pl_off, pl_len))
 
     return bytes(parts)
 
 
 def _encode_search(entry: dict, pool: _StringPool) -> bytes:
-    exact_refs = entry.get('exact_refs', ())
-    tokens = entry.get('tokens', ())
+    exact_refs = entry.get("exact_refs", ())
+    tokens = entry.get("tokens", ())
 
     if not exact_refs and not tokens:
-        return b''
+        return b""
 
     parts = bytearray()
     parts.extend(_PAIR_U32_STRUCT.pack(len(exact_refs), len(tokens)))
@@ -197,10 +200,10 @@ def _compute_slot_flags(
     state: str,
 ) -> tuple[int, int, int]:
     """Compute (slot_flags, map_flags, plat_code) bitfields for one record slot."""
-    platform_val = entry.get('platform', 'posix')
-    if platform_val == 'posix':
+    platform_val = entry.get("platform", "posix")
+    if platform_val == "posix":
         plat_code = _PLATFORM_POSIX
-    elif platform_val == 'nt':
+    elif platform_val == "nt":
         plat_code = _PLATFORM_NT
     else:
         plat_code = _PLATFORM_CUSTOM
@@ -212,34 +215,34 @@ def _compute_slot_flags(
         slot_flags |= FLAG_ACTIVE
         map_flags |= MAP_FLAG_ACTIVE
 
-    if entry.get('tokens_truncated'):
+    if entry.get("tokens_truncated"):
         slot_flags |= FLAG_TOKENS_TRUNCATED
         map_flags |= MAP_FLAG_TOKENS_TRUNCATED
 
-    if entry.get('exact_refs_truncated'):
+    if entry.get("exact_refs_truncated"):
         slot_flags |= FLAG_EXACT_REFS_TRUNCATED
         map_flags |= MAP_FLAG_EXACT_REFS_TRUNCATED
 
-    if entry.get('basis'):
+    if entry.get("basis"):
         slot_flags |= FLAG_HAS_BASIS
         map_flags |= MAP_FLAG_HAS_BASIS
 
-    if graph.get('content_links'):
+    if graph.get("content_links"):
         slot_flags |= FLAG_HAS_CONTENT_LINKS
         map_flags |= MAP_FLAG_HAS_CONTENT_LINKS
 
-    if graph.get('duplicate_relations'):
+    if graph.get("duplicate_relations"):
         slot_flags |= FLAG_HAS_DUP_RELS
         map_flags |= MAP_FLAG_HAS_DUP_RELS
 
-    if graph.get('question_norm') is not None:
+    if graph.get("question_norm") is not None:
         slot_flags |= FLAG_HAS_QUESTION_NORM
         map_flags |= MAP_FLAG_HAS_QUESTION_NORM
 
-    if graph.get('content_format') is not None:
+    if graph.get("content_format") is not None:
         slot_flags |= FLAG_HAS_CONTENT_FORMAT
 
-    if kind == 'question' and active and state in _OPEN_QUESTION_STATES:
+    if kind == "question" and active and state in _OPEN_QUESTION_STATES:
         slot_flags |= FLAG_OPEN_QUESTION
         map_flags |= MAP_FLAG_OPEN_QUESTION
 
@@ -249,42 +252,42 @@ def _compute_slot_flags(
 def _encode_one_slot(
     slot_idx: int,
     ident: str,
-    entry: dict,
+    entry: dict[str, Any],
     *,
     id_to_slot: dict[str, int],
     pool: _StringPool,
-    intern_kind,
-    intern_rel,
+    intern_kind: Callable[[str, bool], int],
+    intern_rel: Callable[[str], int],
     rel_to_id: dict[str, int],
-    buffers: dict,
+    buffers: dict[str, Any],
 ) -> None:
-    """Encode a single record entry into fixed-width slot, columnar maps, CSR edges, and aux/search pools."""
-    graph = entry.get('graph')
+    """Encode one record entry into slot, columnar maps, CSR edges, and aux/search pools."""
+    graph = entry.get("graph")
     if not isinstance(graph, dict):
         graph = {}
 
-    active = bool(entry.get('active', True))
-    kind = str(entry['kind'])
+    active = bool(entry.get("active", True))
+    kind = str(entry["kind"])
     kid = intern_kind(kind, active)
 
     id_off, id_len = pool.add(ident)
-    title_off, title_len = pool.add(str(graph.get('title', '') or ''))
-    state = str(graph.get('selection_state', '') or '')
+    title_off, title_len = pool.add(str(graph.get("title", "") or ""))
+    state = str(graph.get("selection_state", "") or "")
     state_off, state_len = pool.add(state)
 
     if id_len > 0xFFFF or title_len > 0xFFFF or state_len > 0xFFFF:
-        raise ValueError(f'head index string field exceeds u16 length for {ident}')
+        raise ValueError(f"head index string field exceeds u16 length for {ident}")
 
     slot_flags, map_flags, plat_code = _compute_slot_flags(entry, graph, kind, active, state)
 
-    for dup_label, _ in graph.get('duplicate_relations') or ():
+    for dup_label, _ in graph.get("duplicate_relations") or ():
         intern_rel(dup_label)
 
-    fwd_edges_buf = buffers['fwd_edges_buf']
-    rev_buckets = buffers['rev_buckets']
-    ext_rev_rows = buffers['ext_rev_rows']
+    fwd_edges_buf = buffers["fwd_edges_buf"]
+    rev_buckets = buffers["rev_buckets"]
+    ext_rev_rows = buffers["ext_rev_rows"]
 
-    for label, target in graph.get('relations', ()):
+    for label, target in graph.get("relations", ()):
         rid = intern_rel(label)
         t_slot = id_to_slot.get(target, -1)
         t_off, t_len = pool.add(target)
@@ -292,16 +295,16 @@ def _encode_one_slot(
         if t_slot >= 0:
             rev_buckets[t_slot].append((label, ident, rid, slot_idx))
         else:
-            ext_rev_rows.append((target.encode('utf-8'), label, ident, t_off, t_len, rid, slot_idx))
+            ext_rev_rows.append((target.encode("utf-8"), label, ident, t_off, t_len, rid, slot_idx))
 
-    buffers['fwd_offsets'].append(len(fwd_edges_buf) // _FWD_EDGE_STRUCT.size)
-    buffers['aux_pool'].extend(_encode_aux(entry, graph, slot_flags, plat_code, rel_to_id, pool))
-    buffers['aux_offsets'].append(len(buffers['aux_pool']))
-    buffers['search_pool'].extend(_encode_search(entry, pool))
-    buffers['search_offsets'].append(len(buffers['search_pool']))
+    buffers["fwd_offsets"].append(len(fwd_edges_buf) // _FWD_EDGE_STRUCT.size)
+    buffers["aux_pool"].extend(_encode_aux(entry, graph, slot_flags, plat_code, rel_to_id, pool))
+    buffers["aux_offsets"].append(len(buffers["aux_pool"]))
+    buffers["search_pool"].extend(_encode_search(entry, pool))
+    buffers["search_offsets"].append(len(buffers["search_pool"]))
 
     _SLOT_STRUCT.pack_into(
-        buffers['slots_buf'],
+        buffers["slots_buf"],
         slot_idx * _SLOT_SIZE,
         id_off,
         id_len,
@@ -309,33 +312,33 @@ def _encode_one_slot(
         title_off,
         state_off,
         state_len,
-        min(len(entry.get('basis') or ()), 0xFFFF),
+        min(len(entry.get("basis") or ()), 0xFFFF),
         kid,
         slot_flags,
-        int(entry.get('revision', 0)),
-        min(len(entry.get('exact_refs') or ()), 0xFFFF),
-        min(len(entry.get('tokens') or ()), 0xFFFF),
-        min(len(graph.get('content_links') or {}), 0xFFFF),
-        min(len(graph.get('duplicate_relations') or ()), 0xFFFF),
+        int(entry.get("revision", 0)),
+        min(len(entry.get("exact_refs") or ()), 0xFFFF),
+        min(len(entry.get("tokens") or ()), 0xFFFF),
+        min(len(graph.get("content_links") or {}), 0xFFFF),
+        min(len(graph.get("duplicate_relations") or ()), 0xFFFF),
         0,
-        max(0, int(entry.get('size', 0))),
-        int(entry.get('mtime_ns', 0)),
-        int(entry.get('ino', 0)) & 0xFFFFFFFFFFFFFFFF,
-        _hex64_to_bytes(entry['sha256'], 'record sha256'),
-        _hex64_to_bytes(entry['raw_sha256'], 'record raw_sha256'),
+        max(0, int(entry.get("size", 0))),
+        int(entry.get("mtime_ns", 0)),
+        int(entry.get("ino", 0)) & 0xFFFFFFFFFFFFFFFF,
+        _hex64_to_bytes(entry["sha256"], "record sha256"),
+        _hex64_to_bytes(entry["raw_sha256"], "record raw_sha256"),
     )
-    buffers['active_map'][slot_idx] = 1 if active else 0
-    buffers['flags_map'][slot_idx] = map_flags
-    _U16_STRUCT.pack_into(buffers['kind_map_buf'], slot_idx * 2, kid)
+    buffers["active_map"][slot_idx] = 1 if active else 0
+    buffers["flags_map"][slot_idx] = map_flags
+    _U16_STRUCT.pack_into(buffers["kind_map_buf"], slot_idx * 2, kid)
 
 
 def _encode_record_slots(
     sorted_ids: list[str],
-    entries: dict[str, dict],
+    entries: dict[str, dict[str, Any]],
     id_to_slot: dict[str, int],
     pool: _StringPool,
-) -> dict:
-    """Encode fixed-width slots, columnar bytemaps, forward edges, aux/search pools, and reverse buckets."""
+) -> dict[str, Any]:
+    """Encode slots, columnar bytemaps, forward edges, aux/search pools, and reverse buckets."""
     record_count = len(sorted_ids)
     kinds: list[str] = []
     kind_to_id: dict[str, int] = {}
@@ -349,7 +352,7 @@ def _encode_record_slots(
         if kid is None:
             kid = len(kinds)
             if kid >= 65535:
-                raise ValueError('head index kind dictionary exceeds u16 limit')
+                raise ValueError("head index kind dictionary exceeds u16 limit")
             kinds.append(kind)
             kind_to_id[kind] = kid
             kind_totals.append(0)
@@ -368,18 +371,18 @@ def _encode_record_slots(
         return rid
 
     buffers = {
-        'slots_buf': bytearray(record_count * _SLOT_SIZE),
-        'active_map': bytearray(record_count),
-        'flags_map': bytearray(record_count),
-        'kind_map_buf': bytearray(record_count * 2),
-        'fwd_offsets': array('I', [0]),
-        'fwd_edges_buf': bytearray(),
-        'rev_buckets': [[] for _ in range(record_count)],
-        'ext_rev_rows': [],
-        'aux_offsets': array('I', [0]),
-        'aux_pool': bytearray(),
-        'search_offsets': array('I', [0]),
-        'search_pool': bytearray(),
+        "slots_buf": bytearray(record_count * _SLOT_SIZE),
+        "active_map": bytearray(record_count),
+        "flags_map": bytearray(record_count),
+        "kind_map_buf": bytearray(record_count * 2),
+        "fwd_offsets": array("I", [0]),
+        "fwd_edges_buf": bytearray(),
+        "rev_buckets": [[] for _ in range(record_count)],
+        "ext_rev_rows": [],
+        "aux_offsets": array("I", [0]),
+        "aux_pool": bytearray(),
+        "search_offsets": array("I", [0]),
+        "search_pool": bytearray(),
     }
 
     for slot_idx, ident in enumerate(sorted_ids):
@@ -396,10 +399,10 @@ def _encode_record_slots(
         )
 
     return {
-        'kinds': kinds,
-        'kind_totals': kind_totals,
-        'kind_actives': kind_actives,
-        'rel_labels': rel_labels,
+        "kinds": kinds,
+        "kind_totals": kind_totals,
+        "kind_actives": kind_actives,
+        "rel_labels": rel_labels,
         **buffers,
     }
 
@@ -437,7 +440,7 @@ def _build_reverse_tables(
     ext_rev_rows: list[tuple[bytes, str, str, int, int, int, int]],
 ) -> tuple[array, bytearray, bytearray]:
     """Build sorted reverse CSR (per target slot) and external-target reverse table."""
-    rev_offsets = array('I', [0])
+    rev_offsets = array("I", [0])
     rev_edges_buf = bytearray()
 
     for bucket in rev_buckets:
@@ -499,18 +502,18 @@ def _assemble_signed_image(
 
     out = bytearray(hmac_off + 32)
     out[0:_HEADER_SIZE] = header
-    for off, sec in zip(offsets, sections):
-        out[off:off + len(sec)] = sec
+    for off, sec in zip(offsets, sections, strict=True):
+        out[off : off + len(sec)] = sec
 
     mv = memoryview(out)
     try:
-        mac = hmac.new(key, BINARY_INDEX_DOMAIN, 'sha256')
+        mac = hmac.new(key, BINARY_INDEX_DOMAIN, "sha256")
         mac.update(mv[:hmac_off])
         digest_bytes = mac.digest()
     finally:
         mv.release()
 
-    out[hmac_off:hmac_off + 32] = digest_bytes
+    out[hmac_off : hmac_off + 32] = digest_bytes
     return bytes(out), digest_bytes.hex()
 
 
@@ -522,52 +525,52 @@ def build_binary_image(
     """Serialize verified head-index entries into a signed HeadIndex v3 binary image."""
     pool = _StringPool()
     rf_off, rf_len = pool.add(record_format)
-    sorted_ids = sorted(entries.keys(), key=lambda ident: ident.encode('utf-8'))
+    sorted_ids = sorted(entries.keys(), key=lambda ident: ident.encode("utf-8"))
     id_to_slot = {ident: idx for idx, ident in enumerate(sorted_ids)}
 
     encoded = _encode_record_slots(sorted_ids, entries, id_to_slot, pool)
     kind_table_buf, rel_table_buf = _build_dictionary_tables(
-        encoded['kinds'],
-        encoded['kind_totals'],
-        encoded['kind_actives'],
-        encoded['rel_labels'],
+        encoded["kinds"],
+        encoded["kind_totals"],
+        encoded["kind_actives"],
+        encoded["rel_labels"],
         pool,
     )
     rev_offsets, rev_edges_buf, ext_rev_buf = _build_reverse_tables(
-        encoded['rev_buckets'],
-        encoded['ext_rev_rows'],
+        encoded["rev_buckets"],
+        encoded["ext_rev_rows"],
     )
 
-    aux_pool = encoded['aux_pool']
-    search_pool = encoded['search_pool']
+    aux_pool = encoded["aux_pool"]
+    search_pool = encoded["search_pool"]
     if len(aux_pool) >= 0xFFFFFFFF or len(search_pool) >= 0xFFFFFFFF:
-        raise ValueError('head index variable pool exceeds 4 GiB limit')
+        raise ValueError("head index variable pool exceeds 4 GiB limit")
 
     sections: list[bytes | bytearray] = [
-        encoded['slots_buf'],
-        encoded['active_map'],
-        encoded['flags_map'],
-        encoded['kind_map_buf'],
+        encoded["slots_buf"],
+        encoded["active_map"],
+        encoded["flags_map"],
+        encoded["kind_map_buf"],
         kind_table_buf,
         rel_table_buf,
-        encoded['fwd_offsets'].tobytes(),
-        encoded['fwd_edges_buf'],
+        encoded["fwd_offsets"].tobytes(),
+        encoded["fwd_edges_buf"],
         rev_offsets.tobytes(),
         rev_edges_buf,
         ext_rev_buf,
-        encoded['aux_offsets'].tobytes(),
+        encoded["aux_offsets"].tobytes(),
         aux_pool,
-        encoded['search_offsets'].tobytes(),
+        encoded["search_offsets"].tobytes(),
         search_pool,
         pool.to_bytes(),
     ]
     counts = (
         len(sorted_ids),
-        len(encoded['kinds']),
-        len(encoded['rel_labels']),
-        len(encoded['fwd_edges_buf']) // _FWD_EDGE_STRUCT.size,
+        len(encoded["kinds"]),
+        len(encoded["rel_labels"]),
+        len(encoded["fwd_edges_buf"]) // _FWD_EDGE_STRUCT.size,
         len(rev_edges_buf) // _REV_EDGE_STRUCT.size,
-        len(encoded['ext_rev_rows']),
+        len(encoded["ext_rev_rows"]),
     )
     return _assemble_signed_image(key, rf_off, rf_len, counts, sections)
 
@@ -637,7 +640,4 @@ def _validate_header_bounds(fields: tuple, file_size: int) -> bool:
     ):
         return False
 
-    if string_pool_off > hmac_off or string_pool_off + rf_off + rf_len > hmac_off:
-        return False
-
-    return True
+    return not (string_pool_off > hmac_off or string_pool_off + rf_off + rf_len > hmac_off)

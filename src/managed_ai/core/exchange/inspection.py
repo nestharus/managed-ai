@@ -1,11 +1,12 @@
 """Inspect packet, transport, and publication state through read-only observations."""
-from __future__ import annotations
 
 import os
 import threading
-from typing import Any
+from collections.abc import Callable
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from ..storage import open_directory, read_json
+from ..storage import ObjectStore, open_directory, read_json
 from .carrier_receipts import transport_outcome
 from .publication import observe_basis, observe_target
 from .publication_receipts import (
@@ -13,12 +14,23 @@ from .publication_receipts import (
     publication_inventory,
     publication_matches,
     publication_name,
-    validate_publication_record,
     validate_publication_reconciliation,
+    validate_publication_record,
 )
 
+if TYPE_CHECKING:
+    from .transport.packet_transport import PacketTransport
 
-def inspect_publications(exchange, directory, request, result, observe) -> None:
+type _PacketSummaryList = list[dict[str, Any]]
+
+
+def inspect_publications(
+    exchange: Any,
+    directory: Path,
+    request: dict[str, Any],
+    result: dict[str, Any],
+    observe: Callable[[str], dict[str, Any]],
+) -> None:
     try:
         publications, reconciliations, unreadable = publication_inventory(directory)
     except OSError as exc:
@@ -57,7 +69,13 @@ def inspect_publications(exchange, directory, request, result, observe) -> None:
                 for slot, (account, _) in reconciliations.items()
                 if account.get("intent_sha256") == digest
             ]
-            slot = canonical if canonical in reconciliations else matching[0] if len(matching) == 1 else None
+            slot = (
+                canonical
+                if canonical in reconciliations
+                else matching[0]
+                if len(matching) == 1
+                else None
+            )
             if slot is not None:
                 account = reconciliations[slot][0]
                 observation["reconciliation"] = validate_publication_reconciliation(
@@ -75,13 +93,13 @@ def inspect_publications(exchange, directory, request, result, observe) -> None:
 
         result["publications"].append(observation)
 
-    unattached = [
+    unattached: list[dict[str, Any]] = [
         {"record_file": name, "record": record}
         for name, (record, _) in reconciliations.items()
         if name not in attached
     ]
     for name, error in unreadable.items():
-        row = {"record_file": name, "observation_error": str(error)}
+        row: dict[str, Any] = {"record_file": name, "observation_error": str(error)}
         (result["publications"] if name.lower().startswith("publish-") else unattached).append(row)
 
     if unattached:
@@ -91,7 +109,39 @@ def inspect_publications(exchange, directory, request, result, observe) -> None:
 class PacketInspection:
     """Read-only inspection and listing of retained exchange packets."""
 
-    def packet_summary(self, directory, consumer, publications, *, returned, outcome):
+    if TYPE_CHECKING:
+        root: Path
+        objects: ObjectStore
+        transport: PacketTransport
+
+        def load(self, packet: str) -> tuple[Path, dict[str, Any]]: ...
+        def _load_directory(
+            self,
+            directory: Path,
+            *,
+            _verified_objects: dict[str, int] | set[str] | None = None,
+            _validated_returns: dict[str, dict[str, Any]] | None = None,
+            _objects_fd: int | None = None,
+            _memo_lock: Any = None,
+            _request_shas: dict[str, str] | None = None,
+        ) -> tuple[Path, dict[str, Any]]: ...
+        def validate_return(
+            self,
+            directory: Path,
+            record: dict[str, Any],
+            **kwargs: Any,
+        ) -> None: ...
+        def get(self, key: str) -> bytes: ...
+
+    def packet_summary(
+        self,
+        directory: Path,
+        consumer: str,
+        publications: _PacketSummaryList,
+        *,
+        returned: bool,
+        outcome: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         """Summarize validated observations of one packet under the caller's guard."""
         attempted = self.transport.has_attempt(directory)
         if outcome is not None:
@@ -109,10 +159,12 @@ class PacketInspection:
             "semantic_fulfillment": "not-decided-by-exchange",
         }
         if outcome is not None:
-            row["transport_outcome"] = {k: outcome[k] for k in ("reason", "account", "outcome_sha256")}
+            row["transport_outcome"] = {
+                k: outcome[k] for k in ("reason", "account", "outcome_sha256")
+            }
         return row
 
-    def list(self, consumer: str | None = None) -> list[dict[str, Any]]:
+    def list(self, consumer: str | None = None) -> _PacketSummaryList:
         """Expose retained occasions without inventing a semantic completion flag."""
         verified_objects: dict[str, int] = {}
         validated_returns: dict[str, dict[str, Any]] = {}
@@ -126,7 +178,7 @@ class PacketInspection:
             except OSError:
                 objects_fd = None
 
-        def inspect_one(directory):
+        def inspect_one(directory: Path) -> dict[str, Any] | None:
             try:
                 _, request = self._load_directory(
                     directory,
@@ -167,7 +219,11 @@ class PacketInspection:
                     outcome=outcome,
                 )
             except (ValueError, KeyError, OSError, TypeError) as exc:
-                return {"packet": directory.name, "transport": "record-unresolved", "error": str(exc)}
+                return {
+                    "packet": directory.name,
+                    "transport": "record-unresolved",
+                    "error": str(exc),
+                }
 
         try:
             with self.objects.pack_session():
@@ -192,10 +248,15 @@ class PacketInspection:
     def inspect(self, packet: str) -> dict[str, Any]:
         with self.objects.pack_session():
             directory, request = self.load(packet)
-            result: dict[str, Any] = {"packet": packet, "consumer": request["consumer"], "basis": None, "return": None}
+            result: dict[str, Any] = {
+                "packet": packet,
+                "consumer": request["consumer"],
+                "basis": None,
+                "return": None,
+            }
             observations: dict[str, Any] = {}
 
-            def observe(path: str):
+            def observe(path: str) -> dict[str, Any]:
                 if path not in observations:
                     try:
                         observations[path] = observe_target(self, path)
@@ -225,8 +286,9 @@ class PacketInspection:
 
             inspect_publications(self, directory, request, result, observe)
             result["inspection_scope"] = (
-                "Read-only observations in one cooperative-owner invocation; not an atomic external-writer "
-                "snapshot, historical completion proof, reconciliation or permission to replay."
+                "Read-only observations in one cooperative-owner invocation; not an atomic "
+                "external-writer snapshot, historical completion proof, reconciliation or "
+                "permission to replay."
             )
 
             outcome = transport_outcome(self, directory, request)

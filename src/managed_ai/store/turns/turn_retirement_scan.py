@@ -1,11 +1,10 @@
 """Read-only structural reference scanners for turn working-copy retirement."""
-from __future__ import annotations
 
 import errno
 import hashlib
 import os
-from pathlib import Path
 import stat
+from pathlib import Path
 from typing import Any
 
 from managed_ai.core.storage import (
@@ -19,6 +18,8 @@ from managed_ai.core.storage import (
 from managed_ai.store.protocol.identities import require, strict_json
 from managed_ai.store.records.hot_refs import (
     extract_turn_ref as _extract_referenced_turn,
+)
+from managed_ai.store.records.hot_refs import (
     scan_attention_refs,
     scan_interpretation_refs,
     scan_packet_refs,
@@ -26,7 +27,13 @@ from managed_ai.store.records.hot_refs import (
 )
 
 
-def _scan_turn_directory(turn_dir: Path) -> tuple[int, int, str, list[str], dict[str, str], list[str]]:
+def _open_nofollow(path: str, _flags: int) -> int:
+    return os.open(path, _OPEN_RO_NOFOLLOW)
+
+
+def _scan_turn_directory(
+    turn_dir: Path,
+) -> tuple[int, int, str, list[str], dict[str, str], list[str]]:
     """Inspect a working turn directory without following symlinks or reparse points."""
     issues: list[str] = []
     entries: list[dict[str, Any]] = []
@@ -34,59 +41,58 @@ def _scan_turn_directory(turn_dir: Path) -> tuple[int, int, str, list[str], dict
     dir_paths: list[str] = []
     file_count = 0
     total_bytes = 0
+    opener = _open_nofollow if hasattr(os, "O_NOFOLLOW") else None
 
     def walk_dir(current: Path, rel_prefix: str) -> None:
         nonlocal file_count, total_bytes
         for child in sorted(current.iterdir(), key=lambda p: p.name):
-            rel = f'{rel_prefix}/{child.name}' if rel_prefix else child.name
+            rel = f"{rel_prefix}/{child.name}" if rel_prefix else child.name
             info = child.lstat()
             mode = info.st_mode
             if is_reparse_or_symlink(info):
-                issues.append(f'symlink:{rel}')
+                issues.append(f"symlink:{rel}")
                 continue
 
             if stat.S_ISDIR(mode):
                 dir_paths.append(rel)
-                entries.append({'path': rel, 'type': 'dir'})
+                entries.append({"path": rel, "type": "dir"})
                 walk_dir(child, rel)
             elif stat.S_ISREG(mode):
-                ctx = (
-                    open(child, 'rb', opener=lambda p, flags: os.open(p, _OPEN_RO_NOFOLLOW))
-                    if hasattr(os, 'O_NOFOLLOW') else child.open('rb')
-                )
-                with ctx as stream:
+                with open(child, "rb", opener=opener) as stream:
                     finfo = os.fstat(stream.fileno())
                     if not stat.S_ISREG(finfo.st_mode):
-                        issues.append(f'non_regular:{rel}')
+                        issues.append(f"non_regular:{rel}")
                         continue
-                    file_sha = hashlib.file_digest(stream, 'sha256').hexdigest()
+                    file_sha = hashlib.file_digest(stream, "sha256").hexdigest()
                     size = finfo.st_size
 
                 file_count += 1
                 total_bytes += size
                 file_hashes[rel] = file_sha
-                entries.append({'path': rel, 'type': 'file', 'bytes': size, 'sha256': file_sha})
+                entries.append({"path": rel, "type": "file", "bytes": size, "sha256": file_sha})
             else:
-                issues.append(f'special:{rel}')
+                issues.append(f"special:{rel}")
 
-    walk_dir(turn_dir, '')
+    walk_dir(turn_dir, "")
     return file_count, total_bytes, sha(encode(entries)), issues, file_hashes, dir_paths
 
 
-def _read_record_raw_for_refs(records_dir: Path, name: str, dir_fd: int | None) -> tuple[bytes | None, str | None]:
+def _read_record_raw_for_refs(
+    records_dir: Path, name: str, dir_fd: int | None
+) -> tuple[bytes | None, str | None]:
     full = records_dir / name
-    if dir_fd is not None and hasattr(os, 'O_NOFOLLOW'):
+    if dir_fd is not None and hasattr(os, "O_NOFOLLOW"):
         try:
             fd = os.open(name, _OPEN_RO_NOFOLLOW, dir_fd=dir_fd)
         except OSError as exc:
             if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
-                raise ValueError(f'ordinary record file required: {full}') from None
-            return None, f'unreadable record {name}: {exc}'
+                raise ValueError(f"ordinary record file required: {full}") from None
+            return None, f"unreadable record {name}: {exc}"
 
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
-                raise ValueError(f'ordinary record file required: {full}')
-            stream = os.fdopen(fd, 'rb')
+                raise ValueError(f"ordinary record file required: {full}")
+            stream = os.fdopen(fd, "rb")
         except BaseException:
             os.close(fd)
             raise
@@ -95,7 +101,7 @@ def _read_record_raw_for_refs(records_dir: Path, name: str, dir_fd: int | None) 
             return stream.read(), None
 
     info = full.lstat()
-    require(is_ordinary_file_stat(info), f'ordinary record file required: {full}')
+    require(is_ordinary_file_stat(info), f"ordinary record file required: {full}")
     return full.read_bytes(), None
 
 
@@ -105,47 +111,47 @@ def _extract_record_turn_refs(
     candidate_set: set[str],
     found: list[tuple[str, dict[str, Any]]],
 ) -> None:
-    rec_id = record.get('id', fallback_id)
+    rec_id = record.get("id", fallback_id)
 
     def add_if_match(value: Any, field_name: str) -> None:
         target_turn = _extract_referenced_turn(value)
         if target_turn in candidate_set:
-            found.append((target_turn, {'record': rec_id, 'field': field_name, 'path': value}))
+            found.append((target_turn, {"record": rec_id, "field": field_name, "path": value}))
 
-    for item in record.get('basis', []):
+    for item in record.get("basis", []):
         if isinstance(item, dict):
-            add_if_match(item.get('path'), 'basis')
+            add_if_match(item.get("path"), "basis")
 
-    for rel in record.get('relations', []):
+    for rel in record.get("relations", []):
         if not isinstance(rel, dict):
             continue
-        for rel_field in ('target', 'origin'):
-            add_if_match(rel.get(rel_field), f'relations.{rel_field}')
-        aliases = rel.get('aliases')
+        for rel_field in ("target", "origin"):
+            add_if_match(rel.get(rel_field), f"relations.{rel_field}")
+        aliases = rel.get("aliases")
         if isinstance(aliases, list):
             for alias in aliases:
-                add_if_match(alias, 'relations.aliases')
+                add_if_match(alias, "relations.aliases")
 
-    content = record.get('content')
+    content = record.get("content")
     if not isinstance(content, dict):
         return
 
-    add_if_match(content.get('origin'), 'content.origin')
+    add_if_match(content.get("origin"), "content.origin")
 
-    obligations = content.get('obligations')
+    obligations = content.get("obligations")
     if isinstance(obligations, list):
         for ob in obligations:
-            if isinstance(ob, dict) and isinstance(ob.get('evidence'), list):
-                for ev in ob['evidence']:
-                    add_if_match(ev, 'content.obligations.evidence')
+            if isinstance(ob, dict) and isinstance(ob.get("evidence"), list):
+                for ev in ob["evidence"]:
+                    add_if_match(ev, "content.obligations.evidence")
 
-    if isinstance(content.get('evidence'), list):
-        for ev in content['evidence']:
-            add_if_match(ev, 'content.evidence')
+    if isinstance(content.get("evidence"), list):
+        for ev in content["evidence"]:
+            add_if_match(ev, "content.evidence")
 
 
 def _collect_record_references(
-    system,
+    system: Any,
     candidate_set: set[str],
 ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
     """Scan live work/records/*.json for structural references to any candidate turn working dir."""
@@ -154,24 +160,27 @@ def _collect_record_references(
     if not candidate_set:
         return refs, errors
 
-    records_dir = system.ex.path('records')
+    records_dir = system.ex.path("records")
     try:
         dir_info = records_dir.lstat()
     except FileNotFoundError:
         return refs, errors
 
-    require(is_ordinary_dir_stat(dir_info), 'ordinary records directory required')
+    require(is_ordinary_dir_stat(dir_info), "ordinary records directory required")
     filenames = sorted(
-        p.name for p in records_dir.iterdir()
-        if p.name.endswith('.json') and not p.name.startswith('.')
+        p.name
+        for p in records_dir.iterdir()
+        if p.name.endswith(".json") and not p.name.startswith(".")
     )
     if not filenames:
         return refs, errors
 
-    marker = b'.system'
-    unicode_ascii_escape = b'\\u00'
+    marker = b".system"
+    unicode_ascii_escape = b"\\u00"
 
-    def inspect_chunk(names: list[str], dir_fd: int | None) -> tuple[list[tuple[str, dict[str, Any]]], list[str]]:
+    def inspect_chunk(
+        names: list[str], dir_fd: int | None
+    ) -> tuple[list[tuple[str, dict[str, Any]]], list[str]]:
         found: list[tuple[str, dict[str, Any]]] = []
         chunk_errors: list[str] = []
 
@@ -188,7 +197,7 @@ def _collect_record_references(
             try:
                 record = strict_json(raw)
             except (ValueError, TypeError) as exc:
-                chunk_errors.append(f'unreadable record {name}: {exc}')
+                chunk_errors.append(f"unreadable record {name}: {exc}")
                 continue
 
             _extract_record_turn_refs(record, (records_dir / name).stem, candidate_set, found)
@@ -200,16 +209,20 @@ def _collect_record_references(
             refs.setdefault(target_turn, []).append(ref)
         errors.extend(chunk_errors)
 
-    if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
-        with system.ex.open_workspace_dir('records') as records_fd:
+    if hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY"):
+        with system.ex.open_workspace_dir("records") as records_fd:
             if len(filenames) >= 64:
                 from concurrent.futures import ThreadPoolExecutor
 
                 workers = min(8, len(filenames))
                 chunk_size = (len(filenames) + workers - 1) // workers
-                chunks = [filenames[i:i + chunk_size] for i in range(0, len(filenames), chunk_size)]
+                chunks = [
+                    filenames[i : i + chunk_size] for i in range(0, len(filenames), chunk_size)
+                ]
                 with ThreadPoolExecutor(max_workers=workers) as pool:
-                    for batch, chunk_errors in pool.map(lambda c: inspect_chunk(c, records_fd), chunks):
+                    for batch, chunk_errors in pool.map(
+                        lambda c: inspect_chunk(c, records_fd), chunks
+                    ):
                         merge_batch(batch, chunk_errors)
             else:
                 merge_batch(*inspect_chunk(filenames, records_fd))
@@ -217,16 +230,16 @@ def _collect_record_references(
         merge_batch(*inspect_chunk(filenames, None))
 
     for turn_refs in refs.values():
-        turn_refs.sort(key=lambda r: (r['record'], r['field'], r['path']))
+        turn_refs.sort(key=lambda r: (r["record"], r["field"], r["path"]))
     errors.sort()
     return refs, errors
 
 
 def _collect_cross_packet_references(
-    system,
+    system: Any,
     candidate_set: set[str],
 ) -> tuple[dict[str, list[dict[str, str]]], list[str]]:
-    """Scan all exchange/packets/*/request.json (including staged .sealed-*/.prepare-*) for cross-turn refs."""
+    """Scan exchange/packets/*/request.json (including staged dirs) for cross-turn refs."""
     if not candidate_set:
         return {}, []
 
@@ -241,10 +254,10 @@ def _collect_cross_packet_references(
 
 
 def _collect_attention_references(
-    system,
+    system: Any,
     candidate_set: set[str],
 ) -> tuple[dict[str, list[dict[str, str]]], str | None]:
-    """Scan active native Attention field, item basis, and latest assessment products for working-dir refs."""
+    """Scan active Attention field, item basis, and latest assessment products for turn refs."""
     if not candidate_set:
         return {}, None
 
@@ -253,10 +266,10 @@ def _collect_attention_references(
 
 
 def _collect_interpretation_references(
-    system,
+    system: Any,
     candidate_set: set[str],
 ) -> tuple[dict[str, list[dict[str, str]]], list[str]]:
-    """Scan work/interpretations/*.json evidence paths (snapshot dicts or strings) for working-dir refs."""
+    """Scan work/interpretations/*.json evidence paths for working-dir references."""
     if not candidate_set:
         return {}, []
 
@@ -265,7 +278,7 @@ def _collect_interpretation_references(
 
 
 def _collect_uncommitted_turn_references(
-    system,
+    system: Any,
     turns_root: Path,
     candidate_set: set[str],
 ) -> tuple[dict[str, list[dict[str, str]]], list[str]]:
@@ -273,10 +286,11 @@ def _collect_uncommitted_turn_references(
     if not candidate_set or not turns_root.is_dir():
         return {}, []
 
-    packets_root = system.ex.root / 'packets'
+    packets_root = system.ex.root / "packets"
     committed = (
-        {p.name for p in packets_root.iterdir() if not p.name.startswith('.')}
-        if packets_root.is_dir() else set()
+        {p.name for p in packets_root.iterdir() if not p.name.startswith(".")}
+        if packets_root.is_dir()
+        else set()
     )
     all_refs, errors = scan_uncommitted_turn_refs(
         system,

@@ -3,31 +3,31 @@
 Stdlib-only leaf module safe for standalone vendoring (e.g. material_retention
 recovery archives) with zero imports from runtime packages or heavy stdlib modules.
 """
-from __future__ import annotations
 
-from collections.abc import Callable, Iterable
-from contextlib import contextmanager
 import errno
 import math
 import os
-from pathlib import Path
 import stat
 import threading
 import time
-from typing import Any, Generic, TypeVar
 import weakref
+from collections.abc import Callable, Generator, Iterable
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
 
 _REPARSE_ATTR = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
 _BYTES_LIKE = (bytes, bytearray, memoryview)
-_WINDOWS_RESERVED_DEVICE_NAMES = frozenset({
-    "CON",
-    "PRN",
-    "AUX",
-    "NUL",
-    *(f"COM{i}" for i in range(1, 10)),
-    *(f"LPT{i}" for i in range(1, 10)),
-})
-_T = TypeVar("_T")
+_WINDOWS_RESERVED_DEVICE_NAMES = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+    }
+)
 
 
 def is_reserved_windows_segment(name: str) -> bool:
@@ -39,7 +39,7 @@ def is_reserved_windows_segment(name: str) -> bool:
 
 
 def validate_safe_segment(name: str, label: str = "path segment") -> str:
-    """Validate one portable path segment (rejects reserved Windows devices and trailing dot/space)."""
+    """Validate a portable path segment (rejects reserved Windows devices and trailing dot)."""
     if not isinstance(name, str) or not name or "\0" in name:
         raise ValueError(f"invalid {label}: {name!r}")
 
@@ -71,7 +71,7 @@ def is_reparse_or_symlink(target: os.stat_result | Path | str) -> bool:
 
     try:
         info = Path(target).lstat()
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return False
 
     return is_reparse_or_symlink_stat(info)
@@ -117,7 +117,7 @@ def _validate_input_path_segments(path: Path | str, label: str) -> None:
 
 
 def safe_relpath(path: Path | str, start: Path | str) -> str:
-    """Return a POSIX-separated relative path on the same mount/drive, else canonical absolute path."""
+    """Return a POSIX relative path on the same mount/drive, else canonical absolute path."""
     _validate_input_path_segments(path, "path segment")
     try:
         rel = os.path.relpath(path, start).replace("\\", "/")
@@ -136,7 +136,7 @@ def safe_relpath(path: Path | str, start: Path | str) -> str:
 
 
 def admission_deadline(forwarded: float | None = None) -> float | None:
-    """Return the stricter of a forwarded monotonic cutoff and MANAGED_AI_DOMAIN_ADMISSION_SECONDS."""
+    """Return stricter of forwarded monotonic cutoff and MANAGED_AI_DOMAIN_ADMISSION_SECONDS."""
     if forwarded is not None and not math.isfinite(forwarded):
         raise ValueError("invalid admission deadline")
 
@@ -342,15 +342,22 @@ def check_unfollowed_ancestors_common(
             continue
         is_last = idx == len(raw_parts) - 1
         current = current.parent if part == ".." else current / part
-        if include_target or not is_last:
-            if is_reparse_or_symlink(current):
-                raise ValueError(f"{role} must not traverse or be a symlink or reparse point: {current}")
+        if (include_target or not is_last) and is_reparse_or_symlink(current):
+            raise ValueError(
+                f"{role} must not traverse or be a symlink or reparse point: {current}"
+            )
 
     abs_path = Path(os.path.abspath(raw))
-    check_parts = (*reversed(abs_path.parents), abs_path) if include_target else tuple(reversed(abs_path.parents))
-    for part in check_parts:
-        if is_reparse_or_symlink(part):
-            raise ValueError(f"{role} must not traverse or be a symlink or reparse point: {part}")
+    check_parts = (
+        (*reversed(abs_path.parents), abs_path)
+        if include_target
+        else tuple(reversed(abs_path.parents))
+    )
+    for ancestor_part in check_parts:
+        if is_reparse_or_symlink(ancestor_part):
+            raise ValueError(
+                f"{role} must not traverse or be a symlink or reparse point: {ancestor_part}"
+            )
 
     return abs_path
 
@@ -407,7 +414,9 @@ def check_unfollowed_descendant_common(
 
     ok = is_ordinary_dir_stat(info) if expect_dir else is_ordinary_file_stat(info)
     if not ok:
-        raise ValueError(f"{role}: ordinary {'directory' if expect_dir else 'file'} required: {leaf}")
+        raise ValueError(
+            f"{role}: ordinary {'directory' if expect_dir else 'file'} required: {leaf}"
+        )
 
     return leaf
 
@@ -416,7 +425,12 @@ def validate_lock_timeout(timeout: float | None) -> float | None:
     """Validate that a lock timeout is either None or a nonnegative finite number."""
     if timeout is None:
         return None
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout < 0:
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(timeout)
+        or timeout < 0
+    ):
         raise ValueError(f"lock timeout must be a nonnegative finite number: {timeout!r}")
     return float(timeout)
 
@@ -523,7 +537,7 @@ class ThreadRWLock:
                 self._cond.notify_all()
 
     @contextmanager
-    def hold(self, *, shared: bool = False, nonblocking: bool = False):
+    def hold(self, *, shared: bool = False, nonblocking: bool = False) -> Generator[ThreadRWLock]:
         if not self.acquire(shared=shared, nonblocking=nonblocking):
             raise BlockingIOError("in-process lock is busy")
         try:
@@ -532,15 +546,15 @@ class ThreadRWLock:
             self.release(shared=shared)
 
 
-class KeyedLockPool(Generic[_T]):
+class KeyedLockPool[T]:
     """Leak-free weakref.WeakValueDictionary pool for keyed in-process locks."""
 
-    def __init__(self, factory: Callable[[], _T]) -> None:
+    def __init__(self, factory: Callable[[], T]) -> None:
         self._factory = factory
         self._guard = threading.Lock()
-        self._locks: weakref.WeakValueDictionary[Any, _T] = weakref.WeakValueDictionary()
+        self._locks: weakref.WeakValueDictionary[Any, T] = weakref.WeakValueDictionary()
 
-    def get(self, key: Any) -> _T:
+    def get(self, key: Any) -> T:
         with self._guard:
             lock = self._locks.get(key)
             if lock is None:

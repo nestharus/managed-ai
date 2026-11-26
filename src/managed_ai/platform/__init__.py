@@ -5,7 +5,6 @@ os.name to select Windows vs POSIX primitives. It is stdlib-only at runtime so
 library/ preserves its zero-core/store/deployment sandbox and material_retention
 recovery archives can vendor it verbatim.
 """
-from __future__ import annotations
 
 import os
 
@@ -75,11 +74,11 @@ signal_process_group = PLATFORM.signal_process_group
 child_cpu_times = PLATFORM.child_cpu_times
 
 __all__ = [
-    "KeyedLockPool",
-    "LockMode",
     "OPEN_DIR_NOFOLLOW",
     "OPEN_RO_NOFOLLOW",
     "PLATFORM",
+    "KeyedLockPool",
+    "LockMode",
     "PlatformAdapter",
     "ThreadLock",
     "ThreadRLockState",

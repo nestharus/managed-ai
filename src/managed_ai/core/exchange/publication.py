@@ -1,21 +1,27 @@
 """Check the declared basis, publish a nominated target, and reconcile an interrupted intent."""
-from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from managed_ai.platform import is_ordinary_dir_stat
 
-from ..ownership import NativeLayout, external_root, relative_path as _relative
+from ..ownership import EffectAuthority, NativeLayout, external_root
+from ..ownership import relative_path as _relative
 from ..storage import (
     atomic_bytes as _atomic_bytes,
+)
+from ..storage import (
     encode,
     now,
-    read_bytes as _bytes,
     read_json,
     sha,
     write_json,
+)
+from ..storage import (
+    read_bytes as _bytes,
 )
 from .publication_receipts import (
     publication_accounts,
@@ -33,12 +39,21 @@ PUBLICATION_ALREADY_ATTEMPTED = "publication already attempted; inspect its rece
 
 class PublicationBasisChanged(ValueError):
     def __init__(self) -> None:
-        super().__init__("declared basis changed; preserve this return and construct its current use")
-        self.basis = None
-        self.native_basis = None
+        super().__init__(
+            "declared basis changed; preserve this return and construct its current use"
+        )
+        self.basis: dict[str, Any] | None = None
+        self.native_basis: dict[str, Any] | None = None
 
 
-def _publication_basis(packet, target, request, record, proposal, changed):
+def _publication_basis(
+    packet: str,
+    target: str,
+    request: dict[str, Any],
+    record: dict[str, Any],
+    proposal: dict[str, Any],
+    changed: list[dict[str, Any]],
+) -> dict[str, Any] | None:
     declared = next((row for row in request["targets"] if row["path"] == target), None)
     if (
         declared is None
@@ -60,7 +75,7 @@ def _publication_basis(packet, target, request, record, proposal, changed):
             ):
                 return None
 
-    rows = []
+    rows: list[dict[str, Any]] = []
     path_budget = MAX_BASIS_PATH_BUDGET
     for row in sorted(changed, key=lambda item: item["path"] != target):
         if len(rows) == MAX_BASIS_ROWS:
@@ -104,7 +119,14 @@ def _absent_under(path: Path, workspace: Path) -> bool:
     return False
 
 
-def publication_state(exchange, packet, directory, request, received, target):
+def publication_state(
+    exchange: Any,
+    packet: str,
+    directory: Path,
+    request: dict[str, Any],
+    received: dict[str, Any] | None,
+    target: str | None,
+) -> dict[str, Any]:
     publications, reconciliations, unreadable = publication_inventory(directory)
     for error in unreadable.values():
         if isinstance(error, OSError):
@@ -130,7 +152,9 @@ def publication_state(exchange, packet, directory, request, received, target):
             if name in records:
                 recorded_target = records[name][0].get("path")
                 if isinstance(recorded_target, str) and recorded_target != target:
-                    occupied.append(f"publication {label} slot is occupied by a record naming another target")
+                    occupied.append(
+                        f"publication {label} slot is occupied by a record naming another target"
+                    )
             elif name not in unreadable:
                 try:
                     (directory / name).lstat()
@@ -175,7 +199,7 @@ def publication_state(exchange, packet, directory, request, received, target):
     return applied
 
 
-def observe_target(exchange, name: str) -> dict[str, Any]:
+def observe_target(exchange: Any, name: str) -> dict[str, Any]:
     path = exchange.path(name)
     try:
         path.stat()
@@ -189,14 +213,14 @@ def observe_target(exchange, name: str) -> dict[str, Any]:
 
 
 def observe_basis(
-    exchange,
-    packet,
-    directory,
-    request,
-    received=None,
+    exchange: Any,
+    packet: str,
+    directory: Path,
+    request: dict[str, Any],
+    received: dict[str, Any] | None = None,
     *,
-    publishing_target=None,
-    observe=None,
+    publishing_target: str | None = None,
+    observe: Callable[[str], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     applied = publication_state(exchange, packet, directory, request, received, publishing_target)
     rows = [request["brief"], *request["methods"], *request["materials"], *request["targets"]]
@@ -206,17 +230,29 @@ def observe_basis(
     for row in rows:
         current = observer(row["path"])["sha256"]
         expected = applied.get(row["path"], row["sha256"])
-        checks.append({
-            "path": row["path"],
-            "expected_sha256": expected,
-            "current_sha256": current,
-            "unchanged": current == expected,
-        })
+        checks.append(
+            {
+                "path": row["path"],
+                "expected_sha256": expected,
+                "current_sha256": current,
+                "unchanged": current == expected,
+            }
+        )
     return checks
 
 
 class TargetPublication:
     """Publish proposals and reconcile interrupted publications."""
+
+    if TYPE_CHECKING:
+        _authority: EffectAuthority
+
+        def path(self, value: str) -> Path: ...
+        def load(self, packet: str) -> tuple[Path, dict[str, Any]]: ...
+        def validate_return(
+            self, directory: Path, record: dict[str, Any], **kwargs: Any
+        ) -> None: ...
+        def get(self, key: str) -> bytes: ...
 
     def basis(self, packet: str) -> list[dict[str, Any]]:
         return observe_basis(self, packet, *self.load(packet))
@@ -256,7 +292,10 @@ class TargetPublication:
             raise ValueError("reconciliation requires the bound original publication intent")
         if unreadable:
             raise next(iter(unreadable.values()))
-        if any(name != intent_name and record.get("path") == target for name, (record, _) in publications.items()):
+        if any(
+            name != intent_name and record.get("path") == target
+            for name, (record, _) in publications.items()
+        ):
             raise ValueError("conflicting publication records for the same target")
 
         validate_publication_record(intent)
@@ -304,18 +343,24 @@ class TargetPublication:
         intent, intent_digest, received, matching, account_name = self._load_reconciliation_intent(
             packet, target, directory, request
         )
-        accounts = publication_accounts(self, request, received, {target: (intent, intent_digest)}, matching)
+        accounts = publication_accounts(
+            self, request, received, {target: (intent, intent_digest)}, matching
+        )
         prior = accounts.get(target)
         if prior is not None:
             if prior["account"] != account or prior["observed_sha256"] != expected_sha256:
-                raise ValueError("publication reconciliation already has a different account or observation")
+                raise ValueError(
+                    "publication reconciliation already has a different account or observation"
+                )
             return prior
 
         observed = observe_target(self, target)["sha256"]
         if observed != expected_sha256:
             raise ValueError("current target differs from the expected reconciliation observation")
         if observed not in (intent["base_sha256"], intent["sha256"]):
-            raise ValueError("target differs from the base and proposal; prepare a fresh receiving occasion")
+            raise ValueError(
+                "target differs from the base and proposal; prepare a fresh receiving occasion"
+            )
 
         record: dict[str, Any] = {
             "version": 1,
@@ -367,10 +412,10 @@ class TargetPublication:
         changed = [row for row in basis if not row["unchanged"]]
         if changed:
             failure = PublicationBasisChanged()
-            try:
-                failure.basis = _publication_basis(packet, target, request, record, proposal, changed)
-            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-                pass
+            with suppress(OSError, ValueError, KeyError, TypeError, RuntimeError):
+                failure.basis = _publication_basis(
+                    packet, target, request, record, proposal, changed
+                )
             raise failure
 
         if not output.parent.is_dir():

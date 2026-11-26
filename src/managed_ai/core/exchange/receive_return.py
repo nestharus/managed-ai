@@ -1,17 +1,32 @@
 """Dispatch a packet, receive its attributed return, and validate the retained receipt."""
-from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ..storage import encode, now, read_bytes as _bytes, read_json, sha, write_json
+from ..storage import ObjectStore, encode, now, read_json, sha, write_json
+from ..storage import read_bytes as _bytes
 from .carrier_receipts import retain_transport, transport_outcome, transport_view
-from .proposal_files import _proposal_bytes, _proposal_directory, _run_nominations, proposal_mappings
+from .proposal_files import (
+    _proposal_bytes,
+    _proposal_directory,
+    _run_nominations,
+    proposal_mappings,
+)
+
+if TYPE_CHECKING:
+    from .transport.packet_transport import PacketTransport
 
 
 class PacketReceiving:
     """Dispatch and attributed-return receiving for exchange packets."""
+
+    if TYPE_CHECKING:
+        objects: ObjectStore
+        transport: PacketTransport
+
+        def load(self, packet: str) -> tuple[Path, dict[str, Any]]: ...
+        def put(self, data: bytes) -> str: ...
 
     def dispatch(
         self,
@@ -47,7 +62,9 @@ class PacketReceiving:
         mappings: dict[str, str],
         wait: float,
         run_nominations: bool,
-    ) -> tuple[bytes | None, dict[str, Any] | None, str | None, dict[str, str], Any, dict[str, Any]]:
+    ) -> tuple[
+        bytes | None, dict[str, Any] | None, str | None, dict[str, str], Any, dict[str, Any]
+    ]:
         marker = self.transport.bound_marker(packet, directory, request)
         bound = False
         origin = None
@@ -64,7 +81,9 @@ class PacketReceiving:
                 raise ValueError("receive nominations differ from original bounded run")
             bound = True
         elif run_nominations:
-            raise ValueError("original run nominations unavailable; use the original explicit receive")
+            raise ValueError(
+                "original run nominations unavailable; use the original explicit receive"
+            )
 
         data, view = self.transport.collect_marked(marker, wait)
         pending: dict[str, Any] = {"packet": packet, "received": False, "carrier": view}
@@ -75,7 +94,9 @@ class PacketReceiving:
             return None, view, producer, mappings, origin, pending
 
         if bound and saved is not None:
-            proposals = [target + "=" + os.fsdecode(bytes.fromhex(raw)) for target, raw in saved["files"]]
+            proposals = [
+                target + "=" + os.fsdecode(bytes.fromhex(raw)) for target, raw in saved["files"]
+            ]
             mappings = proposal_mappings(request, proposals)
             origin = saved["origin"]
 
@@ -108,7 +129,10 @@ class PacketReceiving:
                     }
                     if display != source:
                         error["file_bytes_hex"] = os.fsencode(source).hex()
-                    assert pending is not None
+                    if pending is None:
+                        raise RuntimeError(
+                            "carrier proposal collection requires pending state"
+                        ) from exc
                     return None, dict(pending, proposal_error=error)
 
                 proposal: dict[str, Any] = {
@@ -142,7 +166,9 @@ class PacketReceiving:
         if run_nominations and (reply is not None or proposals or producer is not None):
             raise ValueError("original run nominations carry their own files, carrier and producer")
         if not run_nominations and (not producer or not producer.strip()):
-            raise ValueError("producer attribution is required; it is caller-asserted, not authenticated")
+            raise ValueError(
+                "producer attribution is required; it is caller-asserted, not authenticated"
+            )
 
         mappings = proposal_mappings(request, proposals)
         origin = None
@@ -175,10 +201,13 @@ class PacketReceiving:
         )
         if proposal_error is not None:
             return proposal_error
-        assert changes is not None
+        if changes is None:
+            raise RuntimeError("proposal collection returned neither changes nor error")
 
         reply_sha256 = self.put(data)
         if reply is None:
+            if view is None:
+                raise RuntimeError("carrier return requires a transport view")
             transport = retain_transport(self, view)
 
         record: dict[str, Any] = {
@@ -209,7 +238,9 @@ class PacketReceiving:
     ) -> None:
         if (directory / "transport-outcome.json").exists():
             raise ValueError("packet contains both a return and a terminal outcome")
-        if record["return_sha256"] != sha(encode({k: v for k, v in record.items() if k != "return_sha256"})):
+        if record["return_sha256"] != sha(
+            encode({k: v for k, v in record.items() if k != "return_sha256"})
+        ):
             raise ValueError("return record changed")
 
         if request_sha256 is None:
@@ -250,5 +281,8 @@ class PacketReceiving:
         view = transport_view(self, record["transport"])
         if view is not None:
             stdout = view["streams"]["stdout"]
-            if stdout["sha256"] != record["reply_sha256"] or stdout["byte_count"] != record["reply_bytes"]:
+            if (
+                stdout["sha256"] != record["reply_sha256"]
+                or stdout["byte_count"] != record["reply_bytes"]
+            ):
                 raise ValueError("transport stdout does not match the reply")

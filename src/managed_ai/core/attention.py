@@ -3,12 +3,11 @@
 No model calls, semantic classification, automatic effects or completeness claims.
 One cooperative owner; use the CLI's lock or serialize embedded calls yourself.
 """
-from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
 
 if __name__ == "__main__":
@@ -17,15 +16,14 @@ if __name__ == "__main__":
     if _src_root not in sys.path:
         sys.path.insert(0, _src_root)
 
-from managed_ai.platform import strict_json_loads
-
 from managed_ai.core.exchange import Exchange
-from managed_ai.core.ownership import external_root, packet_id as _id, relative_path as _relative
+from managed_ai.core.ownership import external_root
+from managed_ai.core.ownership import packet_id as _id
+from managed_ai.core.ownership import relative_path as _relative
 from managed_ai.core.storage import (
-    AdmissionContended,
     MAX_BYTES,
+    AdmissionContended,
     admission_deadline,
-    atomic_bytes as _atomic_bytes,
     encode,
     exclusive,
     now,
@@ -35,6 +33,10 @@ from managed_ai.core.storage import (
     shared,
     write_json,
 )
+from managed_ai.core.storage import (
+    atomic_bytes as _atomic_bytes,
+)
+from managed_ai.platform import strict_json_loads
 
 BOUNDARY = (
     "Records describe declared public work, not hidden attention, truth, fulfillment, "
@@ -54,7 +56,11 @@ def _text(value: Any, name: str, limit: int = MAX_TEXT) -> str:
 
 
 def _strings(value: Any, name: str, limit: int = 100) -> list[str]:
-    if not isinstance(value, list) or len(value) > limit or any(not isinstance(x, str) for x in value):
+    if (
+        not isinstance(value, list)
+        or len(value) > limit
+        or any(not isinstance(x, str) for x in value)
+    ):
         raise ValueError(f"{name} must be a bounded list of strings")
     if len(value) != len(set(value)):
         raise ValueError(f"{name} contains duplicates")
@@ -64,25 +70,25 @@ def _strings(value: Any, name: str, limit: int = 100) -> list[str]:
 def _render_feedback_entry(row: dict[str, Any]) -> str:
     spec = row["spec"]
     lines = [
-        f'\n### {row["id"]} — {row["status"]}',
-        f'Use: {spec["use"]}',
-        f'Question: {spec["question"]}',
-        f'Groups: {", ".join(spec["groups"]) or "(none)"}',
-        f'Basis key: {row["basis_key"]}',
+        f"\n### {row['id']} — {row['status']}",
+        f"Use: {spec['use']}",
+        f"Question: {spec['question']}",
+        f"Groups: {', '.join(spec['groups']) or '(none)'}",
+        f"Basis key: {row['basis_key']}",
     ]
 
     for entry in row["basis"]:
-        lines.append(f'Source: {entry["path"]}; object={entry["sha256"]}; bytes={entry["bytes"]}')
+        lines.append(f"Source: {entry['path']}; object={entry['sha256']}; bytes={entry['bytes']}")
 
     if row["assessment"]:
         assessment = row["assessment"]
-        lines.append(f'Last public account ({assessment["producer"]}): {assessment["account"]}')
+        lines.append(f"Last public account ({assessment['producer']}): {assessment['account']}")
         if assessment["remaining"]:
             lines.append("Open in that account: " + "; ".join(assessment["remaining"]))
         for prod in row["products"]:
             lines.append(
-                f'Captured product: {prod["path"]}; object={prod["sha256"]}; '
-                f'current bytes match={prod["current_bytes_match"]}. '
+                f"Captured product: {prod['path']}; object={prod['sha256']}; "
+                f"current bytes match={prod['current_bytes_match']}. "
                 "Binding alone does not establish the claimed contribution."
             )
 
@@ -124,7 +130,9 @@ class Attention:
         if self.feedback_object(feedback) == occurrence:
             return
         if self.index_identity() != before:
-            raise ValueError("Attention changed before commit; inspect and abandon-context, then reselect")
+            raise ValueError(
+                "Attention changed before commit; inspect and abandon-context, then reselect"
+            )
 
         data = draft.state_path.read_bytes()
         if sha(data) != after or draft.feedback_object(feedback) != occurrence:
@@ -205,7 +213,7 @@ class Attention:
                         or not 0 <= ref[1] < MAX_ITEMS
                     ):
                         return False
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return False
 
         return True
@@ -217,7 +225,10 @@ class Attention:
 
         current["receipt_ids"][record["id"]] = position
         for offset, assessment in enumerate(record["assessments"]):
-            current["latest"].setdefault(assessment["item"], {})[assessment["basis_key"]] = [position, offset]
+            current["latest"].setdefault(assessment["item"], {})[assessment["basis_key"]] = [
+                position,
+                offset,
+            ]
 
     @staticmethod
     def _seal_current(state: dict[str, Any], current: dict[str, Any]) -> None:
@@ -252,12 +263,18 @@ class Attention:
                 if position not in records:
                     records[position] = self._get(state["receipts"][position])
                 record = records[position]
-                if offset >= len(record["assessments"]) or current["receipt_ids"].get(record["id"]) != position:
+                if (
+                    offset >= len(record["assessments"])
+                    or current["receipt_ids"].get(record["id"]) != position
+                ):
                     break
                 assessment = record["assessments"][offset]
                 if assessment["item"] != ident or assessment["basis_key"] != basis:
                     break
-                selected[ident] = assessment | {"receipt": record["id"], "producer": record["producer"]}
+                selected[ident] = assessment | {
+                    "receipt": record["id"],
+                    "producer": record["producer"],
+                }
             else:
                 return current, selected
 
@@ -311,7 +328,14 @@ class Attention:
         state = self._load()
         normalized: dict[str, dict[str, Any]] = {}
         for row in rows:
-            if not isinstance(row, dict) or set(row) - {"id", "question", "use", "basis", "groups", "active"}:
+            if not isinstance(row, dict) or set(row) - {
+                "id",
+                "question",
+                "use",
+                "basis",
+                "groups",
+                "active",
+            }:
                 raise ValueError("invalid item fields")
             ident = _id(row["id"])
             if ident in normalized:
@@ -343,7 +367,12 @@ class Attention:
             self.ex.get(captured["sha256"]).decode("utf-8")
             state["field"] = field
 
-        revision = {"created_at": now(), "source": source, "items": normalized, "field": state["field"]}
+        revision = {
+            "created_at": now(),
+            "source": source,
+            "items": normalized,
+            "field": state["field"],
+        }
         for ident, item in normalized.items():
             state["items"][ident] = self._put(item)
         state["revisions"].append(self._put(revision))
@@ -396,18 +425,24 @@ class Attention:
                 for product in assessment["products"]:
                     present = self._observed([product["path"]], captured)[0]
                     products.append(
-                        product | {"current_sha256": present["sha256"], "current_bytes_match": product == present}
+                        product
+                        | {
+                            "current_sha256": present["sha256"],
+                            "current_bytes_match": product == present,
+                        }
                     )
 
-            rows.append({
-                "id": ident,
-                "spec": spec,
-                "basis": basis,
-                "basis_key": basis_key,
-                "status": status,
-                "assessment": assessment,
-                "products": products,
-            })
+            rows.append(
+                {
+                    "id": ident,
+                    "spec": spec,
+                    "basis": basis,
+                    "basis_key": basis_key,
+                    "status": status,
+                    "assessment": assessment,
+                    "products": products,
+                }
+            )
 
         return rows
 
@@ -422,11 +457,14 @@ class Attention:
         limit: int,
         max_bytes: int,
     ) -> tuple[str, list[dict[str, Any]], list[str], list[str]]:
-        field_text = self.ex.get(field["sha256"]).decode("utf-8") if field else "(No wider field supplied.)"
+        field_text = (
+            self.ex.get(field["sha256"]).decode("utf-8") if field else "(No wider field supplied.)"
+        )
         text = (
             f"# Attention return: {ident}\n\n{BOUNDARY}\n\n"
             f"Active declared items: {len(active)}. Selected by this view: {len(selected)}. "
-            f"Current counts within this selected view only: {json.dumps(counts, ensure_ascii=False)}. "
+            "Current counts within this selected view only: "
+            f"{json.dumps(counts, ensure_ascii=False)}. "
             "Sources outside this view were not revalidated.\n\n"
             "## Wider field (caller/model-authored material, not a priority oracle)\n\n"
             + field_text
@@ -435,13 +473,18 @@ class Attention:
 
         tail_max = 800
         if len(text.encode("utf-8")) + tail_max > max_bytes:
-            raise ValueError("wider field cannot fit; supply a smaller explicit field or increase the bound")
+            raise ValueError(
+                "wider field cannot fit; supply a smaller explicit field or increase the bound"
+            )
 
         delivered: list[dict[str, Any]] = []
         omitted: list[str] = []
         for row in selected:
             block = _render_feedback_entry(row)
-            if len(delivered) >= limit or len((text + block).encode("utf-8")) + tail_max > max_bytes:
+            if (
+                len(delivered) >= limit
+                or len((text + block).encode("utf-8")) + tail_max > max_bytes
+            ):
                 omitted.append(row["id"])
                 continue
             text += block
@@ -450,9 +493,11 @@ class Attention:
         unselected = [spec["id"] for spec in active if spec["id"] not in selected_ids]
         text += (
             f"\nDelivery: {len(delivered)} shown; {len(omitted)} selected items omitted by bounds; "
-            f"{len(unselected)} active items outside this view. Inspect the saved feedback for exact IDs.\n"
-            "No absence from this view establishes irrelevance. No named-list completion establishes "
-            "exhausted discovery. Develop further implications or change the view when that is useful.\n"
+            f"{len(unselected)} active items outside this view. "
+            "Inspect the saved feedback for exact IDs.\n"
+            "No absence from this view establishes irrelevance. "
+            "No named-list completion establishes exhausted discovery. "
+            "Develop further implications or change the view when that is useful.\n"
         )
         return text, delivered, omitted, unselected
 
@@ -484,7 +529,9 @@ class Attention:
         selected_ids = {
             spec["id"]
             for spec in active
-            if not (items or groups) or spec["id"] in items or set(spec["groups"]).intersection(groups)
+            if not (items or groups)
+            or spec["id"] in items
+            or set(spec["groups"]).intersection(groups)
         }
         captured: dict[str, dict[str, Any]] = {}
         selected = self._rows(state, selected_ids, captured, specs)
@@ -504,7 +551,14 @@ class Attention:
             raise ValueError("wider field is unavailable; historical feedback remains inspectable")
 
         text, delivered, omitted, unselected = self._render_feedback_body(
-            ident, active, selected, selected_ids, counts, field, limit, max_bytes,
+            ident,
+            active,
+            selected,
+            selected_ids,
+            counts,
+            field,
+            limit,
+            max_bytes,
         )
         encoded_text = text.encode("utf-8")
         body = {
@@ -573,18 +627,22 @@ class Attention:
             for question in remaining:
                 _text(question, "remaining question")
 
-            products = [self.ex.snapshot(p) for p in _strings(assessment.get("products", []), "products")]
+            products = [
+                self.ex.snapshot(p) for p in _strings(assessment.get("products", []), "products")
+            ]
             row = selected[item]
-            made.append({
-                "item": item,
-                "basis_key": row["basis_key"],
-                "spec": row["spec"],
-                "basis": row["basis"],
-                "disposition": assessment["disposition"],
-                "account": account,
-                "remaining": remaining,
-                "products": products,
-            })
+            made.append(
+                {
+                    "item": item,
+                    "basis_key": row["basis_key"],
+                    "spec": row["spec"],
+                    "basis": row["basis"],
+                    "disposition": assessment["disposition"],
+                    "account": account,
+                    "remaining": remaining,
+                    "products": products,
+                }
+            )
 
         body = {
             "version": 1,
@@ -696,7 +754,10 @@ def main() -> None:
 
         if isinstance(result, bytes):
             if not text:
-                raise ValueError("object reading requires --text; use the existing content store for binary bytes")
+                raise ValueError(
+                    "object reading requires --text; "
+                    "use the existing content store for binary bytes"
+                )
             sys.stdout.write(result.decode("utf-8"))
         elif text:
             sys.stdout.write(result["context"])
@@ -704,10 +765,10 @@ def main() -> None:
             print(json.dumps(result, ensure_ascii=False, indent=2))
     except AdmissionContended as exc:
         print(json.dumps(exc.result(action)), file=sys.stderr)
-        raise SystemExit(75)
+        raise SystemExit(75) from None
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         print(json.dumps({"error": str(exc), "operation": action}), file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(2) from None
 
 
 if __name__ == "__main__":

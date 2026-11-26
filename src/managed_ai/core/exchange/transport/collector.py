@@ -5,25 +5,23 @@ Admit records a request; resume dispatches it at most once; receive returns actu
 bytes and a conservative outcome. No shell, automatic retry, semantic acceptance,
 or follow-up command execution is provided. See docs/engine/core/README.md for the support scope.
 """
-from __future__ import annotations
 
 import argparse
 import base64
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
-from typing import Any, Callable
 import uuid
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
 if __name__ == "__main__":
     sys.dont_write_bytecode = True
     _src_root = str(Path(__file__).resolve().parents[4])
     if _src_root not in sys.path:
         sys.path.insert(0, _src_root)
-
-from managed_ai.platform import check_unfollowed_ancestors, detached_subprocess_kwargs
 
 from managed_ai.core.ownership import NativeLayout, external_root
 from managed_ai.core.storage import (
@@ -41,6 +39,7 @@ from managed_ai.core.storage import (
     unlock_file,
     write_json,
 )
+from managed_ai.platform import check_unfollowed_ancestors, detached_subprocess_kwargs
 
 native_owner = NativeLayout.owner_of
 
@@ -82,7 +81,9 @@ def material(path: Path) -> dict[str, Any]:
     }
 
 
-def _worker_command_and_env(root: Path, job_key: str, token: str) -> tuple[list[str], dict[str, str]]:
+def _worker_command_and_env(
+    root: Path, job_key: str, token: str
+) -> tuple[list[str], dict[str, str]]:
     """Invoke the detached worker via python -m with the exact pinned package tree on PYTHONPATH."""
     engine = Path(__file__).resolve().parents[3]
     env = dict(os.environ)
@@ -109,9 +110,13 @@ def _worker_command_and_env(root: Path, job_key: str, token: str) -> tuple[list[
 class Collector:
     """Durable file-backed collector for explicitly admitted local commands."""
 
-    def __init__(self, root: Path, *, check_job_owner: Callable[[str | None], None] | None = None) -> None:
+    def __init__(
+        self, root: Path, *, check_job_owner: Callable[[str | None], None] | None = None
+    ) -> None:
         self._selected_owner = check_job_owner
-        checked = check_unfollowed_ancestors(Path(root).expanduser(), "Collector root", include_target=True)
+        checked = check_unfollowed_ancestors(
+            Path(root).expanduser(), "Collector root", include_target=True
+        )
         self.root = checked.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.jobs = self.root / "jobs"
@@ -126,7 +131,8 @@ class Collector:
         owner = native_owner(self.root)
         if owner is not None:
             raise ValueError(
-                f"carrier belongs to the native runtime; use manage_store.py --root {owner} run for the selected turn"
+                f"carrier belongs to the native runtime; use manage_store.py --root {owner} "
+                "run for the selected turn"
             )
 
     def admit(
@@ -148,11 +154,15 @@ class Collector:
         if not argv or any(not isinstance(item, str) or "\0" in item for item in argv):
             raise ValueError("nonempty argv with no NUL characters required")
 
-        workdir = check_unfollowed_ancestors(cwd, "Job cwd", include_target=True).resolve(strict=True)
+        workdir = check_unfollowed_ancestors(cwd, "Job cwd", include_target=True).resolve(
+            strict=True
+        )
         if not workdir.is_dir():
             raise ValueError("cwd must be an existing directory")
 
-        brief_path = check_unfollowed_ancestors(brief, "Job brief", include_target=True).resolve(strict=True)
+        brief_path = check_unfollowed_ancestors(brief, "Job brief", include_target=True).resolve(
+            strict=True
+        )
         origin = material(brief_path)
         if origin.get("utf8_text") is None:
             raise ValueError("originating brief must be UTF-8 text")
@@ -175,9 +185,13 @@ class Collector:
         if directory.exists():
             old = read_json(directory / "request.json")
             if old.get("dispatch_binding_sha256") != dispatch_binding_sha256:
-                raise ValueError("job already admitted with another binding; receive under its original scope")
+                raise ValueError(
+                    "job already admitted with another binding; receive under its original scope"
+                )
             if {k: v for k, v in old.items() if k != "admitted_at"} != request:
-                raise ValueError("job identity already names a different request; choose a new identity")
+                raise ValueError(
+                    "job identity already names a different request; choose a new identity"
+                )
             if dispatch_binding_sha256 is not None:
                 sync_dir(self.jobs)
             return {"job_id": job_id, "admission": "already-recorded", "key": key}
@@ -229,7 +243,7 @@ class Collector:
 
                 worker_argv, worker_env = _worker_command_and_env(self.root, directory.name, token)
                 with (directory / "worker.log").open("ab") as log:
-                    process = subprocess.Popen(
+                    process = subprocess.Popen(  # noqa: S603
                         worker_argv,
                         stdin=subprocess.DEVNULL,
                         stdout=log,
@@ -238,17 +252,21 @@ class Collector:
                         env=worker_env,
                         **detached_subprocess_kwargs(),
                     )
-                reports.append({
-                    "job_id": request["job_id"],
-                    "dispatch": "requested",
-                    "worker_pid_hint": process.pid,
-                })
+                reports.append(
+                    {
+                        "job_id": request["job_id"],
+                        "dispatch": "requested",
+                        "worker_pid_hint": process.pid,
+                    }
+                )
             except (OSError, ValueError, KeyError, TypeError) as exc:
-                reports.append({
-                    "directory": str(directory),
-                    "dispatch": "unresolved",
-                    "error": str(exc),
-                })
+                reports.append(
+                    {
+                        "directory": str(directory),
+                        "dispatch": "unresolved",
+                        "error": str(exc),
+                    }
+                )
 
         return reports
 
@@ -267,7 +285,9 @@ class Collector:
 
         # Read the terminal record before stream bodies. Its publication
         # follows the worker's stream fsyncs; otherwise this is a snapshot.
-        terminal = read_json(directory / "result.json") if (directory / "result.json").exists() else None
+        terminal = (
+            read_json(directory / "result.json") if (directory / "result.json").exists() else None
+        )
         streams = {which: material(directory / (which + ".bin")) for which in ("stdout", "stderr")}
 
         view: dict[str, Any] = {
@@ -282,10 +302,9 @@ class Collector:
 
         if terminal is not None:
             dispatch = read_json(directory / "dispatch.json")
-            if (
-                terminal["attempt_id"] != dispatch["attempt_id"]
-                or dispatch["request_sha256"] != sha(encode(request))
-            ):
+            if terminal["attempt_id"] != dispatch["attempt_id"] or dispatch[
+                "request_sha256"
+            ] != sha(encode(request)):
                 raise ValueError("request/attempt/result binding mismatch")
 
             valid = all(
@@ -323,7 +342,9 @@ class Collector:
                 else "current-interpretation-required"
             )
         except (OSError, ValueError, KeyError) as exc:
-            view.update(interpretation="current-context-unavailable", current_context_error=str(exc))
+            view.update(
+                interpretation="current-context-unavailable", current_context_error=str(exc)
+            )
 
         return view
 
@@ -374,7 +395,9 @@ class Collector:
         with exclusive(directory / "worker.lock"):
             dispatch = read_json(directory / "dispatch.json")
             request = read_json(directory / "request.json")
-            if token != dispatch["attempt_id"] or dispatch["request_sha256"] != sha(encode(request)):
+            if token != dispatch["attempt_id"] or dispatch["request_sha256"] != sha(
+                encode(request)
+            ):
                 raise ValueError("worker does not match admitted attempt")
             if (directory / "started.json").exists() or (directory / "result.json").exists():
                 raise ValueError("an execution was already attempted; refusing repeat")
@@ -397,7 +420,7 @@ class Collector:
                 (directory / "stderr.bin").open("xb") as stderr,
             ):
                 try:
-                    child = subprocess.Popen(
+                    child = subprocess.Popen(  # noqa: S603
                         request["argv"],
                         cwd=request["cwd"],
                         stdin=subprocess.DEVNULL,
@@ -445,10 +468,14 @@ def _build_parser() -> argparse.ArgumentParser:
     admit.add_argument("--brief", type=Path, required=True)
     admit.add_argument("argv", nargs=argparse.REMAINDER)
 
-    sub.add_parser("resume", allow_abbrev=False, help="start only admitted jobs with no recorded attempt")
+    sub.add_parser(
+        "resume", allow_abbrev=False, help="start only admitted jobs with no recorded attempt"
+    )
     sub.add_parser("list", allow_abbrev=False, help="show all work and actual stream snapshots")
 
-    receive = sub.add_parser("receive", allow_abbrev=False, help="show actual material for a named consumer")
+    receive = sub.add_parser(
+        "receive", allow_abbrev=False, help="show actual material for a named consumer"
+    )
     receive.add_argument("consumer")
     receive.add_argument("--current-brief", type=Path)
 
@@ -459,7 +486,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(*, validate_root=external_root) -> None:
+def main(*, validate_root: Callable[[Path], Path] | None = external_root) -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
@@ -473,8 +500,11 @@ def main(*, validate_root=external_root) -> None:
         guard = shared if read_only else exclusive
         deadline = admission_deadline(args.admission_deadline)
 
+        out: Any
         with owner_admission(
-            lambda guards: guards.enter_context(guard(collector.root / "owner.lock", allow_readonly_open=read_only)),
+            lambda guards: guards.enter_context(
+                guard(collector.root / "owner.lock", allow_readonly_open=read_only)
+            ),
             deadline=deadline,
         ):
             if args.command == "admit":
@@ -490,7 +520,7 @@ def main(*, validate_root=external_root) -> None:
         sys.stdout.buffer.write(encode(out))
     except AdmissionContended as exc:
         print(json.dumps(exc.result(args.command)), file=sys.stderr)
-        raise SystemExit(75)
+        raise SystemExit(75) from None
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         parser.exit(2, f"collector: {exc}\n")
 

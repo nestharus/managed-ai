@@ -1,5 +1,4 @@
 """Domain-native structural protocols for the Managed AI store package."""
-from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -74,7 +73,7 @@ class CatalogueReader(Protocol):
     def search(
         self,
         ident: str | None = None,
-        query: str = '',
+        query: str = "",
         kind: str | None = None,
         limit: int = 25,
         offset: int = 0,

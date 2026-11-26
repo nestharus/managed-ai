@@ -1,10 +1,10 @@
 """Location and authority at effect boundaries for native and standalone workspaces."""
-from __future__ import annotations
 
+import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
-import re
-from typing import Protocol
+from typing import Any, Protocol
 
 from managed_ai.platform import check_unfollowed_ancestors, validate_safe_segment
 
@@ -24,7 +24,7 @@ def packet_id(value: str) -> str:
 
 
 def relative_path(value: str) -> str:
-    """Validate one portable POSIX-style relative workspace path without traversal or reserved names."""
+    """Validate a portable POSIX relative workspace path without traversal or reserved names."""
     if not isinstance(value, str) or not value or "\0" in value or "\\" in value:
         raise ValueError("a nonempty relative workspace path without traversal is required")
 
@@ -48,15 +48,18 @@ def relative_path(value: str) -> str:
     return p.as_posix()
 
 
-def external_root(root: Path, role: str = "runtime root", *, module_file: str | None = None) -> Path:
-    """Ensure runtime/exchange roots are ordinary unfollowed paths strictly outside the engine tree."""
+def external_root(
+    root: Path, role: str = "runtime root", *, module_file: str | None = None
+) -> Path:
+    """Ensure runtime/exchange roots are ordinary unfollowed paths outside the engine tree."""
     checked = check_unfollowed_ancestors(Path(root).expanduser(), role, include_target=True)
     resolved = checked.resolve()
 
     package = Path(module_file or __file__).resolve().parent
     parent = package.parent
     if (parent / "CURRENT-RELEASE.json").is_file() or (
-        (parent / "deployment" / "controller.py").is_file() and (parent / "store" / "system.py").is_file()
+        (parent / "deployment" / "controller.py").is_file()
+        and (parent / "store" / "system.py").is_file()
     ):
         protected = parent
     else:
@@ -89,13 +92,22 @@ class NativeLayout:
     def descriptor(self) -> Path:
         return self.root / self.DESCRIPTOR
 
-    def read_descriptor(self, reader=read_json) -> dict:
+    def read_descriptor(
+        self,
+        reader: Callable[[Path], dict[str, Any]] = read_json,
+    ) -> dict[str, Any]:
         record = reader(self.descriptor)
         if record.get("format") != self.FORMAT:
             raise ValueError("unsupported agent-system format")
         return record
 
-    def write_descriptor(self, *, app_version: str, core_version: str, **selection) -> None:
+    def write_descriptor(
+        self,
+        *,
+        app_version: str,
+        core_version: str,
+        **selection: Any,
+    ) -> None:
         write_json(
             self.descriptor,
             {
@@ -111,7 +123,9 @@ class NativeLayout:
     def owner_of(cls, path: Path) -> Path | None:
         """Find the existing native declaration along the actual effect destination."""
         for part in (path, *path.parents):
-            if part.name not in {cls.WORK, cls.EXCHANGE} and not (part == path and part.name == cls.DESCRIPTOR):
+            if part.name not in {cls.WORK, cls.EXCHANGE} and not (
+                part == path and part.name == cls.DESCRIPTOR
+            ):
                 continue
 
             layout = cls(part.parent)
