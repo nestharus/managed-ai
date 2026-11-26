@@ -18,21 +18,22 @@ ROLES = ('methods', 'materials', 'targets', 'returns', 'artifacts')
 def captured_view(exchange, turn, request):
     """Read only the full view referenced by this already validated packet."""
     prefix = '.system/turns/' + turn + '/'
-    exposure = next((r for r in request['materials'] if r['path'] == prefix + 'exposure.json'), None)
-    if exposure is not None:
-        binding = strict_json_loads(exchange.objects.read(exposure['sha256']), 'exposure.json')
-        validate_optional_format(binding, TURN_EXPOSURE_FORMAT, 'exposure.json')
-        view = strict_json_loads(exchange.objects.read(binding['full_view_object']), 'view.json')
+    with exchange.objects.pack_session():
+        exposure = next((r for r in request['materials'] if r['path'] == prefix + 'exposure.json'), None)
+        if exposure is not None:
+            binding = strict_json_loads(exchange.objects.read(exposure['sha256']), 'exposure.json')
+            validate_optional_format(binding, TURN_EXPOSURE_FORMAT, 'exposure.json')
+            view = strict_json_loads(exchange.objects.read(binding['full_view_object']), 'view.json')
+            validate_optional_format(view, TURN_VIEW_FORMAT, 'view.json')
+            return view
+
+        original = next((r for r in request['materials'] if r['path'] == prefix + 'view.json'), None)
+        if original is None:
+            raise ValueError('no captured system view for this turn')
+
+        view = strict_json_loads(exchange.objects.read(original['sha256']), 'view.json')
         validate_optional_format(view, TURN_VIEW_FORMAT, 'view.json')
         return view
-
-    original = next((r for r in request['materials'] if r['path'] == prefix + 'view.json'), None)
-    if original is None:
-        raise ValueError('no captured system view for this turn')
-
-    view = strict_json_loads(exchange.objects.read(original['sha256']), 'view.json')
-    validate_optional_format(view, TURN_VIEW_FORMAT, 'view.json')
-    return view
 
 
 def _parse_captured_origins(view: dict, included: set[tuple[str, str]]) -> dict[tuple[str, str], list]:
@@ -58,6 +59,7 @@ def _verify_packet_entries(exchange, entries: list[tuple[str, dict]], record_pat
 
     for role, row in entries:
         key = row['sha256']
+        body = None
         if key is None:
             if row['bytes'] != 0:
                 raise ValueError('absent captured input has a nonzero byte count')
@@ -69,7 +71,9 @@ def _verify_packet_entries(exchange, entries: list[tuple[str, dict]], record_pat
             raise ValueError('captured input byte count differs: ' + row['path'])
 
         if role == 'materials' and row['path'] in record_paths:
-            record = strict_json_loads(exchange.objects.read(key), row['path'])
+            if body is None:
+                body = exchange.objects.read(key)
+            record = strict_json_loads(body, row['path'])
             if record.get('id') != record_paths[row['path']]:
                 raise ValueError('captured selected-record identity differs')
             records[record['id']] = record
@@ -150,24 +154,25 @@ def _build_explanation_units(
 
 
 def explain_context(exchange, turn):
-    directory, request = exchange.load(turn)
-    view = captured_view(exchange, turn, request)
-    binding = read_json(directory / 'binding.json')
-    validate_optional_format(binding, PACKET_BINDING_FORMAT, 'binding.json')
+    with exchange.objects.pack_session():
+        directory, request = exchange.load(turn)
+        view = captured_view(exchange, turn, request)
+        binding = read_json(directory / 'binding.json')
+        validate_optional_format(binding, PACKET_BINDING_FORMAT, 'binding.json')
 
-    carrier = read_bytes(directory / 'context.md', MAX_PACKET_BYTES)
-    if sha(carrier) != binding['context_sha256'] or sha(encode(request)) != binding['request_sha256']:
-        raise ValueError('frozen request/context changed')
+        carrier = read_bytes(directory / 'context.md', MAX_PACKET_BYTES)
+        if sha(carrier) != binding['context_sha256'] or sha(encode(request)) != binding['request_sha256']:
+            raise ValueError('frozen request/context changed')
 
-    entries = [('brief', request['brief'])]
-    entries.extend((role, row) for role in ROLES for row in request.get(role, []))
-    included = {(role, row['path']) for role, row in entries}
-    recorded = _parse_captured_origins(view, included)
+        entries = [('brief', request['brief'])]
+        entries.extend((role, row) for role in ROLES for row in request.get(role, []))
+        included = {(role, row['path']) for role, row in entries}
+        recorded = _parse_captured_origins(view, included)
 
-    # Recover record/basis correspondence strictly from selected immutable objects.
-    record_paths = {'records/' + ident + '.json': ident for ident in view['selected_records']}
-    records, object_sizes, by_role = _verify_packet_entries(exchange, entries, record_paths)
-    units = _build_explanation_units(turn, entries, view, recorded, record_paths, records)
+        # Recover record/basis correspondence strictly from selected immutable objects.
+        record_paths = {'records/' + ident + '.json': ident for ident in view['selected_records']}
+        records, object_sizes, by_role = _verify_packet_entries(exchange, entries, record_paths)
+        units = _build_explanation_units(turn, entries, view, recorded, record_paths, records)
 
     nonempty = sum(row['sha256'] is not None for _, row in entries)
     return {

@@ -20,7 +20,6 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from tests._paths import ENGINE, SRC, cleanup_tempdir
-import managed_ai.core._platform as core_platform
 import managed_ai.platform as platform_pkg
 from managed_ai.platform import (
     KeyedLockPool,
@@ -123,7 +122,7 @@ class PlatformAdapterTests(unittest.TestCase):
         self.assertFalse((ENGINE / "contracts").exists(), "No generic top-level contracts/ bucket folder")
 
     def test_platform_hygiene_zero_semicolons_and_clean_spacing(self):
-        targets = [*sorted((ENGINE / "platform").rglob("*.py")), ENGINE / "core/_platform.py"]
+        targets = sorted((ENGINE / "platform").rglob("*.py"))
         for py in targets:
             text = py.read_text(encoding="utf-8")
             semi_lines = [
@@ -133,7 +132,7 @@ class PlatformAdapterTests(unittest.TestCase):
             ]
             self.assertEqual(semi_lines, [], f"Semicolons in {py.name}: {semi_lines}")
             lines = text.splitlines()
-            if py.name not in ("__init__.py", "_platform.py") and len(lines) >= 40:
+            if py.name != "__init__.py" and len(lines) >= 40:
                 blank_ratio = sum(1 for line in lines if not line.strip()) / len(lines)
                 self.assertGreaterEqual(blank_ratio, 0.15, f"Low blank ratio in {py.name}: {blank_ratio:.2%}")
 
@@ -163,7 +162,8 @@ class PlatformAdapterTests(unittest.TestCase):
         self.assertEqual(LockMode.SHARED.value, "shared")
         self.assertEqual(LockMode.EXCLUSIVE.value, "exclusive")
 
-    def test_core_platform_backward_compatibility_wrapper(self):
+    def test_core_platform_wrapper_retired_and_platform_exports_canonical(self):
+        self.assertFalse((ENGINE / "core/_platform.py").exists())
         expected_symbols = (
             "OPEN_DIR_NOFOLLOW",
             "OPEN_RO_NOFOLLOW",
@@ -182,7 +182,7 @@ class PlatformAdapterTests(unittest.TestCase):
             "unlock_file",
         )
         for name in expected_symbols:
-            self.assertIs(getattr(core_platform, name), getattr(platform_pkg, name))
+            self.assertTrue(hasattr(platform_pkg, name), f"Missing canonical platform export: {name}")
         self.assertIsInstance(OPEN_RO_NOFOLLOW, int)
         self.assertIsInstance(OPEN_DIR_NOFOLLOW, int)
 

@@ -29,8 +29,8 @@
       "link_base": "../../docs/engine/store/README.md",
       "presentation": "../../docs/engine/store/README.md",
       "kind": "guide",
-      "sha256": "234e5b826cb17b392c51b274434ffd001f900a6ef3fbde3a6a4b0c85ddfb4820",
-      "bytes": 50284,
+      "sha256": "385e75d57bdf29faafad51e5666bdbbe7d6d9371c6552ed81d2bc0c440266739",
+      "bytes": 50901,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -109,8 +109,8 @@
       "link_base": "../../docs/engine/CLI-FIELD-REFERENCE.md",
       "presentation": "../../docs/engine/CLI-FIELD-REFERENCE.md",
       "kind": "guide",
-      "sha256": "0aa62a01a9024457d952bc45dbdbd471b515bc4c804c114f38e199e4e64e723b",
-      "bytes": 22942,
+      "sha256": "a8f334d1fbe47a15103d733f563f426e7bf49e90e39ae82be9dd255edcf17e44",
+      "bytes": 24262,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {

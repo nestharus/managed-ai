@@ -237,6 +237,18 @@ The authoritative field contracts are `patterns/prospective-reception/discovery/
 
 `recall.py` searches the new prospect's query against indexed actual observed uses. It returns bounded candidates, prior verdict/conditions, later differing verdicts, branches, and exact shared-evidence co-uses when present. It does not read unselected owner windows or establish that a candidate applies to the new use.
 
+## Storage indexing, shard slab packing, and object GC
+
+```bash
+python3 -B "$G60_BASE/store/manage_store.py" --root RUNTIME reindex
+python3 -B "$G60_BASE/store/manage_store.py" --root RUNTIME pack-objects --shard-bytes 67108864
+python3 -B "$G60_BASE/store/manage_store.py" --root RUNTIME pack-objects --apply --expected-plan PLAN_SHA256 --reason ACCOUNT
+python3 -B "$G60_BASE/store/manage_store.py" --root RUNTIME audit-objects
+python3 -B "$G60_BASE/store/manage_store.py" --root RUNTIME gc-objects --expected-plan PLAN_SHA256 --reason ACCOUNT
+```
+
+`reindex` builds an HMAC-verified binary `HeadIndex v3` generation (`exchange/.system/head-index.current.json` -> `head-index.gen<N>.bin`, with forward/reverse CSR edges and an append-only `.delta.jsonl` sidecar) read via zero-copy `mmap` (`HeadIndexView`). `pack-objects` (dry-run by default under shared lock; `--apply` under exclusive owner lock) packs loose immutable objects into reserved append-only shard slabs under `exchange/objects/packs/CURRENT.json` (`.slab` + 256-fanout `.idx` + `.occ`) after 100% SHA-256 readback verification. `gc-objects` applies plan-guarded unreachable-object removal: loose orphans are unlinked and packed orphans are tombstoned via a fresh `.occ<G>` generation, automatically repacking shards physically once dead bytes exceed 30%.
+
 ## Changed-read routing
 
 The public CLI accepts receipts and supplied changes:

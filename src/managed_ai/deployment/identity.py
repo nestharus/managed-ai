@@ -176,9 +176,9 @@ def _status_payload(
     return payload
 
 
-def _collect_engine_modules(engine: Path) -> list[Path]:
+def _scan_engine_subtree(root_dir: Path, initial_cache: bool) -> list[Path]:
     paths: list[Path] = []
-    pending: list[tuple[Path, bool]] = [(engine, False)]
+    pending: list[tuple[Path, bool]] = [(root_dir, initial_cache)]
 
     while pending:
         directory, cache = pending.pop()
@@ -202,6 +202,40 @@ def _collect_engine_modules(engine: Path) -> list[Path]:
                     if lower.endswith(".py") and not _is_test_module_name(name):
                         paths.append(path)
 
+    return paths
+
+
+def _collect_engine_modules(engine: Path) -> list[Path]:
+    paths: list[Path] = []
+    subdirs: list[tuple[Path, bool]] = []
+
+    with os.scandir(engine) as entries:
+        for entry in entries:
+            name = entry.name
+            path = engine / name
+            mode = _ordinary_mode(path, entry.stat(follow_symlinks=False))
+            if stat.S_ISDIR(mode):
+                lower = name.casefold()
+                if lower in CODE_IDENTITY_EXCLUDED_DIRS:
+                    continue
+                subdirs.append((path, lower == "__pycache__"))
+            else:
+                lower = name.lower()
+                if lower.endswith(NON_SOURCE_SUFFIXES):
+                    raise ValueError(f"shared engine requires Python source for executable modules: {path}")
+                if lower.endswith(".py") and not _is_test_module_name(name):
+                    paths.append(path)
+
+    if len(subdirs) >= 4:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=min(8, len(subdirs))) as pool:
+            for found in pool.map(lambda item: _scan_engine_subtree(item[0], item[1]), subdirs):
+                paths.extend(found)
+    else:
+        for sub_path, is_cache in subdirs:
+            paths.extend(_scan_engine_subtree(sub_path, is_cache))
+
     return sorted(paths)
 
 
@@ -222,10 +256,10 @@ def _hash_engine_modules(
             ))
         return out
 
-    if len(sorted_paths) >= 32:
+    if len(sorted_paths) >= 16:
         from concurrent.futures import ThreadPoolExecutor
 
-        workers = min(8, (len(sorted_paths) + 15) // 16)
+        workers = min(8, (len(sorted_paths) + 7) // 8)
         step = (len(sorted_paths) + workers - 1) // workers
         chunks = [sorted_paths[i : i + step] for i in range(0, len(sorted_paths), step)]
         with ThreadPoolExecutor(max_workers=len(chunks)) as pool:

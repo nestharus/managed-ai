@@ -105,7 +105,7 @@ def inside_product(path, product):
     if (product.parent / 'CURRENT-RELEASE.json').is_file():
         if resolved == product.parent or resolved.is_relative_to(product.parent):
             return True
-    # Guard enclosing package root when hosted under src/managed_ai/collective (or legacy optional/collective).
+    # Guard enclosing package root when hosted under src/managed_ai/collective.
     if product.name == 'collective':
         candidates = (product.parent,)
         if product.parent.name == 'optional':

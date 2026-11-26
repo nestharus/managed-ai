@@ -5,26 +5,22 @@ from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 import errno
 import hashlib
-import io
 import json
-import mmap
 import os
 from pathlib import Path
 import random
-import re
 import stat
-import struct
+import threading
 import time
 from typing import Any, Iterator
 import uuid
 import zlib
 
-from managed_ai.platform import atomic_bytes as _platform_atomic_bytes
-
-from ._platform import (
+from managed_ai.platform import (
     OPEN_DIR_NOFOLLOW as _OPEN_DIR_NOFOLLOW,
     OPEN_RO_NOFOLLOW as _OPEN_RO_NOFOLLOW,
     admission_deadline,
+    atomic_bytes as _platform_atomic_bytes,
     check_ordinary_ancestors,
     has_ordinary_dir,
     has_ordinary_file,
@@ -37,34 +33,33 @@ from ._platform import (
     sync_dir,
     unlock_file,
 )
+from .pack_reader import (
+    DEFAULT_SHARD_TARGET_BYTES,
+    FRAME_HEADER_STRUCT,
+    IDX_ENTRIES_OFFSET,
+    IDX_ENTRY_STRUCT,
+    IDX_FANOUT_OFFSET,
+    IDX_HEADER_STRUCT,
+    MAX_BYTES,
+    OCC_HEADER_STRUCT,
+    OCC_LIVE_DEFLATE,
+    OCC_LIVE_RAW,
+    OCC_SEALED,
+    OCC_TOMBSTONE,
+    PACK_CURRENT_FORMAT,
+    PACK_FRAME_MAGIC,
+    PACK_IDX_MAGIC,
+    PACK_OCC_MAGIC,
+    PACK_SLAB_MAGIC,
+    PackSession,
+    PackShardHandle,
+    SLAB_HEADER_STRUCT,
+    decompress_bounded,
+    has_pack_pointer,
+    parse_pack_current,
+)
 
-MAX_BYTES = 2 * 1024 * 1024
 _ORIG_PATH_OPEN = Path.open
-
-# Reserved append-only shard slab layout constants (shared by ObjectStore PackSession & store.records.pack_slab).
-PACK_CURRENT_FORMAT = 'managed-ai-pack-current/1'
-DEFAULT_SHARD_TARGET_BYTES = 64 * 1024 * 1024
-PACK_SLAB_MAGIC = b'MAISLAB1'
-PACK_IDX_MAGIC = b'MAIIDX01'
-PACK_OCC_MAGIC = b'MAIOCC01'
-PACK_FRAME_MAGIC = 0x5346
-OCC_TOMBSTONE = 0
-OCC_LIVE_RAW = 1
-OCC_LIVE_DEFLATE = 2
-OCC_SEALED = 3
-
-SLAB_HEADER_STRUCT = struct.Struct('<8sHHIIQ36x')
-FRAME_HEADER_STRUCT = struct.Struct('<BBHII32sI')
-IDX_HEADER_STRUCT = struct.Struct('<8sHHIIQ4x')
-IDX_FANOUT_OFFSET = IDX_HEADER_STRUCT.size
-IDX_ENTRIES_OFFSET = IDX_FANOUT_OFFSET + 256 * 4
-IDX_ENTRY_STRUCT = struct.Struct('<32sQII')
-OCC_HEADER_STRUCT = struct.Struct('<8sHHI')
-
-_PACK_SLAB_NAME_RE = re.compile(r'^pack-[0-9]{6}-[0-9]{4}\.slab$')
-_PACK_IDX_NAME_RE = re.compile(r'^pack-[0-9]{6}-[0-9]{4}\.idx$')
-_PACK_OCC_NAME_RE = re.compile(r'^pack-[0-9]{6}-[0-9]{4}\.occ[1-9][0-9]*$')
-_PACK_HEX64_RE = re.compile(r'^[0-9a-f]{64}$')
 
 
 def now() -> str:
@@ -311,452 +306,44 @@ def read_bytes(path: Path | str, limit: int = MAX_BYTES, *,
 _READ_BYTES = read_bytes
 
 
-def _open_readonly_regular(path: Path):
-    """Open an ordinary non-symlink regular file read-only, returning (stream, size) or raising ValueError."""
-
-    if hasattr(os, 'O_NOFOLLOW'):
-        try:
-            fd = os.open(path, _OPEN_RO_NOFOLLOW)
-        except OSError as exc:
-            if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
-                raise ValueError(f'ordinary pack file required: {path}') from None
-            raise
-
-        try:
-            info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode):
-                raise ValueError(f'ordinary pack file required: {path}')
-            return os.fdopen(fd, 'rb'), info.st_size
-        except BaseException:
-            os.close(fd)
-            raise
-
-    try:
-        info = path.lstat()
-    except OSError:
-        raise ValueError(f'ordinary pack file required: {path}') from None
-
-    if not is_ordinary_file_stat(info):
-        raise ValueError(f'ordinary pack file required: {path}')
-
-    return path.open('rb'), info.st_size
-
-
-def parse_pack_current(packs_dir: Path) -> dict[str, Any] | None:
-    """Read and strictly validate packs/CURRENT.json, or return None if no pack directory/pointer exists."""
-    pointer = packs_dir / 'CURRENT.json'
-
-    try:
-        info = pointer.lstat()
-    except FileNotFoundError:
-        return None
-    except OSError:
-        raise ValueError(f'ordinary pack pointer required: {pointer}') from None
-
-    if not is_ordinary_file_stat(info):
-        raise ValueError(f'ordinary pack pointer required: {pointer}')
-
-    doc = read_json(pointer)
-
-    if doc.get('format') != PACK_CURRENT_FORMAT:
-        raise ValueError(f'unsupported pack pointer format: {doc.get("format")!r}')
-    gen = doc.get('generation')
-    occ_gen = doc.get('occ_generation')
-
-    if type(gen) is not int or gen < 1 or type(occ_gen) is not int or occ_gen < 1:
-        raise ValueError('invalid pack pointer generation')
-
-    shards = doc.get('shards')
-
-    if not isinstance(shards, list):
-        raise ValueError('pack pointer shards must be a list')
-
-    for shard in shards:
-        if not isinstance(shard, dict):
-            raise ValueError('pack shard descriptor must be an object')
-
-        if type(shard.get('shard')) is not int or shard['shard'] < 0:
-            raise ValueError('invalid pack shard id')
-
-        if not isinstance(shard.get('slab'), str) or not _PACK_SLAB_NAME_RE.fullmatch(shard['slab']):
-            raise ValueError(f'invalid pack slab filename: {shard.get("slab")!r}')
-
-        if not isinstance(shard.get('idx'), str) or not _PACK_IDX_NAME_RE.fullmatch(shard['idx']):
-            raise ValueError(f'invalid pack idx filename: {shard.get("idx")!r}')
-
-        if not isinstance(shard.get('occ'), str) or not _PACK_OCC_NAME_RE.fullmatch(shard['occ']):
-            raise ValueError(f'invalid pack occ filename: {shard.get("occ")!r}')
-
-        if type(shard.get('object_count')) is not int or shard['object_count'] < 0:
-            raise ValueError('invalid pack shard object_count')
-
-        for sha_field in ('slab_sha256', 'idx_sha256', 'occ_sha256'):
-            val = shard.get(sha_field)
-            if not isinstance(val, str) or not _PACK_HEX64_RE.fullmatch(val):
-                raise ValueError(f'invalid {sha_field} in pack pointer')
-
-    return doc
-
-
-class PackShardHandle:
-    """Read-only mmap handle over one immutable (.slab, .idx, .occ) shard triplet."""
-
-    def __init__(self, packs_dir: Path, descriptor: dict[str, Any]) -> None:
-        self.descriptor = descriptor
-        self.shard_id: int = descriptor['shard']
-        self.slab_path = packs_dir / descriptor['slab']
-        self.idx_path = packs_dir / descriptor['idx']
-        self.occ_path = packs_dir / descriptor['occ']
-        self.object_count: int = descriptor['object_count']
-        self._closed = False
-
-        self._idx_stream = None
-        self._idx_mm: mmap.mmap | None = None
-        self._occ_stream = None
-        self._occ_mm: mmap.mmap | None = None
-        self._slab_stream = None
-        self._slab_mm: mmap.mmap | None = None
-        self._slab_size = 0
-        self._fanout: tuple[int, ...] = ()
-
-        try:
-            self._idx_stream, idx_size = _open_readonly_regular(self.idx_path)
-            expected_idx_size = IDX_ENTRIES_OFFSET + self.object_count * IDX_ENTRY_STRUCT.size
-            if idx_size != expected_idx_size:
-                raise ValueError(f'pack idx size mismatch: {self.idx_path}')
-            self._idx_mm = mmap.mmap(self._idx_stream.fileno(), 0, access=mmap.ACCESS_READ)
-            idx_magic, idx_ver, _idx_flags, idx_sid, idx_cnt, _idx_gen = IDX_HEADER_STRUCT.unpack_from(self._idx_mm, 0)
-            if idx_magic != PACK_IDX_MAGIC or idx_ver != 1 or idx_sid != self.shard_id or idx_cnt != self.object_count:
-                raise ValueError(f'corrupt pack idx header: {self.idx_path}')
-            self._fanout = struct.unpack_from('<256I', self._idx_mm, IDX_FANOUT_OFFSET)
-            prev_fanout = 0
-            for fanout_count in self._fanout:
-                if fanout_count < prev_fanout or fanout_count > self.object_count:
-                    raise ValueError(f'corrupt pack idx fanout: {self.idx_path}')
-                prev_fanout = fanout_count
-            if prev_fanout != self.object_count:
-                raise ValueError(f'corrupt pack idx fanout: {self.idx_path}')
-
-            self._occ_stream, occ_size = _open_readonly_regular(self.occ_path)
-            expected_occ_size = OCC_HEADER_STRUCT.size + self.object_count
-            if occ_size != expected_occ_size:
-                raise ValueError(f'pack occ size mismatch: {self.occ_path}')
-            self._occ_mm = mmap.mmap(self._occ_stream.fileno(), 0, access=mmap.ACCESS_READ)
-            occ_magic, occ_ver, _occ_flags, occ_cnt = OCC_HEADER_STRUCT.unpack_from(self._occ_mm, 0)
-            if occ_magic != PACK_OCC_MAGIC or occ_ver != 1 or occ_cnt != self.object_count:
-                raise ValueError(f'corrupt pack occ header: {self.occ_path}')
-
-            self._slab_stream, self._slab_size = _open_readonly_regular(self.slab_path)
-            if self._slab_size < SLAB_HEADER_STRUCT.size:
-                raise ValueError(f'corrupt pack slab size: {self.slab_path}')
-            self._slab_mm = mmap.mmap(self._slab_stream.fileno(), 0, access=mmap.ACCESS_READ)
-            slab_magic, slab_ver, _slab_flags, slab_sid, slab_cnt, _slab_gen = SLAB_HEADER_STRUCT.unpack_from(
-                self._slab_mm, 0,
-            )
-            if slab_magic != PACK_SLAB_MAGIC or slab_ver != 1 or slab_sid != self.shard_id or slab_cnt != self.object_count:
-                raise ValueError(f'corrupt pack slab header: {self.slab_path}')
-        except BaseException:
-            self.close()
-            raise
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-
-        for attr in ('_slab_mm', '_occ_mm', '_idx_mm'):
-            mm = getattr(self, attr, None)
-            setattr(self, attr, None)
-            if mm is not None:
-                try:
-                    mm.close()
-                except (BufferError, ValueError, OSError):
-                    pass
-
-        for attr in ('_slab_stream', '_occ_stream', '_idx_stream'):
-            stream = getattr(self, attr, None)
-            setattr(self, attr, None)
-            if stream is not None:
-                try:
-                    stream.close()
-                except OSError:
-                    pass
-
-    def __del__(self) -> None:
-        self.close()
-
-    def lookup(self, key_bytes: bytes) -> tuple[int, int, int, int, int] | None:
-        """O(log(N/256)) 256-entry fanout binary search in mmap. Returns (slot, occ, slab_off, stored_len, raw_len)."""
-
-        if self._closed or self.object_count == 0:
-            return None
-        first_byte = key_bytes[0]
-        lo = 0 if first_byte == 0 else self._fanout[first_byte - 1]
-        hi = self._fanout[first_byte]
-        idx_mm = self._idx_mm
-        assert idx_mm is not None
-        assert self._occ_mm is not None
-
-        while lo < hi:
-            mid = (lo + hi) >> 1
-            pos = IDX_ENTRIES_OFFSET + mid * 48
-            cur = idx_mm[pos:pos + 32]
-            if cur < key_bytes:
-                lo = mid + 1
-            elif cur > key_bytes:
-                hi = mid
-            else:
-                occ = self._occ_mm[OCC_HEADER_STRUCT.size + mid]
-                if occ == OCC_TOMBSTONE:
-                    return None
-                _, slab_off, stored_len, raw_len = IDX_ENTRY_STRUCT.unpack_from(idx_mm, pos)
-                return mid, occ, slab_off, stored_len, raw_len
-        return None
-
-    def read_frame(
-        self,
-        key_hex: str,
-        key_bytes: bytes,
-        occ: int,
-        slab_off: int,
-        stored_len: int,
-        raw_len: int,
-        *,
-        retained: bool,
-        expected_bytes: int | None,
-    ) -> bytes:
-        """Read and cryptographically verify one frame from the mmapped slab."""
-
-        if occ == OCC_SEALED:
-            raise ValueError(f'sealed packed object cannot be read directly: {key_hex}')
-
-        if occ not in (OCC_LIVE_RAW, OCC_LIVE_DEFLATE):
-            raise ValueError(f'invalid packed object state ({occ}): {key_hex}')
-
-        if expected_bytes is not None and raw_len != expected_bytes:
-            raise ValueError('content object changed (length changed)')
-        limit = raw_len if retained else min(raw_len, MAX_BYTES)
-
-        if not retained and raw_len > MAX_BYTES:
-            raise ValueError(f'file exceeds {MAX_BYTES} bytes: {self.slab_path}')
-
-        frame_end = slab_off + FRAME_HEADER_STRUCT.size + stored_len
-
-        if slab_off < SLAB_HEADER_STRUCT.size or frame_end > self._slab_size:
-            raise ValueError(f'corrupt pack frame bounds: {self.slab_path}')
-
-        slab_mm = self._slab_mm
-        assert slab_mm is not None
-        codec, _flags, magic2, hdr_stored, hdr_raw, hdr_sha, hdr_crc = FRAME_HEADER_STRUCT.unpack_from(
-            slab_mm, slab_off,
-        )
-
-        if (
-            magic2 != PACK_FRAME_MAGIC
-            or codec != occ
-            or hdr_stored != stored_len
-            or hdr_raw != raw_len
-            or hdr_sha != key_bytes
-        ):
-            raise ValueError(f'corrupt pack frame header for {key_hex}')
-
-        payload_start = slab_off + FRAME_HEADER_STRUCT.size
-        payload = slab_mm[payload_start:payload_start + stored_len]
-
-        if (zlib.crc32(payload) & 0xFFFFFFFF) != hdr_crc:
-            raise ValueError(f'corrupt pack frame crc32 for {key_hex}')
-
-        if codec == OCC_LIVE_RAW:
-            data = payload
-        else:
-            data = ObjectStore._decompress_bounded(io.BytesIO(payload), limit, self.slab_path)
-
-        if len(data) != raw_len:
-            raise ValueError('content object changed (length changed)')
-
-        if expected_bytes is not None and len(data) != expected_bytes:
-            raise ValueError('content object changed (length changed)')
-
-        if sha(data) != key_hex:
-            raise ValueError('content object changed')
-
-        return data
-
-    def iter_live_slots(self) -> Iterator[tuple[str, int, int, int, int, int, int]]:
-        """Yield (key_hex, shard_id, slot_idx, occ, slab_off, stored_len, raw_len) for non-tombstoned slots."""
-        idx_mm = self._idx_mm
-        occ_mm = self._occ_mm
-        assert idx_mm is not None and occ_mm is not None
-        occ_base = OCC_HEADER_STRUCT.size
-
-        for slot in range(self.object_count):
-            occ = occ_mm[occ_base + slot]
-            if occ == OCC_TOMBSTONE:
-                continue
-            sha_bin, slab_off, stored_len, raw_len = IDX_ENTRY_STRUCT.unpack_from(
-                idx_mm, IDX_ENTRIES_OFFSET + slot * 48,
-            )
-            yield sha_bin.hex(), self.shard_id, slot, occ, slab_off, stored_len, raw_len
-
-
-class PackSession:
-    """Context-managed read-only mmap session across all active shards in packs/CURRENT.json."""
-
-    def __init__(self, packs_dir: Path, *, current_doc: dict[str, Any] | None = None) -> None:
-        self.packs_dir = packs_dir
-        self._closed = False
-        self.current = parse_pack_current(packs_dir) if current_doc is None else current_doc
-        self.shards: list[PackShardHandle] = []
-
-        if self.current is not None:
-            try:
-                for shard_desc in self.current['shards']:
-                    self.shards.append(PackShardHandle(packs_dir, shard_desc))
-            except BaseException:
-                self.close()
-                raise
-
-    @property
-    def has_packs(self) -> bool:
-        return bool(self.shards)
-
-    def __enter__(self) -> PackSession:
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        self.close()
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-
-        for shard in self.shards:
-            shard.close()
-        self.shards.clear()
-
-    def __del__(self) -> None:
-        self.close()
-
-    def locate(self, key: str) -> tuple[PackShardHandle, int, int, int, int, int] | None:
-        if not self.shards:
-            return None
-        key_bytes = bytes.fromhex(key)
-        # Search newest shards first so a newer repacked/appended shard shadows any older tombstoned slot.
-        for shard in reversed(self.shards):
-            hit = shard.lookup(key_bytes)
-            if hit is not None:
-                return shard, *hit
-        return None
-
-    def has(self, key: str) -> bool:
-        return self.locate(key) is not None
-
-    def read(
-        self,
-        key: str,
-        *,
-        retained: bool = False,
-        expected_bytes: int | None = None,
-    ) -> bytes | None:
-        located = self.locate(key)
-        if located is None:
-            return None
-        shard, _slot, occ, slab_off, stored_len, raw_len = located
-        return shard.read_frame(
-            key,
-            bytes.fromhex(key),
-            occ,
-            slab_off,
-            stored_len,
-            raw_len,
-            retained=retained,
-            expected_bytes=expected_bytes,
-        )
-
-    def live_entries(self) -> list[dict[str, Any]]:
-        """Return live (non-tombstoned) packed object metadata sorted by key."""
-        seen: dict[str, dict[str, Any]] = {}
-        for shard in reversed(self.shards):
-            for key_hex, shard_id, slot, occ, slab_off, stored_len, raw_len in shard.iter_live_slots():
-                if key_hex in seen:
-                    continue
-                seen[key_hex] = {
-                    'object': key_hex,
-                    'shard': shard_id,
-                    'slot': slot,
-                    'occ': occ,
-                    'compressed': occ == OCC_LIVE_DEFLATE,
-                    'slab_offset': slab_off,
-                    'stored_bytes': stored_len,
-                    'raw_bytes': raw_len,
-                    'disk_bytes': stored_len + FRAME_HEADER_STRUCT.size,
-                }
-        return [seen[k] for k in sorted(seen)]
-
-    def iter_verified_sequential(
-        self,
-        keys_filter: set[str] | None = None,
-        *,
-        retained: bool = True,
-    ) -> Iterator[tuple[str, bytes]]:
-        """Scan live packed frames in strict ascending (shard, slab_offset) order for peak sequential throughput."""
-        emitted: set[str] = set()
-        for shard in self.shards:
-            ordered = sorted(shard.iter_live_slots(), key=lambda row: row[4])
-            for key_hex, _sid, _slot, occ, slab_off, stored_len, raw_len in ordered:
-                if key_hex in emitted:
-                    continue
-                if keys_filter is not None and key_hex not in keys_filter:
-                    continue
-                if occ == OCC_SEALED:
-                    continue
-                raw = shard.read_frame(
-                    key_hex,
-                    bytes.fromhex(key_hex),
-                    occ,
-                    slab_off,
-                    stored_len,
-                    raw_len,
-                    retained=retained,
-                    expected_bytes=raw_len,
-                )
-                emitted.add(key_hex)
-                yield key_hex, raw
-
-
 class ObjectStore:
     """Immutable content addressed by SHA-256 within one exchange (hybrid loose + reserved shard slabs)."""
+
+    _decompress_bounded = staticmethod(decompress_bounded)
 
     def __init__(self, directory: Path):
         self.directory = directory
         self.packs_dir = directory / 'packs'
         self._active_pack_session: PackSession | None = None
         self._pack_session_depth = 0
+        self._pack_lock = threading.RLock()
+
+    def _open_pack_session(self) -> PackSession:
+        return PackSession(self.packs_dir, verify_sha=lambda data: sha(data))
 
     @contextmanager
     def pack_session(self) -> Iterator[PackSession]:
         """Hold open read-only mmap PackSession across a batch of reads/audits, closing deterministically."""
-        if self._active_pack_session is not None:
+        with self._pack_lock:
+            if self._active_pack_session is None:
+                self._active_pack_session = self._open_pack_session()
             self._pack_session_depth += 1
-            try:
-                yield self._active_pack_session
-            finally:
-                self._pack_session_depth -= 1
-            return
+            session = self._active_pack_session
 
-        session = PackSession(self.packs_dir)
-        self._active_pack_session = session
-        self._pack_session_depth = 1
         try:
             yield session
         finally:
-            self._pack_session_depth = 0
-            self._active_pack_session = None
-            session.close()
+            to_close: PackSession | None = None
+            with self._pack_lock:
+                self._pack_session_depth -= 1
+                if self._pack_session_depth == 0:
+                    to_close = self._active_pack_session
+                    self._active_pack_session = None
+            if to_close is not None:
+                to_close.close()
 
     def _has_pack_pointer(self) -> bool:
-        return (self.packs_dir / 'CURRENT.json').exists()
+        return has_pack_pointer(self.packs_dir)
 
     @staticmethod
     def _validate_key(key: str) -> None:
@@ -766,17 +353,18 @@ class ObjectStore:
     def has(self, key: str) -> bool:
         if not isinstance(key, str) or len(key) != 64 or any(c not in '0123456789abcdef' for c in key):
             return False
-        if self._active_pack_session is not None and self._active_pack_session.has(key):
+        active = self._active_pack_session
+        if active is not None and active.has(key):
             return True
         if has_ordinary_file(self.directory / key):
             return True
         if has_ordinary_file(self.directory / (key + '.deflate')):
             return True
-        if self._active_pack_session is not None:
+        if active is not None:
             return False
         if not self._has_pack_pointer():
             return False
-        with PackSession(self.packs_dir) as session:
+        with self._open_pack_session() as session:
             return session.has(key)
 
     def entries(self) -> list[tuple[str, Path, bool, int]]:
@@ -809,11 +397,12 @@ class ObjectStore:
 
     def packed_entries(self) -> list[dict[str, Any]]:
         """Return live (non-tombstoned) packed object metadata from packs/CURRENT.json."""
-        if self._active_pack_session is not None:
-            return self._active_pack_session.live_entries()
+        active = self._active_pack_session
+        if active is not None:
+            return active.live_entries()
         if not self._has_pack_pointer():
             return []
-        with PackSession(self.packs_dir) as session:
+        with self._open_pack_session() as session:
             return session.live_entries()
 
     def iter_objects(self) -> Iterator[dict[str, Any]]:
@@ -858,45 +447,6 @@ class ObjectStore:
         atomic_bytes(raw_path, data)
         return key
 
-    @staticmethod
-    def _decompress_bounded(stream, limit: int | None, display: Path) -> bytes:
-        """Stream-decompress a zlib payload while strictly enforcing a raw-byte ceiling."""
-        decompressor = zlib.decompressobj()
-        chunks: list[bytes] = []
-        total = 0
-        try:
-            while True:
-                compressed_chunk = stream.read(65536)
-                if not compressed_chunk:
-                    break
-                if limit is None:
-                    out = decompressor.decompress(compressed_chunk)
-                else:
-                    remaining = (limit + 1) - total
-                    out = decompressor.decompress(compressed_chunk, remaining)
-                if out:
-                    chunks.append(out)
-                    total += len(out)
-                    if limit is not None and total > limit:
-                        raise ValueError(f'file exceeds {limit} bytes: {display}')
-                if decompressor.unconsumed_tail and limit is not None:
-                    raise ValueError(f'file exceeds {limit} bytes: {display}')
-                if decompressor.eof:
-                    if decompressor.unused_data or stream.read(1):
-                        raise ValueError(f'trailing data after compressed object: {display}')
-                    break
-            tail = decompressor.flush() if limit is None else decompressor.flush((limit + 1) - total)
-            if tail:
-                chunks.append(tail)
-                total += len(tail)
-                if limit is not None and total > limit:
-                    raise ValueError(f'file exceeds {limit} bytes: {display}')
-            if not decompressor.eof:
-                raise ValueError(f'truncated compressed object: {display}')
-        except zlib.error as exc:
-            raise ValueError(f'corrupt compressed object {display}: {exc}') from None
-        return b''.join(chunks)
-
     def _read_from_packs(
         self,
         key: str,
@@ -904,11 +454,12 @@ class ObjectStore:
         retained: bool,
         expected_bytes: int | None,
     ) -> bytes | None:
-        if self._active_pack_session is not None:
-            return self._active_pack_session.read(key, retained=retained, expected_bytes=expected_bytes)
+        active = self._active_pack_session
+        if active is not None:
+            return active.read(key, retained=retained, expected_bytes=expected_bytes)
         if not self._has_pack_pointer():
             return None
-        with PackSession(self.packs_dir) as session:
+        with self._open_pack_session() as session:
             return session.read(key, retained=retained, expected_bytes=expected_bytes)
 
     def _read_deflate_or_pack(
@@ -973,8 +524,9 @@ class ObjectStore:
             raise ValueError('invalid expected object length')
 
         # Fast-path inside active pack_session(): PackShardHandle.read_frame() verifies CRC32 + SHA-256 + length.
-        if self._active_pack_session is not None and read_bytes is _READ_BYTES:
-            packed = self._active_pack_session.read(key, retained=retained, expected_bytes=expected_bytes)
+        active = self._active_pack_session
+        if active is not None and read_bytes is _READ_BYTES:
+            packed = active.read(key, retained=retained, expected_bytes=expected_bytes)
             if packed is not None:
                 return packed
 

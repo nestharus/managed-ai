@@ -12,6 +12,7 @@ from contextlib import nullcontext
 import copy
 import errno
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,8 @@ from managed_ai.store.query.discovery_traversal import (
     extract_record_edges,
     traverse_anchors,
 )
+from managed_ai.store.records.head_index_bin import FLAG_ACTIVE
+from managed_ai.store.records.record_scanner import open_verified_index_view
 from managed_ai.store.records.records import RecordStore
 
 PROJECT_CONTEXT_BYTES = 2 * 1024 * 1024
@@ -232,6 +235,8 @@ class Discovery:
         self.saturated = set()
         self._records_fd = None
         self._records_dir_str = None
+        self._verified_index = None
+        self._record_order_rank = None
         self._project_selection_copy = (
             copy.deepcopy(self.projects.current.get('selection'))
             if self.projects.current is not None else None
@@ -343,15 +348,20 @@ class Discovery:
             and (self.records.work / 'records').is_dir()
         )
         fd_ctx = nullcontext(None)
+        verified_ctx = nullcontext(None)
 
         if use_fast_records:
             if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
                 fd_ctx = self.records.ex.open_workspace_dir('records')
             else:
                 _, self._records_dir_str = self.records._validated_records_dir_win()
+            opened_view = open_verified_index_view(self.records)
+            if opened_view is not None:
+                verified_ctx = opened_view
 
-        with fd_ctx as records_fd:
+        with fd_ctx as records_fd, verified_ctx as verified_index:
             self._records_fd = records_fd
+            self._verified_index = verified_index
 
             try:
                 self._inventory()
@@ -372,6 +382,7 @@ class Discovery:
             finally:
                 self._records_fd = None
                 self._records_dir_str = None
+                self._verified_index = None
 
         omitted = [c['ref'] for c in all_candidates[self.req['limit']:]]
 
@@ -572,6 +583,109 @@ class Discovery:
             return None
         return self.records.read(ident, byte_limit=byte_limit)
 
+    def _verified_record_meta(self, ident: str):
+        """Return verified HeadIndex v3 metadata tuple for a hot record, or None if unavailable."""
+        verified = self._verified_index
+        if verified is None:
+            return None
+
+        entry = verified.overrides.get(ident)
+        if entry is None:
+            entry = verified.view.delta_puts.get(ident)
+        if entry is not None:
+            raw_sha_hex = entry['raw_sha256']
+            return (
+                int(entry['size']),
+                entry.get('format'),
+                entry['kind'],
+                entry['revision'],
+                entry['sha256'],
+                raw_sha_hex,
+                bytes.fromhex(raw_sha_hex),
+                bool(entry.get('active', True)),
+            )
+
+        if ident in verified.removed or ident in verified.view.delta_dels:
+            return None
+
+        slot = verified.view.slot_for_id(ident)
+        if slot < 0:
+            return None
+
+        tup = verified.view.slot_tuple(slot)
+        raw_sha_bin = tup[19]
+        return (
+            tup[15],
+            verified.view.record_format,
+            verified.view.kind_names()[tup[7]],
+            tup[9],
+            tup[18].hex(),
+            raw_sha_bin.hex(),
+            raw_sha_bin,
+            bool(tup[8] & FLAG_ACTIVE),
+        )
+
+    def _read_verified_record_raw(
+        self,
+        ident: str,
+        expected_size: int,
+        expected_raw_sha_bin: bytes,
+    ) -> tuple[bytes, dict | None]:
+        """Read a hot record's raw bytes and cryptographically verify SHA-256 against HeadIndex v3."""
+        filename = packet_id(ident) + '.json'
+        if self._records_fd is not None:
+            full_path = self.records.work / 'records' / filename
+            try:
+                fd = os.open(filename, _OPEN_RO_NOFOLLOW, dir_fd=self._records_fd)
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
+                    raise ValueError(f'ordinary JSON file required: {full_path}') from None
+                raise
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError(f'ordinary JSON file required: {full_path}')
+                stream = os.fdopen(fd, 'rb')
+                fd = -1
+            except BaseException:
+                if fd >= 0:
+                    os.close(fd)
+                raise
+            with stream:
+                raw = stream.read(expected_size + 1)
+        elif self._records_dir_str is not None:
+            full_str = self._records_dir_str + os.sep + filename
+            try:
+                info = os.lstat(full_str)
+            except OSError:
+                raise ValueError(f'ordinary JSON file required: {full_str}') from None
+            if not is_ordinary_file_stat(info):
+                raise ValueError(f'ordinary JSON file required: {full_str}')
+            with open(full_str, 'rb') as stream:
+                raw = stream.read(expected_size + 1)
+        else:
+            record, raw = self.records.read(ident, byte_limit=expected_size)
+            return raw, record
+
+        if len(raw) == expected_size and hmac.compare_digest(hashlib.sha256(raw).digest(), expected_raw_sha_bin):
+            return raw, None
+
+        record, raw = self.records.read(ident, byte_limit=expected_size)
+        return raw, record
+
+    def _ensure_record_loaded(self, item: dict) -> dict:
+        """Lazily parse the cryptographically verified record JSON for relation traversal."""
+        if 'record' in item:
+            return item['record']
+        body_text = self._body(item['ref'])
+        if 'record' in item:
+            return item['record']
+        assert body_text is not None
+        full_path = self.records.work / 'records' / (packet_id(item['id']) + '.json')
+        record = parse_input_bytes(body_text.encode('utf-8'), full_path)
+        item['record'] = record
+        return record
+
     def _inspect(self, ref):
         if ref in self.loaded:
             return self.loaded[ref]
@@ -589,36 +703,66 @@ class Discovery:
         scope, ident = entry['scope'], entry['id']
 
         if scope == 'records':
-            loaded = self._read_record_bounded(ref, ident)
-            if loaded is None:
-                return None
-            record, raw = loaded
-            raw_sha = digest(raw)
-            self.bodies[ref] = raw.decode('utf-8')
-            self.body_info[ref] = {'bytes': len(raw), 'sha256': raw_sha, 'verified': True, 'text': True}
-            if not self.req['include_inactive'] and record.get('active') is False:
-                self._skip(ref, 'inactive-record')
-                return None
+            meta = self._verified_record_meta(ident)
+            if meta is not None:
+                size_val, fmt, kind, revision, sha_hex, raw_sha_hex, raw_sha_bin, active = meta
+                if not self._budget_bytes(ref, size_val):
+                    return None
+                self.body_info[ref] = {'bytes': size_val, 'sha256': raw_sha_hex, 'verified': True, 'text': True}
+                if not self.req['include_inactive'] and not active:
+                    self._skip(ref, 'inactive-record')
+                    return None
+                source = {
+                    'scope': scope,
+                    'id': ident,
+                    'format': fmt,
+                    'revision': revision,
+                    'record_sha256': sha_hex,
+                    'body_sha256': raw_sha_hex,
+                    'bytes': size_val,
+                }
+                metadata = f'{ident} {kind}'
+                value = {
+                    'ref': ref,
+                    'scope': scope,
+                    'id': ident,
+                    'source': source,
+                    'title': ident,
+                    'metadata': metadata,
+                    '_raw_sha_bin': raw_sha_bin,
+                    '_size': size_val,
+                }
+            else:
+                loaded = self._read_record_bounded(ref, ident)
+                if loaded is None:
+                    return None
+                record, raw = loaded
+                raw_sha = digest(raw)
+                self.bodies[ref] = raw.decode('utf-8')
+                self.body_info[ref] = {'bytes': len(raw), 'sha256': raw_sha, 'verified': True, 'text': True}
+                if not self.req['include_inactive'] and record.get('active') is False:
+                    self._skip(ref, 'inactive-record')
+                    return None
 
-            source = {
-                'scope': scope,
-                'id': ident,
-                'format': record.get('format'),
-                'revision': record['revision'],
-                'record_sha256': record['sha256'],
-                'body_sha256': raw_sha,
-                'bytes': len(raw),
-            }
-            metadata = ' '.join(str(record.get(k, '')) for k in ('id', 'kind'))
-            value = {
-                'ref': ref,
-                'scope': scope,
-                'id': ident,
-                'source': source,
-                'title': ident,
-                'metadata': metadata,
-                'record': record,
-            }
+                source = {
+                    'scope': scope,
+                    'id': ident,
+                    'format': record.get('format'),
+                    'revision': record['revision'],
+                    'record_sha256': record['sha256'],
+                    'body_sha256': raw_sha,
+                    'bytes': len(raw),
+                }
+                metadata = ' '.join(str(record.get(k, '')) for k in ('id', 'kind'))
+                value = {
+                    'ref': ref,
+                    'scope': scope,
+                    'id': ident,
+                    'source': source,
+                    'title': ident,
+                    'metadata': metadata,
+                    'record': record,
+                }
         elif scope == 'project':
             row = entry['row']
             source = {
@@ -665,6 +809,14 @@ class Discovery:
         row, scope = entry.get('row'), entry['scope']
 
         if scope == 'records':
+            item = self.loaded.get(ref)
+            if item is not None and '_raw_sha_bin' in item:
+                raw, parsed = self._read_verified_record_raw(entry['id'], item['_size'], item['_raw_sha_bin'])
+                text = raw.decode('utf-8')
+                self.bodies[ref] = text
+                if parsed is not None:
+                    item['record'] = parsed
+                return text
             return None
 
         if scope == 'project' and row['bytes'] > PROJECT_CONTEXT_BYTES:

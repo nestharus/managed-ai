@@ -170,18 +170,19 @@ class PacketInspection:
                 return {"packet": directory.name, "transport": "record-unresolved", "error": str(exc)}
 
         try:
-            packet_dirs = [
-                directory
-                for directory in sorted((self.root / "packets").iterdir())
-                if not directory.name.startswith(".") and directory.is_dir()
-            ]
-            if len(packet_dirs) >= 4:
-                from concurrent.futures import ThreadPoolExecutor
+            with self.objects.pack_session():
+                packet_dirs = [
+                    directory
+                    for directory in sorted((self.root / "packets").iterdir())
+                    if not directory.name.startswith(".") and directory.is_dir()
+                ]
+                if len(packet_dirs) >= 4:
+                    from concurrent.futures import ThreadPoolExecutor
 
-                with ThreadPoolExecutor(max_workers=min(8, len(packet_dirs))) as pool:
-                    observed = list(pool.map(inspect_one, packet_dirs))
-            else:
-                observed = [inspect_one(directory) for directory in packet_dirs]
+                    with ThreadPoolExecutor(max_workers=min(8, len(packet_dirs))) as pool:
+                        observed = list(pool.map(inspect_one, packet_dirs))
+                else:
+                    observed = [inspect_one(directory) for directory in packet_dirs]
         finally:
             if objects_fd is not None:
                 os.close(objects_fd)
@@ -189,46 +190,47 @@ class PacketInspection:
         return [row for row in observed if row is not None]
 
     def inspect(self, packet: str) -> dict[str, Any]:
-        directory, request = self.load(packet)
-        result: dict[str, Any] = {"packet": packet, "consumer": request["consumer"], "basis": None, "return": None}
-        observations: dict[str, Any] = {}
+        with self.objects.pack_session():
+            directory, request = self.load(packet)
+            result: dict[str, Any] = {"packet": packet, "consumer": request["consumer"], "basis": None, "return": None}
+            observations: dict[str, Any] = {}
 
-        def observe(path: str):
-            if path not in observations:
-                try:
-                    observations[path] = observe_target(self, path)
-                except (OSError, ValueError) as exc:
-                    observations[path] = exc
+            def observe(path: str):
+                if path not in observations:
+                    try:
+                        observations[path] = observe_target(self, path)
+                    except (OSError, ValueError) as exc:
+                        observations[path] = exc
 
-            observation = observations[path]
-            if isinstance(observation, Exception):
-                raise observation
-            return observation
+                observation = observations[path]
+                if isinstance(observation, Exception):
+                    raise observation
+                return observation
 
-        try:
-            result["basis"] = observe_basis(self, packet, directory, request, observe=observe)
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            result["basis_error"] = str(exc)
-
-        result["publications"] = []
-        if (directory / "return.json").exists():
-            record = read_json(directory / "return.json")
-            self.validate_return(directory, record)
-            result["return"] = record
-            data = self.get(record["reply_sha256"])
             try:
-                result["reply_text"] = data.decode("utf-8")
-            except UnicodeDecodeError:
-                result["reply_text"] = None
+                result["basis"] = observe_basis(self, packet, directory, request, observe=observe)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                result["basis_error"] = str(exc)
 
-        inspect_publications(self, directory, request, result, observe)
-        result["inspection_scope"] = (
-            "Read-only observations in one cooperative-owner invocation; not an atomic external-writer "
-            "snapshot, historical completion proof, reconciliation or permission to replay."
-        )
+            result["publications"] = []
+            if (directory / "return.json").exists():
+                record = read_json(directory / "return.json")
+                self.validate_return(directory, record)
+                result["return"] = record
+                data = self.get(record["reply_sha256"])
+                try:
+                    result["reply_text"] = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    result["reply_text"] = None
 
-        outcome = transport_outcome(self, directory, request)
-        if outcome is not None:
-            result["transport_outcome"] = outcome
+            inspect_publications(self, directory, request, result, observe)
+            result["inspection_scope"] = (
+                "Read-only observations in one cooperative-owner invocation; not an atomic external-writer "
+                "snapshot, historical completion proof, reconciliation or permission to replay."
+            )
 
-        return result
+            outcome = transport_outcome(self, directory, request)
+            if outcome is not None:
+                result["transport_outcome"] = outcome
+
+            return result

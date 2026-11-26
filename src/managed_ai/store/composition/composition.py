@@ -6,6 +6,7 @@ record kinds or arbitrary relation labels into a universal task graph.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 import hashlib
 import json
 
@@ -179,66 +180,69 @@ class Composition:
         if not isinstance(declared, list) or len(declared) > MAX_ROWS:
             raise ValueError('record basis must be a list of at most 2000 captured paths')
 
-        for row in declared:
-            if not isinstance(row, dict) or not isinstance(row.get('path'), str):
-                raise ValueError('record basis must contain captured path objects')
+        objects = getattr(self.system.ex, 'objects', None)
+        with (objects.pack_session() if objects is not None and hasattr(objects, 'pack_session') else nullcontext()):
+            for row in declared:
+                if not isinstance(row, dict) or not isinstance(row.get('path'), str):
+                    raise ValueError('record basis must contain captured path objects')
 
-            name = row['path']
-            if name in captured:
-                raise ValueError('duplicate captured record basis path: ' + name)
+                name = row['path']
+                if name in captured:
+                    raise ValueError('duplicate captured record basis path: ' + name)
 
-            observed = {'path': name, 'captured_sha256': row.get('sha256'),
-                        'current_sha256': None, 'status': 'unavailable'}
+                observed = {'path': name, 'captured_sha256': row.get('sha256'),
+                            'current_sha256': None, 'status': 'unavailable'}
 
-            try:
-                path = None if name.startswith('object:') else self.system.ex.path(name)
-                info = None
-                if path is not None:
-                    try:
-                        st = path.lstat()
-                        if is_ordinary_file_stat(st):
-                            info = st
-                    except OSError:
-                        info = None
+                try:
+                    path = None if name.startswith('object:') else self.system.ex.path(name)
+                    info = None
+                    if path is not None:
+                        try:
+                            st = path.lstat()
+                            if is_ordinary_file_stat(st):
+                                info = st
+                        except OSError:
+                            info = None
 
-                if info is None:
-                    prefixes = getattr(getattr(self.system, 'record_store', None), 'content_addressed_basis_prefixes', ())
-                    if (is_content_addressed_basis(row, prefixes=prefixes)
-                            and self.system.ex.objects.has(row['sha256'])):
-                        size = row['bytes']
-                        if size > MAX_PROFILE_BYTES:
-                            observed['status'] = 'per-source-byte-bound'
-                        elif used + size > MAX_BASIS_BYTES:
-                            observed['status'] = 'total-source-byte-bound'
+                    if info is None:
+                        prefixes = getattr(getattr(self.system, 'record_store', None), 'content_addressed_basis_prefixes', ())
+                        if (objects is not None
+                                and is_content_addressed_basis(row, prefixes=prefixes)
+                                and objects.has(row['sha256'])):
+                            size = row['bytes']
+                            if size > MAX_PROFILE_BYTES:
+                                observed['status'] = 'per-source-byte-bound'
+                            elif used + size > MAX_BASIS_BYTES:
+                                observed['status'] = 'total-source-byte-bound'
+                            else:
+                                raw = objects.read(row['sha256'], retained=True, expected_bytes=size)
+                                used += len(raw)
+                                observed['current_sha256'] = hashlib.sha256(raw).hexdigest()
+                                observed['current_bytes'] = len(raw)
+                                observed['status'] = ('current' if row.get('sha256') == observed['current_sha256']
+                                                      else 'changed')
+                                observed['custody'] = 'exchange-object'
                         else:
-                            raw = self.system.ex.objects.read(row['sha256'], retained=True, expected_bytes=size)
+                            observed['status'] = 'missing'
+                    elif info.st_size > MAX_PROFILE_BYTES:
+                        observed['status'] = 'per-source-byte-bound'
+                    elif used + info.st_size > MAX_BASIS_BYTES:
+                        observed['status'] = 'total-source-byte-bound'
+                    else:
+                        with path.open('rb') as source:
+                            raw = source.read(MAX_PROFILE_BYTES + 1)
+                        if len(raw) > MAX_PROFILE_BYTES or used + len(raw) > MAX_BASIS_BYTES:
+                            observed['status'] = 'source-byte-bound'
+                        else:
                             used += len(raw)
                             observed['current_sha256'] = hashlib.sha256(raw).hexdigest()
                             observed['current_bytes'] = len(raw)
                             observed['status'] = ('current' if row.get('sha256') == observed['current_sha256']
                                                   else 'changed')
-                            observed['custody'] = 'exchange-object'
-                    else:
-                        observed['status'] = 'missing'
-                elif info.st_size > MAX_PROFILE_BYTES:
-                    observed['status'] = 'per-source-byte-bound'
-                elif used + info.st_size > MAX_BASIS_BYTES:
-                    observed['status'] = 'total-source-byte-bound'
-                else:
-                    with path.open('rb') as source:
-                        raw = source.read(MAX_PROFILE_BYTES + 1)
-                    if len(raw) > MAX_PROFILE_BYTES or used + len(raw) > MAX_BASIS_BYTES:
-                        observed['status'] = 'source-byte-bound'
-                    else:
-                        used += len(raw)
-                        observed['current_sha256'] = hashlib.sha256(raw).hexdigest()
-                        observed['current_bytes'] = len(raw)
-                        observed['status'] = ('current' if row.get('sha256') == observed['current_sha256']
-                                              else 'changed')
-            except (OSError, ValueError) as exc:
-                observed['error'] = str(exc)
+                except (OSError, ValueError) as exc:
+                    observed['error'] = str(exc)
 
-            captured[name] = observed
+                captured[name] = observed
 
         return captured, used
 

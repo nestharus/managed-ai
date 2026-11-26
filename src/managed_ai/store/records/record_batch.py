@@ -306,40 +306,41 @@ def _reconcile_pending(store, op, pending, previous, pin_predecessors):
 
 def _prevalidate_batch_operations(store, operations, pending_entry, pin_predecessors):
     prepared = []
-    for index, op in enumerate(operations):
-        path = store.path(op['id'])
-        if not path.exists() and store.cold_archive.has(op['id']):
-            raise ValueError(f"record {op['id']} is in cold archive; restore explicitly before modifying")
+    with store.objects.pack_session():
+        for index, op in enumerate(operations):
+            path = store.path(op['id'])
+            if not path.exists() and store.cold_archive.has(op['id']):
+                raise ValueError(f"record {op['id']} is in cold archive; restore explicitly before modifying")
 
-        previous, previous_raw = store.read(op['id']) if path.exists() else (None, None)
-        already_committed = None
-        if index == 0 and pending_entry is not None:
-            already_committed = _reconcile_pending(store, op, pending_entry, previous, pin_predecessors)
+            previous, previous_raw = store.read(op['id']) if path.exists() else (None, None)
+            already_committed = None
+            if index == 0 and pending_entry is not None:
+                already_committed = _reconcile_pending(store, op, pending_entry, previous, pin_predecessors)
 
-        if already_committed is not None:
-            prepared.append((op, None, None, None, None, None, None, already_committed))
-            continue
+            if already_committed is not None:
+                prepared.append((op, None, None, None, None, None, None, already_committed))
+                continue
 
-        candidate, preserve_basis = _build_candidate(op, previous)
-        preview_body, preview_raw = store._prepare_write(
-            candidate, previous, previous_raw, retain_basis=False, preserve_basis=preserve_basis,
-        )
-        can_reuse_prepared = preserve_basis is not None or not candidate.get('basis')
-        prepared.append((
-            op,
-            candidate,
-            previous,
-            previous_raw,
-            preserve_basis,
-            _fields_digest(preview_body),
-            (preview_body, preview_raw) if can_reuse_prepared else None,
-            None,
-        ))
+            candidate, preserve_basis = _build_candidate(op, previous)
+            preview_body, preview_raw = store._prepare_write(
+                candidate, previous, previous_raw, retain_basis=False, preserve_basis=preserve_basis,
+            )
+            can_reuse_prepared = preserve_basis is not None or not candidate.get('basis')
+            prepared.append((
+                op,
+                candidate,
+                previous,
+                previous_raw,
+                preserve_basis,
+                _fields_digest(preview_body),
+                (preview_body, preview_raw) if can_reuse_prepared else None,
+                None,
+            ))
     return prepared
 
 
 def _commit_batch_operations(store, receipt, result, old, prepared, pin_predecessors):
-    with store.batch_index_updates():
+    with store.objects.pack_session(), store.batch_index_updates():
         if old is not None:
             for row in result['records']:
                 store._deferred_index_ids.append(row['id'])

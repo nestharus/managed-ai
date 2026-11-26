@@ -29,49 +29,50 @@ def plan_compact_objects(system, *, min_savings_bytes: int = 64) -> dict:
     total_raw = 0
     total_comp = 0
 
-    for key, path, is_comp, disk_bytes in entries:
-        if is_comp:
-            continue
+    with objects.pack_session():
+        for key, path, is_comp, disk_bytes in entries:
+            if is_comp:
+                continue
 
-        raw = _read_ordinary_unbounded(path)
-        if sha(raw) != key or len(raw) != disk_bytes:
-            raise ValueError(f'corrupt object encountered during compaction plan: {key}')
+            raw = _read_ordinary_unbounded(path)
+            if sha(raw) != key or len(raw) != disk_bytes:
+                raise ValueError(f'corrupt object encountered during compaction plan: {key}')
 
-        if key in compressed_keys:
-            existing = objects.read(key, retained=True, expected_bytes=len(raw))
-            require(existing == raw, f'conflicting raw and compressed object: {key}')
+            if key in compressed_keys:
+                existing = objects.read(key, retained=True, expected_bytes=len(raw))
+                require(existing == raw, f'conflicting raw and compressed object: {key}')
 
-            deflate_path = objects.directory / (key + '.deflate')
-            info = _verify_ordinary_file(deflate_path, 'ordinary compressed object file required')
-            comp_bytes = info.st_size
-            if comp_bytes < len(raw) and len(raw) >= min_savings_bytes:
+                deflate_path = objects.directory / (key + '.deflate')
+                info = _verify_ordinary_file(deflate_path, 'ordinary compressed object file required')
+                comp_bytes = info.st_size
+                if comp_bytes < len(raw) and len(raw) >= min_savings_bytes:
+                    candidates.append({
+                        'object': key,
+                        'raw_bytes': len(raw),
+                        'compressed_bytes': comp_bytes,
+                        'saved_bytes': len(raw),
+                        'already_deflated': True,
+                    })
+                    total_raw += len(raw)
+                    total_comp += comp_bytes
+                else:
+                    skipped_incompressible += 1
+                continue
+
+            comp = zlib.compress(raw, level=6)
+            saved = len(raw) - len(comp)
+            if saved >= min_savings_bytes and len(comp) < len(raw):
                 candidates.append({
                     'object': key,
                     'raw_bytes': len(raw),
-                    'compressed_bytes': comp_bytes,
-                    'saved_bytes': len(raw),
-                    'already_deflated': True,
+                    'compressed_bytes': len(comp),
+                    'saved_bytes': saved,
+                    'already_deflated': False,
                 })
                 total_raw += len(raw)
-                total_comp += comp_bytes
+                total_comp += len(comp)
             else:
                 skipped_incompressible += 1
-            continue
-
-        comp = zlib.compress(raw, level=6)
-        saved = len(raw) - len(comp)
-        if saved >= min_savings_bytes and len(comp) < len(raw):
-            candidates.append({
-                'object': key,
-                'raw_bytes': len(raw),
-                'compressed_bytes': len(comp),
-                'saved_bytes': saved,
-                'already_deflated': False,
-            })
-            total_raw += len(raw)
-            total_comp += len(comp)
-        else:
-            skipped_incompressible += 1
 
     reclaimable = sum(row['saved_bytes'] for row in candidates)
     body = {
@@ -179,29 +180,30 @@ def execute_compact_objects(system, *, plan: dict, expected_plan: str, reason: s
     mutated = False
 
     try:
-        for key, raw_path, deflate_path, raw_bytes, comp_size, saved_bytes, already_deflated in verified:
-            raw = _read_ordinary_unbounded(raw_path)
-            require(len(raw) == raw_bytes and sha(raw) == key, 'object changed during compaction: ' + key)
+        with objects.pack_session():
+            for key, raw_path, deflate_path, raw_bytes, comp_size, saved_bytes, already_deflated in verified:
+                raw = _read_ordinary_unbounded(raw_path)
+                require(len(raw) == raw_bytes and sha(raw) == key, 'object changed during compaction: ' + key)
 
-            if not already_deflated:
-                compressed = zlib.compress(raw, level=6)
-                require(len(compressed) == comp_size, 'compressed size drifted during compaction: ' + key)
-                atomic_bytes(deflate_path, compressed)
-                with deflate_path.open('rb') as stream:
-                    roundtrip = objects._decompress_bounded(stream, raw_bytes, deflate_path)
-                require(roundtrip == raw and sha(roundtrip) == key, 'written .deflate verification failed: ' + key)
+                if not already_deflated:
+                    compressed = zlib.compress(raw, level=6)
+                    require(len(compressed) == comp_size, 'compressed size drifted during compaction: ' + key)
+                    atomic_bytes(deflate_path, compressed)
+                    with deflate_path.open('rb') as stream:
+                        roundtrip = objects._decompress_bounded(stream, raw_bytes, deflate_path)
+                    require(roundtrip == raw and sha(roundtrip) == key, 'written .deflate verification failed: ' + key)
 
-            raw_path.unlink()
-            mutated = True
-            require(
-                objects.read(key, retained=True, expected_bytes=raw_bytes) == raw,
-                'post-compaction ObjectStore.read failed: ' + key,
-            )
+                raw_path.unlink()
+                mutated = True
+                require(
+                    objects.read(key, retained=True, expected_bytes=raw_bytes) == raw,
+                    'post-compaction ObjectStore.read failed: ' + key,
+                )
 
-            compacted += 1
-            raw_bytes_total += raw_bytes
-            comp_bytes_total += comp_size
-            saved_bytes_total += saved_bytes
+                compacted += 1
+                raw_bytes_total += raw_bytes
+                comp_bytes_total += comp_size
+                saved_bytes_total += saved_bytes
     finally:
         if mutated:
             sync_dir(objects.directory)

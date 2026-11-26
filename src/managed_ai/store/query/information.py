@@ -109,8 +109,9 @@ class InformationEnvelope:
     def validate_write(self, record: dict, previous: dict | None, *, mode: str | None = None) -> None:
         """Called by the aware owner's put; raw older engines do not enforce it."""
         require(mode in {None, 'wrap', 'migrate'}, 'unknown information write mode')
-        incoming = self._envelope(record)
-        old = self._envelope(previous) if previous is not None else None
+        with self.objects.pack_session():
+            incoming = self._envelope(record)
+            old = self._envelope(previous) if previous is not None else None
         if old is not None:
             require(incoming is not None, 'information contract removal requires an explicit supported migration')
             if incoming['contract'] != old['contract']:
@@ -188,31 +189,33 @@ class Information(InformationEnvelope):
 
     def inspect(self, ident: str) -> dict:
         record = self.records.show(ident)
-        envelope = self._envelope(record)
-        if envelope is None:
-            return {'record': record, 'contracted': False,
-                    'scope': 'Ordinary open content; no optional information contract is declared.'}
-        definition, _ = self._definition(envelope['contract'])
-        result = {'record': record, 'contracted': True, 'definition': definition,
-                  'scope': 'The exact pinned definition is exposed; no latest-definition substitution or semantic validation is implied.'}
-        if 'derivation' in envelope:
-            result['last_explicit_conversion'] = strict_json(self.objects.read(envelope['derivation']['spec_object']))
-            result['conversion_scope'] = 'This is the envelope lineage conversion. Later same-contract payload edits remain ordinary record revisions.'
-        return result
+        with self.objects.pack_session():
+            envelope = self._envelope(record)
+            if envelope is None:
+                return {'record': record, 'contracted': False,
+                        'scope': 'Ordinary open content; no optional information contract is declared.'}
+            definition, _ = self._definition(envelope['contract'])
+            result = {'record': record, 'contracted': True, 'definition': definition,
+                      'scope': 'The exact pinned definition is exposed; no latest-definition substitution or semantic validation is implied.'}
+            if 'derivation' in envelope:
+                result['last_explicit_conversion'] = strict_json(self.objects.read(envelope['derivation']['spec_object']))
+                result['conversion_scope'] = 'This is the envelope lineage conversion. Later same-contract payload edits remain ordinary record revisions.'
+            return result
 
     def context_inputs(self, directory: Path, selected: list[dict]) -> dict:
         paths, exposed, by_object = [], [], {}
-        for record in selected:
-            envelope = self._envelope(record)
-            if envelope is None:
-                continue
-            pin = envelope['contract']
-            definition, body = self._definition(pin)
-            if pin['object'] not in by_object:
-                path = write_input(self.records.work, directory, 'information/' + pin['object'] + '.json', body)
-                by_object[pin['object']] = path
-                paths.append(path)
-            exposed.append({'record': record_identity(record), 'contract': pin,
-                            'captured_path': by_object[pin['object']], 'bytes': len(body),
-                            'scope': 'Exact declared interpretation, not a claim of compatibility, truth or latest-head applicability.'})
+        with self.objects.pack_session():
+            for record in selected:
+                envelope = self._envelope(record)
+                if envelope is None:
+                    continue
+                pin = envelope['contract']
+                definition, body = self._definition(pin)
+                if pin['object'] not in by_object:
+                    path = write_input(self.records.work, directory, 'information/' + pin['object'] + '.json', body)
+                    by_object[pin['object']] = path
+                    paths.append(path)
+                exposed.append({'record': record_identity(record), 'contract': pin,
+                                'captured_path': by_object[pin['object']], 'bytes': len(body),
+                                'scope': 'Exact declared interpretation, not a claim of compatibility, truth or latest-head applicability.'})
         return {'paths': paths, 'selected': exposed}

@@ -180,18 +180,19 @@ def receive(system, path, ident, account, expected):
         verify_preserved_objects=False,
     )
 
-    key = system.ex.objects.put(raw)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if target_info is None:
-        atomic_bytes(target, raw)
+    with system.ex.objects.pack_session():
+        key = system.ex.objects.put(raw)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target_info is None:
+            atomic_bytes(target, raw)
 
-    result = system.record_store._replace(
-        value,
-        expected,
-        observation_write=True,
-        _preloaded=(previous, previous_raw),
-        _prepared=prepared,
-    )
+        result = system.record_store._replace(
+            value,
+            expected,
+            observation_write=True,
+            _preloaded=(previous, previous_raw),
+            _prepared=prepared,
+        )
     return {'replayed': False, 'record': result, 'source': source}
 
 
@@ -200,5 +201,6 @@ def inspect(system, ident):
     if observation['kind'] != 'source-observation':
         raise ValueError('record is not a cross-instance observation')
 
-    raw = system.ex.objects.read(observation['content']['object_sha256'], retained=True)
+    with system.ex.objects.pack_session():
+        raw = system.ex.objects.read(observation['content']['object_sha256'], retained=True)
     return {'observation': observation, 'source_record': strict_json(raw)}

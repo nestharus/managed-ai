@@ -487,6 +487,394 @@ class PackSlabTests(unittest.TestCase):
                     self.assertEqual(system.ex.objects.read(key), payload)
                 self.assertEqual(sha_spy2.call_count, 1)
 
+    def test_w9_pack_session_multi_object_callers_and_zero_handle_leaks(self) -> None:
+        """Wave 9: explain_delivery, turn_retirement, compaction, record_transfer & composition share PackSession cleanly."""
+        import managed_ai.core.storage as storage_mod
+        from managed_ai.store.composition.composition import Composition
+        from managed_ai.store.records.compaction import execute_compact_objects, plan_compact_objects
+        from managed_ai.store.records.record_transfer import export as export_record, inspect as inspect_transfer, receive as receive_transfer
+        from managed_ai.store.turns.turn_retirement import plan_turn_retirement
+
+        system = System(self.store)
+        peer_store = self.root / 'peer-store'
+        System.initialize(peer_store, {'contribution': 'Peer instance for transfer test.'}, instance_id='w9-peer')
+        peer = System(peer_store)
+
+        with exclusive(peer.ex.root / 'owner.lock'):
+            peer.put({'id': 'peer-note', 'kind': 'note', 'content': {'summary': 'Transferred claim'}}, 0)
+            bundle_path = self.root / 'peer-note.transfer.json'
+            export_record(peer, 'peer-note', bundle_path)
+
+        with exclusive(system.ex.root / 'owner.lock'):
+            # 1. Create a cross-instance observation so its object moves into a packed shard.
+            receive_transfer(system, bundle_path, 'obs-peer', 'Receive peer note for Wave 9 test.', 0)
+
+            # 2. Create a composition record whose basis is object-backed (object:<sha256>).
+            ev_bytes = b'packed composition evidence payload\n'
+            ev_sha = system.ex.objects.put(ev_bytes)
+            comp_rec = {
+                'id': 'comp-w9',
+                'kind': 'design',
+                'content': {
+                    'format': 'g60-composition/1',
+                    'purpose': 'Verify packed object basis in Composition',
+                    'premises': [{
+                        'id': 'p1',
+                        'account': 'Packed basis resolves',
+                        'basis': [f'object:{ev_sha}'],
+                        'disposition': 'available',
+                    }],
+                    'opportunities': [],
+                },
+                'basis': [f'object:{ev_sha}'],
+            }
+            system.put(comp_rec, 0)
+
+            # 2b. Create a wrapped information record so Information.inspect() reads pinned packed objects.
+            system.put({'id': 'contract-w9', 'kind': 'content-contract', 'content': 'Contract definition'}, 0)
+            system.put({'id': 'info-w9', 'kind': 'note', 'content': {'v': 1}}, 0)
+            c_head = system.show('contract-w9')
+            i_head = system.show('info-w9')
+            from managed_ai.store.query.information import Information
+
+            Information(system).wrap({
+                'source': {'id': i_head['id'], 'revision': i_head['revision'], 'sha256': i_head['sha256']},
+                'contract': {'id': c_head['id'], 'revision': c_head['revision'], 'sha256': c_head['sha256']},
+                'account': 'Wrap for Wave 9 packed info test',
+            })
+
+            # 3. Create a prepared turn context so explain_delivery, packet inspection & turn_retirement read packed objects.
+            system.context('turn-w9', {'task': 'Exercise packed turn recovery and explanation'})
+
+            # Pack ALL existing loose objects into shard slabs (zero loose files remain).
+            rcpt = execute_pack_objects(system, reason='Wave 9 pack all objects for multi-caller test')
+            self.assertGreater(rcpt['packed_objects'], 0)
+            self.assertEqual(system.ex.objects.entries(), [])
+
+            # 4. Add one fresh compressible loose object to exercise compaction alongside active packs.
+            fresh_loose = system.ex.objects.put(b'compressible-loose-for-compaction ' * 30)
+            self.assertTrue((system.ex.objects.directory / fresh_loose).is_file())
+
+            # Exercise every multi-object caller while counting PackSession opens and verifying zero handle leaks!
+            with mock.patch.object(
+                system.ex.objects,
+                '_open_pack_session',
+                wraps=system.ex.objects._open_pack_session,
+            ) as open_spy:
+                explained = system.explain_context('turn-w9')
+                self.assertEqual(explained['packet'], 'turn-w9')
+                self.assertEqual(open_spy.call_count, 1)
+
+                open_spy.reset_mock()
+                inspected_turn = system.ex.inspect('turn-w9')
+                self.assertEqual(inspected_turn['packet'], 'turn-w9')
+                self.assertEqual(open_spy.call_count, 1)
+
+                open_spy.reset_mock()
+                listed = system.ex.list()
+                self.assertGreaterEqual(len(listed), 2)
+                self.assertEqual(open_spy.call_count, 1)
+
+                open_spy.reset_mock()
+                ret_plan = plan_turn_retirement(system, turns=['turn-w9'])
+                self.assertIn('ineligible', ret_plan)
+                self.assertLessEqual(open_spy.call_count, 2)
+
+                open_spy.reset_mock()
+                obs_info = inspect_transfer(system, 'obs-peer')
+                self.assertEqual(obs_info['source_record']['id'], 'peer-note')
+                self.assertEqual(open_spy.call_count, 1)
+
+                open_spy.reset_mock()
+                comp_view = Composition(system).inspect('comp-w9')
+                self.assertEqual(comp_view['premises'][0]['support']['sources'][0]['status'], 'current')
+                self.assertEqual(open_spy.call_count, 1)
+
+                open_spy.reset_mock()
+                info_view = Information(system).inspect('info-w9')
+                self.assertTrue(info_view['contracted'])
+                self.assertEqual(open_spy.call_count, 1)
+
+                open_spy.reset_mock()
+                comp_head = system.show('comp-w9')
+                batch_rcpt = system.put_batch({
+                    'format': 'managed-ai-batch-update/1',
+                    'id': 'w9-packed-batch',
+                    'instance_id': system.instance_id,
+                    'pin_predecessors': True,
+                    'operations': [{
+                        'id': 'comp-w9',
+                        'expected_revision': comp_head['revision'],
+                        'expected_sha256': comp_head['sha256'],
+                        'mode': 'patch',
+                        'set_active': True,
+                    }],
+                })
+                self.assertEqual(len(batch_rcpt['records']), 1)
+                self.assertLessEqual(open_spy.call_count, 2)
+
+                open_spy.reset_mock()
+                cplan = plan_compact_objects(system)
+                self.assertEqual(cplan['candidate_count'], 2)
+                self.assertEqual(open_spy.call_count, 1)
+
+                open_spy.reset_mock()
+                crcpt = execute_compact_objects(
+                    system,
+                    plan=cplan,
+                    expected_plan=cplan['plan_sha256'],
+                    reason='Compact loose objects alongside active packs',
+                )
+                self.assertEqual(crcpt['compacted_objects'], 2)
+                self.assertEqual(open_spy.call_count, 1)
+
+            # Verify zero active pack session or leaked Windows mmap handles after all calls!
+            self.assertIsNone(system.ex.objects._active_pack_session)
+            self.assertEqual(system.ex.objects._pack_session_depth, 0)
+
+            # Verify exception inside pack_session() still closes deterministically (0 leaked handles).
+            with self.assertRaisesRegex(RuntimeError, 'injected boom'):
+                with system.ex.objects.pack_session():
+                    self.assertIsNotNone(system.ex.objects._active_pack_session)
+                    raise RuntimeError('injected boom')
+            self.assertIsNone(system.ex.objects._active_pack_session)
+            self.assertEqual(system.ex.objects._pack_session_depth, 0)
+
+            # Prove zero open Windows mmap handles remain by unlinking the .slab file directly!
+            cur = parse_pack_current(system.ex.objects.packs_dir)
+            assert cur is not None
+            slab_path = system.ex.objects.packs_dir / cur['shards'][0]['slab']
+            slab_path.unlink()
+            self.assertFalse(slab_path.exists())
+            _ = storage_mod
+
+    def _make_dir_link(self, link: Path, target: Path) -> bool:
+        if os.name == 'nt':
+            proc = subprocess.run(['cmd', '/c', 'mklink', '/J', str(link), str(target)], capture_output=True)
+            return proc.returncode == 0
+        link.symlink_to(target)
+        return True
+
+    def _remove_dir_link(self, link: Path) -> None:
+        from managed_ai.platform import is_reparse_or_symlink
+
+        if not is_reparse_or_symlink(link):
+            return
+        if os.name == 'nt':
+            subprocess.run(['cmd', '/c', 'rmdir', str(link)], capture_output=True)
+        else:
+            link.unlink(missing_ok=True)
+
+    def test_qa9_1_packs_dir_junction_and_symlink_rejected(self) -> None:
+        """QA9-1: NTFS junction (Win) / POSIX symlink (WSL) replacing packs/ dir is refused on ObjectStore & ColdArchive."""
+        system = System(self.store)
+        with exclusive(system.ex.root / 'owner.lock'):
+            key = system.ex.objects.put(b'qa9-1-object-payload-' + (b'J' * 256))
+            system.put({'id': 'qa9-keep', 'kind': 'note', 'content': {'k': key}}, 0)
+            system.put({'id': 'qa9-cold', 'kind': 'note', 'content': {'v': 'cold'}, 'active': False}, 0)
+            execute_pack_objects(system, reason='QA9-1 pack objects')
+
+            plan = plan_archive_records(system, ids=['qa9-cold'])
+            execute_archive_records(system, plan=plan, expected_plan=plan['plan_sha256'], reason='QA9-1 archive')
+            system.record_store.cold_archive.pack_blobs()
+
+            # Move real exchange/objects/packs outside store and replace with junction/symlink.
+            real_obj_packs = system.ex.objects.packs_dir
+            moved_obj_packs = self.root / 'external-obj-packs'
+            real_obj_packs.rename(moved_obj_packs)
+            self.assertTrue(self._make_dir_link(real_obj_packs, moved_obj_packs))
+            self.addCleanup(self._remove_dir_link, real_obj_packs)
+
+            with self.assertRaisesRegex(ValueError, 'ordinary packs directory required'):
+                parse_pack_current(real_obj_packs)
+            with self.assertRaisesRegex(ValueError, 'ordinary packs directory required'):
+                PackSession(real_obj_packs)
+            with self.assertRaisesRegex(ValueError, 'ordinary packs directory required'):
+                system.ex.objects.has(key)
+            with self.assertRaisesRegex(ValueError, 'ordinary packs directory required'):
+                system.ex.objects.read(key)
+            with self.assertRaisesRegex(ValueError, 'ordinary packs directory required'):
+                with system.ex.objects.pack_session():
+                    pass
+
+            self._remove_dir_link(real_obj_packs)
+            moved_obj_packs.rename(real_obj_packs)
+
+            # Repeat for exchange/cold-records/packs.
+            archive = system.record_store.cold_archive
+            real_cold_packs = archive.packs_dir
+            moved_cold_packs = self.root / 'external-cold-packs'
+            real_cold_packs.rename(moved_cold_packs)
+            self.assertTrue(self._make_dir_link(real_cold_packs, moved_cold_packs))
+            self.addCleanup(self._remove_dir_link, real_cold_packs)
+
+            with self.assertRaisesRegex(ValueError, 'ordinary packs directory required'):
+                archive.read('qa9-cold')
+            with self.assertRaisesRegex(ValueError, 'ordinary packs directory required'):
+                with archive.pack_session():
+                    pass
+
+            self._remove_dir_link(real_cold_packs)
+            moved_cold_packs.rename(real_cold_packs)
+
+    def test_qa9_2_3_4_corrupt_occ_truncated_slab_and_missing_slab_bytes(self) -> None:
+        """QA9-2/3/4: 0xFF .occ byte, truncated .slab, and missing slab_bytes raise ValueError (never struct.error/KeyError)."""
+        from managed_ai.core.pack_reader import OCC_HEADER_STRUCT, PackShardHandle, SLAB_HEADER_STRUCT
+        from managed_ai.store.records.pack_gc import _extract_verified_live_frames, gc_packed_objects
+
+        system = System(self.store)
+        with exclusive(system.ex.root / 'owner.lock'):
+            keys: list[str] = []
+            for idx in range(4):
+                keys.append(system.ex.objects.put(f'qa9-payload-{idx}-'.encode('utf-8') + (b'X' * 1024)))
+            execute_pack_objects(system, reason='QA9-2/3/4 pack')
+
+            packs_dir = system.ex.objects.packs_dir
+            cur = parse_pack_current(packs_dir)
+            assert cur is not None
+            orig_cur_bytes = (packs_dir / 'CURRENT.json').read_bytes()
+            shard = cur['shards'][0]
+            occ_path = packs_dir / shard['occ']
+            slab_path = packs_dir / shard['slab']
+            orig_occ_bytes = occ_path.read_bytes()
+            orig_slab_bytes = slab_path.read_bytes()
+
+            # QA9-2a: Flip slot 0 .occ byte to 0xFF (both mismatched AND re-signed occ_sha256 must fail!).
+            bad_occ = bytearray(orig_occ_bytes)
+            bad_occ[OCC_HEADER_STRUCT.size] = 0xFF
+            occ_path.write_bytes(bytes(bad_occ))
+            with self.assertRaisesRegex(ValueError, 'occ sha256 mismatch'):
+                PackShardHandle(packs_dir, shard)
+            with self.assertRaisesRegex(ValueError, 'occ sha256 mismatch'):
+                system.ex.objects.has(keys[0])
+            with self.assertRaisesRegex(ValueError, 'occ sha256 mismatch'):
+                gc_packed_objects(packs_dir, {keys[-1]}, repack_threshold=0.95)
+
+            # Even if CURRENT.json occ_sha256 is forged to match the 0xFF .occ file, state validation rejects it!
+            forged = json.loads(orig_cur_bytes.decode('utf-8'))
+            forged['shards'][0]['occ_sha256'] = sha(bytes(bad_occ))
+            (packs_dir / 'CURRENT.json').write_bytes(encode(forged))
+            with self.assertRaisesRegex(ValueError, 'corrupt pack occ state byte'):
+                PackShardHandle(packs_dir, forged['shards'][0])
+            with self.assertRaisesRegex(ValueError, 'corrupt pack occ state byte'):
+                system.ex.objects.has(keys[0])
+            with self.assertRaisesRegex(ValueError, 'corrupt pack occ state byte'):
+                gc_packed_objects(packs_dir, {keys[-1]}, repack_threshold=0.95)
+
+            # Restore clean .occ & CURRENT.json.
+            occ_path.write_bytes(orig_occ_bytes)
+            (packs_dir / 'CURRENT.json').write_bytes(orig_cur_bytes)
+
+            # QA9-3: Mid-frame truncated .slab raises ValueError on open, has(), and repack (never struct.error!).
+            slab_path.write_bytes(orig_slab_bytes[:SLAB_HEADER_STRUCT.size + 10])
+            with self.assertRaisesRegex(ValueError, 'corrupt pack slab size'):
+                PackShardHandle(packs_dir, shard)
+            with self.assertRaisesRegex(ValueError, 'corrupt pack slab size'):
+                system.ex.objects.has(keys[0])
+            with self.assertRaisesRegex(ValueError, 'corrupt pack slab size'):
+                gc_packed_objects(packs_dir, set(keys[:3]), repack_threshold=0.10)
+
+            # Also verify _extract_verified_live_frames bounds check raises ValueError on out-of-range slab_off.
+            slab_path.write_bytes(orig_slab_bytes)
+            handle = PackShardHandle(packs_dir, shard)
+            try:
+                with self.assertRaisesRegex(ValueError, 'corrupt pack frame bounds'):
+                    _extract_verified_live_frames(
+                        handle,
+                        [(bytes.fromhex(keys[0]), handle._slab_size - 4, 32, 32, OCC_LIVE_RAW)],
+                    )
+            finally:
+                handle.close()
+
+            # QA9-4: Missing or invalid slab_bytes in CURRENT.json raises ValueError (never KeyError!).
+            no_slab_bytes = json.loads(orig_cur_bytes.decode('utf-8'))
+            del no_slab_bytes['shards'][0]['slab_bytes']
+            (packs_dir / 'CURRENT.json').write_bytes(encode(no_slab_bytes))
+            with self.assertRaisesRegex(ValueError, 'slab_bytes'):
+                parse_pack_current(packs_dir)
+            with self.assertRaisesRegex(ValueError, 'slab_bytes'):
+                gc_packed_objects(packs_dir, set(keys))
+
+            bad_slab_bytes = json.loads(orig_cur_bytes.decode('utf-8'))
+            bad_slab_bytes['shards'][0]['slab_bytes'] = SLAB_HEADER_STRUCT.size - 1
+            (packs_dir / 'CURRENT.json').write_bytes(encode(bad_slab_bytes))
+            with self.assertRaisesRegex(ValueError, 'slab_bytes'):
+                parse_pack_current(packs_dir)
+
+            (packs_dir / 'CURRENT.json').write_bytes(orig_cur_bytes)
+
+    def test_p9_1_2_concurrent_exchange_list_explain_single_read_and_cold_restore_session(self) -> None:
+        """P9-1/P9-2/P9-8: concurrent packed Exchange.list() is thread-safe, explain reads each object once, cold restore batches."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        system = System(self.store)
+        with exclusive(system.ex.root / 'owner.lock'):
+            for idx in range(6):
+                system.put({'id': f'p9-note-{idx}', 'kind': 'note', 'content': {'i': idx, 'pad': 'N' * 300}}, 0)
+            for idx in range(4):
+                system.context(f'p9-turn-{idx}', {
+                    'task': f'Concurrent packed list turn {idx}',
+                    'records': [f'p9-note-{idx}'],
+                })
+
+            # Archive 3 inactive records and pack both object store & cold archive into small multi-shards.
+            for idx in range(3):
+                system.put({'id': f'p9-cold-{idx}', 'kind': 'note', 'content': {'c': idx}, 'active': False}, 0)
+            cplan = plan_archive_records(system, ids=[f'p9-cold-{idx}' for idx in range(3)])
+            execute_archive_records(system, plan=cplan, expected_plan=cplan['plan_sha256'], reason='P9-8 cold pack')
+            system.record_store.cold_archive.pack_blobs(shard_target_bytes=4096)
+
+            rcpt = execute_pack_objects(system, shard_target_bytes=4096, reason='P9-1 multi-shard pack')
+            self.assertGreaterEqual(rcpt['new_shards'], 2)
+
+            # P9-1: Concurrent Exchange.list() across 4 threads (each fanning out internally across ThreadPoolExecutor).
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                results = list(pool.map(lambda _: system.ex.list(), range(8)))
+            for listed in results:
+                names = {row['packet'] for row in listed}
+                for idx in range(4):
+                    self.assertIn(f'p9-turn-{idx}', names)
+            self.assertIsNone(system.ex.objects._active_pack_session)
+            self.assertEqual(system.ex.objects._pack_session_depth, 0)
+
+            # P9-2: _verify_packet_entries reads each selected record object once (no duplicate L65/L72 read:
+            # 1 read in exchange.load() + 1 read in _verify_packet_entries() == same count as brief, never 3!).
+            read_counts: dict[str, int] = {}
+            orig_read = system.ex.objects.read
+
+            def counting_read(key: str, **kwargs):
+                read_counts[key] = read_counts.get(key, 0) + 1
+                return orig_read(key, **kwargs)
+
+            with mock.patch.object(system.ex.objects, 'read', side_effect=counting_read):
+                explained = system.explain_context('p9-turn-0')
+            brief_unit = next(u for u in explained['units'] if u['role'] == 'brief')
+            rec_unit = next(u for u in explained['units'] if u['path'] == 'records/p9-note-0.json')
+            self.assertEqual(read_counts.get(rec_unit['sha256']), read_counts.get(brief_unit['sha256']))
+            self.assertEqual(read_counts.get(rec_unit['sha256']), 2)
+
+            # P9-8: restore_archived_records shares ONE ColdArchive PackSession across all 3 packed cold records!
+            archive = system.record_store.cold_archive
+            cold_opens = 0
+            real_session = PackSession
+
+            def counting_cold_session(packs_dir: Path, **kwargs):
+                nonlocal cold_opens
+                if Path(packs_dir) == archive.packs_dir:
+                    cold_opens += 1
+                return real_session(packs_dir, **kwargs)
+
+            with mock.patch('managed_ai.store.records.cold_archive.PackSession', side_effect=counting_cold_session):
+                restored = restore_archived_records(
+                    system,
+                    ids=[f'p9-cold-{idx}' for idx in range(3)],
+                    reason='P9-8 batched cold restore',
+                )
+            self.assertEqual(restored['restored_count'], 3)
+            self.assertEqual(cold_opens, 1)
+            self.assertIsNone(archive._active_pack_session)
+            self.assertEqual(archive._pack_session_depth, 0)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

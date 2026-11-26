@@ -225,14 +225,36 @@ def _engine_code_identity(engine_root: Path) -> str:
     native_entry = Path("store/system.py")
     native_contract = Path("store/selection/domain_selection.py")
     declaration_paths = {native_entry, native_contract}
+    sorted_paths = sorted(paths)
+
+    def _hash_chunk(chunk: list[Path]) -> list[tuple[Path, dict[str, str], bytes | None]]:
+        out: list[tuple[Path, dict[str, str], bytes | None]] = []
+        for path in chunk:
+            relative = path.relative_to(engine)
+            raw = path.read_bytes()
+            out.append((
+                relative,
+                {"path": relative.as_posix(), "sha256": hashlib.sha256(raw).hexdigest()},
+                raw if relative in declaration_paths else None,
+            ))
+        return out
+
+    if len(sorted_paths) >= 16:
+        from concurrent.futures import ThreadPoolExecutor
+
+        workers = min(8, (len(sorted_paths) + 7) // 8)
+        step = (len(sorted_paths) + workers - 1) // workers
+        chunks = [sorted_paths[i : i + step] for i in range(0, len(sorted_paths), step)]
+        with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
+            hashed = [item for sub in pool.map(_hash_chunk, chunks) for item in sub]
+    else:
+        hashed = _hash_chunk(sorted_paths)
+
     rows: list[dict[str, str]] = []
     declarations: dict[Path, bytes] = {}
-
-    for path in sorted(paths):
-        relative = path.relative_to(engine)
-        raw = path.read_bytes()
-        rows.append({"path": relative.as_posix(), "sha256": hashlib.sha256(raw).hexdigest()})
-        if relative in declaration_paths:
+    for relative, row, raw in hashed:
+        rows.append(row)
+        if raw is not None:
             declarations[relative] = raw
 
     if declaration_paths != declarations.keys():

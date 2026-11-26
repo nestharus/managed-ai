@@ -395,6 +395,91 @@ class DiscoveryChecks(unittest.TestCase):
         self.assertEqual(self.system.recover('pinned-current')['context'], original)
         self.assertEqual(self.system.view('pinned-current')['source_pins'], pins)
 
+    def test_p9_7_head_index_v3_discovery_parity_and_domain_api_view(self):
+        """P9-7 & P9-4: HeadIndex v3 (exact-base + delta) discovery matches unindexed discovery identically."""
+        from managed_ai.deployment.identity import code_identity
+        from managed_ai.host.continuing_work.capture_native import _engine_code_identity
+        from managed_ai.store import domain_api
+
+        # P9-4: parallelized code_identity matches capture_native._engine_code_identity byte-for-byte.
+        self.assertEqual(code_identity(ENGINE), _engine_code_identity(ENGINE))
+
+        self.record('alpha', ['beta', 'record:gamma', 'project:current-note.md'])
+        self.record('beta', ['gamma'])
+        self.system.put({
+            'id': 'gamma',
+            'kind': 'claim',
+            'content': {'summary': 'Distinctive quantum cadence finding', 'parent_id': 'alpha'},
+            'relations': [{'relation': 'supports', 'target': 'alpha'}],
+            'active': True,
+        }, 0)
+        self.record('dormant', ['alpha'], active=False)
+
+        queries = [
+            {'query': 'claim', 'content': False, 'scopes': ['records']},
+            {'query': 'quantum cadence', 'content': True, 'scopes': ['records']},
+            {'scopes': ['records', 'project'], 'scan_order': 'scope-round-robin'},
+            {'scopes': ['records'], 'scan_order': 'seeded', 'seed': 42},
+            {'anchors': ['record:alpha'], 'scopes': ['records', 'project'], 'direction': 'both', 'hops': 2},
+            {'anchors': ['project:current-note.md'], 'scopes': ['records', 'project'], 'direction': 'incoming', 'hops': 1},
+            {'anchors': ['record:alpha'], 'scopes': ['records'], 'direction': 'incoming', 'hops': 1, 'include_content_links': True},
+            {'anchors': ['record:alpha'], 'scopes': ['records'], 'direction': 'both', 'hops': 2, 'include_inactive': True},
+        ]
+
+        # 1. Baseline unindexed discovery results (no HeadIndex present).
+        self.assertFalse(self.system.record_store.index.exists())
+        unindexed_results = [Discovery(self.system).search(q) for q in queries]
+
+        # 2. Build HeadIndex v3 and verify public domain_api.open_verified_index_view works & closes cleanly.
+        self.system.record_store.reindex()
+        with domain_api.open_verified_index_view(self.system.record_store) as verified:
+            self.assertIsNotNone(verified)
+            self.assertIsInstance(verified, domain_api.VerifiedIndexView)
+            self.assertTrue(verified.is_exact_base)
+
+        indexed_results = [Discovery(self.system).search(q) for q in queries]
+        for idx, (q, expected, actual) in enumerate(zip(queries, unindexed_results, indexed_results)):
+            with self.subTest(mode='exact-base', idx=idx, query=q):
+                if q.get('direction') in ('incoming', 'both'):
+                    # Reverse CSR inspects only incoming sources rather than scanning every unrelated record.
+                    self.assertEqual(actual['candidates'], expected['candidates'])
+                    self.assertEqual(actual['context_request'], expected['context_request'])
+                    self.assertEqual(actual['source_bindings'], expected['source_bindings'])
+                else:
+                    self.assertEqual(actual, expected)
+
+        # 3. Mutate via delta sidecar (without full reindex) and confirm exact parity with a freshly unindexed scan!
+        self.system.put({
+            'id': 'delta-link',
+            'kind': 'claim',
+            'content': {'summary': 'Fresh delta quantum note', 'ref_id': 'beta'},
+            'relations': [{'relation': 'cites', 'target': 'gamma'}],
+            'active': True,
+        }, 0)
+        delta_queries = [
+            {'query': 'delta quantum', 'content': True, 'scopes': ['records']},
+            {'anchors': ['record:gamma'], 'scopes': ['records'], 'direction': 'incoming', 'hops': 1},
+            {'anchors': ['record:beta'], 'scopes': ['records'], 'direction': 'incoming', 'hops': 1, 'include_content_links': True},
+        ]
+        delta_indexed = [Discovery(self.system).search(q) for q in delta_queries]
+
+        # Remove HeadIndex files to compare against pure unindexed discovery on the exact same store state.
+        sys_dir = self.system.ex.path('.system')
+        for name in ('head-index.current.json', 'head-index.delta.jsonl'):
+            (sys_dir / name).unlink(missing_ok=True)
+        for gen_file in sys_dir.glob('head-index.gen*.bin'):
+            gen_file.unlink(missing_ok=True)
+
+        delta_unindexed = [Discovery(self.system).search(q) for q in delta_queries]
+        for idx, (q, expected, actual) in enumerate(zip(delta_queries, delta_unindexed, delta_indexed)):
+            with self.subTest(mode='v3-delta', idx=idx, query=q):
+                if q.get('direction') in ('incoming', 'both'):
+                    self.assertEqual(actual['candidates'], expected['candidates'])
+                    self.assertEqual(actual['context_request'], expected['context_request'])
+                    self.assertEqual(actual['source_bindings'], expected['source_bindings'])
+                else:
+                    self.assertEqual(actual, expected)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

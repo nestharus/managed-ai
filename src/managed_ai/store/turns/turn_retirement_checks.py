@@ -404,26 +404,27 @@ def _check_working_copy_integrity(
     refuse,
 ) -> None:
     """Guard (d): Verify 100% captured recoverability and working-copy byte correspondence."""
-    _verify_captured_recovery(system, turn, binding, request, returned, prep_state, refuse)
-    if dir_issues:
-        return
+    with system.ex.objects.pack_session():
+        _verify_captured_recovery(system, turn, binding, request, returned, prep_state, refuse)
+        if dir_issues:
+            return
 
-    expected_captured, full_view_object = _expected_captured_files(system, turn, request, refuse)
-    modified_files: list[str] = []
-    uncaptured_entries: list[str] = []
-    allowed_files: set[str] = set()
+        expected_captured, full_view_object = _expected_captured_files(system, turn, request, refuse)
+        modified_files: list[str] = []
+        uncaptured_entries: list[str] = []
+        allowed_files: set[str] = set()
 
-    for rel, expected_sha in sorted(expected_captured.items()):
-        if rel in file_hashes:
-            allowed_files.add(rel)
-            if file_hashes[rel] != expected_sha:
-                modified_files.append(rel)
+        for rel, expected_sha in sorted(expected_captured.items()):
+            if rel in file_hashes:
+                allowed_files.add(rel)
+                if file_hashes[rel] != expected_sha:
+                    modified_files.append(rel)
 
-    _verify_metadata_working_files(
-        system, turn, turn_dir, binding, request, prep_state, declared_targets,
-        expected_captured, full_view_object, file_hashes,
-        allowed_files, modified_files, uncaptured_entries,
-    )
+        _verify_metadata_working_files(
+            system, turn, turn_dir, binding, request, prep_state, declared_targets,
+            expected_captured, full_view_object, file_hashes,
+            allowed_files, modified_files, uncaptured_entries,
+        )
 
     for rel in sorted(file_hashes):
         if rel not in allowed_files:

@@ -68,6 +68,8 @@ from managed_ai.store.query.information import Information, pointer
 
 from managed_ai.store.records.record_import import import_records, read_receipt
 
+from managed_ai.store.records.record_scanner import VerifiedIndexView, open_verified_index_view
+
 from managed_ai.store.records.record_transfer import inspect as inspect_transfer
 
 from managed_ai.store.records.records import RecordStore
@@ -99,6 +101,7 @@ __all__ = [
     'RecordStore',
     'System',
     'TurnPreparation',
+    'VerifiedIndexView',
     'admission_deadline',
     'atomic_bytes',
     'canonical',
@@ -116,6 +119,7 @@ __all__ = [
     'is_ordinary_file_stat',
     'nonempty',
     'open_admitted_store',
+    'open_verified_index_view',
     'opened_admitted_store',
     'owner_admission',
     'packet_id',

@@ -757,20 +757,21 @@ def scan_records(store, idents=None, *, max_workers: int = 16) -> list[dict]:
     if not target_ids:
         return []
 
-    if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
-        with store.ex.open_workspace_dir('records') as records_fd:
-            return chunk_map(
-                target_ids,
-                lambda chunk: [store.read(ident, dir_fd=records_fd)[0] for ident in chunk],
-                max_workers=min(max_workers, 8),
-            )
+    with store.cold_archive.pack_session():
+        if hasattr(os, 'O_NOFOLLOW') and hasattr(os, 'O_DIRECTORY'):
+            with store.ex.open_workspace_dir('records') as records_fd:
+                return chunk_map(
+                    target_ids,
+                    lambda chunk: [store.read(ident, dir_fd=records_fd)[0] for ident in chunk],
+                    max_workers=min(max_workers, 8),
+                )
 
-    _, dir_str = validated_records_dir_win(store)
-    return chunk_map(
-        target_ids,
-        lambda chunk: [read_verified_win(store, dir_str, ident, allow_cold=True)[0] for ident in chunk],
-        max_workers=min(max_workers, 8),
-    )
+        _, dir_str = validated_records_dir_win(store)
+        return chunk_map(
+            target_ids,
+            lambda chunk: [read_verified_win(store, dir_str, ident, allow_cold=True)[0] for ident in chunk],
+            max_workers=min(max_workers, 8),
+        )
 
 
 def reindex(store, *, max_workers: int = 16) -> dict:

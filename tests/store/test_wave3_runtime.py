@@ -514,7 +514,7 @@ class Wave3RuntimeTests(unittest.TestCase):
 
     def test_posix_relative_paths_serialized_in_descriptors(self):
         """Wave 3.5: relative paths written to deployment.json, system.json, and host.json always use POSIX '/'."""
-        from managed_ai.core._platform import safe_relpath
+        from managed_ai.platform import safe_relpath
 
         base = self.root / 'posix-check'
         eng_copy = self._copy_minimal_engine(base / 'trunk/src/managed_ai')

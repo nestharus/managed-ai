@@ -6,6 +6,7 @@ import errno
 import os
 from pathlib import Path
 import stat
+import threading
 from typing import Iterator
 import zlib
 
@@ -23,6 +24,7 @@ from managed_ai.core.storage import (
     _OPEN_RO_NOFOLLOW,
     atomic_bytes,
     encode,
+    has_pack_pointer,
     is_ordinary_file_stat,
     now,
     read_json,
@@ -128,31 +130,42 @@ class ColdArchive:
         self._manifest_cache: tuple[tuple[int, int, int], dict] | None = None
         self._active_pack_session: PackSession | None = None
         self._pack_session_depth = 0
+        self._pack_session_lock = threading.RLock()
+
+    def _has_pack_pointer(self) -> bool:
+        return has_pack_pointer(self.packs_dir)
 
     @contextmanager
     def pack_session(self) -> Iterator[PackSession | None]:
-        """Share one read-only PackSession across batched cold-archive reads."""
-        if self._active_pack_session is not None:
-            self._pack_session_depth += 1
-            try:
-                yield self._active_pack_session
-            finally:
-                self._pack_session_depth -= 1
-            return
+        """Share one thread-safe read-only PackSession across batched cold-archive reads."""
+        opened_here = False
+        with self._pack_session_lock:
+            if self._active_pack_session is not None:
+                self._pack_session_depth += 1
+                session: PackSession | None = self._active_pack_session
+            elif not self._has_pack_pointer():
+                session = None
+            else:
+                session = PackSession(self.packs_dir)
+                self._active_pack_session = session
+                self._pack_session_depth = 1
+                opened_here = True
 
-        if not (self.packs_dir / 'CURRENT.json').exists():
+        if session is None:
             yield None
             return
 
-        session = PackSession(self.packs_dir)
-        self._active_pack_session = session
-        self._pack_session_depth = 1
         try:
             yield session
         finally:
-            self._pack_session_depth = 0
-            self._active_pack_session = None
-            session.close()
+            to_close: PackSession | None = None
+            with self._pack_session_lock:
+                self._pack_session_depth -= 1
+                if opened_here and self._pack_session_depth == 0:
+                    to_close = self._active_pack_session
+                    self._active_pack_session = None
+            if to_close is not None:
+                to_close.close()
 
     def _load_manifest(self) -> dict | None:
         try:
@@ -213,14 +226,15 @@ class ColdArchive:
         digest(raw_sha256, 'cold archive raw_sha256')
 
         blob = self.blob_path(ident)
+        active_session = self._active_pack_session
         if blob.exists() or blob.is_symlink():
             raw = _decompress_exact(blob, raw_bytes, raw_sha256)
-        elif self._active_pack_session is not None:
-            packed_raw = self._active_pack_session.read(raw_sha256, retained=True, expected_bytes=raw_bytes)
+        elif active_session is not None:
+            packed_raw = active_session.read(raw_sha256, retained=True, expected_bytes=raw_bytes)
             if packed_raw is None:
                 raise ValueError(f'archived record missing from cold archive packs: {ident}')
             raw = packed_raw
-        elif (self.packs_dir / 'CURRENT.json').exists():
+        elif self._has_pack_pointer():
             with PackSession(self.packs_dir) as session:
                 packed_raw = session.read(raw_sha256, retained=True, expected_bytes=raw_bytes)
             if packed_raw is None:
@@ -571,12 +585,13 @@ def execute_archive_records(system, *, plan: dict, expected_plan: str, reason: s
     sync_dir(records_dir)
     system.record_store.index.remove_if_present(system.record_store.format, nominated_ids)
 
-    for planned in plan['eligible']:
-        reloaded = system.record_store.show(planned['id'])
-        require(
-            reloaded['revision'] == planned['revision'] and reloaded['sha256'] == planned['sha256'],
-            'post-archive readback mismatch: ' + planned['id'],
-        )
+    with archive.pack_session():
+        for planned in plan['eligible']:
+            reloaded = system.record_store.show(planned['id'])
+            require(
+                reloaded['revision'] == planned['revision'] and reloaded['sha256'] == planned['sha256'],
+                'post-archive readback mismatch: ' + planned['id'],
+            )
 
     receipt_dir = system.ex.path('.system/maintenance')
     receipt_dir.mkdir(parents=True, exist_ok=True)
@@ -606,12 +621,13 @@ def restore_archived_records(system, *, ids: list[str], reason: str) -> dict:
     manifest_records = archive.entries()
 
     staged: list[tuple[str, dict, bytes]] = []
-    for ident in requested:
-        require(ident in manifest_records, 'record is not in cold archive: ' + ident)
-        hot_path = system.record_store.path(ident)
-        require(not hot_path.exists() and not hot_path.is_symlink(), 'hot record path already exists: ' + ident)
-        record, raw = archive.read(ident)
-        staged.append((ident, record, raw))
+    with archive.pack_session():
+        for ident in requested:
+            require(ident in manifest_records, 'record is not in cold archive: ' + ident)
+            hot_path = system.record_store.path(ident)
+            require(not hot_path.exists() and not hot_path.is_symlink(), 'hot record path already exists: ' + ident)
+            record, raw = archive.read(ident)
+            staged.append((ident, record, raw))
 
     records_dir = system.work / 'records'
     records_dir.mkdir(parents=True, exist_ok=True)
@@ -649,7 +665,7 @@ def restore_archived_records(system, *, ids: list[str], reason: str) -> dict:
     if archive.blobs_dir.exists():
         sync_dir(archive.blobs_dir)
 
-    if removed_raw_shas and (archive.packs_dir / 'CURRENT.json').exists():
+    if removed_raw_shas and archive._has_pack_pointer():
         still_used = {
             row['raw_sha256']
             for row in manifest_records.values()
