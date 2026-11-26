@@ -15,11 +15,11 @@ from typing import Any
 import uuid
 
 if __package__ in (None, ""):
-    _src_root = str(Path(__file__).resolve().parents[4])
+    _src_root = str(Path(__file__).resolve().parents[3])
     if _src_root not in sys.path:
         sys.path.insert(0, _src_root)
 
-from managed_ai.companions.workbench.core.config import (
+from managed_ai.companions.workbench.config import (
     CORE_MODULES,
     build_model_transport,
     command_code as _command_code,
@@ -27,15 +27,15 @@ from managed_ai.companions.workbench.core.config import (
     pin_files as _pins,
     validate_resolution_payload,
 )
-from managed_ai.companions.workbench.core.durable_agent import (
+from managed_ai.companions.workbench.durable_agent import (
     inspect_durable_state,
     resolve_durable_operation,
     run_durable_agent,
 )
-from managed_ai.companions.workbench.core.io_utils import atomic_json, loads_strict, pin_file as pin
-from managed_ai.companions.workbench.core.model_bridges import write_mailbox_response
-from managed_ai.companions.workbench.core.source_tools import SearchImplementation
-from managed_ai.companions.workbench.core.workbench_agent import Workbench, WorkbenchBasisMismatch
+from managed_ai.companions.workbench.io_utils import atomic_json, loads_strict, pin_file as pin
+from managed_ai.companions.workbench.model_bridges import write_mailbox_response
+from managed_ai.companions.workbench.source_tools import SearchImplementation
+from managed_ai.companions.workbench.workbench_agent import Workbench, WorkbenchBasisMismatch
 
 VERSION = "g60-resumable-workbench/1"
 

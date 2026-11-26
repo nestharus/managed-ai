@@ -2,26 +2,26 @@
   "schema": "peer-workbench-acquired-components/1",
   "scope": "Declarative manifest of shared workbench components under companions/. Release packages stamp exact file identities on export; runtime verifies any stamped identity and always records live loaded module identities in input-identities.json.",
   "files": {
-    "workbench/core/io_utils.py": {
-      "source": "workbench/core/io_utils.py"
+    "workbench/io_utils.py": {
+      "source": "workbench/io_utils.py"
     },
-    "workbench/core/config.py": {
-      "source": "workbench/core/config.py"
+    "workbench/config.py": {
+      "source": "workbench/config.py"
     },
-    "workbench/core/model_bridges.py": {
-      "source": "workbench/core/model_bridges.py"
+    "workbench/model_bridges.py": {
+      "source": "workbench/model_bridges.py"
     },
-    "workbench/core/source_tools.py": {
-      "source": "workbench/core/source_tools.py"
+    "workbench/source_tools.py": {
+      "source": "workbench/source_tools.py"
     },
-    "workbench/core/workbench_agent.py": {
-      "source": "workbench/core/workbench_agent.py"
+    "workbench/workbench_agent.py": {
+      "source": "workbench/workbench_agent.py"
     },
-    "workbench/controller/agent_runtime.py": {
-      "source": "workbench/controller/agent_runtime.py"
+    "workbench/agent_runtime.py": {
+      "source": "workbench/agent_runtime.py"
     },
-    "workbench/controller/evidence_support.py": {
-      "source": "workbench/controller/evidence_support.py"
+    "workbench/evidence_support.py": {
+      "source": "workbench/evidence_support.py"
     }
   }
 }

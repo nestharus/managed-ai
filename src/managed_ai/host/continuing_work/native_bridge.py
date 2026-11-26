@@ -111,6 +111,29 @@ def resolve_sibling_cli(engine_entry: Path, canonical_rel: str, legacy_name: str
     return entry.with_name(legacy_name)
 
 
+def build_sibling_cli_command(
+    engine_entry: Path,
+    module_name: str,
+    canonical_rel: str,
+    legacy_name: str,
+    *args: Any,
+) -> tuple[list[str], dict[str, str] | None]:
+    """Build subprocess argv + env invoking a canonical core module directly or legacy script."""
+    entry = check_unfollowed_ancestors(engine_entry, "Engine entry", include_target=True).resolve()
+    str_args = [str(arg) for arg in args]
+    if entry.parent.name == "store":
+        engine_root = entry.parents[1]
+        candidate = engine_root / canonical_rel
+        if candidate.is_file() and not is_reparse_or_symlink(candidate):
+            if engine_root.name == "managed_ai" and (engine_root / "__init__.py").is_file():
+                env = dict(os.environ)
+                env["PYTHONPATH"] = str(engine_root.parent)
+                env["PYTHONDONTWRITEBYTECODE"] = "1"
+                return [sys.executable, "-B", "-m", module_name, *str_args], env
+            return [sys.executable, "-B", str(candidate), *str_args], None
+    return [sys.executable, "-B", str(entry.with_name(legacy_name)), *str_args], None
+
+
 class NativeBridge:
     """Collaborator owning durable object/event custody, native subprocesses, and capture reconciliation."""
 
@@ -212,21 +235,17 @@ class NativeBridge:
         return loads_strict(proc.stdout)
 
     def inspect_native(self, sid: str, scoped_errors: bool = False) -> dict[str, Any]:
-        cli = resolve_sibling_cli(
+        argv, env = build_sibling_cli_command(
             Path(self._host.engine),
-            "core/cli/exchange_packets.py",
+            "managed_ai.core.exchange.cli",
+            "core/exchange/cli.py",
             "exchange_packets.py",
-        )
-        argv = [
-            sys.executable,
-            "-B",
-            str(cli),
             "--root",
-            str(self._host.native / "exchange"),
+            self._host.native / "exchange",
             "inspect",
             ident(sid),
-        ]
-        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8")
+        )
+        proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", env=env)
         self._host.event(
             "native-inspection",
             {"argv": argv, "exit": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr},

@@ -15,18 +15,18 @@ import sys
 from typing import Any
 
 if __package__ in (None, ""):
-    _src_root = str(Path(__file__).resolve().parents[4])
+    _src_root = str(Path(__file__).resolve().parents[3])
     if _src_root not in sys.path:
         sys.path.insert(0, _src_root)
 
-from managed_ai.companions.workbench.core.config import (
+from managed_ai.companions.workbench.config import (
     CORE_MODULES,
     DEFAULT_CONTROLLER_DIR,
     default_search_paths,
     is_clean_relative_posix,
     paths_overlap,
 )
-from managed_ai.companions.workbench.core.io_utils import canonical_bytes, loads_strict
+from managed_ai.companions.workbench.io_utils import canonical_bytes, loads_strict
 
 
 class Inspection:
@@ -330,12 +330,10 @@ class Inspection:
 
         protected: dict[str, Path | None] = {"corpus_root": corpus, "controller_dir": controller}
         if controller is not None:
-            product = controller.parent
-            core_dir = product / "core"
-            if (core_dir / "resumable_workbench.py").is_file():
-                protected["operating package beside controller_dir"] = product
+            if (controller / "resumable_workbench.py").is_file():
+                protected["operating package"] = controller
                 for name in CORE_MODULES:
-                    self.file("operating package/core/" + name, str(core_dir / name))
+                    self.file("operating package/" + name, str(controller / name))
 
         for field, target in {"workspace": workspace, **retained}.items():
             if target is None:

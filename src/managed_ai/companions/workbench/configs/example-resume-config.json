@@ -1,6 +1,6 @@
 {
   "run_id": "mailbox-example-01",
-  "controller_dir": "/__PRODUCT_ROOT__/controller",
+  "controller_dir": "/__PRODUCT_ROOT__",
   "corpus_root": "/__CORPUS_ROOT__",
   "workspace": "/__WORK_ROOT__/workspace",
   "state_dir": "/__WORK_ROOT__/state",

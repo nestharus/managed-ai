@@ -5,10 +5,10 @@ from tempfile import TemporaryDirectory
 import sys
 import unittest
 
-SRC_ROOT = Path(__file__).resolve().parents[3] / 'src'
+SRC_ROOT = Path(__file__).resolve().parents[2] / 'src'
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
-from managed_ai.optional.collective.collective import Collective
+from managed_ai.collective import Collective
 
 
 class ReceiverUse(unittest.TestCase):

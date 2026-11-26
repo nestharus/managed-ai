@@ -30,6 +30,7 @@ from managed_ai.host.continuing_work.native_bridge import (
     MAX_EVENT_STREAM_BYTES,
     NativeBridge,
     _safe_jsonl,
+    build_sibling_cli_command,
     capture_error,
     resolve_sibling_cli,
 )
@@ -380,25 +381,21 @@ class Host:
         if not (self.work / "records/goal.json").is_file():
             raise ValueError("Current native goal material is absent")
 
-        attention_cli = resolve_sibling_cli(
+        command, env = build_sibling_cli_command(
             Path(self.engine),
-            "core/cli/track_attention.py",
+            "managed_ai.core.attention",
+            "core/attention.py",
             "track_attention.py",
-        )
-        command = [
-            sys.executable,
-            "-B",
-            str(attention_cli),
             "--root",
-            str(self.native / "exchange"),
+            self.native / "exchange",
             "feedback",
             operation,
             "--item",
             "continuing-commission",
             "--limit",
             "1",
-        ]
-        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
+        )
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", env=env)
         self.event(
             "continuation-binding-observation",
             {

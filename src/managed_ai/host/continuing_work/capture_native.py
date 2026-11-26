@@ -44,7 +44,7 @@ EXPECTED_ENGINE_API = "managed-ai-runtime/1"
 EXPECTED_DEPLOYMENT_API = "agent-system-deployment/2"
 EXPECTED_STORE_SCHEMA = "managed-ai-store/1"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-_CODE_ID_EXCLUDED_DIRS = frozenset({"tests", "examples", "patterns", "companions", "optional"})
+_CODE_ID_EXCLUDED_DIRS = frozenset({"tests", "examples", "patterns", "companions", "collective"})
 _NON_SOURCE_SUFFIXES = (".pyc", ".pyo", ".pyd", ".so", *EXTENSION_SUFFIXES)
 
 # Frozen historical pre-Wave-4 engine/runtime/ profiles kept only for archival replay.
@@ -170,6 +170,40 @@ def native_sources(entry: Path) -> tuple[Path, dict[str, str]]:
     return native, programs
 
 
+def _collect_engine_entry(
+    entry: os.DirEntry[str],
+    directory: Path,
+    in_cache: bool,
+    pending: list[tuple[Path, bool]],
+    paths: list[Path],
+) -> None:
+    """Validate one scanned engine directory entry and enqueue subdirs or Python sources."""
+    path = directory / entry.name
+    info = entry.stat(follow_symlinks=False)
+    if is_reparse_or_symlink(path):
+        raise ValueError(f"shared engine may not use symbolic links or reparse points: {path}")
+
+    mode = info.st_mode
+    if stat.S_ISDIR(mode):
+        if entry.name.casefold() not in _CODE_ID_EXCLUDED_DIRS:
+            pending.append((path, in_cache or entry.name.casefold() == "__pycache__"))
+        return
+
+    if not stat.S_ISREG(mode):
+        raise ValueError(f"ordinary shared engine file or directory required: {path}")
+
+    if in_cache:
+        if path.suffix.lower() != ".pyc":
+            raise ValueError(f"ordinary bytecode cache files required below __pycache__: {path}")
+        return
+
+    if path.name.lower().endswith(_NON_SOURCE_SUFFIXES):
+        raise ValueError(f"shared engine requires Python source for executable modules: {path}")
+
+    if path.match("*.py") and not _is_test_module(entry.name):
+        paths.append(path)
+
+
 def _engine_code_identity(engine_root: Path) -> str:
     """Compute deployment/controller.py:code_identity() without importing external engine code."""
     engine = check_unfollowed_ancestors(
@@ -186,24 +220,7 @@ def _engine_code_identity(engine_root: Path) -> str:
         directory, in_cache = pending.pop()
         with os.scandir(directory) as entries:
             for entry in entries:
-                path = directory / entry.name
-                info = entry.stat(follow_symlinks=False)
-                if is_reparse_or_symlink(path):
-                    raise ValueError(f"shared engine may not use symbolic links or reparse points: {path}")
-                mode = info.st_mode
-                if stat.S_ISDIR(mode):
-                    if entry.name.casefold() in _CODE_ID_EXCLUDED_DIRS:
-                        continue
-                    pending.append((path, in_cache or entry.name.casefold() == "__pycache__"))
-                elif not stat.S_ISREG(mode):
-                    raise ValueError(f"ordinary shared engine file or directory required: {path}")
-                elif in_cache:
-                    if path.suffix.lower() != ".pyc":
-                        raise ValueError(f"ordinary bytecode cache files required below __pycache__: {path}")
-                elif path.name.lower().endswith(_NON_SOURCE_SUFFIXES):
-                    raise ValueError(f"shared engine requires Python source for executable modules: {path}")
-                elif path.match("*.py") and not _is_test_module(entry.name):
-                    paths.append(path)
+                _collect_engine_entry(entry, directory, in_cache, pending, paths)
 
     native_entry = Path("store/system.py")
     native_contract = Path("store/selection/domain_selection.py")

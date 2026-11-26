@@ -10,13 +10,13 @@ from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC_ROOT = REPO_ROOT / 'src'
-WORKBENCH_CORE = SRC_ROOT / 'managed_ai/companions/workbench/core'
+WORKBENCH_DIR = SRC_ROOT / 'managed_ai/companions/workbench'
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.companions.workbench.core import source_tools
-from managed_ai.companions.workbench.core.source_tools import encoded, identity
-from managed_ai.companions.workbench.core.workbench_agent import Workbench
+from managed_ai.companions.workbench import source_tools
+from managed_ai.companions.workbench.source_tools import encoded, identity
+from managed_ai.companions.workbench.workbench_agent import Workbench
 
 
 class ReceiptPublication(unittest.TestCase):
@@ -151,7 +151,7 @@ class ReceiptPublication(unittest.TestCase):
         self.assertEqual(set(exported['sources']), expected)
         self.assertEqual(path.read_bytes(), encoded(exported) + b'\n')
         script = ("import json,sys; sys.path.insert(0, sys.argv[3]); "
-                  "from managed_ai.companions.workbench.core.workbench_agent import Workbench; "
+                  "from managed_ai.companions.workbench.workbench_agent import Workbench; "
                   "w=Workbench(json.loads(sys.argv[1]),resume=True); "
                   "w.restore(json.loads(sys.argv[2])); print(json.dumps(w.source_service.receipts()))")
         raw = subprocess.check_output([sys.executable, '-B', '-c', script,

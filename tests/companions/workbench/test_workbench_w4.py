@@ -9,12 +9,12 @@ from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC_ROOT = REPO_ROOT / 'src'
-WORKBENCH_CORE = SRC_ROOT / 'managed_ai/companions/workbench/core'
+WORKBENCH_DIR = SRC_ROOT / 'managed_ai/companions/workbench'
 for _p in (str(SRC_ROOT), str(REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from managed_ai.companions.workbench.core import (
+from managed_ai.companions.workbench import (
     config as wb_config,
     durable_agent,
     inspect_config,
@@ -180,7 +180,7 @@ class WorkbenchWave4Tests(unittest.TestCase):
         res_file = self.root / 'bad-resolution.json'
         res_file.write_text(json.dumps({**base, 'extra_arg': 1}), encoding='utf-8')
         proc = subprocess.run(
-            [sys.executable, '-B', str(WORKBENCH_CORE / 'resumable_workbench.py'),
+            [sys.executable, '-B', str(WORKBENCH_DIR / 'resumable_workbench.py'),
              'resolve', '--state-dir', str(self.state), '--resolution', str(res_file)],
             capture_output=True, text=True, encoding='utf-8',
         )
@@ -205,21 +205,22 @@ class WorkbenchWave4Tests(unittest.TestCase):
         self.assertTrue((cmd_dir / '0001.request.json').is_file())
         self.assertTrue((cmd_dir / '0001.transport.json').is_file())
 
-    # --- W4-H3: SearchImplementation supports Wave 7 library level 1 & 2 and blocks escape ---
+    # --- W4-H3: SearchImplementation binds canonical library/lexical.py + config.py and blocks escape ---
     def test_search_implementation_wave4_library_and_escape_refusal(self):
         library, entry = search_layout(self.root)
         impl = source_tools.SearchImplementation(entry)
         self.assertEqual(len(impl.pins), 2)
         self.assertEqual(impl.library_root, library.resolve())
-        # Level-2 compatibility shim under library/search/ also binds cleanly inside library_root.
-        compat_impl = source_tools.SearchImplementation(library / 'search/lexical_search.py')
-        self.assertEqual(len(compat_impl.pins), 3)
-        self.assertEqual(compat_impl.library_root, library.resolve())
-        # Escape attempt via level=3 must be refused.
-        bad = library / 'search/bad_escape.py'
-        bad.write_text('from ...outside import evil\n', encoding='utf-8', newline='\n')
-        with self.assertRaisesRegex(ValueError, 'bounded relative'):
+        # Escape attempt via level=2 relative import above library_root must be refused.
+        bad = library / 'bad_escape.py'
+        bad.write_text('from ..outside import evil\n', encoding='utf-8', newline='\n')
+        with self.assertRaisesRegex(ValueError, 'escapes bounded library root|bounded relative'):
             source_tools.SearchImplementation(bad)
+        # Escape attempt via level=3 must also be refused.
+        bad_deep = library / 'bad_escape_deep.py'
+        bad_deep.write_text('from ...outside import evil\n', encoding='utf-8', newline='\n')
+        with self.assertRaisesRegex(ValueError, 'bounded relative'):
+            source_tools.SearchImplementation(bad_deep)
 
         # C48-3: default_search_paths() aligns with SearchImplementation (library/lexical.py + library/config.py).
         default_entry, default_deps = wb_config.default_search_paths()
@@ -240,7 +241,7 @@ class WorkbenchWave4Tests(unittest.TestCase):
             'model': {'kind': 'mailbox', 'directory': str(self.root / 'mailbox')},
         }), encoding='utf-8')
         proc = subprocess.run(
-            [sys.executable, '-B', str(WORKBENCH_CORE / 'inspect_config.py'), '--config', str(cfg_path)],
+            [sys.executable, '-B', str(WORKBENCH_DIR / 'inspect_config.py'), '--config', str(cfg_path)],
             capture_output=True, text=True, encoding='utf-8',
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)

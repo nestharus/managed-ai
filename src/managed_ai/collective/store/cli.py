@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import json
 from pathlib import Path
 import sqlite3
@@ -10,6 +11,15 @@ from typing import Any
 from . import Collective, PRODUCT
 from .contract import CONTEXT_LIMIT, loads_strict
 from .database import _require_ordinary_path
+
+
+def _load_request_payload(path: Path) -> Any:
+    """Validate an ordinary request file within CONTEXT_LIMIT and decode strict JSON."""
+    _require_ordinary_path(path, "request file", must_exist=True)
+    raw = path.read_bytes()
+    if len(raw) > CONTEXT_LIMIT:
+        raise ValueError("Request file exceeds 2 MiB")
+    return loads_strict(raw)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -61,49 +71,54 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_LIFECYCLE_HANDLERS: dict[str, Callable[[Path, Path], Any]] = {
+    "init": lambda db, prod: Collective.initialize(db, product=prod),
+    "upgrade": lambda db, prod: Collective.upgrade(db, product=prod),
+}
+
+_STORE_HANDLERS: dict[str, Callable[[Collective, argparse.Namespace], Any]] = {
+    "call": lambda store, args: store.call(_load_request_payload(args.request)),
+    "show": lambda store, args: store.show(args.id, args.revision, content=args.content),
+    "context": lambda store, args: store.retained("context", args.id),
+    "proposal": lambda store, args: store.retained("proposal", args.id),
+    "receipt": lambda store, args: store.receipt(args.actor, args.command),
+    "notice": lambda store, args: store.notice(args.id),
+    "next-review": lambda store, args: store.next_review(args.proposal),
+    "use-source": lambda store, args: store.use_source(args.target, args.source),
+    "encounters": lambda store, args: store.encounters(
+        after=args.after,
+        limit=args.limit,
+        scan_limit=args.scan_limit,
+    ),
+    "inbox": lambda store, args: store.view(
+        "inbox",
+        actor=args.actor,
+        after=args.after,
+        limit=args.limit,
+    ),
+    "changes": lambda store, args: store.view(
+        "changes",
+        actor=None,
+        after=args.after,
+        limit=args.limit,
+    ),
+}
+
+
 def main(argv: list[str] | None = None, *, product: Path = PRODUCT) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
     try:
-        result: Any
-        if args.operation == "init":
-            result = Collective.initialize(args.db, product=product)
-        elif args.operation == "upgrade":
-            result = Collective.upgrade(args.db, product=product)
+        lifecycle = _LIFECYCLE_HANDLERS.get(args.operation)
+        if lifecycle is not None:
+            result = lifecycle(args.db, product)
         else:
+            handler = _STORE_HANDLERS.get(args.operation)
+            if handler is None:
+                raise ValueError("Unknown operation: " + str(args.operation))
             store = Collective(args.db, product=product)
-            if args.operation == "call":
-                _require_ordinary_path(args.request, "request file", must_exist=True)
-                raw = args.request.read_bytes()
-                if len(raw) > CONTEXT_LIMIT:
-                    raise ValueError("Request file exceeds 2 MiB")
-                result = store.call(loads_strict(raw))
-            elif args.operation == "show":
-                result = store.show(args.id, args.revision, content=args.content)
-            elif args.operation in {"context", "proposal"}:
-                result = store.retained(args.operation, args.id)
-            elif args.operation == "receipt":
-                result = store.receipt(args.actor, args.command)
-            elif args.operation == "notice":
-                result = store.notice(args.id)
-            elif args.operation == "next-review":
-                result = store.next_review(args.proposal)
-            elif args.operation == "use-source":
-                result = store.use_source(args.target, args.source)
-            elif args.operation == "encounters":
-                result = store.encounters(
-                    after=args.after,
-                    limit=args.limit,
-                    scan_limit=args.scan_limit,
-                )
-            else:
-                result = store.view(
-                    args.operation,
-                    actor=getattr(args, "actor", None),
-                    after=args.after,
-                    limit=args.limit,
-                )
+            result = handler(store, args)
 
         print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
         return 0 if not isinstance(result, dict) or result.get("status") != "refused" else 2

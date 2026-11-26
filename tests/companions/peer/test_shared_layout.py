@@ -11,14 +11,14 @@ from unittest.mock import patch
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC_ROOT = REPO_ROOT / 'src'
 PEER_DIR = SRC_ROOT / 'managed_ai/companions/peer'
-WORKBENCH_CORE = SRC_ROOT / 'managed_ai/companions/workbench/core'
+WORKBENCH_DIR = SRC_ROOT / 'managed_ai/companions/workbench'
 for _p in (str(SRC_ROOT), str(REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
 from managed_ai.companions.peer import peer_workbench
-from managed_ai.companions.workbench.core import source_tools
-from managed_ai.companions.workbench.core.source_tools import SearchImplementation, SourceService, identity
+from managed_ai.companions.workbench import source_tools
+from managed_ai.companions.workbench.source_tools import SearchImplementation, SourceService, identity
 from tests.companions.workbench_fixtures import change_query_parser, search_layout
 
 
@@ -30,7 +30,7 @@ class SharedLayout(unittest.TestCase):
             corpus = root / 'corpus'
             corpus.mkdir()
             (corpus / 'example.md').write_text('# Example lexical fixture\n', encoding='utf-8', newline='\n')
-            tools = root / 'src/managed_ai/companions/workbench/core/source_tools.py'
+            tools = root / 'src/managed_ai/companions/workbench/source_tools.py'
             tools.parent.mkdir(parents=True)
             tools.write_bytes(Path(source_tools.__file__).read_bytes())
 
@@ -107,7 +107,7 @@ class SharedLayout(unittest.TestCase):
 
     def test_peer_requires_a_registered_file_for_each_loaded_role(self):
         manifest = json.loads((peer_workbench.HERE / 'COMPONENTS.json').read_bytes())
-        del manifest['files']['workbench/controller/agent_runtime.py']
+        del manifest['files']['workbench/agent_runtime.py']
         with patch.object(peer_workbench, 'decode_json', return_value=manifest):
             with self.assertRaisesRegex(ValueError, 'Missing peer component: agent_runtime'):
                 peer_workbench.components()
@@ -170,7 +170,7 @@ class SharedLayout(unittest.TestCase):
         )
         self.assertEqual(
             Path(modules["workbench_agent"].__file__).resolve(),
-            (WORKBENCH_CORE / "workbench_agent.py").resolve(),
+            (WORKBENCH_DIR / "workbench_agent.py").resolve(),
         )
         self.assertEqual(len(manifest["files"]), 7)
         self.assertTrue(all(not key.startswith("..") for key in manifest["files"]))
@@ -192,7 +192,7 @@ class SharedLayout(unittest.TestCase):
             self.assertIn("workbench_agent", loaded)
 
         tampered = json.loads(json.dumps(live_manifest))
-        tampered["files"]["workbench/core/io_utils.py"]["identity"]["sha256"] = "0" * 64
+        tampered["files"]["workbench/io_utils.py"]["identity"]["sha256"] = "0" * 64
         with patch.object(peer_workbench, "decode_json", return_value=tampered):
             with self.assertRaisesRegex(ValueError, "Acquired component differs from accepted body"):
                 peer_workbench.components()

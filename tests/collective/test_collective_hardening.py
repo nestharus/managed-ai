@@ -1,4 +1,4 @@
-"""Regression tests for optional/collective hardening (W4-B4, W4-B6)."""
+"""Regression tests for collective hardening (W4-B4, W4-B6)."""
 import json
 import os
 from pathlib import Path
@@ -7,14 +7,14 @@ import sys
 import tempfile
 import unittest
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = REPO_ROOT / 'src'
-COLLECTIVE_DIR = SRC_ROOT / 'managed_ai/optional/collective'
-MANAGE_CLI = COLLECTIVE_DIR / 'manage_collective.py'
+COLLECTIVE_DIR = SRC_ROOT / 'managed_ai/collective'
+MANAGE_CLI = COLLECTIVE_DIR / '__main__.py'
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.optional.collective.collective_store import contract, database
+from managed_ai.collective.store import contract, database
 
 
 class CollectiveHardeningTests(unittest.TestCase):
