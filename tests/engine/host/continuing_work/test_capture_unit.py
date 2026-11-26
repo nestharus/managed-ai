@@ -1,7 +1,10 @@
-"""Unit tests for Wave 4 capture_native narrowing, composition, and public receipt inspection."""
+"""Unit tests for capture_native qualification, composition, and public receipt inspection."""
 import hashlib
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -16,6 +19,7 @@ import capture_native
 from continuing_work import Host
 import native_bridge
 import repair_custody
+import scope_lifecycle
 
 
 class Wave4HostArchitectureTests(unittest.TestCase):
@@ -49,10 +53,12 @@ class Wave4HostArchitectureTests(unittest.TestCase):
     def test_host_uses_composition_instead_of_mixin_inheritance(self):
         self.assertFalse(issubclass(Host, native_bridge.NativeBridge))
         self.assertFalse(issubclass(Host, repair_custody.RepairCustody))
+        self.assertFalse(issubclass(Host, scope_lifecycle.ScopeLifecycle))
         with tempfile.TemporaryDirectory() as tmp:
             host = Host(Path(tmp) / 'host')
             self.assertIsInstance(host.bridge, native_bridge.NativeBridge)
             self.assertIsInstance(host.repairs, repair_custody.RepairCustody)
+            self.assertIsInstance(host.lifecycle, scope_lifecycle.ScopeLifecycle)
 
     def test_reconcile_assessment_uses_public_inspect_receipt_api(self):
         inspected = []
@@ -134,9 +140,160 @@ class Wave4HostArchitectureTests(unittest.TestCase):
                 )
 
     def test_repair_custody_overlap_limit_message_has_no_typo(self):
-        source = (HOST_DIR / 'continuing_work.py').read_text(encoding='utf-8')
-        self.assertNotIn('1 through 2000', source)
-        self.assertIn('from 1 through 200', source)
+        combined = (
+            (HOST_DIR / 'continuing_work.py').read_text(encoding='utf-8')
+            + (HOST_DIR / 'scope_lifecycle.py').read_text(encoding='utf-8')
+        )
+        self.assertNotIn('1 through 2000', combined)
+        self.assertIn('from 1 through 200', combined)
+
+    # --- Wave 5 (#213 Part B): Co-located auto-admission + external --expected-profile / --deployment ---
+    def test_colocated_engine_auto_admits_and_records_live_profile_and_git_commit(self):
+        entry = REPO_ROOT / 'engine/store/manage_store.py'
+        module, info = capture_native.qualify_engine(entry)
+        self.assertEqual(info['admission'], 'colocated')
+        self.assertEqual(len(info['profile']), 64)
+        self.assertTrue(hasattr(module, 'ENTRYPOINT'))
+        self.assertTrue(callable(getattr(module.Attention, 'inspect_receipt', None)))
+        self.assertTrue(callable(getattr(module.Exchange, 'packet_summary', None)))
+        self.assertTrue(callable(getattr(module.System, 'assess', None)))
+        if info['git_head_commit'] is not None:
+            self.assertEqual(len(info['git_head_commit']), 40)
+
+        # Hermetic test of _git_head_commit() covering direct .git/ refs AND linked worktree + packed-refs.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            direct_repo = root / 'direct'
+            (direct_repo / '.git/refs/heads').mkdir(parents=True)
+            (direct_repo / '.git/HEAD').write_text('ref: refs/heads/main\n', encoding='utf-8')
+            (direct_repo / '.git/refs/heads/main').write_text('a' * 40 + '\n', encoding='utf-8')
+            eng = direct_repo / 'engine'
+            eng.mkdir()
+            self.assertEqual(capture_native._git_head_commit(eng), 'a' * 40)
+
+            common_git = root / 'common-git'
+            wt_git = common_git / 'worktrees/wt1'
+            wt_git.mkdir(parents=True)
+            (common_git / 'packed-refs').write_text(
+                '# pack-refs\n' + ('b' * 40) + ' refs/heads/feature\n', encoding='utf-8',
+            )
+            (wt_git / 'commondir').write_text('../..\n', encoding='utf-8')
+            (wt_git / 'HEAD').write_text('ref: refs/heads/feature\n', encoding='utf-8')
+            wt_dir = root / 'wt'
+            (wt_dir / 'engine').mkdir(parents=True)
+            (wt_dir / '.git').write_text(f'gitdir: {wt_git}\n', encoding='utf-8')
+            self.assertEqual(capture_native._git_head_commit(wt_dir / 'engine'), 'b' * 40)
+
+    def test_external_engine_refused_without_pin_and_admitted_with_expected_profile_or_deployment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ext_engine = root / 'ext_engine'
+            for subdir in ('deployment', 'core', 'store'):
+                shutil.copytree(
+                    REPO_ROOT / 'engine' / subdir,
+                    ext_engine / subdir,
+                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc'),
+                )
+            ext_entry = ext_engine / 'store/manage_store.py'
+
+            # Inject a side-effect sentinel into external store/system.py to prove untrusted code is NEVER executed.
+            sentinel = root / 'should-not-execute.txt'
+            ext_system = ext_engine / 'store/system.py'
+            orig_system = ext_system.read_text(encoding='utf-8')
+            ext_system.write_text(
+                f"from pathlib import Path as _P\n_P({str(sentinel)!r}).write_text('RAN', encoding='utf-8')\n" + orig_system,
+                encoding='utf-8', newline='\n',
+            )
+
+            # 1. External engine WITHOUT --expected-profile or --deployment is refused before exec!
+            with self.assertRaisesRegex(ValueError, 'External native engine requires'):
+                capture_native.qualify_engine(ext_entry)
+            self.assertFalse(sentinel.exists())
+
+            # 2. External engine with WRONG --expected-profile is refused before exec!
+            with self.assertRaisesRegex(ValueError, 'does not match'):
+                capture_native.qualify_engine(ext_entry, expected_profile='0' * 64)
+            self.assertFalse(sentinel.exists())
+
+            # Restore clean external system.py and compute its live profile.
+            ext_system.write_text(orig_system, encoding='utf-8', newline='\n')
+            _, programs = capture_native.native_sources(ext_entry)
+            live_profile = capture_native._profile_digest(programs)
+
+            # 3. External engine with matching --expected-profile succeeds!
+            mod_prof, info_prof = capture_native.qualify_engine(ext_entry, expected_profile=live_profile)
+            self.assertEqual(info_prof['admission'], 'expected-profile')
+            self.assertEqual(info_prof['profile'], live_profile)
+
+            # 4. Initialize a real store and real Deployment pointing to ext_engine, then qualify via --deployment!
+            store_dir = root / 'store'
+            mod_prof.System.initialize(store_dir, {'contribution': 'Test external deployment qualification.'})
+            dep_dir = root / 'deployment'
+            if str(REPO_ROOT / 'engine') not in sys.path:
+                sys.path.insert(0, str(REPO_ROOT / 'engine'))
+            from deployment.controller import Deployment
+            Deployment.initialize(dep_dir, store_dir, engine=ext_engine)
+
+            # CLI checks: unqualified refused (rc=2), --expected-profile accepted (rc=0), --deployment accepted (rc=0)!
+            cli = str(HOST_DIR / 'capture_native.py')
+            p_refused = subprocess.run(
+                [sys.executable, '-B', cli, '--engine', str(ext_entry), '--root', str(store_dir),
+                 'inspect-turn', 'start'],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(p_refused.returncode, 2)
+            self.assertIn('External native engine requires', json.loads(p_refused.stderr)['error'])
+
+            p_profile = subprocess.run(
+                [sys.executable, '-B', cli, '--engine', str(ext_entry), '--root', str(store_dir),
+                 '--expected-profile', live_profile, 'inspect-turn', 'start'],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(p_profile.returncode, 0, p_profile.stderr)
+            out_prof = json.loads(p_profile.stdout)
+            self.assertEqual(out_prof['capture_adapter']['admission'], 'expected-profile')
+            self.assertEqual(out_prof['capture_adapter']['native_profile_sha256'], live_profile)
+
+            p_dep = subprocess.run(
+                [sys.executable, '-B', cli, '--engine', str(ext_entry), '--root', str(store_dir),
+                 '--deployment', str(dep_dir), 'inspect-turn', 'start'],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(p_dep.returncode, 0, p_dep.stderr)
+            out_dep = json.loads(p_dep.stdout)
+            self.assertEqual(out_dep['capture_adapter']['admission'], 'deployment-pin')
+            self.assertEqual(out_dep['capture_adapter']['native_profile_sha256'], live_profile)
+
+            # 5. Tampering one byte of ext_engine breaks --deployment pin!
+            formats_py = ext_engine / 'core/formats.py'
+            formats_py.write_text(formats_py.read_text(encoding='utf-8') + '\n# drift\n', encoding='utf-8', newline='\n')
+            p_tampered = subprocess.run(
+                [sys.executable, '-B', cli, '--engine', str(ext_entry), '--root', str(store_dir),
+                 '--deployment', str(dep_dir), 'inspect-turn', 'start'],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(p_tampered.returncode, 2)
+            self.assertIn('code differs from verified deployment pin', json.loads(p_tampered.stderr)['error'])
+
+            # 6. Symlink / NTFS junction inside external engine tree is refused!
+            extra_dir = root / 'outside'
+            extra_dir.mkdir()
+            link_inside = ext_engine / 'store/linked_subdir'
+            if os.name == 'nt':
+                mk = subprocess.run(['cmd', '/c', 'mklink', '/J', str(link_inside), str(extra_dir)], capture_output=True)
+                made = mk.returncode == 0
+            else:
+                link_inside.symlink_to(extra_dir)
+                made = True
+            if made:
+                try:
+                    with self.assertRaisesRegex(ValueError, 'symlinks or reparse points'):
+                        capture_native.native_sources(ext_entry)
+                finally:
+                    if os.name == 'nt':
+                        subprocess.run(['cmd', '/c', 'rmdir', str(link_inside)], capture_output=True)
+                    else:
+                        link_inside.unlink(missing_ok=True)
 
 
 if __name__ == '__main__':

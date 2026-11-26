@@ -316,7 +316,7 @@ class JsonParser(argparse.ArgumentParser):
 
 def main(argv=None):
     check = Inspection()
-    parser = JsonParser(description=__doc__)
+    parser = JsonParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--config", required=True, help="Absolute path to launch configuration JSON")
     try:
         args = parser.parse_args(argv)

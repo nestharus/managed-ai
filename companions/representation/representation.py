@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import sys
 import uuid
 
@@ -22,11 +23,64 @@ import uuid
 OPERATION = 'g60-representation-operation/1'
 WITNESS = 'g60-representation-return/1'
 BOUND_RETURN = 'g60-representation-bound-return/1'
+_REPARSE_ATTR = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)
 
 
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def _is_reparse_or_symlink(path: Path) -> bool:
+    try:
+        info = Path(path).lstat()
+    except FileNotFoundError:
+        return False
+    return bool(stat.S_ISLNK(info.st_mode) or (getattr(info, 'st_file_attributes', 0) & _REPARSE_ATTR))
+
+
+def _check_unfollowed_ancestors(raw_path, role: str, *, include_target: bool = True) -> Path:
+    text_path = os.fspath(raw_path)
+    require(isinstance(text_path, str) and bool(text_path.strip()) and '\0' not in text_path,
+            role + ' must be a valid nonempty path')
+    raw = Path(text_path)
+    if not raw.is_absolute():
+        require(not raw.drive and not raw.anchor, role + ' must not use a drive-relative path: ' + text_path)
+        pwd = os.environ.get('PWD')
+        if pwd and os.path.isabs(pwd):
+            try:
+                if os.path.samefile(pwd, os.getcwd()):
+                    logical = Path(pwd)
+                    for ancestor in (*reversed(logical.parents), logical):
+                        require(
+                            not _is_reparse_or_symlink(ancestor),
+                            role + ' must not traverse a symlink or reparse point: ' + str(ancestor),
+                        )
+            except OSError:
+                pass
+        cur = Path(os.getcwd())
+        raw_parts = raw.parts
+    else:
+        cur = Path(raw.anchor)
+        raw_parts = raw.parts[1:]
+    for idx, part in enumerate(raw_parts):
+        if part == '.':
+            continue
+        is_last = idx == len(raw_parts) - 1
+        cur = cur.parent if part == '..' else cur / part
+        if include_target or not is_last:
+            require(
+                not _is_reparse_or_symlink(cur),
+                role + ' must not traverse or be a symlink or reparse point: ' + str(cur),
+            )
+    abs_path = Path(os.path.abspath(raw))
+    parts = (*reversed(abs_path.parents), abs_path) if include_target else tuple(reversed(abs_path.parents))
+    for part in parts:
+        require(
+            not _is_reparse_or_symlink(part),
+            role + ' must not traverse or be a symlink or reparse point: ' + str(part),
+        )
+    return abs_path
 
 
 def text(value, name):
@@ -68,7 +122,8 @@ def loads_strict(raw):
 
 
 def read_json(path):
-    return loads_strict(Path(path).read_bytes())
+    checked = _check_unfollowed_ancestors(path, 'JSON input', include_target=True)
+    return loads_strict(checked.read_bytes())
 
 
 def _sync_dir(path: Path) -> None:
@@ -85,8 +140,9 @@ def _sync_dir(path: Path) -> None:
 
 
 def _atomic_bytes(path: Path, data: bytes) -> None:
-    path = Path(path)
+    path = _check_unfollowed_ancestors(path, 'Target file', include_target=True)
     path.parent.mkdir(parents=True, exist_ok=True)
+    require(not _is_reparse_or_symlink(path), 'Target file must not be a symlink or reparse point: ' + str(path))
     tmp = path.with_name('.' + path.name + '.' + uuid.uuid4().hex + '.tmp')
     try:
         with tmp.open('xb') as stream:
@@ -163,10 +219,20 @@ class RepresentationOperations:
         # Reuse the native path/identity validators; never touch reserved records.
         return self.ex.path('representation-operations/' + _packet_id_fn()(turn))
 
+    def _ordinary_workspace_file(self, name: str, error_message: str) -> Path:
+        actual = self.ex.path(name)
+        workspace_root = Path(self.ex.workspace)
+        cur = workspace_root
+        for part in Path(name).parts:
+            cur = cur / part
+            require(not _is_reparse_or_symlink(cur), error_message)
+        require(actual.is_file() and not _is_reparse_or_symlink(actual), error_message)
+        require(stat.S_ISREG(actual.lstat().st_mode), error_message)
+        return actual
+
     def pin(self, path, accepted_in=None):
         name = _artifact_target_fn()(path)
-        actual = self.ex.path(name)
-        require(actual.is_file() and not actual.is_symlink(), 'pin requires an ordinary file: ' + name)
+        actual = self._ordinary_workspace_file(name, 'pin requires an ordinary file: ' + name)
         row = {'path': name, 'sha256': digest(actual.read_bytes())}
         if accepted_in is not None:
             row['accepted_in'] = text(accepted_in, 'accepted_in')
@@ -176,8 +242,7 @@ class RepresentationOperations:
     def check_pin(self, row, representation=False):
         require(isinstance(row, dict), 'input pin must be an object')
         name = text(row.get('path'), 'input path')
-        actual = self.ex.path(name)
-        require(actual.is_file() and not actual.is_symlink(), 'input is not an ordinary file: ' + name)
+        actual = self._ordinary_workspace_file(name, 'input is not an ordinary file: ' + name)
         data = actual.read_bytes()
         require(digest(data) == row.get('sha256'), 'input basis changed: ' + name)
         if representation:
@@ -369,8 +434,10 @@ class RepresentationOperations:
 
 def run_cli_action(args, *, engine_loader=_load_engine_api):
     """Execute one representation CLI action, constructing System only AFTER acquiring owner.lock."""
-    System, exclusive, NativeLayout, _, _ = engine_loader(args.engine)
-    root = Path(args.root).expanduser().resolve()
+    checked_engine = _check_unfollowed_ancestors(args.engine, 'Engine directory', include_target=True)
+    checked_root = _check_unfollowed_ancestors(args.root, 'Native root', include_target=True)
+    System, exclusive, NativeLayout, _, _ = engine_loader(checked_engine)
+    root = checked_root.expanduser().resolve()
     exchange_root = NativeLayout(root).exchange.resolve()
     with exclusive(exchange_root / 'owner.lock'):
         system = System(root)

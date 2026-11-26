@@ -198,6 +198,28 @@ class PublicationReviewWave4Tests(unittest.TestCase):
             # _load_assessor must refuse an assessor inside a symlinked/junctioned ancestor directory!
             with self.assertRaisesRegex(ValueError, 'symlink|reparse'):
                 publication_review._load_assessor(alias_assessor_dir / 'custom_assessor.py')
+
+            # W5-B11: _retain() must refuse an output directory whose parent is a symlink or NTFS junction!
+            previous = {'artifacts': [], 'obligations': []}
+            report = {
+                'current': {'requirements': {}, 'sources': {}, 'artifacts': {}},
+                'origins': {},
+                'observation': {'current': {}, 'origins': {}},
+                'assessment': {'artifacts': [], 'open_obligations': []},
+            }
+            with self.assertRaisesRegex(ValueError, 'symlink|reparse'):
+                publication_review._retain(alias_root / 'retained-out', previous, report)
+            self.assertFalse((real_root / 'retained-out').exists())
+            self.assertEqual([p.name for p in real_root.iterdir() if p.name.startswith('.retain-')], [])
+
+            # W5-B11: CLIs must reject abbreviated options (allow_abbrev=False).
+            for script in ('publication_review.py', 'publication_observer.py', 'continuation_assessor.py'):
+                proc = subprocess.run(
+                    [sys.executable, '-B', str(PUB_DIR / script), '--hel'],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(proc.returncode, 2)
+                self.assertTrue('required' in proc.stderr or 'unrecognized' in proc.stderr, proc.stderr)
         finally:
             for link in cleanup_junctions:
                 subprocess.run(['cmd', '/c', 'rmdir', str(link)], capture_output=True)

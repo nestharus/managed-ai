@@ -58,9 +58,14 @@ def _is_reparse_or_symlink(path: Path) -> bool:
     )
 
 
-def _check_unfollowed_ordinary_file(raw_path) -> Path:
-    raw = Path(raw_path)
+def _check_unfollowed_ancestors(raw_path, role: str, *, include_target: bool = True) -> Path:
+    text = os.fspath(raw_path)
+    if not isinstance(text, str) or not text.strip() or "\0" in text:
+        raise ValueError(role + " must be a valid nonempty path")
+    raw = Path(text)
     if not raw.is_absolute():
+        if raw.drive or raw.anchor:
+            raise ValueError(role + " must not use a drive-relative path: " + text)
         pwd = os.environ.get("PWD")
         if pwd and os.path.isabs(pwd):
             try:
@@ -68,13 +73,32 @@ def _check_unfollowed_ordinary_file(raw_path) -> Path:
                     logical = Path(pwd)
                     for ancestor in (*reversed(logical.parents), logical):
                         if _is_reparse_or_symlink(ancestor):
-                            raise ValueError("Explicit assessor path traverses a symlink or reparse point: " + str(ancestor))
+                            raise ValueError(role + " traverses a symlink or reparse point: " + str(ancestor))
             except OSError:
                 pass
+        cur = Path(os.getcwd())
+        raw_parts = raw.parts
+    else:
+        cur = Path(raw.anchor)
+        raw_parts = raw.parts[1:]
+    for idx, part in enumerate(raw_parts):
+        if part == ".":
+            continue
+        is_last = idx == len(raw_parts) - 1
+        cur = cur.parent if part == ".." else cur / part
+        if include_target or not is_last:
+            if _is_reparse_or_symlink(cur):
+                raise ValueError(role + " must not be or traverse a symlink or reparse point: " + str(cur))
     abs_path = Path(os.path.abspath(raw))
-    for part in (*reversed(abs_path.parents), abs_path):
+    parts = (*reversed(abs_path.parents), abs_path) if include_target else tuple(reversed(abs_path.parents))
+    for part in parts:
         if _is_reparse_or_symlink(part):
-            raise ValueError("Explicit assessor must not be or traverse a symlink or reparse point: " + str(part))
+            raise ValueError(role + " must not be or traverse a symlink or reparse point: " + str(part))
+    return abs_path
+
+
+def _check_unfollowed_ordinary_file(raw_path) -> Path:
+    abs_path = _check_unfollowed_ancestors(raw_path, "Explicit assessor", include_target=True)
     try:
         info = abs_path.lstat()
     except FileNotFoundError as exc:
@@ -196,10 +220,10 @@ def _json_text(value):
 
 def _retain(output_dir, previous, report):
     """Atomically publish one fresh occurrence directory; never overwrite or leave partial files."""
-    target = Path(output_dir)
-    if target.exists() or target.is_symlink():
+    target = _check_unfollowed_ancestors(output_dir, "Output directory", include_target=True)
+    if target.exists() or _is_reparse_or_symlink(target):
         raise FileExistsError("Output directory already exists: " + str(target))
-    if not target.parent.is_dir():
+    if not target.parent.is_dir() or _is_reparse_or_symlink(target.parent):
         raise FileNotFoundError("Output parent directory does not exist: " + str(target.parent))
     staging = target.parent / (".retain-" + target.name + "-" + uuid.uuid4().hex)
     staging.mkdir()
@@ -229,7 +253,7 @@ def _retain(output_dir, previous, report):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--previous", required=True, help="Previous assessor receipts JSON")
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument("--declaration", help="Declared input bindings JSON; observe then assess")

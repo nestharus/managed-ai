@@ -33,8 +33,13 @@ class DistributionEntry(unittest.TestCase):
                 self.assertEqual(result['status'], 'unresolved')
                 self.assertFalse(path.exists())
         self.assertFalse((self.product / 'runtime').exists())
-        code, _ = self.call(self.product / 'collective.py', self.product / 'short-option.sqlite', 'init', flag='--d')
-        self.assertEqual(code, 3)
+        short_result = subprocess.run(
+            [sys.executable, '-B', str(self.product / 'collective.py'), '--d',
+             str(self.product / 'short-option.sqlite'), 'init'],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(short_result.returncode, 2)
+        self.assertIn('--db', short_result.stderr)
         self.assertFalse((self.product / 'short-option.sqlite').exists())
 
     def test_external_initialization_and_later_read_remain_available(self):

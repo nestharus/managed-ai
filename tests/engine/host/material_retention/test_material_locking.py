@@ -411,6 +411,160 @@ class MaterialRetentionHardening(unittest.TestCase):
         self.assertTrue(report["source_untouched"])
         material.verify(material.Store(rebuilt_dir))
 
+    # --- W5-B1: Drive-letter/NUL safe_relative & NTFS junction / symlink guards ---
+    def test_safe_relative_rejects_windows_drives_nul_and_traversal(self):
+        for bad in (
+            "",
+            ".",
+            "./ok",
+            "a/./b",
+            "../escape",
+            "a/../b",
+            "a\\b",
+            "C:foo",
+            "c:bar/baz",
+            "C:/foo",
+            "a/C:b",
+            "a/b\x00c",
+            "/abs/path",
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaisesRegex(ValueError, "Unsafe materialization path"):
+                    material.safe_relative(bad)
+        for good in ("selected", "a/b/c.txt", "obsolete/"):
+            with self.subTest(good=good):
+                self.assertTrue(material.safe_relative(good).parts)
+
+    def _make_dir_link(self, link_path: Path, target_dir: Path) -> bool:
+        if os.name == "nt":
+            proc = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link_path), str(target_dir)],
+                capture_output=True, text=True,
+            )
+            if proc.returncode != 0:
+                return False
+            self.addCleanup(lambda p=link_path: subprocess.run(["cmd", "/c", "rmdir", str(p)], capture_output=True)
+                            if p.exists() or material.is_reparse_or_symlink(p) else None)
+            return True
+        link_path.symlink_to(target_dir)
+        self.addCleanup(lambda p=link_path: p.unlink(missing_ok=True))
+        return True
+
+    def test_reparse_point_and_symlink_refused_across_store_restore_retire_rebuild(self):
+        seed = self.make_spec("seed", b"junction test payload\n")
+        seed_res = material.snapshot(self.store, seed)
+        expected_index = material.sha((self.store_dir / "index.json").read_bytes())
+
+        link_store = self.root / "store-link"
+        self.assertTrue(self._make_dir_link(link_store, self.store_dir))
+
+        with self.assertRaisesRegex(ValueError, "symlink or reparse point"):
+            with material.store_lock(link_store):
+                pass
+        with self.assertRaisesRegex(ValueError, "symlink or reparse point"):
+            material.Store(link_store)
+
+        out_real = self.root / "out-real"
+        out_real.mkdir()
+        out_link = self.root / "out-link"
+        self.assertTrue(self._make_dir_link(out_link, out_real))
+        with self.assertRaisesRegex(ValueError, "symlink or reparse point"):
+            material.restore(self.store, out_link / "restored")
+        with self.assertRaisesRegex(ValueError, "symlink or reparse point"):
+            material.export(self.store, out_link / "export.zip")
+        with self.assertRaisesRegex(ValueError, "symlink or reparse point"):
+            material.rebuild(link_store, self.root / "rebuilt-1", expected_index, seed_res["selection"], "test")
+        with self.assertRaisesRegex(ValueError, "symlink or reparse point"):
+            material.rebuild(self.store_dir, out_link / "rebuilt-2", expected_index, seed_res["selection"], "test")
+
+        # retain_artifact must refuse files reached through a junction/symlink ancestor.
+        extra_dir = self.root / "extra-real"
+        extra_dir.mkdir()
+        (extra_dir / "evidence.txt").write_bytes(b"evidence")
+        extra_link = self.root / "extra-link"
+        self.assertTrue(self._make_dir_link(extra_link, extra_dir))
+        with self.assertRaisesRegex(ValueError, "symlink or reparse point"):
+            material.retain_artifact(self.store, extra_link / "evidence.txt", "ev", "test")
+
+        # retire() and _remove_planned_materializations must NEVER rmtree an NTFS junction or symlink!
+        victim = self.root / "victim-dir"
+        victim.mkdir()
+        precious = victim / "precious.txt"
+        precious.write_bytes(b"do not delete me")
+
+        retire_dir = self.root / "retire-target"
+        retire_dir.mkdir()
+        (retire_dir / "old.txt").write_bytes(b"retirable bytes")
+        req = self.root / "retire-spec.json"
+        req.write_text(json.dumps({
+            "format": "managed-material-selection/1",
+            "id": "retire-occ",
+            "roots": [{"label": "obsolete", "path": str(retire_dir)}],
+            "current": [],
+            "materialization_groups": [{"prefix": "obsolete", "state": "retirement-candidate"}],
+        }), encoding="utf-8")
+        occ = material.snapshot(self.store, req)
+        proposal = {
+            "format": "managed-material-retirement-proposal/1",
+            "prefixes": ["obsolete"],
+            "protected_prefixes": ["active"],
+            "account": "Verify junction refusal before rmtree.",
+        }
+        plan = material.retirement_plan(self.store, proposal)
+        plan_path = self.root / "retire-plan.json"
+        plan_path.write_bytes(material.js(plan))
+
+        # Swap retire_dir for a junction/symlink pointing to victim!
+        import shutil as _shutil
+        _shutil.rmtree(retire_dir)
+        self.assertTrue(self._make_dir_link(retire_dir, victim))
+        with self.assertRaisesRegex(ValueError, "reparse|junction|changed"):
+            material.retire(self.store, plan_path, material.sha(plan_path.read_bytes()), occ["selection"])
+        self.assertTrue(precious.is_file())
+        self.assertEqual(precious.read_bytes(), b"do not delete me")
+
+        # Also directly exercise _remove_planned_materializations (simulating TOCTOU after plan check).
+        if os.name == "nt":
+            with self.assertRaisesRegex(ValueError, "reparse|junction"):
+                material._retirement._remove_planned_materializations(
+                    self.store, plan["materializations"], [], "p", occ["selection"],
+                )
+            self.assertTrue(precious.is_file())
+
+    # --- W5-R2: Decomposed export ZIP bundles all 6 modules and runs under python -I ---
+    def test_decomposed_export_zip_bundles_all_modules_and_runs_isolated(self):
+        import zipfile as _zipfile
+        spec = self.make_spec("portable-w5", b"portable wave5 payload\n")
+        material.snapshot(self.store, spec)
+        archive = self.root / "portable-w5.zip"
+        material.export(self.store, archive)
+        expected_modules = {
+            "managed_material.py",
+            "store_io.py",
+            "retention_closures.py",
+            "store_core.py",
+            "material_ops.py",
+            "retirement.py",
+        }
+        with _zipfile.ZipFile(archive) as zf:
+            names = set(zf.namelist())
+            self.assertTrue(expected_modules <= names, f"Missing modules in export ZIP: {expected_modules - names}")
+            extracted = self.root / "extracted-portable"
+            zf.extractall(extracted)
+        proc = subprocess.run(
+            [sys.executable, "-I", str(extracted / "managed_material.py"), "verify", "--store", "."],
+            cwd=extracted, capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        restored = self.root / "extracted-restored"
+        proc_restore = subprocess.run(
+            [sys.executable, "-I", str(extracted / "managed_material.py"), "restore",
+             "--store", ".", "--output", str(restored)],
+            cwd=extracted, capture_output=True, text=True,
+        )
+        self.assertEqual(proc_restore.returncode, 0, proc_restore.stderr)
+        self.assertEqual((restored / "selected").read_bytes(), b"portable wave5 payload\n")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

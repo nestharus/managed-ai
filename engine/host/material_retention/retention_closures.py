@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import os
 from pathlib import Path
 import sys
 
@@ -30,6 +31,8 @@ def _load_store_io():
 
 _io = _load_store_io()
 IMMUTABLE_RECORD_DIRS = _io.IMMUTABLE_RECORD_DIRS
+check_unfollowed_ancestors = _io.check_unfollowed_ancestors
+is_reparse_or_symlink = _io.is_reparse_or_symlink
 js = _io.js
 loads_json = _io.loads_json
 require = _io.require
@@ -38,17 +41,27 @@ sha = _io.sha
 store_lock = _io.store_lock
 
 
+def _read_store_bytes(store_root: Path, rel_path: str, label: str = "Store record") -> bytes:
+    rel = safe_relative(rel_path)
+    cur = store_root
+    for part in rel.parts:
+        cur = cur / part
+        require(not is_reparse_or_symlink(cur), f"{label} must not traverse a symlink or reparse point: {cur}")
+    return cur.read_bytes()
+
+
 def read_manifest(store, occurrence=None):
     if occurrence:
         safe_relative(occurrence)
-        p = loads_json((store.root / "occurrences" / (occurrence + ".json")).read_bytes())
+        p = loads_json(_read_store_bytes(store.root, "occurrences/" + occurrence + ".json", "Occurrence pointer"))
         key = p["manifest"]
     else:
-        c = loads_json((store.root / "CURRENT.json").read_bytes())
-        sraw = (store.root / c["path"]).read_bytes()
+        c = loads_json(_read_store_bytes(store.root, "CURRENT.json", "Current pointer"))
+        sraw = _read_store_bytes(store.root, c["path"], "Current selection")
         require(sha(sraw) == c["selection"], "Current selection differs")
         key = loads_json(sraw)["manifest"]
-    raw = (store.root / "manifests" / (key + ".json")).read_bytes()
+    require(len(key) == 64 and all(ch in "0123456789abcdef" for ch in key), "Invalid manifest identity")
+    raw = _read_store_bytes(store.root, "manifests/" + key + ".json", "Occurrence manifest")
     require(sha(raw) == key, "Occurrence manifest differs")
     return key, loads_json(raw), raw
 
@@ -60,7 +73,7 @@ def manifest_closure(store, key):
         if ident in found:
             continue
         require(len(ident) == 64 and all(c in "0123456789abcdef" for c in ident), "Invalid manifest identity")
-        raw = (store.root / "manifests" / (ident + ".json")).read_bytes()
+        raw = _read_store_bytes(store.root, "manifests/" + ident + ".json", "Historical manifest")
         require(sha(raw) == ident, "Historical manifest differs")
         manifest = loads_json(raw)
         require(manifest["format"] == "managed-material-occurrence/1", "Unknown historical manifest format")
@@ -77,10 +90,10 @@ def manifest_closure(store, key):
 
 
 def current_selection(store):
-    pointer = loads_json((store.root / "CURRENT.json").read_bytes())
+    pointer = loads_json(_read_store_bytes(store.root, "CURRENT.json", "Current pointer"))
     key = pointer["selection"]
     require(pointer["path"] == "selections/" + key + ".json", "Current selection path differs")
-    raw = (store.root / pointer["path"]).read_bytes()
+    raw = _read_store_bytes(store.root, pointer["path"], "Current selection")
     require(sha(raw) == key, "Current selection differs")
     selected = loads_json(raw)
     require(selected["format"] == "managed-material-current-selection/1", "Unknown selection format")
@@ -102,7 +115,7 @@ def representation_closure(store, selections):
             continue
         require(len(key) == 64 and all(c in "0123456789abcdef" for c in key),
                 "Invalid representation transition identity")
-        raw = (store.root / "transitions" / (key + ".json")).read_bytes()
+        raw = _read_store_bytes(store.root, "transitions/" + key + ".json", "Representation transition")
         require(sha(raw) == key, "Representation transition differs")
         record = loads_json(raw)
         require(record["format"] == "managed-material-representation-transition/1", "Unknown representation transition")
@@ -115,7 +128,10 @@ def representation_closure(store, selections):
             path = store.root
             for part in relative.parts:
                 path = path / part
-                require(not path.is_symlink(), "Transition metadata dependency must not traverse a symlink")
+                require(
+                    not is_reparse_or_symlink(path),
+                    "Transition metadata dependency must not traverse a symlink or reparse point",
+                )
             dependency = path.read_bytes()
             require(sha(dependency) == declared["sha256"] and len(dependency) == declared["bytes"],
                     "Transition metadata dependency differs: " + relative.as_posix())
@@ -135,7 +151,8 @@ def selection_closure(store, key, root=None):
         if ident in selections:
             continue
         require(len(ident) == 64 and all(c in "0123456789abcdef" for c in ident), "Invalid selection identity")
-        raw = js(root) if ident == key and root is not None else (store.root / "selections" / (ident + ".json")).read_bytes()
+        raw = (js(root) if ident == key and root is not None
+               else _read_store_bytes(store.root, "selections/" + ident + ".json", "Retained selection"))
         require(sha(raw) == ident, "Retained selection differs")
         selected = loads_json(raw)
         require(selected["format"] == "managed-material-current-selection/1", "Unknown retained selection format")
@@ -155,7 +172,7 @@ def selection_closure(store, key, root=None):
             if receipt_id in receipts:
                 continue
             require(len(receipt_id) == 64 and all(c in "0123456789abcdef" for c in receipt_id), "Invalid lifecycle identity")
-            receipt_raw = (store.root / "lifecycle" / (receipt_id + ".json")).read_bytes()
+            receipt_raw = _read_store_bytes(store.root, "lifecycle/" + receipt_id + ".json", "Lifecycle receipt")
             require(sha(receipt_raw) == receipt_id, "Lifecycle receipt differs")
             receipt = loads_json(receipt_raw)
             require(receipt["format"] == "managed-material-retirement/1", "Unknown lifecycle receipt format")
@@ -206,7 +223,7 @@ def materialization_state(store, selections):
     for selected in ordered:
         manifest_key = selected["manifest"]
         if manifest_key not in seen_manifests:
-            raw = (store.root / "manifests" / (manifest_key + ".json")).read_bytes()
+            raw = _read_store_bytes(store.root, "manifests/" + manifest_key + ".json", "Materialization basis")
             require(sha(raw) == manifest_key, "Materialization basis differs")
             states = observed_materialization_state(states, loads_json(raw), manifest_key)
             seen_manifests.add(manifest_key)
@@ -214,7 +231,7 @@ def materialization_state(store, selections):
         for materialization in selected.get("materializations", []):
             row = dict(materialization)
             if row.get("receipt"):
-                receipt_raw = (store.root / "lifecycle" / (row["receipt"] + ".json")).read_bytes()
+                receipt_raw = _read_store_bytes(store.root, "lifecycle/" + row["receipt"] + ".json", "Materialization receipt")
                 require(sha(receipt_raw) == row["receipt"], "Materialization receipt differs")
                 receipt = loads_json(receipt_raw)
                 matches = [r for r in receipt["retired"] if r["prefix"] == row["prefix"]]
@@ -242,6 +259,41 @@ def selected_for_manifest(store, manifest_key, manifest):
     return sha(js(selected)), selected
 
 
+def _walk_ordinary_json_files(folder: Path, *, strict_entries: bool):
+    """Yield sorted ordinary JSON files under folder without traversing symlinks or reparse points."""
+    if not folder.exists() and not is_reparse_or_symlink(folder):
+        return []
+    if is_reparse_or_symlink(folder):
+        if strict_entries:
+            raise ValueError("Immutable record directory must not be a symlink or reparse point: " + str(folder))
+        return []
+    if not folder.is_dir():
+        return []
+    found = []
+    for parent, dirs, files in os.walk(folder, followlinks=False):
+        dirs.sort()
+        files.sort()
+        kept_dirs = []
+        for d in dirs:
+            candidate = Path(parent) / d
+            if is_reparse_or_symlink(candidate):
+                if strict_entries:
+                    raise ValueError("Immutable record directory must not traverse a symlink or reparse point: " + str(candidate))
+                continue
+            kept_dirs.append(d)
+        dirs[:] = kept_dirs
+        for name in files:
+            if not name.endswith(".json"):
+                continue
+            fpath = Path(parent) / name
+            if is_reparse_or_symlink(fpath):
+                if strict_entries:
+                    raise ValueError("Immutable record must not be a symlink or reparse point: " + str(fpath))
+                continue
+            found.append(fpath)
+    return sorted(found)
+
+
 def unpublished_occurrences(store):
     """Report retained occurrences that were never published to CURRENT.json."""
     with store_lock(store.root, shared=True):
@@ -257,93 +309,91 @@ def unpublished_occurrences(store):
             published_ids.update(s["occurrence"] for s, _ in selections.values() if "occurrence" in s)
         failed = {}
         events_path = store.root / "events.jsonl"
-        if events_path.is_file():
-            for line in events_path.read_bytes().splitlines():
-                if not line.strip():
-                    continue
-                row = loads_json(line)
-                kind = row.get("kind")
-                if kind == "snapshot-completed":
-                    if row.get("id"):
-                        published_ids.add(row["id"])
-                        failed.pop(row["id"], None)
-                    if row.get("manifest"):
-                        published_manifests.add(row["manifest"])
-                elif kind == "historical-artifact-retained":
-                    if row.get("occurrence"):
-                        published_ids.add(row["occurrence"])
-                        failed.pop(row["occurrence"], None)
-                    if row.get("manifest"):
-                        published_manifests.add(row["manifest"])
-                elif kind == "snapshot-failed" and row.get("id"):
-                    if row.get("selection_published"):
-                        published_ids.add(row["id"])
-                        failed.pop(row["id"], None)
+        if events_path.exists() or is_reparse_or_symlink(events_path):
+            require(
+                not is_reparse_or_symlink(events_path),
+                "Event log must not be a symlink or reparse point: " + str(events_path),
+            )
+            if events_path.is_file():
+                for line in events_path.read_bytes().splitlines():
+                    if not line.strip():
+                        continue
+                    row = loads_json(line)
+                    kind = row.get("kind")
+                    if kind == "snapshot-completed":
+                        if row.get("id"):
+                            published_ids.add(row["id"])
+                            failed.pop(row["id"], None)
                         if row.get("manifest"):
                             published_manifests.add(row["manifest"])
-                    elif row.get("occurrence_retained"):
-                        failed[row["id"]] = {
-                            "id": row["id"],
-                            "manifest": row.get("manifest"),
-                            "selection": row.get("selection"),
-                            "error": row.get("error"),
-                            "reason": "snapshot-failed-before-current-publish",
-                        }
-                elif kind == "historical-artifact-retention-failed" and row.get("occurrence"):
-                    if row.get("selection_published"):
-                        published_ids.add(row["occurrence"])
-                        failed.pop(row["occurrence"], None)
+                    elif kind == "historical-artifact-retained":
+                        if row.get("occurrence"):
+                            published_ids.add(row["occurrence"])
+                            failed.pop(row["occurrence"], None)
                         if row.get("manifest"):
                             published_manifests.add(row["manifest"])
-                    elif row.get("occurrence_retained"):
-                        failed[row["occurrence"]] = {
-                            "id": row["occurrence"],
-                            "manifest": row.get("manifest"),
-                            "selection": row.get("selection"),
-                            "error": row.get("error"),
-                            "reason": "historical-artifact-retention-failed-before-current-publish",
-                        }
+                    elif kind == "snapshot-failed" and row.get("id"):
+                        if row.get("selection_published"):
+                            published_ids.add(row["id"])
+                            failed.pop(row["id"], None)
+                            if row.get("manifest"):
+                                published_manifests.add(row["manifest"])
+                        elif row.get("occurrence_retained"):
+                            failed[row["id"]] = {
+                                "id": row["id"],
+                                "manifest": row.get("manifest"),
+                                "selection": row.get("selection"),
+                                "error": row.get("error"),
+                                "reason": "snapshot-failed-before-current-publish",
+                            }
+                    elif kind == "historical-artifact-retention-failed" and row.get("occurrence"):
+                        if row.get("selection_published"):
+                            published_ids.add(row["occurrence"])
+                            failed.pop(row["occurrence"], None)
+                            if row.get("manifest"):
+                                published_manifests.add(row["manifest"])
+                        elif row.get("occurrence_retained"):
+                            failed[row["occurrence"]] = {
+                                "id": row["occurrence"],
+                                "manifest": row.get("manifest"),
+                                "selection": row.get("selection"),
+                                "error": row.get("error"),
+                                "reason": "historical-artifact-retention-failed-before-current-publish",
+                            }
         selection_by_manifest = {}
-        selections_dir = store.root / "selections"
-        if selections_dir.is_dir():
-            for spath in sorted(selections_dir.rglob("*.json")):
-                if spath.is_symlink():
-                    continue
-                sraw = spath.read_bytes()
-                skey = sha(sraw)
-                if spath.stem != skey:
-                    continue
-                sel = loads_json(sraw)
-                if sel.get("format") != "managed-material-current-selection/1":
-                    continue
-                if sel.get("manifest"):
-                    selection_by_manifest.setdefault(sel["manifest"], skey)
-                for extra_manifest in sel.get("additional_manifests", []):
-                    selection_by_manifest.setdefault(extra_manifest, skey)
+        for spath in _walk_ordinary_json_files(store.root / "selections", strict_entries=False):
+            sraw = spath.read_bytes()
+            skey = sha(sraw)
+            if spath.stem != skey:
+                continue
+            sel = loads_json(sraw)
+            if sel.get("format") != "managed-material-current-selection/1":
+                continue
+            if sel.get("manifest"):
+                selection_by_manifest.setdefault(sel["manifest"], skey)
+            for extra_manifest in sel.get("additional_manifests", []):
+                selection_by_manifest.setdefault(extra_manifest, skey)
         results = []
-        occurrences_dir = store.root / "occurrences"
-        if occurrences_dir.is_dir():
-            for opath in sorted(occurrences_dir.rglob("*.json")):
-                require(not opath.is_symlink(), "Immutable record must not be a symlink")
-                pointer = loads_json(opath.read_bytes())
-                ident = pointer.get("id", opath.stem)
-                manifest_key = pointer.get("manifest")
-                if ident in published_ids or (manifest_key and manifest_key in published_manifests):
-                    continue
-                info = failed.get(ident)
-                if info is not None:
-                    entry = dict(info)
-                    if not entry.get("manifest"):
-                        entry["manifest"] = manifest_key
-                    if not entry.get("selection") and manifest_key:
-                        entry["selection"] = selection_by_manifest.get(manifest_key)
-                else:
-                    entry = {
-                        "id": ident,
-                        "manifest": manifest_key,
-                        "selection": selection_by_manifest.get(manifest_key) if manifest_key else None,
-                        "error": None,
-                        "reason": "unconfirmed-occurrence-not-published",
-                    }
-                results.append(entry)
+        for opath in _walk_ordinary_json_files(store.root / "occurrences", strict_entries=True):
+            pointer = loads_json(opath.read_bytes())
+            ident = pointer.get("id", opath.stem)
+            manifest_key = pointer.get("manifest")
+            if ident in published_ids or (manifest_key and manifest_key in published_manifests):
+                continue
+            info = failed.get(ident)
+            if info is not None:
+                entry = dict(info)
+                if not entry.get("manifest"):
+                    entry["manifest"] = manifest_key
+                if not entry.get("selection") and manifest_key:
+                    entry["selection"] = selection_by_manifest.get(manifest_key)
+            else:
+                entry = {
+                    "id": ident,
+                    "manifest": manifest_key,
+                    "selection": selection_by_manifest.get(manifest_key) if manifest_key else None,
+                    "error": None,
+                    "reason": "unconfirmed-occurrence-not-published",
+                }
+            results.append(entry)
         return sorted(results, key=lambda r: r["id"])

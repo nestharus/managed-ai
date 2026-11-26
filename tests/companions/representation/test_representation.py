@@ -144,6 +144,48 @@ class RepresentationWave4Tests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'nonfinite JSON'):
             representation.read_json(nan_file)
 
+    # --- W5-B11: NTFS junction / symlink refusal in pin(), check_pin(), and _atomic_bytes() ---
+    def test_pin_check_pin_and_atomic_bytes_refuse_reparse_or_symlink(self):
+        import os
+        import subprocess
+        store = self.root / 'store'
+        work = store / 'work'
+        work.mkdir(parents=True)
+        outside = self.root / 'outside'
+        outside.mkdir()
+        (outside / 'secret.json').write_text('{"k": 1}\n', encoding='utf-8')
+        link_dir = work / 'linked'
+        if os.name == 'nt':
+            proc = subprocess.run(['cmd', '/c', 'mklink', '/J', str(link_dir), str(outside)], capture_output=True)
+            if proc.returncode != 0:
+                return
+            self.addCleanup(lambda: subprocess.run(['cmd', '/c', 'rmdir', str(link_dir)], capture_output=True))
+        else:
+            link_dir.symlink_to(outside)
+
+        class FakeExchange:
+            def __init__(self):
+                self.workspace = work
+
+            def path(self, rel):
+                return work / rel
+
+        class FakeSystem:
+            def __init__(self):
+                self.ex = FakeExchange()
+
+        ops = representation.RepresentationOperations(FakeSystem())
+        with patch.object(representation, '_artifact_target_fn', return_value=lambda x: x):
+            with self.assertRaisesRegex(ValueError, 'ordinary file'):
+                ops.pin('linked/secret.json')
+            with self.assertRaisesRegex(ValueError, 'ordinary file'):
+                ops.check_pin({
+                    'path': 'linked/secret.json',
+                    'sha256': representation.digest((outside / 'secret.json').read_bytes()),
+                })
+        with self.assertRaisesRegex(ValueError, 'symlink or reparse point'):
+            representation._atomic_bytes(link_dir / 'out.json', b'{}')
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

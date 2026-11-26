@@ -75,9 +75,15 @@ def write_json(path, value):
 
 
 def components():
-    """Verify and load pinned workbench modules in an isolated package namespace."""
+    """Load declared workbench modules in an isolated package namespace and measure live identities."""
     global _MODULES
     manifest = decode_json((HERE / "COMPONENTS.json").read_bytes())
+    need(
+        isinstance(manifest, dict)
+        and manifest.get("schema") == "peer-workbench-acquired-components/1"
+        and isinstance(manifest.get("files"), dict),
+        "Invalid peer component manifest",
+    )
     # Import order follows module dependencies; COMPONENTS.json keys are companions/-relative.
     roles = (
         ("io_utils", "core"),
@@ -90,21 +96,29 @@ def components():
     )
     role_names = {name for name, _ in roles}
     aliases = {}
+    measured_files = {}
     for name, item in manifest["files"].items():
+        need(isinstance(item, dict), "Component entry must be an object: " + str(name))
+        fields(item, ("source",), ("identity",))
+        need(item["source"] == name, "Component source path differs from manifest key: " + str(name))
         path = scoped_file(COMPANIONS_ROOT, name)
-        need(
-            identity(path.read_bytes()) == item["identity"],
-            "Acquired component differs from accepted body: " + name,
-        )
+        live_identity = identity(path.read_bytes())
+        if "identity" in item:
+            need(
+                live_identity == item["identity"],
+                "Acquired component differs from accepted body: " + name,
+            )
+        measured_files[name] = {**item, "identity": live_identity}
         role = path.stem
         if role in role_names:
             need(role not in aliases and path.suffix == ".py", "Ambiguous peer component: " + role)
             aliases[role] = path
     missing = [name for name, _ in roles if name not in aliases]
     need(not missing, "Missing peer component: " + ", ".join(missing))
-    basis = (COMPANIONS_ROOT, digest(canonical(manifest["files"])))
+    effective_manifest = {**manifest, "files": measured_files}
+    basis = (COMPANIONS_ROOT, digest(canonical(measured_files)))
     if _MODULES is not None and _MODULES[0] == basis:
-        return _MODULES[1], manifest
+        return _MODULES[1], effective_manifest
 
     pkg_root = "_g60_peer_" + digest(str(COMPANIONS_ROOT).encode("utf-8"))[:16]
     subpackages = {
@@ -136,7 +150,7 @@ def components():
                 sys.modules[key] = old
         raise
     _MODULES = (basis, loaded)
-    return loaded, manifest
+    return loaded, effective_manifest
 
 
 def validate(config, request):
@@ -579,7 +593,7 @@ def run_peer_turn(config, request, *, model=None):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--config", required=True)
     args = parser.parse_args(argv)
     try:

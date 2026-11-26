@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 
-arguments = argparse.ArgumentParser()
+arguments = argparse.ArgumentParser(allow_abbrev=False)
 arguments.add_argument('--engine', required=True, type=Path, metavar='ENGINE',
                        help='canonical engine directory containing store/ and core/')
 args, rest = arguments.parse_known_args()
