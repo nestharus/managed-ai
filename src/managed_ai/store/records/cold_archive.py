@@ -138,7 +138,6 @@ class ColdArchive:
     @contextmanager
     def pack_session(self) -> Iterator[PackSession | None]:
         """Share one thread-safe read-only PackSession across batched cold-archive reads."""
-        opened_here = False
         with self._pack_session_lock:
             if self._active_pack_session is not None:
                 self._pack_session_depth += 1
@@ -149,7 +148,6 @@ class ColdArchive:
                 session = PackSession(self.packs_dir)
                 self._active_pack_session = session
                 self._pack_session_depth = 1
-                opened_here = True
 
         if session is None:
             yield None
@@ -161,7 +159,7 @@ class ColdArchive:
             to_close: PackSession | None = None
             with self._pack_session_lock:
                 self._pack_session_depth -= 1
-                if opened_here and self._pack_session_depth == 0:
+                if self._pack_session_depth == 0:
                     to_close = self._active_pack_session
                     self._active_pack_session = None
             if to_close is not None:

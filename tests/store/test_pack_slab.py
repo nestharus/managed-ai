@@ -875,6 +875,62 @@ class PackSlabTests(unittest.TestCase):
             self.assertIsNone(archive._active_pack_session)
             self.assertEqual(archive._pack_session_depth, 0)
 
+    def test_c58_1_overlapping_threads_cold_archive_pack_session_closes_cleanly(self) -> None:
+        """C58-1: overlapping 2-thread ColdArchive.pack_session() closes & clears session when last thread exits."""
+        import threading
+
+        system = System(self.store)
+        with exclusive(system.ex.root / 'owner.lock'):
+            system.put({'id': 'c58-cold', 'kind': 'note', 'content': {'v': 'overlap'}, 'active': False}, 0)
+            plan = plan_archive_records(system, ids=['c58-cold'])
+            execute_archive_records(system, plan=plan, expected_plan=plan['plan_sha256'], reason='C58-1 pack')
+            archive = system.record_store.cold_archive
+            archive.pack_blobs()
+
+            a_entered = threading.Event()
+            b_entered = threading.Event()
+            a_exited = threading.Event()
+            sessions: list[PackSession | None] = []
+            errors: list[BaseException] = []
+
+            def thread_a() -> None:
+                try:
+                    with archive.pack_session() as sess:
+                        sessions.append(sess)
+                        a_entered.set()
+                        assert b_entered.wait(timeout=5.0)
+                except BaseException as exc:
+                    errors.append(exc)
+                finally:
+                    a_exited.set()
+
+            def thread_b() -> None:
+                try:
+                    assert a_entered.wait(timeout=5.0)
+                    with archive.pack_session() as sess:
+                        sessions.append(sess)
+                        b_entered.set()
+                        assert a_exited.wait(timeout=5.0)
+                        rec, _ = archive.read('c58-cold')
+                        self.assertEqual(rec['id'], 'c58-cold')
+                except BaseException as exc:
+                    errors.append(exc)
+
+            t_a = threading.Thread(target=thread_a)
+            t_b = threading.Thread(target=thread_b)
+            t_a.start()
+            t_b.start()
+            t_a.join(timeout=10.0)
+            t_b.join(timeout=10.0)
+
+            self.assertEqual(errors, [])
+            self.assertEqual(len(sessions), 2)
+            self.assertIsNotNone(sessions[0])
+            self.assertIs(sessions[0], sessions[1])
+            self.assertEqual(archive._pack_session_depth, 0)
+            self.assertIsNone(archive._active_pack_session)
+            self.assertTrue(sessions[0]._closed)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

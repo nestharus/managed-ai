@@ -12,6 +12,7 @@ from managed_ai.core.storage import (
     PackSession,
     SLAB_HEADER_STRUCT,
     encode,
+    has_pack_pointer,
     now,
     parse_pack_current,
     sha,
@@ -95,7 +96,7 @@ def _collect_loose_pack_candidates(
         grouped.setdefault(key, {})['deflate' if is_comp else 'raw'] = (path, disk_bytes)
 
     existing_packed_keys: set[str] = set()
-    if (objects.packs_dir / 'CURRENT.json').exists():
+    if has_pack_pointer(objects.packs_dir):
         with PackSession(objects.packs_dir) as session:
             for row in session.live_entries():
                 existing_packed_keys.add(row['object'])
@@ -405,7 +406,7 @@ def _collect_cold_archive_pack_candidates(
 ) -> tuple[dict[str, tuple[int, bytes, list[str]]], list[Path], list[str]]:
     """Verify loose cold-archive .json.deflate blobs and deduplicate them by raw_sha256."""
     existing_packed: set[str] = set()
-    if (archive.packs_dir / 'CURRENT.json').exists():
+    if has_pack_pointer(archive.packs_dir):
         with PackSession(archive.packs_dir) as session:
             existing_packed = {row['object'] for row in session.live_entries()}
 

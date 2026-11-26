@@ -510,9 +510,11 @@ class PackSession:
 
     def _get_shard(self, idx: int) -> PackShardHandle:
         # Fast lock-free path once the immutable shard handle is cached.
-        handle = self._handles[idx]
-        if handle is not None:
-            return handle
+        handles = self._handles
+        if idx < len(handles):
+            handle = handles[idx]
+            if handle is not None:
+                return handle
 
         with self._lock:
             if self._closed:
