@@ -1,5 +1,13 @@
 """Regression tests for bounded exposure.json and chunked outside_view_records."""
 
+if not __package__:
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _src = str(_Path(__file__).resolve().parents[3] / "src")
+    if _src not in _sys.path:
+        _sys.path.insert(0, _src)
+
 import tempfile
 import unittest
 from pathlib import Path

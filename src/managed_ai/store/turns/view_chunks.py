@@ -10,7 +10,7 @@ from managed_ai.core.storage import MAX_BYTES, encode, strict_json_loads
 OUTSIDE_VIEW_INLINE_LIMIT = 512 * 1024
 RECORD_ID_CHUNK_MAX_BYTES = 512 * 1024
 
-_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+_SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
 _CHUNK_WRAPPER_OVERHEAD = len(encode({"format": RECORD_ID_CHUNK_FORMAT, "records": [""]})) - 2
 _CHUNK_ITEM_SEP_BYTES = len(",\n    ")
 
