@@ -5,6 +5,7 @@ import codecs
 from contextlib import ExitStack, contextmanager
 import gzip
 import importlib
+import importlib.util
 import re
 import hashlib
 from itertools import zip_longest
@@ -76,9 +77,7 @@ def observed_path(root, relative, kind, *, scope_probe=False):
 
 def _is_package_engine(core):
     core = Path(core)
-    return core.name == "managed_ai" and (
-        core.parent.name == "src" or (core / "__init__.py").is_file()
-    )
+    return (core / "__init__.py").is_file()
 
 
 def inventory_engine(root):
@@ -146,29 +145,44 @@ def source_paths(root, engine):
 def _with_engine(engine, relative):
     engine_path = Path(engine).resolve(strict=True)
     is_pkg = _is_package_engine(engine_path)
-    import_root = str(engine_path.parent if is_pkg else engine_path)
-    sys.path.insert(0, import_root)
-    importlib.invalidate_caches()
     saved_modules = None
+    saved_path = None
     try:
         if is_pkg:
             mod_name = "managed_ai." + relative[:-3].replace("/", ".")
             expected = (engine_path / relative).resolve(strict=True)
             existing = sys.modules.get("managed_ai")
             existing_file = getattr(existing, "__file__", None) if existing is not None else None
-            if existing is None or (
-                existing_file is None or Path(existing_file).resolve() != (engine_path / "__init__.py").resolve()
-            ):
+            existing_paths = list(getattr(existing, "__path__", ())) if existing is not None else []
+            already_same = existing is not None and (
+                (existing_file is not None and Path(existing_file).resolve() == (engine_path / "__init__.py").resolve())
+                or any(Path(p).resolve() == engine_path for p in existing_paths)
+            )
+            if not already_same:
                 saved_modules = {
                     k: sys.modules.pop(k)
                     for k in list(sys.modules)
                     if k == "managed_ai" or k.startswith("managed_ai.")
                 }
+                spec = importlib.util.spec_from_file_location(
+                    "managed_ai",
+                    str(engine_path / "__init__.py"),
+                    submodule_search_locations=[str(engine_path)],
+                )
+                if spec is None or spec.loader is None:
+                    raise ImportError("Unable to load managed_ai package from " + str(engine_path))
+                pkg_mod = importlib.util.module_from_spec(spec)
+                sys.modules["managed_ai"] = pkg_mod
+                spec.loader.exec_module(pkg_mod)
+                importlib.invalidate_caches()
             mod = importlib.import_module(mod_name)
             if Path(mod.__file__).resolve(strict=True) != expected:
                 raise ValueError("Loaded engine module differs from selected engine: " + mod_name)
             yield vars(mod)
         else:
+            saved_path = sys.path[:]
+            sys.path.insert(0, str(engine_path))
+            importlib.invalidate_caches()
             yield runpy.run_path(str(engine_path / relative))
     finally:
         if saved_modules is not None:
@@ -176,10 +190,10 @@ def _with_engine(engine, relative):
                 if k == "managed_ai" or k.startswith("managed_ai."):
                     sys.modules.pop(k, None)
             sys.modules.update(saved_modules)
-        try:
-            sys.path.remove(import_root)
-        except ValueError:
-            pass
+            importlib.invalidate_caches()
+        if saved_path is not None:
+            sys.path[:] = saved_path
+            importlib.invalidate_caches()
 
 
 def received_compressed_text(system):

@@ -512,6 +512,71 @@ class Wave5CoreTests(unittest.TestCase):
             self.assertEqual(sys_obj.show('c37-rec-1')['content'], {'v': 2})
             self.assertEqual(sys_obj.show('c37-rec-2')['content'], {'v': 2})
 
+    def test_c42_1_and_c42_2_external_engine_isolation(self):
+        """C42-1 & C42-2: audit_feedback loads explicit product engine; open_admitted_store isolates external engines."""
+        from managed_ai.deployment.controller import open_admitted_store, opened_admitted_store
+        import managed_ai as colocated_pkg
+
+        def _make_ext_engine(dest: Path, label: str) -> Path:
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ENGINE / '__init__.py', dest / '__init__.py')
+            ignore = shutil.ignore_patterns('__pycache__', '*.pyc')
+            for sub in ('core', 'deployment', 'store', 'library'):
+                shutil.copytree(ENGINE / sub, dest / sub, ignore=ignore)
+            (dest / 'store' / 'ext_tag.py').write_text(f'LABEL = {label!r}\n', encoding='utf-8')
+            sys_file = dest / 'store' / 'system.py'
+            orig = sys_file.read_text(encoding='utf-8')
+            sys_file.write_text(
+                orig
+                + '\nfrom managed_ai.store.ext_tag import LABEL as _EXT_LABEL\n'
+                + 'System._ext_label = _EXT_LABEL\n'
+                + 'def _lazy_ext_label(self):\n'
+                + '    from managed_ai.store.ext_tag import LABEL\n'
+                + '    return LABEL\n'
+                + 'System.lazy_ext_label = _lazy_ext_label\n',
+                encoding='utf-8',
+            )
+            return dest
+
+        # C42-2: open_admitted_store & opened_admitted_store isolate both pkg/managed_ai and custom-named ext_eng
+        pkg_ext = _make_ext_engine(self.base / 'pkg_a' / 'managed_ai', 'PKG_A')
+        custom_ext = _make_ext_engine(self.base / 'ext_eng', 'CUSTOM_EXT')
+
+        for ext_root, expected_label in ((pkg_ext, 'PKG_A'), (custom_ext, 'CUSTOM_EXT')):
+            s_direct = open_admitted_store(ext_root, self.store)
+            self.assertEqual(s_direct._ext_label, expected_label)
+            self.assertIs(sys.modules.get('managed_ai'), colocated_pkg)
+            self.assertNotIn('managed_ai.store.ext_tag', sys.modules)
+
+            with opened_admitted_store(ext_root, self.store) as s_ctx:
+                self.assertEqual(s_ctx._ext_label, expected_label)
+                self.assertEqual(s_ctx.lazy_ext_label(), expected_label)
+            self.assertIs(sys.modules.get('managed_ai'), colocated_pkg)
+            self.assertNotIn('managed_ai.store.ext_tag', sys.modules)
+
+            dep_dir = self.base / f'dep-{expected_label.lower()}'
+            Deployment.initialize(dep_dir, self.store, ext_root)
+            with Deployment.admitted(dep_dir, engine=ext_root, read_only=True) as bound:
+                s_admitted = open_admitted_store(bound.engine, bound.runtime)
+                self.assertEqual(s_admitted._ext_label, expected_label)
+                self.assertEqual(s_admitted.lazy_ext_label(), expected_label)
+            self.assertIs(sys.modules.get('managed_ai'), colocated_pkg)
+
+        # C42-1: audit_feedback CLI loads the explicit external product argument (not co-located ENGINE_ROOT)
+        marker_ext = _make_ext_engine(self.base / 'audit_ext' / 'managed_ai', 'AUDIT_EXT')
+        sys_file = marker_ext / 'store' / 'system.py'
+        sys_file.write_text(
+            sys_file.read_text(encoding='utf-8')
+            + '\nraise ValueError("EXTERNAL_AUDIT_PRODUCT_LOADED")\n',
+            encoding='utf-8',
+        )
+        proc = self._run(
+            [sys.executable, '-B', str(ENGINE / 'tools/audit_feedback.py'),
+             str(marker_ext), str(self.store), 'goal', '--obligation'],
+            expected_rc=2,
+        )
+        self.assertIn('EXTERNAL_AUDIT_PRODUCT_LOADED', proc.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

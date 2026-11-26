@@ -827,6 +827,22 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 with PACKAGE["_with_engine"](ext_src / "managed_ai", "store/system.py") as api:
                     # Lazy imports inside the external module MUST bind to external, not colocated
                     self.assertEqual(api["run_lazy"](), ("EXTERNAL", "EXTERNAL_ONLY"))
+                # C42-O1: custom-named flattened standalone package engine dir also isolates cleanly
+                custom = tmp / "custom_engine_root"
+                (custom / "store").mkdir(parents=True)
+                (custom / "__init__.py").write_text("LABEL = 'CUSTOM'\n", encoding="utf-8")
+                (custom / "store/__init__.py").write_text("", encoding="utf-8")
+                (custom / "store/shared_tag.py").write_text("TAG = 'CUSTOM'\n", encoding="utf-8")
+                (custom / "store/ext_only_helper.py").write_text("ORIGIN = 'CUSTOM_ONLY'\n", encoding="utf-8")
+                (custom / "store/system.py").write_text(
+                    "def run_lazy():\n"
+                    "    from managed_ai.store.shared_tag import TAG\n"
+                    "    from managed_ai.store.ext_only_helper import ORIGIN\n"
+                    "    return (TAG, ORIGIN)\n",
+                    encoding="utf-8",
+                )
+                with PACKAGE["_with_engine"](custom, "store/system.py") as api:
+                    self.assertEqual(api["run_lazy"](), ("CUSTOM", "CUSTOM_ONLY"))
                 # After exiting context, colocated managed_ai MUST be restored cleanly
                 self.assertIs(sys.modules.get("managed_ai"), coloc_mod)
                 self.assertEqual(sys.modules["managed_ai"].LABEL, "COLOCATED")

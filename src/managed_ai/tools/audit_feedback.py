@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import importlib
 from importlib.machinery import ModuleSpec
 import importlib.util
 import json
@@ -15,69 +16,103 @@ import sys
 
 sys.dont_write_bytecode = True
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
+_ISOLATED_ROOT_PACKAGES = frozenset({'managed_ai', 'core', 'store', 'library', 'deployment'})
 
 
-def _ensure_engine_path(product: Path) -> None:
-    candidate = product.resolve()
-    if (candidate / 'store' / 'system.py').is_file():
-        root = candidate
-    else:
-        root = ENGINE_ROOT
-    if root.name == 'managed_ai' and (root / '__init__.py').is_file():
-        src = str(root.parent)
-        if src not in sys.path:
-            sys.path.insert(0, src)
+def _is_package_mounted(root: Path) -> bool:
+    loaded = sys.modules.get('managed_ai')
+    if loaded is None:
+        return False
+    loaded_file = getattr(loaded, '__file__', None)
+    if loaded_file and Path(loaded_file).resolve() == (root / '__init__.py').resolve():
+        return True
+    return any(Path(p).resolve() == root for p in getattr(loaded, '__path__', ()))
+
+
+@contextmanager
+def _with_product_engine(product: Path):
+    """Mount the requested engine root cleanly for the full audit operation, restoring on exit."""
+    candidate = Path(product).resolve()
+    root = candidate if (candidate / 'store' / 'system.py').is_file() else ENGINE_ROOT
+    is_pkg = (root / '__init__.py').is_file()
+    if is_pkg and _is_package_mounted(root):
+        yield root, True
         return
-    if 'managed_ai' not in sys.modules:
-        init = root / '__init__.py'
-        if init.is_file():
+
+    def _is_isolated(name: str) -> bool:
+        return name.partition('.')[0] in _ISOLATED_ROOT_PACKAGES
+
+    previous = {name: sys.modules.pop(name) for name in tuple(sys.modules) if _is_isolated(name)}
+    saved_path = sys.path[:]
+    try:
+        excluded = {ENGINE_ROOT, ENGINE_ROOT.parent}
+        filtered = [p for p in saved_path if Path(p).resolve() not in excluded]
+        if is_pkg:
+            sys.path[:] = filtered
+            init = root / '__init__.py'
             spec = importlib.util.spec_from_file_location(
                 'managed_ai', str(init), submodule_search_locations=[str(root)],
             )
+            if spec is None:
+                spec = ModuleSpec('managed_ai', None, is_package=True)
+                spec.submodule_search_locations = [str(root)]
+            module = importlib.util.module_from_spec(spec)
+            sys.modules['managed_ai'] = module
+            if spec.loader is not None:
+                spec.loader.exec_module(module)
         else:
-            spec = ModuleSpec('managed_ai', None, is_package=True)
-            spec.submodule_search_locations = [str(root)]
-        module = importlib.util.module_from_spec(spec)
-        sys.modules['managed_ai'] = module
-        if spec.loader is not None:
-            spec.loader.exec_module(module)
+            sys.path[:] = [str(root), *filtered]
+        importlib.invalidate_caches()
+        yield root, is_pkg
+    finally:
+        for name in tuple(sys.modules):
+            if _is_isolated(name):
+                del sys.modules[name]
+        sys.modules.update(previous)
+        sys.path[:] = saved_path
+        importlib.invalidate_caches()
 
 
 @contextmanager
 def _admitted_history(product: Path, root: Path, ident: str):
-    _ensure_engine_path(product)
-    from managed_ai.core.ownership import NativeLayout, external_root
-    from managed_ai.core.storage import admission_deadline, owner_admission, shared
-    from managed_ai.store.system import System
+    with _with_product_engine(product) as (engine_root, is_pkg):
+        prefix = 'managed_ai.' if is_pkg else ''
+        ownership_mod = importlib.import_module(prefix + 'core.ownership')
+        storage_mod = importlib.import_module(prefix + 'core.storage')
+        system_mod = importlib.import_module(prefix + 'store.system')
+        expected_system = (engine_root / 'store' / 'system.py').resolve(strict=True)
+        if Path(system_mod.__file__).resolve(strict=True) != expected_system:
+            raise ValueError('loaded engine system module differs from requested product')
 
-    resolved_root = external_root(root)
-    lock_path = external_root(NativeLayout(resolved_root).exchange) / 'owner.lock'
-    with owner_admission(
-            lambda stack: stack.enter_context(shared(lock_path, allow_readonly_open=True)),
-            deadline=admission_deadline()):
-        store = System(resolved_root).record_store
+        resolved_root = ownership_mod.external_root(root)
+        lock_path = ownership_mod.external_root(ownership_mod.NativeLayout(resolved_root).exchange) / 'owner.lock'
+        with storage_mod.owner_admission(
+                lambda stack: stack.enter_context(storage_mod.shared(lock_path, allow_readonly_open=True)),
+                deadline=storage_mod.admission_deadline()):
+            store = system_mod.System(resolved_root).record_store
 
-        def _pages():
-            for page in store.history_pages(ident):
-                if page.get('retention_boundary'):
-                    raise ValueError(
-                        'Historical audit stops at the declared current-use retention boundary; '
-                        'absence of earlier revisions is not a clean historical finding'
-                    )
-                yield from page['records']
+            def _pages():
+                for page in store.history_pages(ident):
+                    if page.get('retention_boundary'):
+                        raise ValueError(
+                            'Historical audit stops at the declared current-use retention boundary; '
+                            'absence of earlier revisions is not a clean historical finding'
+                        )
+                    yield from page['records']
 
-        yield _pages()
+            yield _pages(), is_pkg
 
 
 def history(product: Path, root: Path, ident: str):
-    with _admitted_history(product, root, ident) as records:
+    with _admitted_history(product, root, ident) as (records, _):
         return list(records)
 
 
 def scan(product: Path, root: Path, ident: str):
-    with _admitted_history(product, root, ident) as records:
+    with _admitted_history(product, root, ident) as (records, is_pkg):
         current = next(records)
-        from managed_ai.store.governance.feedback import Feedback, KIND
+        feedback_mod = importlib.import_module(('managed_ai.' if is_pkg else '') + 'store.governance.feedback')
+        Feedback, KIND = feedback_mod.Feedback, feedback_mod.KIND
         if current['kind'] != KIND:
             raise ValueError('record does not own a feedback use')
         head_revision = current['revision']
@@ -99,7 +134,7 @@ def scan(product: Path, root: Path, ident: str):
 
 
 def scan_obligation(product: Path, root: Path, ident: str):
-    with _admitted_history(product, root, ident) as records:
+    with _admitted_history(product, root, ident) as (records, _):
         current = next(records)
         head_revision = current['revision']
         findings = []
@@ -147,8 +182,6 @@ def scan_obligation(product: Path, root: Path, ident: str):
 
 
 if __name__ == '__main__':
-    _ensure_engine_path(ENGINE_ROOT)
-    from managed_ai.core.storage import AdmissionContended
     cli = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     cli.add_argument('product', type=Path)
     cli.add_argument('root', type=Path)
@@ -158,9 +191,11 @@ if __name__ == '__main__':
     inspect = scan_obligation if a.obligation else scan
     try:
         result = inspect(a.product.resolve(), a.root.resolve(), a.record)
-    except AdmissionContended as exc:
-        print(json.dumps(exc.result('audit-feedback')), file=sys.stderr)
-        raise SystemExit(75)
+    except RuntimeError as exc:
+        if type(exc).__name__ == 'AdmissionContended' and callable(getattr(exc, 'result', None)):
+            print(json.dumps(exc.result('audit-feedback')), file=sys.stderr)
+            raise SystemExit(75)
+        raise
     except (OSError, ValueError, KeyError, TypeError) as exc:
         cli.exit(2, json.dumps({'status': 'unresolved', 'record': a.record, 'error': str(exc)}) + '\n')
     print(json.dumps(result, indent=2, ensure_ascii=False))
