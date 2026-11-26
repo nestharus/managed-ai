@@ -23,8 +23,7 @@ Deployment status reopens the current descriptor and reports its raw digest with
 From the package root:
 
 ```sh
-python3 -B engine/deployment/select_deployment.py --deployment deployments/research system status
-python3 -B engine/deployment/select_deployment.py --deployment deployments/novel system status
+python -B engine/deployment/select_deployment.py --deployment /path/to/deployment system status
 ```
 
 Create an additional instance only in a new location:

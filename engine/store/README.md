@@ -28,8 +28,7 @@ The deployment entrance points to the central engine and one independent native 
 From the package root:
 
 ```bash
-python3 -B engine/deployment/select_deployment.py --deployment deployments/research system status
-python3 -B engine/deployment/select_deployment.py --deployment deployments/novel system status
+python -B engine/deployment/select_deployment.py --deployment /path/to/deployment system status
 ```
 
 Each store owns its selected domains, payload schemas and reference catalogues. Acquire a complete selected source with `system catalogue SOURCE_ID --text`, then nominate its logical ID in a context's `techniques`. Local workspace material still uses the context's `sources` paths. A source catalogue or an available tool description does not establish participant acquisition or authorize execution.
@@ -72,7 +71,7 @@ python3 -B manage_store.py --root ../../../my-ai-work adopt review \
 
 A refusal stating `publication parent must already exist` occurs before the core records publication intent. Inspect the original turn and target first. If inspection confirms that no publication intent was recorded and the captured sources and target basis still hold, the owner can create the intended ordinary parent and adopt the already received proposal. Keep the existing receipt; this does not call for redispatching its producer. A recorded publication intent or uncertain effect instead requires its existing recovery procedure; creating a directory does not resolve that uncertainty.
 
-Records, interpretations and internal context files have reserved namespaces. Use their owning commands rather than proposing replacements for them. Declared missing sources and delivered Attention source/product observations also participate in the writer's checks; an absent source appearing can change the basis just as an existing source changing does. Publication is one file at a time, not an atomic multi-file transaction. The underlying [Exchange contract](../docs/exchange.md) explains exact custody, bounds, failures and publication recovery.
+Records, interpretations and internal context files have reserved namespaces. Use their owning commands rather than proposing replacements for them. Declared missing sources and delivered Attention source/product observations also participate in the writer's checks; an absent source appearing can change the basis just as an existing source changing does. Publication is one file at a time, not an atomic multi-file transaction. The underlying [continuation core contract](../core/README.md) explains exact custody, bounds, failures and publication recovery.
 
 ## Represent what the work actually needs
 
@@ -323,7 +322,7 @@ The retained observer-model entry supplies its complete operation description an
 
 The historical LC-L07 locator is retained here only as a qualified identity note; its former all-history catalogue is not installed. The original body declared by that locator has SHA-256 `6361c33f8aaa3541197423d5e4cfc5a32300d3cf32c9507b2143e771954ff399`, member `cybernetics-research/theory/constructive_repair.md` in `G35-inside-G59`; its LC-L07 argument occupies original lines 55–82. Returning the locator does not return that original body.
 
-The paired research archive retains a [primary constructive-repair source — additional source](../SOURCES.md#source-239de2d9a237e33efdf5) under its own current file identity, and a [current construction account — additional source](../SOURCES.md#source-b527d5ad052a1f0c1aea). These are useful current routes, not a claim that the locator's exact historical body or all of its dependencies are installed. The maintained primary file and the locator's declared original have different byte identities.
+The paired research archive retains a primary constructive-repair source (`research/references/primary/cybernetics-research/theory/constructive_repair.md`) under its own current file identity, and a current construction account (`research/evidence/construction-in-use.md`), both routed in [navigation.json](../release/navigation.json). These are useful current routes, not a claim that the locator's exact historical body or all of its dependencies are installed. The maintained primary file and the locator's declared original have different byte identities.
 
 No predecessor archive or historical recovery command is required for ordinary current system use. A historical recipe retained in catalogue metadata describes an earlier environment and is not an installed recovery service. If a contribution specifically needs an omitted original, acquire that exact body, verify its declared identity and qualify its original premises before relying on it. A present account can support current use without being passed off as a byte-identical historical source.
 
@@ -366,7 +365,7 @@ For restart, retain the complete runtime root and use `status`, `show ID` and `r
 
 ## Verify the delivered contract
 
-From the distribution root, run `python3 -B agent-system/check_system.py`. It exercises the new integration boundaries with external temporary state. The core's tests and [API](../docs/api.md) cover its declared mechanisms. These checks establish particular software behavior; actual agent use and interpretation remain separate evidence.
+From the repository root, run `python -B -m unittest discover -s tests/engine/store`. The core's tests and [overview](../core/README.md) cover its declared mechanisms. These checks establish particular software behavior; actual agent use and interpretation remain separate evidence.
 
 For the deployment addition, run `python3 -B agent-system/check_deployment.py`. Its isolated public-CLI checks cover actual source/instruction reselection, stable continuation commands, exact earlier-context recovery, expected-selection and manifest guards, complete membership, workspace publication boundaries, same-runtime binding and one actual bounded command lifetime. Its project text and replies are declared fixtures. A later real agent consuming the selected edition remains a separate receiving use.
 
@@ -388,4 +387,4 @@ If an independent Attention update arrived before the sealed selection installed
 
 `reconcile-publication TURN --target OUTPUT --expected-sha256 HASH --account ACCOUNT` acknowledges a currently observed target matching the captured base or proposal. Use `absent` for an absent captured base and current target. The result contains `reconciliation` and current `status`. The receipt retains the original intent identity and marks historical completion `unestablished`. Original target bytes and the intent record are preserved. A sibling adoption can use that acknowledged identity through its ordinary basis and current-authority checks. The original target retains its replay guard.
 
-Exact repeated requests return their original records. Changed accounts or observations are refused. Terminal closure uses existing owner and current-feedback dispatch checks. Reconciliation uses existing publication authority. Divergent targets and changed governing work require a fresh current receiving occasion. The [exchange contract](../docs/exchange.md) states the complete recovery conditions.
+Exact repeated requests return their original records. Changed accounts or observations are refused. Terminal closure uses existing owner and current-feedback dispatch checks. Reconciliation uses existing publication authority. Divergent targets and changed governing work require a fresh current receiving occasion. The [continuation core contract](../core/README.md) states the complete recovery conditions.

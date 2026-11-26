@@ -12,7 +12,7 @@ python3 -B engine/store/manage_store.py --root stores/novel status
 python3 -B domains/research/operations/current_work.py --root stores/research --source-store stores/novel --section duties
 ```
 
-The [research instance](../stores/research/README.md) owns current research interpretation and the two original-history duties. The [novel instance](../stores/novel/README.md) owns the manuscript and three writing commission duties. Research receives exact pinned observations of the novel-owned duties; the unified reader exposes all five without maintaining independent copies of their dispositions.
+The research instance (`stores/research/` in a packaged or external workspace) owns current research interpretation and the two original-history duties. The novel instance (`stores/novel/`) owns the manuscript and three writing commission duties. Research receives exact pinned observations of the novel-owned duties; the unified reader exposes all five without maintaining independent copies of their dispositions.
 
 Read the selected native question and relevant current records before continuing. The current-work reader supplies claims, gaps, directions, frontier families, issues and retained-question maps. Their labels do not make every opening an assignment. A useful adequate return can finish a selected duty.
 

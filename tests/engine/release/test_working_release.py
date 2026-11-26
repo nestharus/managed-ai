@@ -215,6 +215,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             self.assertEqual(payload["status"], "packaged")
             self.assertTrue((bundle / "MANIFEST.json").is_file())
             self.assertTrue((bundle / "engine/MANIFEST.json").is_file())
+            self.assertTrue((bundle / "engine/SOURCES.md").is_file())
             with zipfile.ZipFile(archive) as zf:
                 self.assertIsNone(zf.testzip())
                 extracted_parent = tmp / "extracted"
@@ -646,6 +647,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                     st_file_attributes=getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400),
                 )
                 sources_md = core / "SOURCES.md"
+                sources_md.write_text("# Sources\n", encoding="utf-8")
                 orig_lstat = Path.lstat
 
                 def patched_lstat(path_self):
@@ -655,16 +657,22 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
 
                 with mock.patch.object(Path, "lstat", patched_lstat):
                     with self.assertRaisesRegex(ValueError, "ordinary projection target required"):
-                        REFRESH["refresh"](core)
+                        REFRESH["refresh"](core, include_sources_md=True)
             else:
                 # POSIX real symlink clobber tests for C26-1 (SOURCES.md, CURRENT-RELEASE.json, --root)
+                subprocess.run(
+                    [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(core), "--write-sources-md"],
+                    check=True,
+                    capture_output=True,
+                )
                 for target_name in ("SOURCES.md", "CURRENT-RELEASE.json"):
                     target = core / target_name
                     backup = target.read_bytes()
                     target.unlink()
                     target.symlink_to(ext)
                     res = subprocess.run(
-                        [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(core)],
+                        [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"),
+                         "--root", str(core), "--write-sources-md"],
                         capture_output=True,
                         text=True,
                     )
@@ -719,6 +727,62 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 )
                 self.assertNotEqual(res_pkg_root.returncode, 0)
                 self.assertIn("ordinary files and directories", res_pkg_root.stderr)
+
+    def test_declarative_components_stamping_gitignore_and_allow_abbrev(self):
+        with TemporaryDirectory() as temporary:
+            tmp = Path(temporary)
+            bundle = tmp / "bundle"
+            _build_minimal_bundle(bundle)
+            # .gitignore in root & domains must be admitted cleanly (only .git is refused)
+            (bundle / ".gitignore").write_text("__pycache__/\n*.pyc\n", encoding="utf-8")
+            (bundle / "domains/sample").mkdir(parents=True)
+            (bundle / "domains/sample/.gitignore").write_text("__pycache__/\n", encoding="utf-8")
+            # Declarative COMPONENTS.json (omitting "identity" in Git checkouts)
+            comp_file = bundle / "companions/workbench/core/io_utils.py"
+            comp_file.parent.mkdir(parents=True)
+            comp_raw = b"IO = 1\n"
+            comp_file.write_bytes(comp_raw)
+            peer = bundle / "companions/peer"
+            peer.mkdir(parents=True)
+            _write_json(
+                peer / "COMPONENTS.json",
+                {
+                    "schema": "peer-workbench-acquired-components/1",
+                    "files": {"workbench/core/io_utils.py": {"source": "workbench/core/io_utils.py"}},
+                },
+            )
+            archive = tmp / "stamped.zip"
+            res = subprocess.run(
+                [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle), "--output", str(archive)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(json.loads(res.stdout)["status"], "packaged")
+            # Exported bundle has stamped identity in COMPONENTS.json + generated SOURCES.md & MANIFEST.json
+            stamped = json.loads((peer / "COMPONENTS.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                stamped["files"]["workbench/core/io_utils.py"]["identity"],
+                {"bytes": len(comp_raw), "sha256": _sha256(comp_raw)},
+            )
+            self.assertTrue((bundle / "engine/SOURCES.md").is_file())
+            manifest = json.loads((bundle / "MANIFEST.json").read_text(encoding="utf-8"))
+            self.assertIn(".gitignore", manifest["members"])
+            self.assertIn("domains/sample/.gitignore", manifest["members"])
+            self.assertIn("engine/SOURCES.md", manifest["members"])
+            # W5-B11: allow_abbrev=False refuses abbreviated flags on package.py & refresh_guidance.py
+            bad_pkg = subprocess.run(
+                [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(bundle), "--ref"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(bad_pkg.returncode, 0)
+            bad_ref = subprocess.run(
+                [sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--ro", str(bundle / "engine")],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(bad_ref.returncode, 0)
 
 
 if __name__ == "__main__":

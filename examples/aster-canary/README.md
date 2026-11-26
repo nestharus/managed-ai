@@ -1,6 +1,6 @@
 # Resume a canary investigation
 
-A worker has returned west-cohort latency. The release desk has a versioned rollout plan and its own observation of the rollback procedure. The receiving operation records a decision about that cohort. A separate process reads the decision and uses its measured latency and rollback command. This example runs from the extracted current system package with Python 3.11+ on POSIX. Choose a new directory to retain the independent desks.
+A worker has returned west-cohort latency. The release desk has a versioned rollout plan and its own observation of the rollback procedure. The receiving operation records a decision about that cohort. A separate process reads the decision and uses its measured latency and rollback command. This example runs from an exported system package or checkout with Python 3.11+ on Windows or POSIX. Choose a new directory to retain the independent desks.
 
 ```sh
 python3 -B examples/aster-canary/demo.py /tmp/aster-canary-study
@@ -17,4 +17,4 @@ Each completed trial retains a native investigation, a sender outbox, a collecti
 
 The profile uses a typed west direction and obligations tagged with its profile or `all`. Untagged duties apply conservatively. It treats explicit reinstatement of identical policy values as reinstatement of the same direction. A policy requiring a fresh permission epoch needs an epoch in its direction record. The local lock covers cooperating G60 writers and the SQLite transaction covers this authority's records. An independently administered or physical writer needs a corresponding admission protocol. The external review’s Aster V2 has its own active-duty publication contract. This example installs a separate terminal-return profile and leaves the frozen V2 package and its stores intact.
 
-The paired research archive retains the [construction-repair report and receiving counterexamples](../../../domains/research/sources/knowledge/evidence/construction-repair/REPORT.md). The report describes the bounded local study and its limitations.
+See [examples/README.md](../README.md) for the receiving and feedback examples.
