@@ -289,7 +289,7 @@ def _git_head_commit(engine_root: Path) -> str | None:
                     parts = line.split(' ', 1)
                     if len(parts) == 2 and parts[1].strip() == ref_name and re.fullmatch(r'[0-9a-f]{40}', parts[0]):
                         return parts[0]
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     return None
 
