@@ -8,6 +8,8 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+from unittest import mock
+import zlib
 
 if __package__:
     from .native_test_paths import ENGINE
@@ -17,6 +19,7 @@ else:
 from managed_ai.core.storage import (
     OCC_LIVE_DEFLATE,
     OCC_LIVE_RAW,
+    OCC_SEALED,
     PackSession,
     encode,
     exclusive,
@@ -35,6 +38,8 @@ from managed_ai.store.records.pack_slab import (
     PACK_OBJECTS_RECEIPT_FORMAT,
     execute_pack_objects,
     plan_pack_objects,
+    write_pack_current,
+    write_shard,
 )
 from managed_ai.store.system import System
 
@@ -352,6 +357,135 @@ class PackSlabTests(unittest.TestCase):
             # Remaining packed cold records still read back cleanly!
             self.assertEqual(system.show('cold-0')['content']['title'], 'Cold 0')
             self.assertEqual(system.show('cold-2')['content']['title'], 'Cold 2')
+
+    def test_pack_objects_deflate_only_incompressible_and_suboptimal_recompression(self) -> None:
+        """C52-1 Repro A & B: deflate-only loose objects where len(.deflate) >= raw_len pack cleanly."""
+        system = System(self.store)
+        with exclusive(system.ex.root / 'owner.lock'):
+            # Repro A1 (compress=False): tiny incompressible deflate-only loose object (12B >= 4B).
+            tiny_a = b'tiny'
+            key_a = sha(tiny_a)
+            def_a = zlib.compress(tiny_a, level=6)
+            self.assertGreaterEqual(len(def_a), len(tiny_a))
+            (system.ex.objects.directory / (key_a + '.deflate')).write_bytes(def_a)
+            self.assertFalse((system.ex.objects.directory / key_a).exists())
+
+            rcpt_a = execute_pack_objects(system, compress=False, reason='C52-1 repro A1 compress=False')
+            self.assertGreaterEqual(rcpt_a['packed_objects'], 1)
+            self.assertFalse((system.ex.objects.directory / (key_a + '.deflate')).exists())
+            self.assertEqual(system.ex.objects.read(key_a), tiny_a)
+            row_a = next(r for r in system.ex.objects.packed_entries() if r['object'] == key_a)
+            self.assertEqual(row_a['occ'], OCC_LIVE_RAW)
+            self.assertEqual(row_a['stored_bytes'], len(tiny_a))
+
+            # Repro A2 (compress=True): tiny incompressible deflate-only loose object (11B >= 3B).
+            tiny_b = b'abc'
+            key_b = sha(tiny_b)
+            def_b = zlib.compress(tiny_b, level=6)
+            self.assertGreaterEqual(len(def_b), len(tiny_b))
+            (system.ex.objects.directory / (key_b + '.deflate')).write_bytes(def_b)
+            self.assertFalse((system.ex.objects.directory / key_b).exists())
+
+            # Repro B (compress=True): compressible payload stored ONLY as level-0 .deflate (511B >= 500B).
+            subopt_raw = b'A' * 500
+            key_sub = sha(subopt_raw)
+            def_sub = zlib.compress(subopt_raw, level=0)
+            self.assertGreaterEqual(len(def_sub), len(subopt_raw))
+            (system.ex.objects.directory / (key_sub + '.deflate')).write_bytes(def_sub)
+            self.assertFalse((system.ex.objects.directory / key_sub).exists())
+
+            rcpt_b = execute_pack_objects(system, compress=True, reason='C52-1 repro A2 + B compress=True')
+            self.assertEqual(rcpt_b['packed_objects'], 2)
+            self.assertFalse((system.ex.objects.directory / (key_b + '.deflate')).exists())
+            self.assertFalse((system.ex.objects.directory / (key_sub + '.deflate')).exists())
+            self.assertEqual(system.ex.objects.read(key_b), tiny_b)
+            self.assertEqual(system.ex.objects.read(key_sub), subopt_raw)
+
+            packed_map = {r['object']: r for r in system.ex.objects.packed_entries()}
+            self.assertEqual(packed_map[key_b]['occ'], OCC_LIVE_RAW)
+            self.assertEqual(packed_map[key_b]['stored_bytes'], len(tiny_b))
+            self.assertEqual(packed_map[key_sub]['occ'], OCC_LIVE_DEFLATE)
+            self.assertLess(packed_map[key_sub]['stored_bytes'], len(subopt_raw))
+
+    def test_audit_objects_skips_occ_sealed_slots_and_reuses_cold_pack_session(self) -> None:
+        """C52-O1: OCC_SEALED packed slots never audited/nominated; C52-O5: ColdArchive reuses one PackSession."""
+        system = System(self.store)
+        with exclusive(system.ex.root / 'owner.lock'):
+            # 1. C52-O1: create a shard containing one OCC_SEALED slot and one live orphan slot.
+            sealed_raw = b'sealed-packed-payload-never-read-by-audit'
+            orphan_raw = b'normal-live-orphan-payload'
+            key_sealed = sha(sealed_raw)
+            key_orphan = sha(orphan_raw)
+            desc = write_shard(
+                system.ex.objects.packs_dir,
+                generation=1,
+                shard_id=0,
+                items=[
+                    (bytes.fromhex(key_sealed), len(sealed_raw), OCC_SEALED, sealed_raw),
+                    (bytes.fromhex(key_orphan), len(orphan_raw), OCC_LIVE_RAW, orphan_raw),
+                ],
+            )
+            write_pack_current(system.ex.objects.packs_dir, 1, 1, [desc])
+
+            audit_s = audit_objects(system)
+            unreach_s = {r['object'] for r in audit_s['unreachable']}
+            self.assertNotIn(key_sealed, unreach_s)
+            self.assertIn(key_orphan, unreach_s)
+
+            # 2. C52-O5: pack 3 cold records and prove audit_objects opens only ONE cold-archive PackSession.
+            for idx in range(3):
+                system.put({
+                    'id': f'cold-sess-{idx}',
+                    'kind': 'note',
+                    'content': {'title': f'Cold Sess {idx}', 'body': 'shared session payload ' * 10},
+                    'active': False,
+                }, 0)
+            plan = plan_archive_records(system, ids=['cold-sess-0', 'cold-sess-1', 'cold-sess-2'])
+            execute_archive_records(system, plan=plan, expected_plan=plan['plan_sha256'], reason='archive 3')
+            execute_pack_objects(system, include_cold_archive=True, reason='pack cold archive')
+
+            cold_packs_dir = system.record_store.cold_archive.packs_dir
+            cold_opens = 0
+            real_pack_session = PackSession
+
+            def tracking_session(packs_dir: Path):
+                nonlocal cold_opens
+                if Path(packs_dir) == cold_packs_dir:
+                    cold_opens += 1
+                return real_pack_session(packs_dir)
+
+            with mock.patch('managed_ai.store.records.cold_archive.PackSession', side_effect=tracking_session):
+                audit_objects(system)
+            self.assertEqual(cold_opens, 1)
+
+    def test_p8_pack_single_collect_pass_and_single_sha_on_packed_read(self) -> None:
+        """P8-1: packed ObjectStore.read hashes once; P8-2: execute_pack_objects collects loose candidates once."""
+        import managed_ai.core.storage as storage_mod
+        import managed_ai.store.records.pack_slab as pack_slab_mod
+
+        system = System(self.store)
+        with exclusive(system.ex.root / 'owner.lock'):
+            payload = b'p8-single-pass-payload-' + (b'P' * 256)
+            key = system.ex.objects.put(payload)
+
+            with mock.patch.object(
+                pack_slab_mod,
+                '_collect_loose_pack_candidates',
+                wraps=pack_slab_mod._collect_loose_pack_candidates,
+            ) as collect_spy:
+                rcpt = execute_pack_objects(system, reason='P8-2 single collect pass check')
+            self.assertGreaterEqual(rcpt['packed_objects'], 1)
+            self.assertEqual(collect_spy.call_count, 1)
+
+            # Unbatched and pack_session() packed reads verify SHA-256 exactly once inside read_frame().
+            with mock.patch.object(storage_mod, 'sha', wraps=storage_mod.sha) as sha_spy:
+                self.assertEqual(system.ex.objects.read(key), payload)
+            self.assertEqual(sha_spy.call_count, 1)
+
+            with system.ex.objects.pack_session():
+                with mock.patch.object(storage_mod, 'sha', wraps=storage_mod.sha) as sha_spy2:
+                    self.assertEqual(system.ex.objects.read(key), payload)
+                self.assertEqual(sha_spy2.call_count, 1)
 
 
 if __name__ == '__main__':

@@ -14,6 +14,7 @@ from managed_ai.core.formats import (
 )
 from managed_ai.core.ownership import packet_id
 from managed_ai.core.storage import (
+    OCC_SEALED,
     _OPEN_RO_NOFOLLOW,
     encode,
     is_ordinary_file_stat,
@@ -409,6 +410,8 @@ def audit_objects(system) -> dict:
                 obj_info[key]['disk_bytes'] += disk_bytes
 
         for prow in pack_sess.live_entries():
+            if prow['occ'] == OCC_SEALED:
+                continue
             key = prow['object']
             if key not in obj_info:
                 obj_info[key] = {
@@ -439,11 +442,12 @@ def audit_objects(system) -> dict:
         # Layer 1: Live hot records (streamed in bounded chunks)
         _collect_live_record_refs(system, known, known_bytes, layer_sets['live_records'])
 
-        # Layer 2: Cold-archived records
+        # Layer 2: Cold-archived records (sharing one PackSession if packed)
         archive = system.record_store.cold_archive
-        for ident in archive.ids():
-            rec, _ = archive.read(ident)
-            _extract_object_hashes(rec, known, layer_sets['cold_archive'])
+        with archive.pack_session():
+            for ident in archive.ids():
+                rec, _ = archive.read(ident)
+                _extract_object_hashes(rec, known, layer_sets['cold_archive'])
 
         # Layers 3 & 4: exchange/packets/** + transitive exposure.json -> full_view_object
         _collect_packet_and_exposure_refs(

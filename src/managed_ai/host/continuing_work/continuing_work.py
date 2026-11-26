@@ -32,7 +32,6 @@ from managed_ai.host.continuing_work.native_bridge import (
     _safe_jsonl,
     build_sibling_cli_command,
     capture_error,
-    resolve_sibling_cli,
 )
 from managed_ai.host.continuing_work.occurrence_files import (
     atomic_bytes,

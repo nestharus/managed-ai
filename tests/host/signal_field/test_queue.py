@@ -247,15 +247,15 @@ class SignalFieldQueueTests(unittest.TestCase):
         with queue_mod.Field(self.db_path) as field:
             field.enroll(sample_use('u1'))
             field.enroll(sample_use('u2'))
-            worker_script = (
-                "import json, sys\n"
-                "pkt = json.loads(sys.stdin.read())\n"
-                "if pkt['use'] == 'u1':\n"
-                "    print(json.dumps({'state': 'complete', 'account': 'Done u1.'}))\n"
-                "else:\n"
-                "    sys.stderr.write('u2 failed')\n"
-                "    sys.exit(9)\n"
-            )
+            worker_script = "\n".join([
+                "import json, sys",
+                "pkt = json.loads(sys.stdin.read())",
+                "if pkt['use'] == 'u1':",
+                "    print(json.dumps({'state': 'complete', 'account': 'Done u1.'}))",
+                "else:",
+                "    sys.stderr.write('u2 failed')",
+                "    sys.exit(9)",
+            ])
             res = field.run([sys.executable, '-c', worker_script], budget=2, timeout=10)
             self.assertEqual(res['status'], 'worker-unresolved')
             self.assertEqual(res['invocations'], 2)

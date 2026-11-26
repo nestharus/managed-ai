@@ -295,7 +295,19 @@ class Wave7ArchitectureTests(unittest.TestCase):
         self.assertIn('rec-p73', entries)
         self.assertEqual(fmt, head_index.INDEX_FORMAT)
 
-        # Tampering 1 byte in the authenticated payload must fail HMAC verification
+        # Tampering 1 byte in binary v3 payload must fail HMAC verification
+        bin_path = hi.binary_path()
+        self.assertIsNotNone(bin_path)
+        assert bin_path is not None
+        raw_bin = bin_path.read_bytes()
+        tampered_bin = bytearray(raw_bin)
+        tampered_bin[200] ^= 0x01
+        bin_path.write_bytes(bytes(tampered_bin))
+        self.assertIsNone(hi.load_with_format(system.record_store.format))
+        bin_path.write_bytes(raw_bin)
+
+        # Legacy JSON scatter-write path also rejects 1-byte payload tamper
+        hi.save_json(system.record_store.format, entries, create_key=False)
         raw = hi.path.read_bytes()
         tampered = raw[:-2] + (b' ' if raw[-2:-1] != b' ' else b'\t') + raw[-1:]
         hi.path.write_bytes(tampered)
@@ -350,6 +362,7 @@ class Wave7ArchitectureTests(unittest.TestCase):
         self.assertNotIn(live_key, unreach_with)
 
         # Remove HeadIndex to force Layer-1 raw streaming scan and verify identical classification
+        system.record_store.index.current_path.unlink(missing_ok=True)
         system.record_store.index.path.unlink(missing_ok=True)
         without_index = audit_objects(system)
         unreach_without = {row['object'] for row in without_index['unreachable']}

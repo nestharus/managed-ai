@@ -235,8 +235,8 @@ def neighbors(
     verified = system.record_store.open_verified_index_view()
     if verified is not None:
         with verified:
+            cold_ids = set(system.record_store.cold_archive.ids())
             if verified.is_exact_base:
-                cold_ids = set(system.record_store.cold_archive.ids())
                 return _neighbors_mmap(
                     system,
                     verified.view,
@@ -248,8 +248,11 @@ def neighbors(
                     active_only=active_only,
                     records_only=records_only,
                 )
-
-    nodes, all_ids, indexed = _load_graph_nodes(system)
+            nodes = verified.all_entries()
+            all_ids = set(nodes.keys()) | cold_ids
+            indexed = True
+    else:
+        nodes, all_ids, indexed = _load_graph_nodes(system)
     require(record_id in nodes, 'record not found in hot graph: ' + record_id)
 
     outgoing_cache: dict[str, list[tuple[str, str]]] = {}
@@ -373,8 +376,10 @@ def links(
                     rel_filter=rel_filter,
                     active_only=active_only,
                 )
-
-    nodes, _, indexed = _load_graph_nodes(system)
+            nodes = verified.all_entries()
+            indexed = True
+    else:
+        nodes, _, indexed = _load_graph_nodes(system)
     matched_edges: list[tuple[str, str]] = []
 
     for src, node in nodes.items():
@@ -582,8 +587,10 @@ def shortest_path(
                     active_only=active_only,
                     rel_filter=rel_filter,
                 )
-
-    nodes, _, indexed = _load_graph_nodes(system)
+            nodes = verified.all_entries()
+            indexed = True
+    else:
+        nodes, _, indexed = _load_graph_nodes(system)
     require(src in nodes, 'source record not found: ' + src)
     require(dst in nodes, 'destination record not found: ' + dst)
 
@@ -859,11 +866,14 @@ def lint(system) -> dict:
     verified = system.record_store.open_verified_index_view()
     if verified is not None:
         with verified:
+            cold_ids = set(system.record_store.cold_archive.ids())
             if verified.is_exact_base:
-                cold_ids = set(system.record_store.cold_archive.ids())
                 return _lint_mmap(system, verified.view, cold_ids)
-
-    nodes, all_ids, indexed = _load_graph_nodes(system)
+            nodes = verified.all_entries()
+            all_ids = set(nodes.keys()) | cold_ids
+            indexed = True
+    else:
+        nodes, all_ids, indexed = _load_graph_nodes(system)
     open_question_ids = {
         ident for ident, node in nodes.items()
         if node['kind'] == 'question'

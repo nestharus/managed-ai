@@ -392,6 +392,75 @@ class HeadIndexBinTests(unittest.TestCase):
             self.assertFalse(gen1_path.exists())
             self.assertTrue(Path(rcpt4['path']).is_file())
 
+    def test_delta_graph_query_reuses_single_verified_view_and_save_json_removes_pointer(self) -> None:
+        """C52-O2: active-delta graph queries open verified view once; C52-O3: save_json unlinks current pointer."""
+        system = System(self.store)
+        self._populate_rich_graph(system)
+        with exclusive(system.ex.root / 'owner.lock'):
+            system.reindex()
+            # Add active deltas so verified.is_exact_base is False.
+            system.put({
+                'id': 'delta-link',
+                'kind': 'note',
+                'content': {'title': 'Delta Link'},
+                'relations': [{'relation': 'supports', 'target': 'dir-b'}],
+                'active': True,
+            }, 0)
+
+        hi = system.record_store.index
+        self.assertTrue(hi.delta_path.is_file())
+
+        # Capture unindexed parity by temporarily hiding current pointer & delta sidecar?
+        # Instead compare against an unindexed System or directly verify single open_verified_index_view call.
+        orig_open = system.record_store.open_verified_index_view
+        open_calls = 0
+
+        def counting_open(*args, **kwargs):
+            nonlocal open_calls
+            open_calls += 1
+            return orig_open(*args, **kwargs)
+
+        system.record_store.open_verified_index_view = counting_open
+        try:
+            open_calls = 0
+            nb = graph_query.neighbors(system, 'dir-b', direction='both', hops=2)
+            self.assertTrue(nb['indexed'])
+            self.assertEqual(open_calls, 1)
+            self.assertIn('delta-link', {n['id'] for n in nb['neighbors']})
+
+            open_calls = 0
+            lk = graph_query.links(system, target='dir-b', relations=['supports'])
+            self.assertTrue(lk['indexed'])
+            self.assertEqual(open_calls, 1)
+            self.assertIn('delta-link', {e['from']['id'] for e in lk['links']})
+
+            open_calls = 0
+            pt = graph_query.shortest_path(system, 'delta-link', 'q-one')
+            self.assertTrue(pt['indexed'])
+            self.assertEqual(open_calls, 1)
+            self.assertTrue(pt['found'])
+
+            open_calls = 0
+            lt = graph_query.lint(system)
+            self.assertTrue(lt['indexed'])
+            self.assertEqual(open_calls, 1)
+        finally:
+            system.record_store.open_verified_index_view = orig_open
+
+        # C52-O3: save_json() must unlink stale head-index.current.json so legacy JSON is not shadowed.
+        self.assertTrue(hi.current_path.is_file())
+        entries = system.record_store.indexed_summaries()
+        assert entries is not None
+        with exclusive(system.ex.root / 'owner.lock'):
+            hi.save_json(system.record_store.format, entries, create_key=False)
+        self.assertTrue(hi.path.is_file())
+        self.assertFalse(hi.current_path.exists())
+        self.assertFalse(hi.delta_path.exists())
+        loaded = hi.load_with_format(system.record_store.format)
+        self.assertIsNotNone(loaded)
+        assert loaded is not None
+        self.assertEqual(loaded[1], HEAD_INDEX_FORMAT)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

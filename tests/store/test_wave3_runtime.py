@@ -244,8 +244,8 @@ class Wave3RuntimeTests(unittest.TestCase):
         (eng_copy / 'patterns/pat.py').write_text('z = 3\n', encoding='utf-8')
         (eng_copy / 'companions').mkdir(exist_ok=True)
         (eng_copy / 'companions/comp.py').write_text('c = 4\n', encoding='utf-8')
-        (eng_copy / 'optional').mkdir(exist_ok=True)
-        (eng_copy / 'optional/opt.py').write_text('o = 6\n', encoding='utf-8')
+        (eng_copy / 'collective').mkdir(exist_ok=True)
+        (eng_copy / 'collective/col.py').write_text('o = 6\n', encoding='utf-8')
         (eng_copy / 'store/test_stray.py').write_text('t = 5\n', encoding='utf-8')
         self.assertEqual(code_identity(eng_copy), before)
 

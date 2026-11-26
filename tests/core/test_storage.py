@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import struct
 import sys
 from tempfile import TemporaryDirectory
 import unittest
@@ -15,6 +16,7 @@ from tests._paths import SRC as _SRC
 _ = _SRC
 
 from managed_ai.core.storage import (
+    IDX_FANOUT_OFFSET,
     MAX_BYTES,
     OCC_LIVE_DEFLATE,
     OCC_LIVE_RAW,
@@ -106,6 +108,57 @@ class CoreStoragePackTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'file exceeds'):
             self.store.read(bomb_key, retained=False)
         self.assertEqual(len(self.store.read(bomb_key, retained=True, expected_bytes=len(bomb))), len(bomb))
+
+    def test_pack_idx_corrupt_fanout_rejected_on_open(self) -> None:
+        """C52-2: corrupt .idx fanout (> object_count, non-monotonic, or tail != object_count) fails closed."""
+        raw_1 = b'fanout-object-one'
+        raw_2 = b'fanout-object-two'
+        key_1 = sha(raw_1)
+        key_2 = sha(raw_2)
+        desc = write_shard(
+            self.store.packs_dir,
+            generation=1,
+            shard_id=0,
+            items=[
+                (bytes.fromhex(key_1), len(raw_1), OCC_LIVE_RAW, raw_1),
+                (bytes.fromhex(key_2), len(raw_2), OCC_LIVE_RAW, raw_2),
+            ],
+        )
+        write_pack_current(self.store.packs_dir, 1, 1, [desc])
+        self.assertTrue(self.store.has(key_1))
+        self.assertTrue(self.store.has(key_2))
+
+        idx_path = self.store.packs_dir / desc['idx']
+        orig_idx = idx_path.read_bytes()
+
+        # Case A: fanout bucket exceeds object_count (would cause struct.error in binary search if unchecked).
+        tampered_a = bytearray(orig_idx)
+        first_byte = bytes.fromhex(key_1)[0]
+        struct.pack_into('<I', tampered_a, IDX_FANOUT_OFFSET + first_byte * 4, 999)
+        idx_path.write_bytes(bytes(tampered_a))
+        with self.assertRaisesRegex(ValueError, 'corrupt pack idx fanout'):
+            self.store.has(key_1)
+        with self.assertRaisesRegex(ValueError, 'corrupt pack idx fanout'):
+            PackSession(self.store.packs_dir)
+
+        # Case B: non-monotonic fanout (fanout[0] = 2 > fanout[1] = 1, even though tail == 2).
+        tampered_b = bytearray(orig_idx)
+        struct.pack_into('<II', tampered_b, IDX_FANOUT_OFFSET, 2, 1)
+        struct.pack_into('<I', tampered_b, IDX_FANOUT_OFFSET + 255 * 4, 2)
+        idx_path.write_bytes(bytes(tampered_b))
+        with self.assertRaisesRegex(ValueError, 'corrupt pack idx fanout'):
+            PackSession(self.store.packs_dir)
+
+        # Case C: monotonic but final fanout[255] != object_count (1 != 2).
+        tampered_c = bytearray(orig_idx)
+        for bucket in range(256):
+            struct.pack_into('<I', tampered_c, IDX_FANOUT_OFFSET + bucket * 4, 1)
+        idx_path.write_bytes(bytes(tampered_c))
+        with self.assertRaisesRegex(ValueError, 'corrupt pack idx fanout'):
+            PackSession(self.store.packs_dir)
+
+        idx_path.write_bytes(orig_idx)
+        self.assertTrue(self.store.has(key_1))
 
 
 if __name__ == '__main__':

@@ -346,17 +346,68 @@ class VerifiedIndexView:
         return out
 
 
+def _advance_slot_cursor(
+    mm,
+    slot_base: int,
+    str_base: int,
+    rec_count: int,
+    cursor: int,
+    target: bytes,
+) -> tuple[int, int]:
+    """O(1) amortized sorted merge-walk over sorted 128B mmap slots; returns (matched_slot_or_neg1, next_cursor)."""
+    from managed_ai.store.records.head_index_bin import _SLOT_ID_STRUCT, _SLOT_SIZE
+
+    unpack_id = _SLOT_ID_STRUCT.unpack_from
+    while cursor < rec_count:
+        id_off, id_len = unpack_id(mm, slot_base + cursor * _SLOT_SIZE)
+        start = str_base + id_off
+        cur = mm[start:start + id_len]
+        if cur < target:
+            cursor += 1
+        elif cur == target:
+            return cursor, cursor + 1
+        else:
+            return -1, cursor
+    return -1, cursor
+
+
 def _verify_view_posix_chunk(store, view: HeadIndexView, records_fd: int, chunk: list[str]) -> list[tuple[str, dict]]:
+    if not chunk:
+        return []
+
+    from managed_ai.store.records.head_index_bin import (
+        _PLATFORM_MASK,
+        _PLATFORM_NT,
+        _PLATFORM_POSIX,
+        _PLATFORM_SHIFT,
+        _SLOT_FLAGS_OFFSET,
+        _SLOT_SIZE,
+        _SLOT_STAT_OFFSET,
+        _SLOT_STAT_STRUCT,
+        _U16_STRUCT,
+    )
+
     platform_key = PLATFORM.platform_key
+    expected_plat_code = _PLATFORM_POSIX if platform_key == 'posix' else (_PLATFORM_NT if platform_key == 'nt' else -1)
     delta_puts = view.delta_puts
     delta_dels = view.delta_dels
     overrides: list[tuple[str, dict]] = []
+
+    mm = view._check_open()
+    slot_base = view._slot_table_off
+    str_base = view._string_pool_off
+    rec_count = view.record_count
+    cursor = view.lower_bound(chunk[0])
+    unpack_stat = _SLOT_STAT_STRUCT.unpack_from
+    unpack_u16 = _U16_STRUCT.unpack_from
 
     for ident in chunk:
         delta_entry = delta_puts.get(ident)
         slot = -1
         if delta_entry is None and ident not in delta_dels:
-            slot = view.slot_for_id(ident)
+            slot, cursor = _advance_slot_cursor(
+                mm, slot_base, str_base, rec_count, cursor, ident.encode('utf-8'),
+            )
 
         filename = (ident if (delta_entry is not None or slot >= 0) else packet_id(ident)) + '.json'
         full_path = store.work / 'records' / filename
@@ -382,12 +433,18 @@ def _verify_view_posix_chunk(store, view: HeadIndexView, records_fd: int, chunk:
                 overrides.append((ident, build_entry(record, raw, info)))
                 continue
         elif slot >= 0:
-            size_val, mtime_ns, ino_val, plat, raw_sha_bin = view.slot_stat_meta(slot)
+            off = slot_base + slot * _SLOT_SIZE
+            size_val, mtime_ns, ino_val = unpack_stat(mm, off + _SLOT_STAT_OFFSET)
             if size_val == info.st_size and mtime_ns == info.st_mtime_ns:
-                if ino_val == info.st_ino and plat == platform_key:
+                slot_flags = unpack_u16(mm, off + _SLOT_FLAGS_OFFSET)[0]
+                plat_code = (slot_flags & _PLATFORM_MASK) >> _PLATFORM_SHIFT
+                if ino_val == info.st_ino and (
+                    plat_code == expected_plat_code
+                    or (expected_plat_code < 0 and view.slot_platform(slot, slot_flags) == platform_key)
+                ):
                     continue
                 raw, _ = _read_dir_fd_raw(filename, full_path, records_fd)
-                if hmac.compare_digest(hashlib.sha256(raw).digest(), raw_sha_bin):
+                if hmac.compare_digest(hashlib.sha256(raw).digest(), view.slot_raw_sha_bin(slot)):
                     continue
                 record = parse_input_bytes(raw, full_path)
                 store._verify_record(ident, record, raw)
@@ -401,16 +458,42 @@ def _verify_view_posix_chunk(store, view: HeadIndexView, records_fd: int, chunk:
 
 
 def _verify_view_win_chunk(store, view: HeadIndexView, dir_str: str, chunk: list[str]) -> list[tuple[str, dict]]:
+    if not chunk:
+        return []
+
+    from managed_ai.store.records.head_index_bin import (
+        _PLATFORM_MASK,
+        _PLATFORM_NT,
+        _PLATFORM_POSIX,
+        _PLATFORM_SHIFT,
+        _SLOT_FLAGS_OFFSET,
+        _SLOT_SIZE,
+        _SLOT_STAT_OFFSET,
+        _SLOT_STAT_STRUCT,
+        _U16_STRUCT,
+    )
+
     platform_key = PLATFORM.platform_key
+    expected_plat_code = _PLATFORM_POSIX if platform_key == 'posix' else (_PLATFORM_NT if platform_key == 'nt' else -1)
     delta_puts = view.delta_puts
     delta_dels = view.delta_dels
     overrides: list[tuple[str, dict]] = []
+
+    mm = view._check_open()
+    slot_base = view._slot_table_off
+    str_base = view._string_pool_off
+    rec_count = view.record_count
+    cursor = view.lower_bound(chunk[0])
+    unpack_stat = _SLOT_STAT_STRUCT.unpack_from
+    unpack_u16 = _U16_STRUCT.unpack_from
 
     for ident in chunk:
         delta_entry = delta_puts.get(ident)
         slot = -1
         if delta_entry is None and ident not in delta_dels:
-            slot = view.slot_for_id(ident)
+            slot, cursor = _advance_slot_cursor(
+                mm, slot_base, str_base, rec_count, cursor, ident.encode('utf-8'),
+            )
 
         filename = (ident if (delta_entry is not None or slot >= 0) else packet_id(ident)) + '.json'
         full_str = dir_str + os.sep + filename
@@ -435,13 +518,19 @@ def _verify_view_win_chunk(store, view: HeadIndexView, dir_str: str, chunk: list
                 overrides.append((ident, build_entry(record, raw, info)))
                 continue
         elif slot >= 0:
-            size_val, mtime_ns, ino_val, plat, raw_sha_bin = view.slot_stat_meta(slot)
+            off = slot_base + slot * _SLOT_SIZE
+            size_val, mtime_ns, ino_val = unpack_stat(mm, off + _SLOT_STAT_OFFSET)
             if size_val == info.st_size and mtime_ns == info.st_mtime_ns:
-                if ino_val == info.st_ino and plat == platform_key:
+                slot_flags = unpack_u16(mm, off + _SLOT_FLAGS_OFFSET)[0]
+                plat_code = (slot_flags & _PLATFORM_MASK) >> _PLATFORM_SHIFT
+                if ino_val == info.st_ino and (
+                    plat_code == expected_plat_code
+                    or (expected_plat_code < 0 and view.slot_platform(slot, slot_flags) == platform_key)
+                ):
                     continue
                 with open(full_str, 'rb') as stream:
                     raw = stream.read()
-                if hmac.compare_digest(hashlib.sha256(raw).digest(), raw_sha_bin):
+                if hmac.compare_digest(hashlib.sha256(raw).digest(), view.slot_raw_sha_bin(slot)):
                     continue
                 record = parse_input_bytes(raw, Path(full_str))
                 store._verify_record(ident, record, raw)

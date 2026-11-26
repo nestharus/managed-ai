@@ -614,10 +614,14 @@ class HeadIndex:
         self.directory.mkdir(parents=True, exist_ok=True)
         atomic_bytes(self.path, (prefix, memoryview(payload)[1:]))
 
+        for obsolete in (self.current_path, self.delta_path):
+            try:
+                if has_ordinary_file(obsolete):
+                    obsolete.unlink(missing_ok=True)
+            except OSError:
+                pass
         try:
-            if has_ordinary_file(self.delta_path):
-                self.delta_path.unlink(missing_ok=True)
-                sync_dir(self.directory)
+            sync_dir(self.directory)
         except OSError:
             pass
 

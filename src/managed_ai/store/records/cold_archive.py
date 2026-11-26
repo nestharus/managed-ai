@@ -1,10 +1,12 @@
 """Cold-tier compressed record archive with verified on-demand readback and strict safety guards."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import errno
 import os
 from pathlib import Path
 import stat
+from typing import Iterator
 import zlib
 
 from managed_ai.core.formats import (
@@ -124,6 +126,33 @@ class ColdArchive:
         self.manifest_path = self.directory / 'manifest.json'
         self.record_format = record_format
         self._manifest_cache: tuple[tuple[int, int, int], dict] | None = None
+        self._active_pack_session: PackSession | None = None
+        self._pack_session_depth = 0
+
+    @contextmanager
+    def pack_session(self) -> Iterator[PackSession | None]:
+        """Share one read-only PackSession across batched cold-archive reads."""
+        if self._active_pack_session is not None:
+            self._pack_session_depth += 1
+            try:
+                yield self._active_pack_session
+            finally:
+                self._pack_session_depth -= 1
+            return
+
+        if not (self.packs_dir / 'CURRENT.json').exists():
+            yield None
+            return
+
+        session = PackSession(self.packs_dir)
+        self._active_pack_session = session
+        self._pack_session_depth = 1
+        try:
+            yield session
+        finally:
+            self._pack_session_depth = 0
+            self._active_pack_session = None
+            session.close()
 
     def _load_manifest(self) -> dict | None:
         try:
@@ -186,6 +215,11 @@ class ColdArchive:
         blob = self.blob_path(ident)
         if blob.exists() or blob.is_symlink():
             raw = _decompress_exact(blob, raw_bytes, raw_sha256)
+        elif self._active_pack_session is not None:
+            packed_raw = self._active_pack_session.read(raw_sha256, retained=True, expected_bytes=raw_bytes)
+            if packed_raw is None:
+                raise ValueError(f'archived record missing from cold archive packs: {ident}')
+            raw = packed_raw
         elif (self.packs_dir / 'CURRENT.json').exists():
             with PackSession(self.packs_dir) as session:
                 packed_raw = session.read(raw_sha256, retained=True, expected_bytes=raw_bytes)

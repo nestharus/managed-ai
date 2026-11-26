@@ -397,10 +397,11 @@ class RecordStore:
 
         if preserve_basis is not None:
             if verify_preserved_objects:
-                require(
-                    all(row['sha256'] is None or self.objects.has(row['sha256']) for row in preserve_basis),
-                    'preserved basis object is unavailable',
-                )
+                with self.objects.pack_session():
+                    require(
+                        all(row['sha256'] is None or self.objects.has(row['sha256']) for row in preserve_basis),
+                        'preserved basis object is unavailable',
+                    )
             basis = preserve_basis
         elif prior_owed and owed and 'basis' not in record:
             basis = previous['basis']
@@ -541,10 +542,11 @@ class RecordStore:
 
         if reviewed_basis is not None:
             require(body['basis'] == reviewed_basis, 'captured workspace basis changed at publication')
-            require(
-                all(row['sha256'] is None or self.objects.has(row['sha256']) for row in reviewed_basis),
-                'reviewed basis object is unavailable',
-            )
+            with self.objects.pack_session():
+                require(
+                    all(row['sha256'] is None or self.objects.has(row['sha256']) for row in reviewed_basis),
+                    'reviewed basis object is unavailable',
+                )
             require(
                 encode(body['content']) == encode(record['content']),
                 'normalized composition differs from reviewed body',
@@ -669,29 +671,30 @@ class RecordStore:
             hashes = self.ex.hash_workspace_paths(workspace_paths) if workspace_paths else {}
 
         changes = []
-        for item in basis:
-            path = item['path']
-            current = None if path.startswith('object:') else hashes.get(path)
-            if (
-                current is None
-                and is_content_addressed_basis(item, prefixes=self.content_addressed_basis_prefixes)
-                and self.objects.has(item['sha256'])
-            ):
-                obj_key = (item['sha256'], item['bytes'])
-                if verified_objects is not None and obj_key in verified_objects:
-                    current = item['sha256']
-                else:
-                    try:
-                        self.objects.read(item['sha256'], retained=True, expected_bytes=item['bytes'])
-                    except FileNotFoundError:
-                        current = None
-                    else:
+        with self.objects.pack_session():
+            for item in basis:
+                path = item['path']
+                current = None if path.startswith('object:') else hashes.get(path)
+                if (
+                    current is None
+                    and is_content_addressed_basis(item, prefixes=self.content_addressed_basis_prefixes)
+                    and self.objects.has(item['sha256'])
+                ):
+                    obj_key = (item['sha256'], item['bytes'])
+                    if verified_objects is not None and obj_key in verified_objects:
                         current = item['sha256']
-                        if verified_objects is not None:
-                            verified_objects.add(obj_key)
+                    else:
+                        try:
+                            self.objects.read(item['sha256'], retained=True, expected_bytes=item['bytes'])
+                        except FileNotFoundError:
+                            current = None
+                        else:
+                            current = item['sha256']
+                            if verified_objects is not None:
+                                verified_objects.add(obj_key)
 
-            if current != item['sha256']:
-                changes.append({'path': path, 'captured': item['sha256'], 'current': current})
+                if current != item['sha256']:
+                    changes.append({'path': path, 'captured': item['sha256'], 'current': current})
         return changes
 
     def head(self, wanted: dict) -> dict:
@@ -740,16 +743,17 @@ class RecordStore:
             require(type(target) is int and 1 <= target < captured['revision'], 'invalid cursor revision')
             digest(cursor['next_object'], 'cursor next object')
 
-            if head != captured:
-                current = self._historical_object(ident, captured['revision'], captured['object'])
-                require(record_identity(current) == record_identity(captured), 'history cursor head changed')
-            head = captured
+            with self.objects.pack_session():
+                if head != captured:
+                    current = self._historical_object(ident, captured['revision'], captured['object'])
+                    require(record_identity(current) == record_identity(captured), 'history cursor head changed')
+                head = captured
 
-            while current['revision'] > target:
-                key = current['previous_object']
-                if current['revision'] == target + 1:
-                    require(key == cursor['next_object'], 'history cursor is off the captured chain')
-                current = self._historical_object(ident, current['revision'] - 1, key)
+                while current['revision'] > target:
+                    key = current['previous_object']
+                    if current['revision'] == target + 1:
+                        require(key == cursor['next_object'], 'history cursor is off the captured chain')
+                    current = self._historical_object(ident, current['revision'] - 1, key)
 
         page = []
         while True:

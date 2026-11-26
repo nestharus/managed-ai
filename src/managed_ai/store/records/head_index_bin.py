@@ -38,6 +38,14 @@ assert _HEADER_SIZE == 192
 _SLOT_STRUCT = struct.Struct('<IHHIIHHHHIHHHHIQqQ32s32s')
 _SLOT_SIZE = _SLOT_STRUCT.size
 assert _SLOT_SIZE == 128
+_SLOT_ID_STRUCT = struct.Struct('<IH')
+_SLOT_FLAGS_OFFSET = struct.calcsize('<IHHIIHHH')
+_SLOT_STAT_OFFSET = struct.calcsize('<IHHIIHHHHIHHHHI')
+_SLOT_STAT_STRUCT = struct.Struct('<QqQ')
+_SLOT_RAW_SHA_OFFSET = struct.calcsize('<IHHIIHHHHIHHHHIQqQ32s')
+assert _SLOT_FLAGS_OFFSET == 22
+assert _SLOT_STAT_OFFSET == 40
+assert _SLOT_RAW_SHA_OFFSET == 96
 
 _KIND_ENTRY_STRUCT = struct.Struct('<IIII')
 _REL_ENTRY_STRUCT = struct.Struct('<II')
@@ -880,6 +888,25 @@ class HeadIndexView:
     def slot_id(self, slot: int) -> str:
         return self.slot_id_bytes(slot).decode('utf-8')
 
+    def lower_bound(self, ident: str) -> int:
+        """O(log N) lower bound in sorted 128B slots: first slot whose ID >= ident (or record_count)."""
+        target = ident.encode('utf-8')
+        lo = 0
+        hi = self.record_count
+        mm = self._check_open()
+        slot_base = self._slot_table_off
+        str_base = self._string_pool_off
+
+        while lo < hi:
+            mid = (lo + hi) >> 1
+            id_off, id_len = _SLOT_ID_STRUCT.unpack_from(mm, slot_base + mid * _SLOT_SIZE)
+            start = str_base + id_off
+            if mm[start:start + id_len] < target:
+                lo = mid + 1
+            else:
+                hi = mid
+        return lo
+
     def slot_for_id(self, ident: str) -> int:
         """O(log N) binary search over sorted 128B slots directly in mmap (-1 if absent)."""
         target = ident.encode('utf-8')
@@ -891,7 +918,7 @@ class HeadIndexView:
 
         while lo < hi:
             mid = (lo + hi) >> 1
-            id_off, id_len = struct.unpack_from('<IH', mm, slot_base + mid * _SLOT_SIZE)
+            id_off, id_len = _SLOT_ID_STRUCT.unpack_from(mm, slot_base + mid * _SLOT_SIZE)
             start = str_base + id_off
             cur = mm[start:start + id_len]
             if cur < target:
@@ -907,20 +934,34 @@ class HeadIndexView:
 
         return _SLOT_STRUCT.unpack_from(mm, self._slot_table_off + slot * _SLOT_SIZE)
 
+    def slot_stat_fast(self, slot: int) -> tuple[int, int, int, int]:
+        """Unpack only (size, mtime_ns, ino, slot_flags) without decoding the full 128B slot or digests."""
+        mm = self._check_open()
+        base = self._slot_table_off + slot * _SLOT_SIZE
+        size_val, mtime_ns, ino_val = _SLOT_STAT_STRUCT.unpack_from(mm, base + _SLOT_STAT_OFFSET)
+        slot_flags = _U16_STRUCT.unpack_from(mm, base + _SLOT_FLAGS_OFFSET)[0]
+        return size_val, mtime_ns, ino_val, slot_flags
+
+    def slot_platform(self, slot: int, slot_flags: int) -> str:
+        """Decode platform key ('posix', 'nt', or custom aux string) from slot_flags."""
+        plat_code = (slot_flags & _PLATFORM_MASK) >> _PLATFORM_SHIFT
+        if plat_code == _PLATFORM_POSIX:
+            return 'posix'
+        if plat_code == _PLATFORM_NT:
+            return 'nt'
+        return self._decode_aux(slot, slot_flags, only_platform=True)['platform']
+
+    def slot_raw_sha_bin(self, slot: int) -> bytes:
+        """Read 32-byte raw_sha256 digest slice directly from slot (slow path only)."""
+        mm = self._check_open()
+        start = self._slot_table_off + slot * _SLOT_SIZE + _SLOT_RAW_SHA_OFFSET
+        return mm[start:start + 32]
+
     def slot_stat_meta(self, slot: int) -> tuple[int, int, int, str, bytes]:
         """Return (size, mtime_ns, ino, platform, raw_sha256_bin) from slot without decoding full entry."""
-        tup = self.slot_tuple(slot)
-        slot_flags = tup[8]
-        plat_code = (slot_flags & _PLATFORM_MASK) >> _PLATFORM_SHIFT
-
-        if plat_code == _PLATFORM_POSIX:
-            plat = 'posix'
-        elif plat_code == _PLATFORM_NT:
-            plat = 'nt'
-        else:
-            plat = self._decode_aux(slot, slot_flags, only_platform=True)['platform']
-
-        return tup[15], tup[16], tup[17], plat, tup[19]
+        size_val, mtime_ns, ino_val, slot_flags = self.slot_stat_fast(slot)
+        plat = self.slot_platform(slot, slot_flags)
+        return size_val, mtime_ns, ino_val, plat, self.slot_raw_sha_bin(slot)
 
     def slot_pin(self, slot: int) -> dict:
         """Return compact graph node pin {id, kind, revision, sha256, active} directly from slot."""
@@ -1388,7 +1429,12 @@ def _validate_header_bounds(fields: tuple, file_size: int) -> bool:
         if start < _HEADER_SIZE or start + length > hmac_off:
             return False
 
-    if aux_pool_off > search_offsets_off or search_pool_off > string_pool_off:
+    if (
+        aux_pool_off < _HEADER_SIZE
+        or search_pool_off < _HEADER_SIZE
+        or aux_pool_off > search_offsets_off
+        or search_pool_off > string_pool_off
+    ):
         return False
     if string_pool_off > hmac_off or string_pool_off + rf_off + rf_len > hmac_off:
         return False

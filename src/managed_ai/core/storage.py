@@ -429,6 +429,13 @@ class PackShardHandle:
             if idx_magic != PACK_IDX_MAGIC or idx_ver != 1 or idx_sid != self.shard_id or idx_cnt != self.object_count:
                 raise ValueError(f'corrupt pack idx header: {self.idx_path}')
             self._fanout = struct.unpack_from('<256I', self._idx_mm, IDX_FANOUT_OFFSET)
+            prev_fanout = 0
+            for fanout_count in self._fanout:
+                if fanout_count < prev_fanout or fanout_count > self.object_count:
+                    raise ValueError(f'corrupt pack idx fanout: {self.idx_path}')
+                prev_fanout = fanout_count
+            if prev_fanout != self.object_count:
+                raise ValueError(f'corrupt pack idx fanout: {self.idx_path}')
 
             self._occ_stream, occ_size = _open_readonly_regular(self.occ_path)
             expected_occ_size = OCC_HEADER_STRUCT.size + self.object_count
@@ -759,12 +766,14 @@ class ObjectStore:
     def has(self, key: str) -> bool:
         if not isinstance(key, str) or len(key) != 64 or any(c not in '0123456789abcdef' for c in key):
             return False
+        if self._active_pack_session is not None and self._active_pack_session.has(key):
+            return True
         if has_ordinary_file(self.directory / key):
             return True
         if has_ordinary_file(self.directory / (key + '.deflate')):
             return True
         if self._active_pack_session is not None:
-            return self._active_pack_session.has(key)
+            return False
         if not self._has_pack_pointer():
             return False
         with PackSession(self.packs_dir) as session:
@@ -909,7 +918,7 @@ class ObjectStore:
         retained: bool,
         expected_bytes: int | None,
         dir_fd: int | None,
-    ) -> bytes:
+    ) -> tuple[bytes, bool]:
         filename = key + '.deflate'
         path = self.directory / filename
         if expected_bytes is not None:
@@ -925,7 +934,7 @@ class ObjectStore:
                 if exc.errno == errno.ENOENT:
                     packed = self._read_from_packs(key, retained=retained, expected_bytes=expected_bytes)
                     if packed is not None:
-                        return packed
+                        return packed, True
                     if not retained and expected_bytes is None:
                         raise ValueError(f'ordinary file required: {self.directory / key}') from None
                     raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(self.directory / key)) from None
@@ -941,36 +950,44 @@ class ObjectStore:
                 os.close(fd)
                 raise
             with stream:
-                return self._decompress_bounded(stream, limit, path)
+                return self._decompress_bounded(stream, limit, path), False
 
         try:
             info = path.lstat()
         except FileNotFoundError:
             packed = self._read_from_packs(key, retained=retained, expected_bytes=expected_bytes)
             if packed is not None:
-                return packed
+                return packed, True
             if retained or expected_bytes is not None:
                 raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(self.directory / key)) from None
             raise ValueError(f'ordinary file required: {self.directory / key}') from None
         if not is_ordinary_file_stat(info):
             raise ValueError(f'ordinary file required: {path}')
         with path.open('rb') as stream:
-            return self._decompress_bounded(stream, limit, path)
+            return self._decompress_bounded(stream, limit, path), False
 
     def read(self, key: str, *, retained: bool = False,
              expected_bytes: int | None = None, dir_fd: int | None = None) -> bytes:
         self._validate_key(key)
         if expected_bytes is not None and (type(expected_bytes) is not int or expected_bytes < 0):
             raise ValueError('invalid expected object length')
+
+        # Fast-path inside active pack_session(): PackShardHandle.read_frame() verifies CRC32 + SHA-256 + length.
+        if self._active_pack_session is not None and read_bytes is _READ_BYTES:
+            packed = self._active_pack_session.read(key, retained=retained, expected_bytes=expected_bytes)
+            if packed is not None:
+                return packed
+
         path = self.directory / key
         data: bytes | None = None
+        verified_in_pack = False
         if hasattr(os, 'O_NOFOLLOW') and read_bytes is _READ_BYTES:
             target = key if dir_fd is not None else path
             try:
                 fd = os.open(target, _OPEN_RO_NOFOLLOW, dir_fd=dir_fd)
             except OSError as exc:
                 if exc.errno == errno.ENOENT:
-                    data = self._read_deflate_or_pack(
+                    data, verified_in_pack = self._read_deflate_or_pack(
                         key, retained=retained, expected_bytes=expected_bytes, dir_fd=dir_fd,
                     )
                 elif exc.errno in (errno.ELOOP, errno.EISDIR, errno.ENOTDIR, errno.ENXIO):
@@ -1001,7 +1018,7 @@ class ObjectStore:
             try:
                 raw_info = path.lstat()
             except FileNotFoundError:
-                data = self._read_deflate_or_pack(
+                data, verified_in_pack = self._read_deflate_or_pack(
                     key, retained=retained, expected_bytes=expected_bytes, dir_fd=None,
                 )
             else:
@@ -1021,6 +1038,8 @@ class ObjectStore:
                         raise ValueError(f'file exceeds {limit} bytes: {path}')
                 else:
                     data = read_bytes(path, limit)
+        if verified_in_pack:
+            return data
         if expected_bytes is not None and len(data) != expected_bytes:
             raise ValueError('content object changed (length changed)')
         if sha(data) != key:

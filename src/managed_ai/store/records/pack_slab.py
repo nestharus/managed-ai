@@ -312,26 +312,32 @@ def _collect_loose_pack_candidates(
         if def_payload is not None and len(def_payload) < raw_len:
             codec = OCC_LIVE_DEFLATE
             stored_len = len(def_payload)
+            source_mode = 'reuse_deflate'
         elif compress:
             comp = zlib.compress(raw_bytes_data, level=6)
             if len(comp) < raw_len:
                 codec = OCC_LIVE_DEFLATE
                 stored_len = len(comp)
+                source_mode = 'recompress'
             else:
                 codec = OCC_LIVE_RAW
                 stored_len = raw_len
+                source_mode = 'raw'
         else:
             codec = OCC_LIVE_RAW
             stored_len = raw_len
+            source_mode = 'raw'
 
         to_pack.append({
             'object': key,
             'raw_bytes': raw_len,
             'stored_bytes': stored_len,
             'codec': codec,
+            'source_mode': source_mode,
             'loose_disk_bytes': loose_disk_bytes,
             'loose_alloc_bytes': loose_alloc_bytes,
             'paths': loose_paths,
+            'has_raw': raw_entry is not None,
             'has_deflate': def_entry is not None,
         })
 
@@ -361,14 +367,14 @@ def _partition_shards(candidates: list[dict], shard_target_bytes: int) -> list[l
     return shards
 
 
-def plan_pack_objects(
+def _plan_pack_objects_with_candidates(
     system,
     *,
     shard_target_bytes: int = DEFAULT_SHARD_TARGET_BYTES,
     compress: bool = False,
     include_cold_archive: bool = False,
-) -> dict:
-    """Read-only dry-run plan for packing immutable loose exchange objects into reserved shard slabs."""
+) -> tuple[dict, list[dict], list[dict]]:
+    """Collect loose pack candidates once and return (plan_dict, to_pack, duplicate_loose)."""
     integer(shard_target_bytes, 'shard_bytes', _MIN_SHARD_TARGET_BYTES)
     objects = system.ex.objects
     to_pack, duplicate_loose, existing_packed_keys = _collect_loose_pack_candidates(objects, compress=compress)
@@ -427,7 +433,25 @@ def plan_pack_objects(
         ],
     }
 
-    return dict(body, plan_sha256=sha(encode(body)))
+    plan = dict(body, plan_sha256=sha(encode(body)))
+    return plan, to_pack, duplicate_loose
+
+
+def plan_pack_objects(
+    system,
+    *,
+    shard_target_bytes: int = DEFAULT_SHARD_TARGET_BYTES,
+    compress: bool = False,
+    include_cold_archive: bool = False,
+) -> dict:
+    """Read-only dry-run plan for packing immutable loose exchange objects into reserved shard slabs."""
+    plan, _, _ = _plan_pack_objects_with_candidates(
+        system,
+        shard_target_bytes=shard_target_bytes,
+        compress=compress,
+        include_cold_archive=include_cold_archive,
+    )
+    return plan
 
 
 def execute_pack_objects(
@@ -446,7 +470,7 @@ def execute_pack_objects(
     if expected_plan is not None:
         digest(expected_plan, 'expected plan sha256')
 
-    live_plan = plan_pack_objects(
+    live_plan, to_pack, duplicate_loose = _plan_pack_objects_with_candidates(
         system,
         shard_target_bytes=shard_target_bytes,
         compress=compress,
@@ -460,7 +484,6 @@ def execute_pack_objects(
         )
 
     objects = system.ex.objects
-    to_pack, duplicate_loose, _ = _collect_loose_pack_candidates(objects, compress=compress)
     planned_shards = _partition_shards(to_pack, shard_target_bytes)
 
     current = parse_pack_current(objects.packs_dir)
@@ -482,14 +505,22 @@ def execute_pack_objects(
         for row in shard_rows:
             key = row['object']
             codec = row['codec']
-            if codec == OCC_LIVE_DEFLATE:
-                if row['has_deflate']:
-                    stored = _read_ordinary_unbounded(objects.directory / (key + '.deflate'))
-                else:
-                    raw_data = _read_ordinary_unbounded(objects.directory / key)
-                    stored = zlib.compress(raw_data, level=6)
+            source_mode = row['source_mode']
+            if source_mode == 'reuse_deflate':
+                stored = _read_ordinary_unbounded(objects.directory / (key + '.deflate'))
+            elif source_mode == 'recompress':
+                raw_data = (
+                    _read_ordinary_unbounded(objects.directory / key)
+                    if row['has_raw']
+                    else objects.read(key, retained=True, expected_bytes=row['raw_bytes'])
+                )
+                stored = zlib.compress(raw_data, level=6)
             else:
-                stored = _read_ordinary_unbounded(objects.directory / key)
+                stored = (
+                    _read_ordinary_unbounded(objects.directory / key)
+                    if row['has_raw']
+                    else objects.read(key, retained=True, expected_bytes=row['raw_bytes'])
+                )
             require(len(stored) == row['stored_bytes'], f'object size drifted during packing: {key}')
             shard_items.append((bytes.fromhex(key), row['raw_bytes'], codec, stored))
 

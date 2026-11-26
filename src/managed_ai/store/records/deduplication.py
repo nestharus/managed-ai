@@ -140,35 +140,36 @@ def plan_deduplicate_originals(system, *, prefix: str | None = None) -> dict:
     skipped: list[dict] = []
     objects = system.ex.objects
 
-    for path in files:
-        rel = path.relative_to(system.work).as_posix()
-        sub = path.relative_to(target_dir).as_posix()
-        match = _CONTENT_ADDRESSED_NAME_RE.fullmatch(sub)
-        if not match or match.group(1) != match.group(2)[:2]:
-            skipped.append({'path': rel, 'reason': 'not-content-addressed-path'})
-            continue
+    with objects.pack_session():
+        for path in files:
+            rel = path.relative_to(system.work).as_posix()
+            sub = path.relative_to(target_dir).as_posix()
+            match = _CONTENT_ADDRESSED_NAME_RE.fullmatch(sub)
+            if not match or match.group(1) != match.group(2)[:2]:
+                skipped.append({'path': rel, 'reason': 'not-content-addressed-path'})
+                continue
 
-        expected_sha = match.group(2)
-        raw = _read_ordinary_unbounded(path)
-        if sha(raw) != expected_sha:
-            skipped.append({'path': rel, 'reason': 'workspace-digest-mismatch'})
-            continue
+            expected_sha = match.group(2)
+            raw = _read_ordinary_unbounded(path)
+            if sha(raw) != expected_sha:
+                skipped.append({'path': rel, 'reason': 'workspace-digest-mismatch'})
+                continue
 
-        if not objects.has(expected_sha):
-            skipped.append({'path': rel, 'reason': 'missing-exchange-object'})
-            continue
+            if not objects.has(expected_sha):
+                skipped.append({'path': rel, 'reason': 'missing-exchange-object'})
+                continue
 
-        try:
-            retained = objects.read(expected_sha, retained=True, expected_bytes=len(raw))
-        except (OSError, ValueError) as exc:
-            skipped.append({'path': rel, 'reason': f'exchange-object-unreadable: {exc}'})
-            continue
+            try:
+                retained = objects.read(expected_sha, retained=True, expected_bytes=len(raw))
+            except (OSError, ValueError) as exc:
+                skipped.append({'path': rel, 'reason': f'exchange-object-unreadable: {exc}'})
+                continue
 
-        if retained != raw:
-            skipped.append({'path': rel, 'reason': 'exchange-object-bytes-mismatch'})
-            continue
+            if retained != raw:
+                skipped.append({'path': rel, 'reason': 'exchange-object-bytes-mismatch'})
+                continue
 
-        candidates.append({'path': rel, 'sha256': expected_sha, 'bytes': len(raw)})
+            candidates.append({'path': rel, 'sha256': expected_sha, 'bytes': len(raw)})
 
     reclaimable = sum(row['bytes'] for row in candidates)
     body = {
@@ -188,32 +189,33 @@ def _verify_dedup_candidates(system, rel_prefix: str, candidates: list[dict]) ->
     verified: list[tuple[Path, dict]] = []
     seen: set[str] = set()
 
-    for row in candidates:
-        exact_fields(row, {'path', 'sha256', 'bytes'}, set(), 'deduplicate candidate')
-        rel = relative_path(row['path'])
-        require(rel not in seen, 'duplicate candidate path in plan: ' + rel)
-        seen.add(rel)
+    with objects.pack_session():
+        for row in candidates:
+            exact_fields(row, {'path', 'sha256', 'bytes'}, set(), 'deduplicate candidate')
+            rel = relative_path(row['path'])
+            require(rel not in seen, 'duplicate candidate path in plan: ' + rel)
+            seen.add(rel)
 
-        require(rel.startswith(rel_prefix + '/'), 'candidate outside declared prefix: ' + rel)
-        sub = rel[len(rel_prefix) + 1:]
-        match = _CONTENT_ADDRESSED_NAME_RE.fullmatch(sub)
-        require(
-            match is not None and match.group(1) == match.group(2)[:2] and match.group(2) == row['sha256'],
-            'candidate path is not content-addressed to its declared digest: ' + rel,
-        )
+            require(rel.startswith(rel_prefix + '/'), 'candidate outside declared prefix: ' + rel)
+            sub = rel[len(rel_prefix) + 1:]
+            match = _CONTENT_ADDRESSED_NAME_RE.fullmatch(sub)
+            require(
+                match is not None and match.group(1) == match.group(2)[:2] and match.group(2) == row['sha256'],
+                'candidate path is not content-addressed to its declared digest: ' + rel,
+            )
 
-        digest(row['sha256'], 'candidate sha256')
-        integer(row['bytes'], 'candidate bytes')
-        path = system.ex.path(rel)
-        raw = _read_ordinary_unbounded(path)
-        require(
-            len(raw) == row['bytes'] and sha(raw) == row['sha256'],
-            'workspace original changed since planning: ' + rel,
-        )
+            digest(row['sha256'], 'candidate sha256')
+            integer(row['bytes'], 'candidate bytes')
+            path = system.ex.path(rel)
+            raw = _read_ordinary_unbounded(path)
+            require(
+                len(raw) == row['bytes'] and sha(raw) == row['sha256'],
+                'workspace original changed since planning: ' + rel,
+            )
 
-        retained = objects.read(row['sha256'], retained=True, expected_bytes=row['bytes'])
-        require(retained == raw, 'exchange object parity mismatch: ' + rel)
-        verified.append((path, row))
+            retained = objects.read(row['sha256'], retained=True, expected_bytes=row['bytes'])
+            require(retained == raw, 'exchange object parity mismatch: ' + rel)
+            verified.append((path, row))
 
     return verified
 

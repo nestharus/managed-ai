@@ -163,7 +163,7 @@ class Integrity(unittest.TestCase):
         shutil.copytree(PRODUCT/'platform',product/'platform')
         shutil.copytree(PRODUCT/'core',product/'core')
         shutil.copy2(PRODUCT/'CURRENT-RELEASE.json',product/'CURRENT-RELEASE.json')
-        cli=product/'core'/'cli'/'collect_returns.py'
+        cli=product/'core'/'exchange'/'transport'/'collector.py'
         inside=product/'illegal';outside=self.base/'allowed'
         for args in [['--root',outside,'--root',inside],[f'--root={outside}',f'--root={inside}'],['--roo',inside]]:
             p=subprocess.run([sys.executable,'-B',str(cli),*map(str,args),'list'],capture_output=True)

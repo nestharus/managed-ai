@@ -356,30 +356,31 @@ class System:
         verified_objects: set[tuple[str, int]] = set()
         rows = []
 
-        for rec in records:
-            if rec['id'] in checked_ids:
-                changed = self.record_store.basis_changes(
-                    rec,
-                    resolved_hashes=resolved_hashes,
-                    verified_objects=verified_objects,
-                )
-            elif rec['basis'] and all(item['path'] in resolved_hashes for item in rec['basis']):
-                changed = self.record_store.basis_changes(
-                    rec,
-                    resolved_hashes=resolved_hashes,
-                    verified_objects=verified_objects,
-                )
-                deferred_inactive -= 1
-            else:
-                changed = []
+        with self.ex.objects.pack_session():
+            for rec in records:
+                if rec['id'] in checked_ids:
+                    changed = self.record_store.basis_changes(
+                        rec,
+                        resolved_hashes=resolved_hashes,
+                        verified_objects=verified_objects,
+                    )
+                elif rec['basis'] and all(item['path'] in resolved_hashes for item in rec['basis']):
+                    changed = self.record_store.basis_changes(
+                        rec,
+                        resolved_hashes=resolved_hashes,
+                        verified_objects=verified_objects,
+                    )
+                    deferred_inactive -= 1
+                else:
+                    changed = []
 
-            rows.append({
-                'id': rec['id'],
-                'kind': rec['kind'],
-                'revision': rec['revision'],
-                'active': rec['active'],
-                'changed_basis': changed,
-            })
+                rows.append({
+                    'id': rec['id'],
+                    'kind': rec['kind'],
+                    'revision': rec['revision'],
+                    'active': rec['active'],
+                    'changed_basis': changed,
+                })
 
         return rows, deferred_inactive
 
