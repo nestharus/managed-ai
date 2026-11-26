@@ -12,12 +12,12 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.host.continuing_work import capture_native  # noqa: E402
-from managed_ai.host.continuing_work.continuing_work import Host  # noqa: E402
+from managed_ai_information.host.continuing_work import capture_native  # noqa: E402
+from managed_ai_information.host.continuing_work.continuing_work import Host  # noqa: E402
 
 
 def _default_engine():
-    primary = SRC_ROOT / "managed_ai/store/manage_store.py"
+    primary = SRC_ROOT / "managed_ai_information/store/manage_store.py"
     if primary.is_file():
         return primary
     legacy = REPO_ROOT / "engine/store/manage_store.py"

@@ -14,8 +14,12 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from managed_ai.core.formats import RECORD_ID_CHUNK_FORMAT, TURN_EXPOSURE_FORMAT, TURN_VIEW_FORMAT
-from managed_ai.core.storage import (
+from managed_ai_information.core.formats import (
+    RECORD_ID_CHUNK_FORMAT,
+    TURN_EXPOSURE_FORMAT,
+    TURN_VIEW_FORMAT,
+)
+from managed_ai_information.core.storage import (
     MAX_BYTES,
     encode,
     exclusive,
@@ -23,12 +27,15 @@ from managed_ai.core.storage import (
     sha,
     strict_json_loads,
 )
-from managed_ai.store.records.object_audit import audit_objects, gc_objects
-from managed_ai.store.system import System
-from managed_ai.store.turns.explain_delivery import captured_view, explain_context
-from managed_ai.store.turns.record_scope import RecordSelection, TurnScope
-from managed_ai.store.turns.turn_retirement import execute_turn_retirement, plan_turn_retirement
-from managed_ai.store.turns.view_chunks import (
+from managed_ai_information.store.records.object_audit import audit_objects, gc_objects
+from managed_ai_information.store.system import System
+from managed_ai_information.store.turns.explain_delivery import captured_view, explain_context
+from managed_ai_information.store.turns.record_scope import RecordSelection, TurnScope
+from managed_ai_information.store.turns.turn_retirement import (
+    execute_turn_retirement,
+    plan_turn_retirement,
+)
+from managed_ai_information.store.turns.view_chunks import (
     OUTSIDE_VIEW_INLINE_LIMIT,
     RECORD_ID_CHUNK_MAX_BYTES,
     hydrate_outside_view_records,

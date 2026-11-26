@@ -15,9 +15,9 @@ from pathlib import Path
 from unittest.mock import patch
 from zipfile import ZipFile
 
-from managed_ai.core.storage import MAX_BYTES
-from managed_ai.store import system
-from managed_ai.store.composition.composition import MAX_PROFILE_BYTES
+from managed_ai_information.core.storage import MAX_BYTES
+from managed_ai_information.store import system
+from managed_ai_information.store.composition.composition import MAX_PROFILE_BYTES
 
 PRODUCT = Path(system.__file__).resolve().parents[1]
 
@@ -48,7 +48,7 @@ class Integrity(unittest.TestCase):
                 with (
                     self.subTest(ident=ident, delta=delta),
                     patch(
-                        "managed_ai.store.records.records.now",
+                        "managed_ai_information.store.records.records.now",
                         return_value="2026-11-06T00:00:00.123456+00:00",
                     ),
                 ):
@@ -294,7 +294,7 @@ class Integrity(unittest.TestCase):
             self.s.abandon_context("east", "Already installed.")
 
     def test_f07_placement_checks_effective_argv(self):
-        product = self.base / "product" / "src" / "managed_ai"
+        product = self.base / "product" / "src" / "managed_ai_information"
         product.mkdir(parents=True)
         shutil.copy2(PRODUCT / "__init__.py", product / "__init__.py")
         shutil.copytree(PRODUCT / "platform", product / "platform")

@@ -18,8 +18,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from managed_ai.core.exchange.publication_receipts import publication_inventory
-from managed_ai.core.formats import (
+from managed_ai_information.core.exchange.publication_receipts import publication_inventory
+from managed_ai_information.core.formats import (
     HEAD_INDEX_FORMAT,
     HEAD_INDEX_FORMAT_V1,
     PACKET_BINDING_FORMAT,
@@ -28,7 +28,7 @@ from managed_ai.core.formats import (
     TURN_SELECTION_FORMAT,
     TURN_VIEW_FORMAT,
 )
-from managed_ai.core.storage import (
+from managed_ai_information.core.storage import (
     OwnerBusy,
     encode,
     exclusive,
@@ -36,18 +36,18 @@ from managed_ai.core.storage import (
     sha,
     shared,
 )
-from managed_ai.deployment.controller import (
+from managed_ai_information.deployment.controller import (
     Deployment,
     DeploymentSelection,
     code_identity,
 )
-from managed_ai.store.records.cold_archive import plan_archive_records
-from managed_ai.store.selection.domain_selection import (
+from managed_ai_information.store.records.cold_archive import plan_archive_records
+from managed_ai_information.store.selection.domain_selection import (
     DomainSelection,
     validate_payload,
 )
-from managed_ai.store.selection.store_configuration import configure
-from managed_ai.store.system import ENTRYPOINT, System
+from managed_ai_information.store.selection.store_configuration import configure
+from managed_ai_information.store.system import ENTRYPOINT, System
 
 
 def _write_json(path: Path, value: dict) -> Path:
@@ -340,7 +340,7 @@ class Wave3RuntimeTests(unittest.TestCase):
 
         # LB-13: Direct Deployment.system() takes deployment.lock (fails AdmissionContended if
         # exclusive held)
-        from managed_ai.core.storage import AdmissionContended
+        from managed_ai_information.core.storage import AdmissionContended
 
         with (
             exclusive(self.dep / "deployment.lock"),
@@ -357,7 +357,7 @@ class Wave3RuntimeTests(unittest.TestCase):
         probe = (
             "import sys\n"
             "from unittest.mock import patch\n"
-            "from managed_ai.deployment import controller\n"
+            "from managed_ai_information.deployment import controller\n"
             "calls = 0\n"
             "orig = controller.code_identity\n"
             "def counted(engine):\n"
@@ -492,7 +492,7 @@ class Wave3RuntimeTests(unittest.TestCase):
             self.assertEqual(parsed["format"], HEAD_INDEX_FORMAT)
             import hmac as hmac_mod
 
-            from managed_ai.store.records.head_index import INDEX_DOMAIN
+            from managed_ai_information.store.records.head_index import INDEX_DOMAIN
 
             body_v1 = {k: v for k, v in parsed.items() if k != "hmac"}
             body_v1["format"] = HEAD_INDEX_FORMAT_V1
@@ -703,10 +703,10 @@ class Wave3RuntimeTests(unittest.TestCase):
     def test_posix_relative_paths_serialized_in_descriptors(self):
         """Wave 3.5: relative paths written to deployment.json, system.json, and host.json always
         use POSIX '/'."""
-        from managed_ai.platform import safe_relpath
+        from managed_ai_information.platform import safe_relpath
 
         base = self.root / "posix-check"
-        eng_copy = self._copy_minimal_engine(base / "trunk/src/managed_ai")
+        eng_copy = self._copy_minimal_engine(base / "trunk/src/managed_ai_information")
         dom_dir = base / "trunk/domains/sample"
         dom_dir.mkdir(parents=True)
         cat_bytes = encode({"format": "managed-ai-source-catalogue/1", "sources": []})
@@ -746,7 +746,7 @@ class Wave3RuntimeTests(unittest.TestCase):
 
         Deployment.initialize(dep_dir, store_dir, eng_copy)
         dep_doc = json.loads((dep_dir / "deployment.json").read_text(encoding="utf-8"))
-        self.assertEqual(dep_doc["engine"]["path"], "../../trunk/src/managed_ai")
+        self.assertEqual(dep_doc["engine"]["path"], "../../trunk/src/managed_ai_information")
         self.assertEqual(dep_doc["store"]["path"], "stores/main")
 
         # Stage also normalizes any pre-existing Windows backslash store path and writes POSIX
@@ -757,13 +757,13 @@ class Wave3RuntimeTests(unittest.TestCase):
         sel = DeploymentSelection(dep_dir)
         staged = sel.stage("posix-ed", eng_copy)
         cand = json.loads((dep_dir / "candidate.json").read_text(encoding="utf-8"))
-        self.assertEqual(cand["engine"]["path"], "../../trunk/src/managed_ai")
+        self.assertEqual(cand["engine"]["path"], "../../trunk/src/managed_ai_information")
         self.assertEqual(cand["store"]["path"], "stores/main")
         sel.activate("posix-ed", prior_sha, staged["candidate_sha256"], "Normalize POSIX paths.")
         act_doc = json.loads((dep_dir / "deployment.json").read_text(encoding="utf-8"))
-        self.assertEqual(act_doc["engine"]["path"], "../../trunk/src/managed_ai")
+        self.assertEqual(act_doc["engine"]["path"], "../../trunk/src/managed_ai_information")
         self.assertEqual(act_doc["store"]["path"], "stores/main")
-        self.assertEqual(safe_relpath(eng_copy, dep_dir), "../../trunk/src/managed_ai")
+        self.assertEqual(safe_relpath(eng_copy, dep_dir), "../../trunk/src/managed_ai_information")
 
         # Host continuing_work config also serializes POSIX relative paths for engine, native_root,
         # and object pins.
@@ -774,7 +774,7 @@ class Wave3RuntimeTests(unittest.TestCase):
 
         self.assertEqual(
             continuing_work._safe_relpath(eng_copy / "store/manage_store.py", dep_dir / "host"),
-            "../../../trunk/src/managed_ai/store/manage_store.py",
+            "../../../trunk/src/managed_ai_information/store/manage_store.py",
         )
         host_root = dep_dir / "host"
         comm = base / "commission.md"

@@ -15,13 +15,13 @@ else:
         _sys.path.insert(0, _repo)
     from tests.store.native_test_paths import ENGINE
 
-from managed_ai.core.exchange import Exchange
-from managed_ai.core.storage import read_json, sha, write_json
-from managed_ai.deployment.controller import runtime_binding
-from managed_ai.store.selection.domain_selection import validate_payload
-from managed_ai.store.selection.installed_catalogue import InstalledCatalogue
-from managed_ai.store.selection.store_configuration import configure
-from managed_ai.store.system import System
+from managed_ai_information.core.exchange import Exchange
+from managed_ai_information.core.storage import read_json, sha, write_json
+from managed_ai_information.deployment.controller import runtime_binding
+from managed_ai_information.store.selection.domain_selection import validate_payload
+from managed_ai_information.store.selection.installed_catalogue import InstalledCatalogue
+from managed_ai_information.store.selection.store_configuration import configure
+from managed_ai_information.store.system import System
 
 
 class SelectionContracts(unittest.TestCase):

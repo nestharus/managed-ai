@@ -16,14 +16,18 @@ class SourceListTest(unittest.TestCase):
     def test_checkout_metadata_refuses_before_manifest_or_transport_write(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary) / "bundle"
-            (root / "src/managed_ai").mkdir(parents=True)
+            (root / "src/managed_ai_information").mkdir(parents=True)
             release = root / "scripts/release"
             release.mkdir(parents=True)
             (release / "current_sources.json").write_text("{}", encoding="utf-8")
             domain = root / "domains/research"
             domain.mkdir(parents=True)
             transport = root.parent / "current.zip"
-            prior = [root / "MANIFEST.json", root / "src/managed_ai/MANIFEST.json", transport]
+            prior = [
+                root / "MANIFEST.json",
+                root / "src/managed_ai_information/MANIFEST.json",
+                transport,
+            ]
             for path in prior:
                 path.write_bytes(b"existing")
             for path, directory in [(root / ".git", True), (domain / ".git", False)]:
@@ -60,7 +64,7 @@ class SourceListTest(unittest.TestCase):
     def check_stale_identity(self, catalogue_root):
         with TemporaryDirectory() as temporary:
             root = Path(temporary) / "bundle"
-            core = root / "src/managed_ai"
+            core = root / "src/managed_ai_information"
             release = root / "scripts/release"
             release.mkdir(parents=True)
             (core / catalogue_root).mkdir(parents=True)
@@ -130,7 +134,7 @@ class SourceListTest(unittest.TestCase):
     def test_package_generates_sources_md_when_absent_in_git_export(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary) / "bundle"
-            core = root / "src/managed_ai"
+            core = root / "src/managed_ai_information"
             release = root / "scripts/release"
             release.mkdir(parents=True)
             (core / "store").mkdir(parents=True)

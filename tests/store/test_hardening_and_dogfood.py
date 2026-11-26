@@ -19,12 +19,16 @@ if __package__:
 else:
     from native_test_paths import ENGINE
 
-from managed_ai.core.exchange import open_contact
-from managed_ai.core.storage import encode, exclusive, sha, shared, sync_dir
-from managed_ai.deployment.controller import Deployment, DeploymentSelection, code_identity
-from managed_ai.library import bundle as product_bundle
-from managed_ai.library import format as library_format
-from managed_ai.library.catalogue import Library
+from managed_ai_information.core.exchange import open_contact
+from managed_ai_information.core.storage import encode, exclusive, sha, shared, sync_dir
+from managed_ai_information.deployment.controller import (
+    Deployment,
+    DeploymentSelection,
+    code_identity,
+)
+from managed_ai_information.library import bundle as product_bundle
+from managed_ai_information.library import format as library_format
+from managed_ai_information.library.catalogue import Library
 
 
 def _load_publish_module():
@@ -38,14 +42,17 @@ def _load_publish_module():
 
 
 publish = _load_publish_module()
-from managed_ai.store.composition import composition_boundary  # noqa: E402
-from managed_ai.store.records import record_batch, record_import, record_transfer  # noqa: E402
-from managed_ai.store.records.cold_archive import execute_archive_records, plan_archive_records  # noqa: E402
-from managed_ai.store.records.head_index import entry_matches_exact_ref  # noqa: E402
-from managed_ai.store.records.object_audit import audit_objects  # noqa: E402
-from managed_ai.store.selection.domain_selection import DomainSelection  # noqa: E402
-from managed_ai.store.system import System  # noqa: E402
-from managed_ai.store.turns.turn_retirement import plan_turn_retirement  # noqa: E402
+from managed_ai_information.store.composition import composition_boundary  # noqa: E402
+from managed_ai_information.store.records import record_batch, record_import, record_transfer  # noqa: E402
+from managed_ai_information.store.records.cold_archive import (  # noqa: E402
+    execute_archive_records,
+    plan_archive_records,
+)
+from managed_ai_information.store.records.head_index import entry_matches_exact_ref  # noqa: E402
+from managed_ai_information.store.records.object_audit import audit_objects  # noqa: E402
+from managed_ai_information.store.selection.domain_selection import DomainSelection  # noqa: E402
+from managed_ai_information.store.system import System  # noqa: E402
+from managed_ai_information.store.turns.turn_retirement import plan_turn_retirement  # noqa: E402
 
 
 class Wave5CoreTests(unittest.TestCase):
@@ -272,14 +279,18 @@ class Wave5CoreTests(unittest.TestCase):
                             parts = alias.name.split(".")
                             root = (
                                 parts[1]
-                                if parts[0] == "managed_ai" and len(parts) > 1
+                                if parts[0] == "managed_ai_information" and len(parts) > 1
                                 else parts[0]
                             )
                             if root in forbidden:
                                 violations.append(f"{py.name}:{node.lineno}: import {alias.name}")
                     elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
                         parts = node.module.split(".")
-                        root = parts[1] if parts[0] == "managed_ai" and len(parts) > 1 else parts[0]
+                        root = (
+                            parts[1]
+                            if parts[0] == "managed_ai_information" and len(parts) > 1
+                            else parts[0]
+                        )
                         if root in forbidden:
                             violations.append(f"{py.name}:{node.lineno}: from {node.module}")
         self.assertEqual(violations, [], f"Library sandbox leakage: {violations}")
@@ -529,11 +540,13 @@ class Wave5CoreTests(unittest.TestCase):
 
         # W5-DF7: single code_identity() per status, git provenance in deployment.json, stage
         # --from-head
-        with patch("managed_ai.deployment.controller.code_identity", wraps=code_identity) as spy:
+        with patch(
+            "managed_ai_information.deployment.controller.code_identity", wraps=code_identity
+        ) as spy:
             Deployment.current_status(self.dep)
             self.assertEqual(spy.call_count, 1)
         git_repo = self.base / "git-eng-repo"
-        git_engine = git_repo / "src" / "managed_ai"
+        git_engine = git_repo / "src" / "managed_ai_information"
         shutil.copytree(ENGINE, git_engine, ignore=shutil.ignore_patterns("__pycache__"))
         git_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         git_env.update(
@@ -721,8 +734,11 @@ class Wave5CoreTests(unittest.TestCase):
     def test_c42_1_and_c42_2_external_engine_isolation(self):
         """C42-1 & C42-2: audit_feedback loads explicit product engine; open_admitted_store isolates
         external engines."""
-        import managed_ai as colocated_pkg
-        from managed_ai.deployment.controller import open_admitted_store, opened_admitted_store
+        import managed_ai_information as colocated_pkg
+        from managed_ai_information.deployment.controller import (
+            open_admitted_store,
+            opened_admitted_store,
+        )
 
         def _make_ext_engine(dest: Path, label: str) -> Path:
             dest.mkdir(parents=True, exist_ok=True)
@@ -735,32 +751,32 @@ class Wave5CoreTests(unittest.TestCase):
             orig = sys_file.read_text(encoding="utf-8")
             sys_file.write_text(
                 orig
-                + "\nfrom managed_ai.store.ext_tag import LABEL as _EXT_LABEL\n"
+                + "\nfrom managed_ai_information.store.ext_tag import LABEL as _EXT_LABEL\n"
                 + "System._ext_label = _EXT_LABEL\n"
                 + "def _lazy_ext_label(self):\n"
-                + "    from managed_ai.store.ext_tag import LABEL\n"
+                + "    from managed_ai_information.store.ext_tag import LABEL\n"
                 + "    return LABEL\n"
                 + "System.lazy_ext_label = _lazy_ext_label\n",
                 encoding="utf-8",
             )
             return dest
 
-        # C42-2: open_admitted_store & opened_admitted_store isolate both pkg/managed_ai and
+        # C42-2: open_admitted_store & opened_admitted_store isolate pkg/managed_ai_information
         # custom-named ext_eng
-        pkg_ext = _make_ext_engine(self.base / "pkg_a" / "managed_ai", "PKG_A")
+        pkg_ext = _make_ext_engine(self.base / "pkg_a" / "managed_ai_information", "PKG_A")
         custom_ext = _make_ext_engine(self.base / "ext_eng", "CUSTOM_EXT")
 
         for ext_root, expected_label in ((pkg_ext, "PKG_A"), (custom_ext, "CUSTOM_EXT")):
             s_direct = open_admitted_store(ext_root, self.store)
             self.assertEqual(s_direct._ext_label, expected_label)
-            self.assertIs(sys.modules.get("managed_ai"), colocated_pkg)
-            self.assertNotIn("managed_ai.store.ext_tag", sys.modules)
+            self.assertIs(sys.modules.get("managed_ai_information"), colocated_pkg)
+            self.assertNotIn("managed_ai_information.store.ext_tag", sys.modules)
 
             with opened_admitted_store(ext_root, self.store) as s_ctx:
                 self.assertEqual(s_ctx._ext_label, expected_label)
                 self.assertEqual(s_ctx.lazy_ext_label(), expected_label)
-            self.assertIs(sys.modules.get("managed_ai"), colocated_pkg)
-            self.assertNotIn("managed_ai.store.ext_tag", sys.modules)
+            self.assertIs(sys.modules.get("managed_ai_information"), colocated_pkg)
+            self.assertNotIn("managed_ai_information.store.ext_tag", sys.modules)
 
             dep_dir = self.base / f"dep-{expected_label.lower()}"
             Deployment.initialize(dep_dir, self.store, ext_root)
@@ -768,11 +784,13 @@ class Wave5CoreTests(unittest.TestCase):
                 s_admitted = open_admitted_store(bound.engine, bound.runtime)
                 self.assertEqual(s_admitted._ext_label, expected_label)
                 self.assertEqual(s_admitted.lazy_ext_label(), expected_label)
-            self.assertIs(sys.modules.get("managed_ai"), colocated_pkg)
+            self.assertIs(sys.modules.get("managed_ai_information"), colocated_pkg)
 
         # C42-1: audit_feedback CLI loads the explicit external product argument (not co-located
         # ENGINE_ROOT)
-        marker_ext = _make_ext_engine(self.base / "audit_ext" / "managed_ai", "AUDIT_EXT")
+        marker_ext = _make_ext_engine(
+            self.base / "audit_ext" / "managed_ai_information", "AUDIT_EXT"
+        )
         sys_file = marker_ext / "store" / "system.py"
         sys_file.write_text(
             sys_file.read_text(encoding="utf-8")

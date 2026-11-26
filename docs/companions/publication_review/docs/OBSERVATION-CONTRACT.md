@@ -1,13 +1,13 @@
 # Publication Observation Contract (`publication_observer.py`)
 
-`src/managed_ai/companions/publication_review/publication_observer.py` inspects declared files under caller-supplied `--root NAME=PATH` directories and compares observed bytes and SHA-256 digests against recorded publication receipts.
+`src/managed_ai_information/companions/publication_review/publication_observer.py` inspects declared files under caller-supplied `--root NAME=PATH` directories and compares observed bytes and SHA-256 digests against recorded publication receipts.
 
 ## Callable route and CLI
 
 Import `observe_file(declaration_path, roots=...)` or run:
 
 ```sh
-python -B src/managed_ai/companions/publication_review/publication_observer.py \
+python -B src/managed_ai_information/companions/publication_review/publication_observer.py \
   --declaration /path/to/declaration.json \
   --root src=/path/to/root
 ```

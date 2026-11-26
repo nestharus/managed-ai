@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-QUEUE_PATH = REPO_ROOT / "src/managed_ai/host/signal_field/queue.py"
+QUEUE_PATH = REPO_ROOT / "src/managed_ai_information/host/signal_field/queue.py"
 spec = importlib.util.spec_from_file_location("signal_field_queue_under_test", QUEUE_PATH)
 queue_mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(queue_mod)

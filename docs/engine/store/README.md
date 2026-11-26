@@ -2,13 +2,13 @@
 
 This application joins persistent goals and extensible JSON records to captured context, actual returns, guarded artifact adoption, attention feedback and a source-bound research catalogue. It is a small work environment for an existing capable agent. It does not provide a model, infer every relevant relationship or make alignment judgments automatically.
 
-Domain and catalogue loading live under [selection](../../../src/managed_ai/store/selection/).
-[Turns](../../../src/managed_ai/store/turns/) holds the input capture, record scope, preparation journal and frozen delivery explanation.
-[The installed catalogue](../../../src/managed_ai/store/catalogue.json) binds the core source IDs and their bodies.
+Domain and catalogue loading live under [selection](../../../src/managed_ai_information/store/selection/).
+[Turns](../../../src/managed_ai_information/store/turns/) holds the input capture, record scope, preparation journal and frozen delivery explanation.
+[The installed catalogue](../../../src/managed_ai_information/store/catalogue.json) binds the core source IDs and their bodies.
 
 ## Start with one useful context
 
-Use Python 3.14 or later (primary/containerized runtime: Python 3.15.2) on Linux, macOS or native Windows. From `src/managed_ai/store`:
+Use Python 3.14 or later (primary/containerized runtime: Python 3.15.2) on Linux, macOS or native Windows. From `src/managed_ai_information/store`:
 
 ```bash
 python3 -B manage_store.py --root ../../../my-ai-work init --goal-text "Review the current design and deliver a useful next version."
@@ -28,7 +28,7 @@ The deployment entrance points to the central engine and one independent native 
 From the package root:
 
 ```bash
-python -B src/managed_ai/deployment/select_deployment.py --deployment /path/to/deployment system status
+python -B src/managed_ai_information/deployment/select_deployment.py --deployment /path/to/deployment system status
 ```
 
 Each store owns its selected domains, payload schemas and reference catalogues. Acquire a complete selected source with `system catalogue SOURCE_ID --text`, then nominate its logical ID in a context's `techniques`. Local workspace material still uses the context's `sources` paths. A source catalogue or an available tool description does not establish participant acquisition or authorize execution.
@@ -361,7 +361,7 @@ python3 -B manage_store.py --root ../../../my-ai-work interpret --goal-revision 
 
 Use `met`, `continue` or `wait`; `wait` also requires `--condition`. The software retains the host-authored account. It does not infer success from item status or validate the semantic adequacy of a `met` claim. A changed goal, declared evidence or separate obligation membership/revision requires a new interpretation; useful old results and still-owed effects remain recoverable. Status gives exact reassessment reasons. Older accounts without a separate-obligation binding remain historical and explicitly require reassessment; unrelated notes and optional field changes alone do not invalidate a current judgment.
 
-For restart, retain the complete runtime root and use `status`, `show ID` and `recover TURN`. Current artifacts are under `work/outputs/`; original objects and returns remain under `exchange/`. No automatic garbage collection or semantic compaction is implemented. Explicit maintenance commands remain caller-authorized: `reindex` builds an HMAC-verified `HeadIndex v3` binary mmap index (`exchange/.system/head-index.current.json` -> `head-index.gen<N>.bin` + `.delta.jsonl` sidecar) accelerating `status`, `graph`, and `discover`; `pack-objects` (dry-run by default, `--apply --expected-plan` under exclusive lock) packs loose immutable objects into reserved append-only shard slabs (`exchange/objects/packs/CURRENT.json`); and `audit-objects` / `gc-objects` plan and remove unreachable objects (logical `.occ` tombstones and physical shard repacking once dead bytes exceed 30%). A handoff should name the actual current goal, accepted version, source routes, unresolved effects and selected next contribution. The complete [working guidance](../../../src/managed_ai/store/GUIDE.md) explains the constructive route when new relationships must be developed.
+For restart, retain the complete runtime root and use `status`, `show ID` and `recover TURN`. Current artifacts are under `work/outputs/`; original objects and returns remain under `exchange/`. No automatic garbage collection or semantic compaction is implemented. Explicit maintenance commands remain caller-authorized: `reindex` builds an HMAC-verified `HeadIndex v3` binary mmap index (`exchange/.system/head-index.current.json` -> `head-index.gen<N>.bin` + `.delta.jsonl` sidecar) accelerating `status`, `graph`, and `discover`; `pack-objects` (dry-run by default, `--apply --expected-plan` under exclusive lock) packs loose immutable objects into reserved append-only shard slabs (`exchange/objects/packs/CURRENT.json`); and `audit-objects` / `gc-objects` plan and remove unreachable objects (logical `.occ` tombstones and physical shard repacking once dead bytes exceed 30%). A handoff should name the actual current goal, accepted version, source routes, unresolved effects and selected next contribution. The complete [working guidance](../../../src/managed_ai_information/store/GUIDE.md) explains the constructive route when new relationships must be developed.
 
 ## Verify the delivered contract
 

@@ -25,7 +25,7 @@ from tests._paths import ENGINE as ROOT  # noqa: E402
 from tests._paths import cleanup_tempdir  # noqa: E402
 
 # isort: split
-from managed_ai.core.exchange.transport import collector  # noqa: E402
+from managed_ai_information.core.exchange.transport import collector  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 TOOL = ROOT / "core" / "exchange" / "transport" / "collector.py"

@@ -22,10 +22,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from managed_ai.deployment.controller import Deployment
-from managed_ai.store.composition.composition import Composition
-from managed_ai.store.system import System
-from managed_ai.store.turns.capture_inputs import TurnCapture
+from managed_ai_information.deployment.controller import Deployment
+from managed_ai_information.store.composition.composition import Composition
+from managed_ai_information.store.system import System
+from managed_ai_information.store.turns.capture_inputs import TurnCapture
 
 
 def digest(body):

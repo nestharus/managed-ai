@@ -15,9 +15,9 @@ else:
     if _repo not in _sys.path:
         _sys.path.insert(0, _repo)
 
-from managed_ai.core.storage import write_json
-from managed_ai.store.records.record_import import import_records, read_receipt
-from managed_ai.store.system import System
+from managed_ai_information.core.storage import write_json
+from managed_ai_information.store.records.record_import import import_records, read_receipt
+from managed_ai_information.store.system import System
 
 
 def specification(ident):
@@ -72,7 +72,7 @@ class ImportReceiptTest(unittest.TestCase):
         receipt.write_bytes(receipt.read_bytes() + b"\n")
         original = receipt.read_bytes()
         with patch(
-            "managed_ai.store.records.record_import.write_json",
+            "managed_ai_information.store.records.record_import.write_json",
             side_effect=AssertionError("receipt rewrite"),
         ):
             self.assertEqual(import_records(system, spec), issued)
@@ -136,7 +136,10 @@ class ImportReceiptTest(unittest.TestCase):
             write_json(path, value)
 
         with (
-            patch("managed_ai.store.records.record_import.write_json", stop_at_second_progress),
+            patch(
+                "managed_ai_information.store.records.record_import.write_json",
+                stop_at_second_progress,
+            ),
             self.assertRaisesRegex(OSError, "progress interrupted"),
         ):
             import_records(system, spec)

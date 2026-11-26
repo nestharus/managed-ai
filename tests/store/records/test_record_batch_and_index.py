@@ -22,7 +22,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from managed_ai.deployment.controller import (
+from managed_ai_information.deployment.controller import (
     Deployment,
     DeploymentSelection,
     encode,
@@ -30,7 +30,7 @@ from managed_ai.deployment.controller import (
     sha,
     shared,
 )
-from managed_ai.store.system import System
+from managed_ai_information.store.system import System
 
 
 def _write_json(path: Path, value: dict) -> Path:
@@ -167,8 +167,8 @@ class Wave1RuntimeTests(unittest.TestCase):
                 "import sys",
                 "from pathlib import Path",
                 "from unittest.mock import patch",
-                "from managed_ai.deployment import controller",
-                "from managed_ai.core.storage import OwnerBusy, exclusive",
+                "from managed_ai_information.deployment import controller",
+                "from managed_ai_information.core.storage import OwnerBusy, exclusive",
                 "calls = 0",
                 "locked_during_hash = []",
                 "owner_lock = Path(sys.argv[1])",
@@ -215,7 +215,7 @@ class Wave1RuntimeTests(unittest.TestCase):
                     self.assertIn("LOCKED=[True]", proc.stderr)
 
     def test_cli_system_and_direct_api_do_not_read_store_before_lock(self):
-        from managed_ai.core.storage import AdmissionContended
+        from managed_ai_information.core.storage import AdmissionContended
 
         owner_lock = self.store / "exchange/owner.lock"
         system_json = self.store / "system.json"
@@ -634,7 +634,7 @@ class Wave1RuntimeTests(unittest.TestCase):
         )
 
     def test_put_batch_resumes_after_interruption(self):
-        from managed_ai.store.records.record_batch import put_batch
+        from managed_ai_information.store.records.record_batch import put_batch
 
         system = System(self.store)
         with exclusive(system.ex.root / "owner.lock"):
@@ -687,7 +687,7 @@ class Wave1RuntimeTests(unittest.TestCase):
             self.assertEqual(system.show("res-b")["content"], {"v": 2})
 
     def test_put_batch_reconciles_crash_after_replace_before_receipt_for_patch_and_replace(self):
-        from managed_ai.store.records import record_batch
+        from managed_ai_information.store.records import record_batch
 
         system = System(self.store)
         with exclusive(system.ex.root / "owner.lock"):
@@ -771,7 +771,7 @@ class Wave1RuntimeTests(unittest.TestCase):
             )
 
     def test_put_batch_refreshes_head_index_on_partial_failure_and_resume(self):
-        from managed_ai.store.records.record_batch import put_batch
+        from managed_ai_information.store.records.record_batch import put_batch
 
         system = System(self.store)
         with exclusive(system.ex.root / "owner.lock"):
@@ -835,8 +835,8 @@ class Wave1RuntimeTests(unittest.TestCase):
             self.assertEqual(after["idx-b"]["revision"], 2)
 
     def test_put_batch_pin_predecessors_supports_legacy_over_2mib_head(self):
-        from managed_ai.core.storage import MAX_BYTES
-        from managed_ai.store.records.record_batch import put_batch
+        from managed_ai_information.core.storage import MAX_BYTES
+        from managed_ai_information.store.records.record_batch import put_batch
 
         system = System(self.store)
         with exclusive(system.ex.root / "owner.lock"):

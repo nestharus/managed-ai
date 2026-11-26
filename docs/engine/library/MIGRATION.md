@@ -1,6 +1,6 @@
 # Library migration and current source maintenance
 
-For a Managed AI store, [the instance contract](../INSTANCES.md) identifies its ordered catalogues and domain descriptors. Read the selected ID with `src/managed_ai/library/cli.py --store STORE show SOURCE_ID`. For a change, update the registered owner, qualify the affected descriptor and use reviewed configure at each intended receiver. The library migration below records the earlier authoring arrangement.
+For a Managed AI Information store, [the instance contract](../INSTANCES.md) identifies its ordered catalogues and domain descriptors. Read the selected ID with `src/managed_ai_information/library/cli.py --store STORE show SOURCE_ID`. For a change, update the registered owner, qualify the affected descriptor and use reviewed configure at each intended receiver. The library migration below records the earlier authoring arrangement.
 
 ## Earlier library entrance
 
@@ -22,7 +22,7 @@ The source map collects complete current, evidence and pattern Markdown bodies, 
 
 ```bash
 python3 -B scripts/publish_library.py --root . publish --edition next-accepted --output /tmp/next-knowledge
-python3 -B src/managed_ai/library/cli.py --library /tmp/next-knowledge verify
+python3 -B src/managed_ai_information/library/cli.py --library /tmp/next-knowledge verify
 python3 -B scripts/publish_library.py --root . audit --library /tmp/next-knowledge
 ```
 

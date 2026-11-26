@@ -1,6 +1,6 @@
 # Knowledge acquisition and product contract
 
-From the Managed AI package root, `src/managed_ai/library/cli.py --store STORE discover --query TEXT` searches the selected store catalogue and `show SOURCE_ID` reads a selected body. The library operations below use `src/managed_ai/library/cli.py --library LIBRARY` and require that library’s catalogue and objects.
+From the Managed AI Information package root, `src/managed_ai_information/library/cli.py --store STORE discover --query TEXT` searches the selected store catalogue and `show SOURCE_ID` reads a selected body. The library operations below use `src/managed_ai_information/library/cli.py --library LIBRARY` and require that library’s catalogue and objects.
 
 ## Participation and source identity
 

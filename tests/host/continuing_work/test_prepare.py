@@ -10,11 +10,11 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.host.continuing_work.continuing_work import Host  # noqa: E402
+from managed_ai_information.host.continuing_work.continuing_work import Host  # noqa: E402
 
 ENGINE = (
-    SRC_ROOT / "managed_ai/store/manage_store.py"
-    if (SRC_ROOT / "managed_ai/store/manage_store.py").is_file()
+    SRC_ROOT / "managed_ai_information/store/manage_store.py"
+    if (SRC_ROOT / "managed_ai_information/store/manage_store.py").is_file()
     else REPO_ROOT / "engine/runtime/manage_store.py"
 )
 

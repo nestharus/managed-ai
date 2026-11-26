@@ -18,15 +18,15 @@ if __package__:
 else:
     from native_test_paths import ENGINE
 
-from managed_ai.core.exchange import open_contact
-from managed_ai.core.ownership import external_root
-from managed_ai.core.storage import AdmissionContended, exclusive, sha, shared
-from managed_ai.deployment.controller import Deployment
-from managed_ai.store import domain_api
-from managed_ai.store.cli.command_dispatch import emit
-from managed_ai.store.composition.composition_change_notice import notice
-from managed_ai.store.composition.composition_opportunities import guarded_inventory
-from managed_ai.store.system import ENTRYPOINT, EngineEntrypoint, System
+from managed_ai_information.core.exchange import open_contact
+from managed_ai_information.core.ownership import external_root
+from managed_ai_information.core.storage import AdmissionContended, exclusive, sha, shared
+from managed_ai_information.deployment.controller import Deployment
+from managed_ai_information.store import domain_api
+from managed_ai_information.store.cli.command_dispatch import emit
+from managed_ai_information.store.composition.composition_change_notice import notice
+from managed_ai_information.store.composition.composition_opportunities import guarded_inventory
+from managed_ai_information.store.system import ENTRYPOINT, EngineEntrypoint, System
 
 
 class Wave4CoreTests(unittest.TestCase):
@@ -443,12 +443,12 @@ class Wave4CoreTests(unittest.TestCase):
         emit Wave 4 exchange CLI path."""
         import zipfile
 
-        from managed_ai.core.exchange.publication import _publication_basis
-        from managed_ai.core.ownership import relative_path
-        from managed_ai.library.format import relative as lib_relative
-        from managed_ai.store.protocol.inputs import artifact_target
-        from managed_ai.store.selection.domain_selection import source_path
-        from managed_ai.store.selection.installed_catalogue import InstalledCatalogue
+        from managed_ai_information.core.exchange.publication import _publication_basis
+        from managed_ai_information.core.ownership import relative_path
+        from managed_ai_information.library.format import relative as lib_relative
+        from managed_ai_information.store.protocol.inputs import artifact_target
+        from managed_ai_information.store.selection.domain_selection import source_path
+        from managed_ai_information.store.selection.installed_catalogue import InstalledCatalogue
 
         bad_paths = (
             "C:escape.txt",

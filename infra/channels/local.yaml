@@ -1,18 +1,18 @@
-# Local ephemeral k3d channel contract for Managed AI.
+# Local ephemeral k3d channel contract for Managed AI Information.
 channel: local
 provider: k3d-local
-cluster_name: managed-ai-local
+cluster_name: managed-ai-information-local
 k3s_version: v1.31.4-k3s1
 registry:
-  name: managed-ai-local
-  endpoint: managed-ai-local:5000
+  name: managed-ai-information-local
+  endpoint: managed-ai-information-local:5000
   ephemeral: true
-kubeconfig: ~/.kube/managed-ai-local.yaml
+kubeconfig: ~/.kube/managed-ai-information-local.yaml
 exposure: loopback-gateway
 control_surface:
   bind_address: 127.0.0.1
   port: 8480
 state:
-  authoritative_volume: managed-ai-store
+  authoritative_volume: managed-ai-information-store
   storage_class: local-path
   size: 4Gi

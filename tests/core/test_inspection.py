@@ -15,8 +15,8 @@ if str(_REPO) not in sys.path:
 from tests._paths import ENGINE as ROOT  # noqa: E402
 
 # isort: split
-from managed_ai.core.exchange import Exchange  # noqa: E402
-from managed_ai.core.exchange import publication as module  # noqa: E402
+from managed_ai_information.core.exchange import Exchange  # noqa: E402
+from managed_ai_information.core.exchange import publication as module  # noqa: E402
 
 
 class InspectionTests(unittest.TestCase):

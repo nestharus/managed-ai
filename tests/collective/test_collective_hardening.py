@@ -10,12 +10,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = REPO_ROOT / "src"
-COLLECTIVE_DIR = SRC_ROOT / "managed_ai/collective"
+COLLECTIVE_DIR = SRC_ROOT / "managed_ai_information/collective"
 MANAGE_CLI = COLLECTIVE_DIR / "__main__.py"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.collective.store import contract, database  # noqa: E402
+from managed_ai_information.collective.store import contract, database  # noqa: E402
 
 
 class CollectiveHardeningTests(unittest.TestCase):
@@ -38,8 +38,8 @@ class CollectiveHardeningTests(unittest.TestCase):
     def test_refuses_database_inside_optional_collective_and_engine(self):
         for forbidden in (
             COLLECTIVE_DIR / "forbidden.sqlite",
-            SRC_ROOT / "managed_ai/forbidden.sqlite",
-            SRC_ROOT / "managed_ai/host/forbidden.sqlite",
+            SRC_ROOT / "managed_ai_information/forbidden.sqlite",
+            SRC_ROOT / "managed_ai_information/host/forbidden.sqlite",
         ):
             with self.subTest(forbidden=str(forbidden)):
                 self.assertTrue(database.inside_product(forbidden, COLLECTIVE_DIR))

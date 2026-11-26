@@ -16,7 +16,7 @@ from tests._paths import SRC as _SRC  # noqa: E402
 
 _ = _SRC
 
-from managed_ai.core.storage import (  # noqa: E402
+from managed_ai_information.core.storage import (  # noqa: E402
     IDX_FANOUT_OFFSET,
     MAX_BYTES,
     OCC_LIVE_DEFLATE,
@@ -27,7 +27,7 @@ from managed_ai.core.storage import (  # noqa: E402
     parse_pack_current,
     sha,
 )
-from managed_ai.store.records.pack_slab import write_pack_current, write_shard  # noqa: E402
+from managed_ai_information.store.records.pack_slab import write_pack_current, write_shard  # noqa: E402
 
 
 class CoreStoragePackTests(unittest.TestCase):

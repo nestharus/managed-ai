@@ -22,10 +22,10 @@ from tests._paths import ENGINE as ROOT  # noqa: E402
 from tests._paths import cleanup_tempdir  # noqa: E402
 
 # isort: split
-from managed_ai.core import storage  # noqa: E402
-from managed_ai.core.exchange import Exchange, carrier_receipts  # noqa: E402
-from managed_ai.core.exchange.transport.collector import material, worker_active  # noqa: E402
-from managed_ai.core.storage import MAX_BYTES, encode, sha, write_json  # noqa: E402
+from managed_ai_information.core import storage  # noqa: E402
+from managed_ai_information.core.exchange import Exchange, carrier_receipts  # noqa: E402
+from managed_ai_information.core.exchange.transport.collector import material, worker_active  # noqa: E402
+from managed_ai_information.core.storage import MAX_BYTES, encode, sha, write_json  # noqa: E402
 
 
 def until(predicate):

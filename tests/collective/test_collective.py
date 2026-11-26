@@ -16,7 +16,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 from importlib import import_module  # noqa: E402
 
-from managed_ai.collective import CONTEXT_LIMIT, Collective, Refused  # noqa: E402
+from managed_ai_information.collective import CONTEXT_LIMIT, Collective, Refused  # noqa: E402
 
 notice_module = import_module(Collective.__module__ + ".notices")
 

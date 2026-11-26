@@ -1,20 +1,20 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: managed-ai
+namespace: managed-ai-information
 resources:
   - ../../base
 labels:
   - pairs:
-      managed-ai.dev/channel: dev
+      managed-ai-information.dev/channel: dev
     includeSelectors: false
 images:
-  - name: ghcr.io/nestharus/managed-ai
-    newName: ghcr.io/nestharus/managed-ai
+  - name: ghcr.io/nestharus/managed-ai-information
+    newName: ghcr.io/nestharus/managed-ai-information
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
 patches:
   - target:
       kind: PersistentVolumeClaim
-      name: managed-ai-store
+      name: managed-ai-information-store
     patch: |-
       - op: replace
         path: /spec/resources/requests/storage

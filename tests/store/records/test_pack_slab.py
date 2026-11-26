@@ -25,7 +25,7 @@ else:
         _sys.path.insert(0, _repo)
     from tests.store.native_test_paths import ENGINE
 
-from managed_ai.core.storage import (
+from managed_ai_information.core.storage import (
     OCC_LIVE_DEFLATE,
     OCC_LIVE_RAW,
     OCC_LIVE_ZSTD,
@@ -37,20 +37,20 @@ from managed_ai.core.storage import (
     sha,
     shared,
 )
-from managed_ai.store.records.cold_archive import (
+from managed_ai_information.store.records.cold_archive import (
     execute_archive_records,
     plan_archive_records,
     restore_archived_records,
 )
-from managed_ai.store.records.object_audit import audit_objects, gc_objects
-from managed_ai.store.records.pack_slab import (
+from managed_ai_information.store.records.object_audit import audit_objects, gc_objects
+from managed_ai_information.store.records.pack_slab import (
     PACK_OBJECTS_PLAN_FORMAT,
     PACK_OBJECTS_RECEIPT_FORMAT,
     execute_pack_objects,
     write_pack_current,
     write_shard,
 )
-from managed_ai.store.system import System
+from managed_ai_information.store.system import System
 
 
 def _write_json(path: Path, value: dict) -> Path:
@@ -531,7 +531,8 @@ class PackSlabTests(unittest.TestCase):
                 return real_pack_session(packs_dir)
 
             with mock.patch(
-                "managed_ai.store.records.cold_archive.PackSession", side_effect=tracking_session
+                "managed_ai_information.store.records.cold_archive.PackSession",
+                side_effect=tracking_session,
             ):
                 audit_objects(system)
             self.assertEqual(cold_opens, 1)
@@ -540,8 +541,8 @@ class PackSlabTests(unittest.TestCase):
         """P8-1: packed ObjectStore.read hashes once; P8-2: execute_pack_objects collects loose
         candidates once.
         """
-        import managed_ai.core.storage as storage_mod
-        import managed_ai.store.records.pack_slab as pack_slab_mod
+        import managed_ai_information.core.storage as storage_mod
+        import managed_ai_information.store.records.pack_slab as pack_slab_mod
 
         system = System(self.store)
         with exclusive(system.ex.root / "owner.lock"):
@@ -572,16 +573,16 @@ class PackSlabTests(unittest.TestCase):
         """Wave 9: explain_delivery, turn_retirement, compaction, transfer & composition share
         PackSession cleanly.
         """
-        import managed_ai.core.storage as storage_mod
-        from managed_ai.store.composition.composition import Composition
-        from managed_ai.store.records.compaction import (
+        import managed_ai_information.core.storage as storage_mod
+        from managed_ai_information.store.composition.composition import Composition
+        from managed_ai_information.store.records.compaction import (
             execute_compact_objects,
             plan_compact_objects,
         )
-        from managed_ai.store.records.record_transfer import export as export_record
-        from managed_ai.store.records.record_transfer import inspect as inspect_transfer
-        from managed_ai.store.records.record_transfer import receive as receive_transfer
-        from managed_ai.store.turns.turn_retirement import plan_turn_retirement
+        from managed_ai_information.store.records.record_transfer import export as export_record
+        from managed_ai_information.store.records.record_transfer import inspect as inspect_transfer
+        from managed_ai_information.store.records.record_transfer import receive as receive_transfer
+        from managed_ai_information.store.turns.turn_retirement import plan_turn_retirement
 
         system = System(self.store)
         peer_store = self.root / "peer-store"
@@ -635,7 +636,7 @@ class PackSlabTests(unittest.TestCase):
             system.put({"id": "info-w9", "kind": "note", "content": {"v": 1}}, 0)
             c_head = system.show("contract-w9")
             i_head = system.show("info-w9")
-            from managed_ai.store.query.information import Information
+            from managed_ai_information.store.query.information import Information
 
             Information(system).wrap(
                 {
@@ -781,7 +782,7 @@ class PackSlabTests(unittest.TestCase):
         return True
 
     def _remove_dir_link(self, link: Path) -> None:
-        from managed_ai.platform import is_reparse_or_symlink
+        from managed_ai_information.platform import is_reparse_or_symlink
 
         if not is_reparse_or_symlink(link):
             return
@@ -856,12 +857,12 @@ class PackSlabTests(unittest.TestCase):
         """QA9-2/3/4: 0xFF .occ byte, truncated .slab, and missing slab_bytes raise ValueError
         struct.error/KeyError).
         """
-        from managed_ai.core.pack_reader import (
+        from managed_ai_information.core.pack_reader import (
             OCC_HEADER_STRUCT,
             SLAB_HEADER_STRUCT,
             PackShardHandle,
         )
-        from managed_ai.store.records.pack_gc import (
+        from managed_ai_information.store.records.pack_gc import (
             _extract_verified_live_frames,
             gc_packed_objects,
         )
@@ -1047,7 +1048,7 @@ class PackSlabTests(unittest.TestCase):
                 return real_session(packs_dir, **kwargs)
 
             with mock.patch(
-                "managed_ai.store.records.cold_archive.PackSession",
+                "managed_ai_information.store.records.cold_archive.PackSession",
                 side_effect=counting_cold_session,
             ):
                 restored = restore_archived_records(

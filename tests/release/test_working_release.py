@@ -18,7 +18,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
-ENGINE = REPO / "src/managed_ai"
+ENGINE = REPO / "src/managed_ai_information"
 RELEASE = REPO / "scripts/release"
 PACKAGE = runpy.run_path(str(RELEASE / "package.py"))
 REFRESH = runpy.run_path(str(RELEASE / "refresh_guidance.py"))
@@ -36,7 +36,7 @@ def _write_json(path, value):
 
 
 def _build_minimal_bundle(root, *, include_siblings=False):
-    core = root / "src/managed_ai"
+    core = root / "src/managed_ai_information"
     release = root / "scripts/release"
     release.mkdir(parents=True)
     (core / "store").mkdir(parents=True)
@@ -78,7 +78,7 @@ def _build_minimal_bundle(root, *, include_siblings=False):
 
 
 def _write_peer_components(root, files):
-    companions = root / "src/managed_ai/companions"
+    companions = root / "src/managed_ai_information/companions"
     peer = companions / "peer"
     peer.mkdir(parents=True, exist_ok=True)
     manifest_files = {}
@@ -145,7 +145,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             bundle = tmp / "working-release"
             shutil.copytree(
                 ENGINE,
-                bundle / "src/managed_ai",
+                bundle / "src/managed_ai_information",
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "companions"),
             )
             shutil.copytree(
@@ -163,7 +163,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 [
                     sys.executable,
                     "-B",
-                    str(bundle / "src/managed_ai/store/manage_store.py"),
+                    str(bundle / "src/managed_ai_information/store/manage_store.py"),
                     "--root",
                     str(store),
                     "init",
@@ -183,28 +183,29 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 [
                     sys.executable,
                     "-B",
-                    str(bundle / "src/managed_ai/deployment/select_deployment.py"),
+                    str(bundle / "src/managed_ai_information/deployment/select_deployment.py"),
                     "--deployment",
                     str(deployment),
                     "init",
                     "--store",
                     str(store),
                     "--engine",
-                    str(bundle / "src/managed_ai"),
+                    str(bundle / "src/managed_ai_information"),
                 ],
                 cwd=bundle,
                 check=True,
                 capture_output=True,
                 text=True,
             )
-            self.assertFalse((bundle / "src/managed_ai/companions").exists())
+            self.assertFalse((bundle / "src/managed_ai_information/companions").exists())
 
-            core = (bundle / "src/managed_ai").resolve(strict=True)
+            core = (bundle / "src/managed_ai_information").resolve(strict=True)
             tree = PACKAGE["members"](bundle, core)
             native = {
-                name[len("src/managed_ai/") :]: row
+                name[len("src/managed_ai_information/") :]: row
                 for name, row in tree.items()
-                if name.startswith("src/managed_ai/") and name != "src/managed_ai/MANIFEST.json"
+                if name.startswith("src/managed_ai_information/")
+                and name != "src/managed_ai_information/MANIFEST.json"
             }
             PACKAGE["verify_bundle"](bundle, core, native, tree=tree)
 
@@ -226,8 +227,8 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             payload = json.loads(packed.stdout)
             self.assertEqual(payload["status"], "packaged")
             self.assertTrue((bundle / "MANIFEST.json").is_file())
-            self.assertTrue((bundle / "src/managed_ai/MANIFEST.json").is_file())
-            self.assertTrue((bundle / "src/managed_ai/SOURCES.md").is_file())
+            self.assertTrue((bundle / "src/managed_ai_information/MANIFEST.json").is_file())
+            self.assertTrue((bundle / "src/managed_ai_information/SOURCES.md").is_file())
             with zipfile.ZipFile(archive) as zf:
                 self.assertIsNone(zf.testzip())
                 extracted_parent = tmp / "extracted"
@@ -238,7 +239,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 [
                     sys.executable,
                     "-B",
-                    str(extracted / "src/managed_ai/deployment/select_deployment.py"),
+                    str(extracted / "src/managed_ai_information/deployment/select_deployment.py"),
                     "--deployment",
                     str(extracted / "deployments/work"),
                     "status",
@@ -254,7 +255,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 [
                     sys.executable,
                     "-B",
-                    str(extracted / "src/managed_ai/deployment/select_deployment.py"),
+                    str(extracted / "src/managed_ai_information/deployment/select_deployment.py"),
                     "--deployment",
                     str(extracted / "deployments/work"),
                     "system",
@@ -268,7 +269,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             self.assertEqual(json.loads(sys_status.stdout)["instance_id"], "working-release-test")
 
             # Also succeeds when companions/ exists without companions/peer/
-            pub = bundle / "src/managed_ai/companions/publication_review"
+            pub = bundle / "src/managed_ai_information/companions/publication_review"
             pub.mkdir(parents=True)
             (pub / "PUBLICATION.md").write_text("# Publication\n", encoding="utf-8")
             refreshed = subprocess.run(
@@ -349,9 +350,9 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
 
             # Tampered component file fails before rewriting MANIFEST.json
             prior_manifest = (bundle / "MANIFEST.json").read_bytes()
-            (bundle / "src/managed_ai/companions/workbench/workbench_agent.py").write_bytes(
-                b"AGENT = 2\n"
-            )
+            (
+                bundle / "src/managed_ai_information/companions/workbench/workbench_agent.py"
+            ).write_bytes(b"AGENT = 2\n")
             tampered = subprocess.run(
                 [
                     sys.executable,
@@ -447,7 +448,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
-            pub = bundle / "src/managed_ai/Companions/publication_review"
+            pub = bundle / "src/managed_ai_information/Companions/publication_review"
             pub.mkdir(parents=True)
             (pub / "PUBLICATION.md").write_text("# Publication\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "expected companions, observed Companions"):
@@ -457,7 +458,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
             _write_peer_components(bundle, {"workbench/workbench_agent.py": b"AGENT = 1\n"})
-            rename_exact(bundle / "src/managed_ai/companions", "Companions")
+            rename_exact(bundle / "src/managed_ai_information/companions", "Companions")
             with self.assertRaisesRegex(ValueError, "expected companions, observed Companions"):
                 PACKAGE["verify_workbench_components"](bundle)
 
@@ -484,7 +485,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             _build_minimal_bundle(bundle)
             _write_peer_components(bundle, {"workbench/workbench_agent.py": b"AGENT = 1\n"})
             rename_exact(
-                bundle / "src/managed_ai/companions/workbench/workbench_agent.py",
+                bundle / "src/managed_ai_information/companions/workbench/workbench_agent.py",
                 "Workbench_Agent.py",
             )
             with self.assertRaisesRegex(
@@ -497,7 +498,9 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             bundle = Path(temporary) / "bundle"
             _build_minimal_bundle(bundle)
             _write_peer_components(bundle, {"workbench/configs/sample.json": b"{}\n"})
-            rename_exact(bundle / "src/managed_ai/companions/workbench/configs", "Configs")
+            rename_exact(
+                bundle / "src/managed_ai_information/companions/workbench/configs", "Configs"
+            )
             with self.assertRaisesRegex(
                 ValueError, "expected workbench/configs, observed workbench/Configs"
             ):
@@ -511,16 +514,16 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             _build_minimal_bundle(bundle)
             outside = tmp / "outside_peer"
             outside.mkdir()
-            (bundle / "src/managed_ai/companions").mkdir()
-            (bundle / "src/managed_ai/companions/peer").symlink_to(outside)
+            (bundle / "src/managed_ai_information/companions").mkdir()
+            (bundle / "src/managed_ai_information/companions/peer").symlink_to(outside)
             with self.assertRaisesRegex(ValueError, "ordinary files and directories"):
                 PACKAGE["verify_workbench_components"](bundle)
 
-            (bundle / "src/managed_ai/companions/peer").unlink()
+            (bundle / "src/managed_ai_information/companions/peer").unlink()
             _write_peer_components(bundle, {"workbench/workbench_agent.py": b"AGENT = 1\n"})
             ext_file = tmp / "ext.py"
             ext_file.write_bytes(b"AGENT = 1\n")
-            target = bundle / "src/managed_ai/companions/workbench/workbench_agent.py"
+            target = bundle / "src/managed_ai_information/companions/workbench/workbench_agent.py"
             target.unlink()
             target.symlink_to(ext_file)
             with self.assertRaisesRegex(ValueError, "ordinary files and directories"):
@@ -638,7 +641,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             ):
                 REFRESH["render"](core)
 
-            # Traversal escaping above bundle root (3 levels up from src/managed_ai) must be
+            # Traversal escaping above bundle root (3 levels up from src/package) must be
             # rejected
             (bundle / "scripts/release/current_sources.json").write_text(
                 json.dumps(
@@ -879,11 +882,11 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             )
             (bundle / ".gitignore").write_text("__pycache__/\n*.pyc\n", encoding="utf-8")
             # Declarative COMPONENTS.json (omitting "identity" in Git checkouts)
-            comp_file = bundle / "src/managed_ai/companions/workbench/io_utils.py"
+            comp_file = bundle / "src/managed_ai_information/companions/workbench/io_utils.py"
             comp_file.parent.mkdir(parents=True)
             comp_raw = b"IO = 1\n"
             comp_file.write_bytes(comp_raw)
-            peer = bundle / "src/managed_ai/companions/peer"
+            peer = bundle / "src/managed_ai_information/companions/peer"
             peer.mkdir(parents=True)
             _write_json(
                 peer / "COMPONENTS.json",
@@ -915,18 +918,18 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 stamped["files"]["workbench/io_utils.py"]["identity"],
                 {"bytes": len(comp_raw), "sha256": _sha256(comp_raw)},
             )
-            self.assertTrue((bundle / "src/managed_ai/SOURCES.md").is_file())
+            self.assertTrue((bundle / "src/managed_ai_information/SOURCES.md").is_file())
             manifest = json.loads((bundle / "MANIFEST.json").read_text(encoding="utf-8"))
             inner_manifest = json.loads(
-                (bundle / "src/managed_ai/MANIFEST.json").read_text(encoding="utf-8")
+                (bundle / "src/managed_ai_information/MANIFEST.json").read_text(encoding="utf-8")
             )
             self.assertIn("LICENSE", manifest["members"])
             self.assertIn("pyproject.toml", manifest["members"])
             self.assertIn(".gitignore", manifest["members"])
-            self.assertIn("src/managed_ai/SOURCES.md", manifest["members"])
+            self.assertIn("src/managed_ai_information/SOURCES.md", manifest["members"])
             self.assertEqual(
                 inner_manifest["members"]["companions/peer/COMPONENTS.json"],
-                manifest["members"]["src/managed_ai/companions/peer/COMPONENTS.json"],
+                manifest["members"]["src/managed_ai_information/companions/peer/COMPONENTS.json"],
             )
             # W5-B11: allow_abbrev=False refuses abbreviated flags on package.py &
             # refresh_guidance.py
@@ -942,7 +945,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                     "-B",
                     str(RELEASE / "refresh_guidance.py"),
                     "--ro",
-                    str(bundle / "src/managed_ai"),
+                    str(bundle / "src/managed_ai_information"),
                 ],
                 capture_output=True,
                 text=True,
@@ -960,7 +963,7 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 (coloc_src, "COLOCATED", False),
                 (ext_src, "EXTERNAL", True),
             ):
-                pkg = src_root / "managed_ai"
+                pkg = src_root / "managed_ai_information"
                 (pkg / "store").mkdir(parents=True)
                 (pkg / "__init__.py").write_text(f"LABEL = {label!r}\n", encoding="utf-8")
                 (pkg / "store/__init__.py").write_text("", encoding="utf-8")
@@ -971,8 +974,8 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                     )
                 (pkg / "store/system.py").write_text(
                     "def run_lazy():\n"
-                    "    from managed_ai.store.shared_tag import TAG\n"
-                    "    from managed_ai.store.ext_only_helper import ORIGIN\n"
+                    "    from managed_ai_information.store.shared_tag import TAG\n"
+                    "    from managed_ai_information.store.ext_only_helper import ORIGIN\n"
                     "    return (TAG, ORIGIN)\n",
                     encoding="utf-8",
                 )
@@ -981,13 +984,15 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
             saved = {
                 k: sys.modules.pop(k)
                 for k in list(sys.modules)
-                if k == "managed_ai" or k.startswith("managed_ai.")
+                if k == "managed_ai_information" or k.startswith("managed_ai_information.")
             }
             sys.path.insert(0, coloc_str)
             try:
-                coloc_mod = importlib.import_module("managed_ai")
+                coloc_mod = importlib.import_module("managed_ai_information")
                 self.assertEqual(coloc_mod.LABEL, "COLOCATED")
-                with PACKAGE["_with_engine"](ext_src / "managed_ai", "store/system.py") as api:
+                with PACKAGE["_with_engine"](
+                    ext_src / "managed_ai_information", "store/system.py"
+                ) as api:
                     # Lazy imports inside the external module MUST bind to external, not colocated
                     self.assertEqual(api["run_lazy"](), ("EXTERNAL", "EXTERNAL_ONLY"))
                 # C42-O1: custom-named flattened standalone package engine dir also isolates cleanly
@@ -1001,20 +1006,20 @@ class WorkingReleaseVerificationTest(unittest.TestCase):
                 )
                 (custom / "store/system.py").write_text(
                     "def run_lazy():\n"
-                    "    from managed_ai.store.shared_tag import TAG\n"
-                    "    from managed_ai.store.ext_only_helper import ORIGIN\n"
+                    "    from managed_ai_information.store.shared_tag import TAG\n"
+                    "    from managed_ai_information.store.ext_only_helper import ORIGIN\n"
                     "    return (TAG, ORIGIN)\n",
                     encoding="utf-8",
                 )
                 with PACKAGE["_with_engine"](custom, "store/system.py") as api:
                     self.assertEqual(api["run_lazy"](), ("CUSTOM", "CUSTOM_ONLY"))
-                # After exiting context, colocated managed_ai MUST be restored cleanly
-                self.assertIs(sys.modules.get("managed_ai"), coloc_mod)
-                self.assertEqual(sys.modules["managed_ai"].LABEL, "COLOCATED")
-                self.assertNotIn("managed_ai.store.ext_only_helper", sys.modules)
+                # After exiting context, colocated managed_ai_information MUST be restored cleanly
+                self.assertIs(sys.modules.get("managed_ai_information"), coloc_mod)
+                self.assertEqual(sys.modules["managed_ai_information"].LABEL, "COLOCATED")
+                self.assertNotIn("managed_ai_information.store.ext_only_helper", sys.modules)
             finally:
                 for k in list(sys.modules):
-                    if k == "managed_ai" or k.startswith("managed_ai."):
+                    if k == "managed_ai_information" or k.startswith("managed_ai_information."):
                         sys.modules.pop(k, None)
                 sys.modules.update(saved)
                 if coloc_str in sys.path:

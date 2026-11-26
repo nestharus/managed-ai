@@ -9,8 +9,8 @@
       "link_base": "store/GUIDE.md",
       "presentation": "store/GUIDE.md",
       "kind": "guide",
-      "sha256": "2133f8d1c389d786dfc0bc11c37365a5719a95099d4d61670a93f70c3548431a",
-      "bytes": 8569,
+      "sha256": "966d524ffed3ef413c7285ec126fddeb44964c016d0145347247707fb778d1cb",
+      "bytes": 8581,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -19,8 +19,8 @@
       "link_base": "../../docs/engine/store/COMPOSITION.md",
       "presentation": "../../docs/engine/store/COMPOSITION.md",
       "kind": "guide",
-      "sha256": "682bfb5c76c27caa9d1da2cf408870825113120a9dceb650d21feca193e711e7",
-      "bytes": 19125,
+      "sha256": "75d7bd1931f6e8cf7bae3295cfe600806658326cd5ca5338ae56fb4dd62b370a",
+      "bytes": 19149,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -29,8 +29,8 @@
       "link_base": "../../docs/engine/store/README.md",
       "presentation": "../../docs/engine/store/README.md",
       "kind": "guide",
-      "sha256": "c57fbd895489eddc7f7155f4f0ad3fbe9d4eb0214815f792c33d47946083694a",
-      "bytes": 50948,
+      "sha256": "8f0fec250b9085e25975a14871b0537ba7dcae889f15ab5fae047fafb54f9907",
+      "bytes": 51020,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -49,8 +49,8 @@
       "link_base": "../../docs/collective/README.md",
       "presentation": "../../docs/collective/README.md",
       "kind": "guide",
-      "sha256": "e256b5f14b8641146910dbd16d03505cda2af77118e8660968e1b721ee709b27",
-      "bytes": 34161,
+      "sha256": "37ea291be9b6b92873cce3265686d32a3211188e6cc3aaafda6c34cd9ff70e9b",
+      "bytes": 34245,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -59,8 +59,8 @@
       "link_base": "../../docs/engine/library/README.md",
       "presentation": "../../docs/engine/library/README.md",
       "kind": "guide",
-      "sha256": "1ca32aa3f6fb349270a7cb31f3e8c9506f49bd23c03194558319f7d5b46fa905",
-      "bytes": 8909,
+      "sha256": "5397425a1a63d0ee395766e534176deb80dd4e45165176528d5dc422bcfcf9a0",
+      "bytes": 9053,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -69,8 +69,8 @@
       "link_base": "../../docs/engine/library/CONTRACT.md",
       "presentation": "../../docs/engine/library/CONTRACT.md",
       "kind": "guide",
-      "sha256": "b4915821b86709d115c7750c8db2a7f18375dacdcdc8e9006cc5055341cfeac3",
-      "bytes": 24150,
+      "sha256": "87dfddc50f8a824cd14a944578c8c326492b1b761340e50722ffeda68b5bc0b6",
+      "bytes": 24186,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -79,8 +79,8 @@
       "link_base": "../../docs/engine/library/MIGRATION.md",
       "presentation": "../../docs/engine/library/MIGRATION.md",
       "kind": "guide",
-      "sha256": "670aaec1f59a2a6bf5477229ef701c450b4a0917533b46d518ef0c1c2aee7281",
-      "bytes": 6362,
+      "sha256": "3040b05f5e732049c1b382522ee070967687993d0b25090ca2090cb669db31ac",
+      "bytes": 6398,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -89,8 +89,8 @@
       "link_base": "../../docs/engine/library/RESEARCH.md",
       "presentation": "../../docs/engine/library/RESEARCH.md",
       "kind": "guide",
-      "sha256": "3fde79feb3ed217e8907b050df7c5f5dcbe6adc71b135d5c5fcda025df043a00",
-      "bytes": 15137,
+      "sha256": "771b84318a930fbff1ed63eb5a369e7858786b7ba0e1bedf9c79a6ed31273a50",
+      "bytes": 15161,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -109,8 +109,8 @@
       "link_base": "../../docs/engine/CLI-FIELD-REFERENCE.md",
       "presentation": "../../docs/engine/CLI-FIELD-REFERENCE.md",
       "kind": "guide",
-      "sha256": "a8f334d1fbe47a15103d733f563f426e7bf49e90e39ae82be9dd255edcf17e44",
-      "bytes": 24262,
+      "sha256": "cac307f416a7b08da51b35284185e92d084ab3eb888f1aefb302971ed85e390b",
+      "bytes": 24310,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -219,8 +219,8 @@
       "link_base": "../../docs/engine/host/README.md",
       "presentation": "../../docs/engine/host/README.md",
       "kind": "guide",
-      "sha256": "ceefcb36171df79d5d367511f708e6db7d43ba32b0fec7c690ce53a0677a5024",
-      "bytes": 24036,
+      "sha256": "1ac8db6ddbb83c42e287176792cc039f1eaa36f714e82fc0701c23e4ab09f700",
+      "bytes": 24084,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -269,8 +269,8 @@
       "link_base": "../../docs/engine/INSTANCES.md",
       "presentation": "../../docs/engine/INSTANCES.md",
       "kind": "guide",
-      "sha256": "948316ce90dce1166d60b2103f684e12919fdb120d703373dc4cea4ef08abe5c",
-      "bytes": 14640,
+      "sha256": "7c4fa68558cb3f27efa97753c9825477e18049d55390e42642ad7efd8a9cbbf0",
+      "bytes": 14712,
       "provenance": "Canonical current shared-engine, store, schema and domain contract."
     },
     {
@@ -279,8 +279,8 @@
       "link_base": "../../docs/engine/host/SIGNAL-FIELD.md",
       "presentation": "../../docs/engine/host/SIGNAL-FIELD.md",
       "kind": "guide",
-      "sha256": "f2c3cc69699ae04c330f69d0a45f3b3e6097014679ba91b80d58859c02310554",
-      "bytes": 17488,
+      "sha256": "92298ff15af40ad9babc6a33e01649b6ac1aada01005bce288273a14b2ea08ad",
+      "bytes": 17524,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     }
   ]

@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "managed-ai"
+name = "managed-ai-information"
 dynamic = ["version"]
 description = "Schema-governed local store, explicit continuation exchange, and shared deployment engine"
 readme = "README.md"
@@ -30,9 +30,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/nestharus/managed-ai"
-Repository = "https://github.com/nestharus/managed-ai"
-Issues = "https://github.com/nestharus/managed-ai/issues"
+Homepage = "https://github.com/nestharus/managed-ai-information"
+Repository = "https://github.com/nestharus/managed-ai-information"
+Issues = "https://github.com/nestharus/managed-ai-information/issues"
 
 [dependency-groups]
 dev = [
@@ -42,24 +42,30 @@ dev = [
 ]
 
 [project.scripts]
-managed-ai = "managed_ai.store.manage_store:main"
-managed-ai-deploy = "managed_ai.deployment.select_deployment:main"
-managed-ai-library = "managed_ai.library.cli:main"
-managed-ai-attend = "managed_ai.core.attention:main"
-managed-ai-work = "managed_ai.core.exchange.cli:main"
-managed-ai-collect = "managed_ai.core.exchange.transport.collector:main"
-g60-attend = "managed_ai.core.attention:main"
-g60-work = "managed_ai.core.exchange.cli:main"
-g60-collect = "managed_ai.core.exchange.transport.collector:main"
+managed-ai-information = "managed_ai_information.store.manage_store:main"
+managed-ai-information-deploy = "managed_ai_information.deployment.select_deployment:main"
+managed-ai-information-library = "managed_ai_information.library.cli:main"
+managed-ai-information-attend = "managed_ai_information.core.attention:main"
+managed-ai-information-work = "managed_ai_information.core.exchange.cli:main"
+managed-ai-information-collect = "managed_ai_information.core.exchange.transport.collector:main"
+managed-ai = "managed_ai_information.store.manage_store:main"
+managed-ai-deploy = "managed_ai_information.deployment.select_deployment:main"
+managed-ai-library = "managed_ai_information.library.cli:main"
+managed-ai-attend = "managed_ai_information.core.attention:main"
+managed-ai-work = "managed_ai_information.core.exchange.cli:main"
+managed-ai-collect = "managed_ai_information.core.exchange.transport.collector:main"
+g60-attend = "managed_ai_information.core.attention:main"
+g60-work = "managed_ai_information.core.exchange.cli:main"
+g60-collect = "managed_ai_information.core.exchange.transport.collector:main"
 
 [tool.setuptools.dynamic]
-version = {attr = "managed_ai.__version__"}
+version = {attr = "managed_ai_information.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-managed_ai = [
+managed_ai_information = [
     "py.typed",
     "CURRENT-RELEASE.json",
     "core/NOTICE.md",

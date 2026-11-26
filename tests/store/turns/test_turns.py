@@ -23,9 +23,9 @@ CUT = """
 import os,sys
 sys.path.insert(0,sys.argv.pop(1))
 point=sys.argv.pop(1)
-from managed_ai.store import system
-from managed_ai.store.turns import preparation_journal as turn_preparation
-from managed_ai.core import attention
+from managed_ai_information.store import system
+from managed_ai_information.store.turns import preparation_journal as turn_preparation
+from managed_ai_information.core import attention
 if point=='private-packet':
     turn_preparation.TurnPreparation.seal=lambda *args: os._exit(61)
 elif point=='sealed':

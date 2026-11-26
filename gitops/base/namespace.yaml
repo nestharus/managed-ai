@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: managed-ai
+  name: managed-ai-information
   labels:
-    app.kubernetes.io/part-of: managed-ai
+    app.kubernetes.io/part-of: managed-ai-information
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/warn: restricted

@@ -16,23 +16,23 @@ Deployment dispatch checks the selected source again before loading its native e
 
 The invoked wrapper's local deployment controller issues the activation receipt. Selecting a newer engine through an earlier controller retains that controller's reporting behavior. A completed `activate` prints verified deployment status on stdout. If candidate removal or status readback raises a handled error after the descriptor write completes, `activate` exits 2 and emits JSON on stderr with `status` set to `committed_incomplete`, `operation` set to `activate`, the `error`, and the SHA-256 of the exact descriptor written (including the activation reason) in `descriptor_sha256`. A `failed_step` of `candidate_cleanup` means removal of the staged file reported an error before status readback. A `failed_step` of `status_readback` means removal succeeded and reading or verifying the resulting selection failed.
 
-Run `src/managed_ai/deployment/select_deployment.py --deployment DEPLOYMENT status` and compare its `descriptor_sha256` with the reported digest. If status refuses, inspect the descriptor and its selected code and store binding for that deployment. A leftover `candidate.json` is staging data. Candidate removal has no separate directory sync, so recheck staging after crash recovery. For another selection, including a return to qualified earlier code, stage it afresh and activate with the observed current descriptor digest, the fresh candidate digest and a reason. A writer error can occur on either side of replacement. Guard release or output can also fail after the selection has been written. Reconcile the current selection and staging before retrying after an `unresolved` error or a missing receipt.
+Run `src/managed_ai_information/deployment/select_deployment.py --deployment DEPLOYMENT status` and compare its `descriptor_sha256` with the reported digest. If status refuses, inspect the descriptor and its selected code and store binding for that deployment. A leftover `candidate.json` is staging data. Candidate removal has no separate directory sync, so recheck staging after crash recovery. For another selection, including a return to qualified earlier code, stage it afresh and activate with the observed current descriptor digest, the fresh candidate digest and a reason. A writer error can occur on either side of replacement. Guard release or output can also fail after the selection has been written. Reconcile the current selection and staging before retrying after an `unresolved` error or a missing receipt.
 
 Deployment status reopens the current descriptor and reports its raw digest with the engine and store it verified from those bytes. A retained Python deployment handle can read current status after activation. Reopen the handle before dispatching or staging against the new selection. An ordinary CLI dispatch verifies the store binding and engine source on its fresh opening under the deployment guard. Frozen `explain-context` keeps its lock-free entry. Native `system status` also loads the store's selected domains and catalogues. Qualify changes to those store pins separately through `configure --spec FILE` with the current store descriptor digest and a receiving account.
 
 From the package root:
 
 ```sh
-python -B src/managed_ai/deployment/select_deployment.py --deployment /path/to/deployment system status
+python -B src/managed_ai_information/deployment/select_deployment.py --deployment /path/to/deployment system status
 ```
 
 Create an additional instance only in a new location:
 
 ```sh
-python3 -B src/managed_ai/store/manage_store.py --root stores/example init \
+python3 -B src/managed_ai_information/store/manage_store.py --root stores/example init \
   --instance-id example-instance --goal-text "Actual receiving contribution" \
   --domain /absolute/domain/domain.json --catalogue /absolute/instance-sources.json
-python3 -B src/managed_ai/deployment/select_deployment.py --deployment deployments/example init \
+python3 -B src/managed_ai_information/deployment/select_deployment.py --deployment deployments/example init \
   --engine engine --store stores/example
 ```
 
@@ -45,8 +45,8 @@ A domain manifest declares `format: managed-ai-domain/1`, `id`, `version`, `engi
 A reference catalogue has `format: managed-ai-source-catalogue/1` and `sources`. Each row declares `id`, `path`, `sha256`, `bytes`, optional title/kind/summary, and `exposure` (`available` or `sealed`). Individual paths cannot escape the explicitly declared source root. Instance catalogues may declare their own `source_root` relative to the catalogue file. Complete acquisition checks current bytes against the selected identity. Sealed sources remain metadata only: ordinary source reading and context capture refuse their bodies.
 
 ```sh
-python3 -B src/managed_ai/library/cli.py --store stores/research show SOURCE_ID --text
-python3 -B src/managed_ai/deployment/select_deployment.py --deployment deployments/novel system catalogue SOURCE_ID --text
+python3 -B src/managed_ai_information/library/cli.py --store stores/research show SOURCE_ID --text
+python3 -B src/managed_ai_information/deployment/select_deployment.py --deployment deployments/novel system catalogue SOURCE_ID --text
 ```
 
 The installed catalogue uses `agent-system-catalogue/1` and also reads its untagged layout. Primary IDs across the core and selected references are unique. A primary ID takes precedence over a compatibility alias. Each alias names one primary target and becomes available when that target is selected. Listing, body lookup and context capture use this same resolution.

@@ -1,4 +1,4 @@
-"""Tests for the unified stdlib-only managed_ai.platform leaf adapter."""
+"""Tests for the unified stdlib-only managed_ai_information.platform leaf adapter."""
 
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ if str(_REPO) not in sys.path:
 from tests._paths import ENGINE, SRC, cleanup_tempdir  # noqa: E402
 
 # isort: split
-import managed_ai.platform as platform_pkg  # noqa: E402
-from managed_ai.platform import (  # noqa: E402
+import managed_ai_information.platform as platform_pkg  # noqa: E402
+from managed_ai_information.platform import (  # noqa: E402
     OPEN_DIR_NOFOLLOW,
     OPEN_RO_NOFOLLOW,
     PLATFORM,
@@ -65,8 +65,8 @@ from managed_ai.platform import (  # noqa: E402
     verify_exact_filename,
     worker_environment,
 )
-from managed_ai.platform._posix import PosixPlatformAdapter  # noqa: E402
-from managed_ai.platform._windows import WindowsPlatformAdapter  # noqa: E402
+from managed_ai_information.platform._posix import PosixPlatformAdapter  # noqa: E402
+from managed_ai_information.platform._windows import WindowsPlatformAdapter  # noqa: E402
 
 
 class PlatformAdapterTests(unittest.TestCase):
@@ -146,7 +146,7 @@ class PlatformAdapterTests(unittest.TestCase):
 
     def test_cold_import_avoids_heavy_stdlib_modules(self):
         code = (
-            "import sys, managed_ai.platform; "
+            "import sys, managed_ai_information.platform; "
             "heavy = [m for m in ('concurrent.futures', 'logging', 'subprocess', 'ctypes') "
             "if m in sys.modules]; "
             "print(','.join(heavy))"

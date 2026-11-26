@@ -15,7 +15,7 @@ for _entry in (str(REPO_ROOT / "src"), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai.platform import (  # noqa: E402
+from managed_ai_information.platform import (  # noqa: E402
     check_ordinary_ancestors,
     is_ordinary_dir_stat,
     is_ordinary_file_stat,
@@ -140,9 +140,9 @@ def compute_context_hash(root: Path) -> dict:
             candidates.append(("containers/Containerfile", safe_cf))
 
     pkg_dir = check_ordinary_ancestors(
-        repo_root / "src/managed_ai",
+        repo_root / "src/managed_ai_information",
         expect_dir=True,
-        error_prefix="ordinary src/managed_ai directory required",
+        error_prefix="ordinary src/managed_ai_information directory required",
     )
     candidates.extend(_walk_ordinary_files(repo_root, pkg_dir))
     candidates.sort(key=lambda item: item[0])
@@ -170,7 +170,7 @@ def build_tag_plan(
     pr_number: int | None = None,
     version: str | None = None,
     registry: str = "ghcr.io/nestharus",
-    image: str = "managed-ai",
+    image: str = "managed-ai-information",
     allow_pr_push: bool = False,
     pr_ttl_days: int = 7,
 ) -> dict:
@@ -516,7 +516,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--version", default=None, help="SemVer version without leading v (for release channel)"
     )
     tag.add_argument("--registry", default="ghcr.io/nestharus", help="Container registry prefix")
-    tag.add_argument("--image", default="managed-ai", help="Container image name")
+    tag.add_argument("--image", default="managed-ai-information", help="Container image name")
     tag.add_argument(
         "--allow-pr-push", action="store_true", help="Allow isolated TTL-bounded PR push"
     )

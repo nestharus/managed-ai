@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""Pure-stdlib static validator for Managed AI container, local compose, OpenTofu, and GitOps
-substrates.
-"""
+"""Pure-stdlib static validator for container, local compose, OpenTofu, and GitOps substrates."""
 
 import argparse
 import ipaddress
@@ -17,7 +15,7 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.platform import check_ordinary_ancestors, is_ordinary_file_stat  # noqa: E402
+from managed_ai_information.platform import check_ordinary_ancestors, is_ordinary_file_stat  # noqa: E402
 
 FORBIDDEN_WHEEL_DIRS = ("containers", "deploy", "infra", "gitops", ".buildkite", "scripts")
 REQUIRED_DOCKERIGNORE = (
@@ -259,14 +257,16 @@ def validate_containerfile(root: Path, errors: list[str]) -> None:
         if "--no-deps" not in text:
             errors.append("containers/Containerfile: wheel build/install must use --no-deps")
 
-        if 'VOLUME ["/var/lib/managed-ai"]' not in text:
-            errors.append('containers/Containerfile: missing VOLUME ["/var/lib/managed-ai"]')
+        if 'VOLUME ["/var/lib/managed-ai-information"]' not in text:
+            errors.append(
+                'containers/Containerfile: missing VOLUME ["/var/lib/managed-ai-information"]'
+            )
 
         if "HEALTHCHECK" not in text:
             errors.append("containers/Containerfile: missing HEALTHCHECK directive")
 
-        if 'ENTRYPOINT ["managed-ai"]' not in text:
-            errors.append('containers/Containerfile: missing ENTRYPOINT ["managed-ai"]')
+        if 'ENTRYPOINT ["managed-ai-information"]' not in text:
+            errors.append('containers/Containerfile: missing ENTRYPOINT ["managed-ai-information"]')
 
     ignore_text = _read_ordinary_text(root, ".dockerignore", errors)
     if ignore_text is not None:
@@ -292,42 +292,37 @@ def validate_local_compose(root: Path, errors: list[str]) -> None:
         services = _yaml_section_lines(lines, "services")
         networks = _yaml_section_lines(lines, "networks")
 
-        worker = _yaml_subblock_lines(services, "managed-ai", indent=2)
+        worker = _yaml_subblock_lines(services, "managed-ai-information", indent=2)
         gateway = _yaml_subblock_lines(services, "gateway", indent=2)
-        internal_net = _yaml_subblock_lines(networks, "managed_ai_internal", indent=2)
+        internal_net = _yaml_subblock_lines(networks, "managed_ai_information_internal", indent=2)
 
         if not worker:
-            errors.append("deploy/local/compose.yaml: missing managed-ai service")
+            errors.append("deploy/local/compose.yaml: missing managed-ai-information service")
         else:
             worker_text = "\n".join(worker)
             if any(line.strip().startswith("ports:") for line in worker):
-                errors.append(
-                    "deploy/local/compose.yaml: managed-ai worker must NOT publish host ports"
-                )
+                errors.append("deploy/local/compose.yaml: worker must NOT publish host ports")
             if "read_only: true" not in worker_text:
-                errors.append(
-                    "deploy/local/compose.yaml: managed-ai worker requires read_only: true"
-                )
+                errors.append("deploy/local/compose.yaml: worker requires read_only: true")
             if "no-new-privileges:true" not in worker_text:
-                errors.append(
-                    "deploy/local/compose.yaml: managed-ai worker requires no-new-privileges:true"
-                )
+                errors.append("deploy/local/compose.yaml: worker requires no-new-privileges:true")
             if "ALL" not in worker_text or "cap_drop:" not in worker_text:
-                errors.append("deploy/local/compose.yaml: managed-ai worker requires cap_drop: ALL")
-            if "managed_ai_store:/var/lib/managed-ai" not in worker_text:
+                errors.append("deploy/local/compose.yaml: worker requires cap_drop: ALL")
+            if "managed_ai_information_store:/var/lib/managed-ai-information" not in worker_text:
                 errors.append(
-                    "deploy/local/compose.yaml: managed-ai worker must mount managed_ai_store at "
-                    "/var/lib/managed-ai"
+                    "deploy/local/compose.yaml: worker must mount "
+                    "managed_ai_information_store at /var/lib/managed-ai-information"
                 )
-            if "managed_ai_edge" in worker_text:
+            if "managed_ai_information_edge" in worker_text:
                 errors.append(
-                    "deploy/local/compose.yaml: managed-ai worker must stay exclusively on "
-                    "managed_ai_internal"
+                    "deploy/local/compose.yaml: worker must stay exclusively on "
+                    "managed_ai_information_internal"
                 )
 
         if not any(line.strip() == "internal: true" for line in internal_net):
             errors.append(
-                "deploy/local/compose.yaml: managed_ai_internal network must declare internal: true"
+                "deploy/local/compose.yaml: managed_ai_information_internal "
+                "network must declare internal: true"
             )
 
         if not gateway:
@@ -415,7 +410,7 @@ def validate_gitops(root: Path, errors: list[str]) -> None:
         if fname == "networkpolicy.yaml":
             if "podSelector: {}" not in text or "- Ingress" not in text or "- Egress" not in text:
                 errors.append(f"{rel}: missing default-deny-all Ingress+Egress NetworkPolicy")
-            if "managed-ai-gateway" not in text:
+            if "managed-ai-information-gateway" not in text:
                 errors.append(f"{rel}: missing gateway-only ingress NetworkPolicy rule")
 
         if fname == "pvc.yaml" and "kind: PersistentVolumeClaim" not in text:
@@ -426,8 +421,8 @@ def validate_gitops(root: Path, errors: list[str]) -> None:
                 "runAsNonRoot: true",
                 "readOnlyRootFilesystem: true",
                 "allowPrivilegeEscalation: false",
-                "mountPath: /var/lib/managed-ai",
-                "claimName: managed-ai-store",
+                "mountPath: /var/lib/managed-ai-information",
+                "claimName: managed-ai-information-store",
             ):
                 if req not in text:
                     errors.append(f"{rel}: missing required security/storage setting {req!r}")
@@ -460,7 +455,7 @@ def validate_gitops(root: Path, errors: list[str]) -> None:
 
 
 def validate_wheel_exclusions(root: Path, errors: list[str]) -> None:
-    """Confirm pyproject.toml ships strictly src/managed_ai with zero deploy/CI leakage."""
+    """Confirm pyproject.toml ships strictly src/managed_ai_information with zero leakage."""
     raw = _read_ordinary_text(root, "pyproject.toml", errors)
     if raw is None:
         return
@@ -483,11 +478,12 @@ def validate_wheel_exclusions(root: Path, errors: list[str]) -> None:
             f"pyproject.toml: setuptools packages.find.where must be ['src'] (got {find_where!r})"
         )
 
-    src_pkg = root / "src" / "managed_ai"
+    src_pkg = root / "src" / "managed_ai_information"
     for forbidden in FORBIDDEN_WHEEL_DIRS:
         if (src_pkg / forbidden).exists():
             errors.append(
-                f"src/managed_ai/{forbidden}: forbidden deploy/CI directory inside wheel package"
+                f"src/managed_ai_information/{forbidden}: "
+                "forbidden deploy/CI directory inside wheel package"
             )
 
 
@@ -517,8 +513,7 @@ def validate_repository(root: Path) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Static validator for Managed AI containers, local compose, OpenTofu, and GitOps "
-            "manifests."
+            "Static validator for containers, local compose, OpenTofu, and GitOps manifests."
         ),
         allow_abbrev=False,
     )

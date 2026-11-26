@@ -21,31 +21,35 @@ if __package__:
 else:
     from native_test_paths import ENGINE, SRC
 
-from managed_ai.core.attention import Attention
-from managed_ai.core.exchange import open_contact
-from managed_ai.core.exchange.packet_context import PacketContext
-from managed_ai.core.exchange.transport import collector
-from managed_ai.core.ownership import external_root, packet_id, relative_path
-from managed_ai.deployment import isolation as dep_isolation
-from managed_ai.deployment.contract import DeploymentService
-from managed_ai.deployment.controller import Deployment
-from managed_ai.library.catalogue import Library
-from managed_ai.library.contract import LibraryReader, SearchBackend, SourceProducerService
-from managed_ai.library.format import digest as lib_digest
-from managed_ai.library.format import encoded as lib_encoded
-from managed_ai.library.index import PreparedIndex, SearchIndex
-from managed_ai.library.lexical import search_query
-from managed_ai.library.producer import Producer
-from managed_ai.store.contract import (
+from managed_ai_information.core.attention import Attention
+from managed_ai_information.core.exchange import open_contact
+from managed_ai_information.core.exchange.packet_context import PacketContext
+from managed_ai_information.core.exchange.transport import collector
+from managed_ai_information.core.ownership import external_root, packet_id, relative_path
+from managed_ai_information.deployment import isolation as dep_isolation
+from managed_ai_information.deployment.contract import DeploymentService
+from managed_ai_information.deployment.controller import Deployment
+from managed_ai_information.library.catalogue import Library
+from managed_ai_information.library.contract import (
+    LibraryReader,
+    SearchBackend,
+    SourceProducerService,
+)
+from managed_ai_information.library.format import digest as lib_digest
+from managed_ai_information.library.format import encoded as lib_encoded
+from managed_ai_information.library.index import PreparedIndex, SearchIndex
+from managed_ai_information.library.lexical import search_query
+from managed_ai_information.library.producer import Producer
+from managed_ai_information.store.contract import (
     CatalogueReader,
     ObjectRepository,
     RecordRepository,
     StoreService,
 )
-from managed_ai.store.governance import audit_feedback
-from managed_ai.store.records import cold_archive, compaction, head_index, head_receipts
-from managed_ai.store.records.object_audit import audit_objects
-from managed_ai.store.system import System
+from managed_ai_information.store.governance import audit_feedback
+from managed_ai_information.store.records import cold_archive, compaction, head_index, head_receipts
+from managed_ai_information.store.records.object_audit import audit_objects
+from managed_ai_information.store.system import System
 
 OWNED_PACKAGES = ("platform", "deployment", "core", "store", "library")
 
@@ -214,7 +218,15 @@ class Wave7ArchitectureTests(unittest.TestCase):
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         env["PYTHONPATH"] = str(SRC)
         proc = subprocess.run(
-            [sys.executable, "-B", "-W", "error", "-m", "managed_ai.core.exchange.cli", "--help"],
+            [
+                sys.executable,
+                "-B",
+                "-W",
+                "error",
+                "-m",
+                "managed_ai_information.core.exchange.cli",
+                "--help",
+            ],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -364,14 +376,15 @@ class Wave7ArchitectureTests(unittest.TestCase):
             [
                 "import json, sys",
                 'sys.argv = ["manage_store.py", "--help"]',
-                "from managed_ai.store import manage_store",
+                "from managed_ai_information.store import manage_store",
                 "rc = 0",
                 "try:",
                 "    manage_store.main()",
                 "except SystemExit as exc:",
                 "    rc = exc.code",
-                'print(json.dumps({"rc": rc, "system": "managed_ai.store.system" in sys.modules, '
-                '"exchange": "managed_ai.core.exchange" in sys.modules, '
+                'print(json.dumps({"rc": rc, '
+                '"system": "managed_ai_information.store.system" in sys.modules, '
+                '"exchange": "managed_ai_information.core.exchange" in sys.modules, '
                 '"futures": "concurrent.futures" in sys.modules}))',
             ]
         )
@@ -498,7 +511,8 @@ class Wave7ArchitectureTests(unittest.TestCase):
         archive._manifest_cache = None
 
         with patch(
-            "managed_ai.store.records.cold_archive.read_json", wraps=cold_archive.read_json
+            "managed_ai_information.store.records.cold_archive.read_json",
+            wraps=cold_archive.read_json,
         ) as spy:
             self.assertTrue(archive.has("cold-1"))
             self.assertTrue(archive.has("cold-1"))
@@ -622,7 +636,7 @@ class Wave7ArchitectureTests(unittest.TestCase):
                             parts = alias.name.split(".")
                             root = (
                                 parts[1]
-                                if parts[0] == "managed_ai" and len(parts) > 1
+                                if parts[0] == "managed_ai_information" and len(parts) > 1
                                 else parts[0]
                             )
                             if root in {"core", "store", "deployment"}:
@@ -631,7 +645,11 @@ class Wave7ArchitectureTests(unittest.TestCase):
                                 )
                     elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
                         parts = node.module.split(".")
-                        root = parts[1] if parts[0] == "managed_ai" and len(parts) > 1 else parts[0]
+                        root = (
+                            parts[1]
+                            if parts[0] == "managed_ai_information" and len(parts) > 1
+                            else parts[0]
+                        )
                         if root in {"core", "store", "deployment"}:
                             library_sandbox_violations.append(
                                 f"{rel}:{node.lineno}:from {node.module}"
@@ -667,7 +685,7 @@ class Wave7ArchitectureTests(unittest.TestCase):
         still_present = [rel for rel in retired_dirs if (ENGINE / rel).exists()]
         self.assertEqual(still_present, [], f"Retired directories must be absent: {still_present}")
 
-        # Zero orphaned code-less packages anywhere under src/managed_ai/
+        # Zero orphaned code-less packages anywhere under src/managed_ai_information/
         codeless_packages: list[str] = []
         for init_py in sorted(ENGINE.rglob("__init__.py")):
             pkg_dir = init_py.parent
@@ -710,7 +728,7 @@ class Wave7ArchitectureTests(unittest.TestCase):
             "companions/workbench/core/ must be flattened into companions/workbench/",
         )
 
-        # No top-level package under src/managed_ai/ may be a single-child meta-wrapper
+        # No top-level package under src/managed_ai_information/ may be a single-child meta-wrapper
         single_child_wrappers: list[str] = []
         for child in sorted(ENGINE.iterdir()):
             if (

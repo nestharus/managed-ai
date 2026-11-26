@@ -22,5 +22,5 @@ resource "vultr_instance" "node" {
   ssh_key_ids       = var.ssh_key_ids
   enable_ipv6       = false
   backups           = "disabled"
-  tags              = ["managed-ai", "channel:${var.channel}"]
+  tags              = ["managed-ai-information", "channel:${var.channel}"]
 }

@@ -23,8 +23,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from managed_ai.store.query.context_discovery import Discovery
-from managed_ai.store.system import System
+from managed_ai_information.store.query.context_discovery import Discovery
+from managed_ai_information.store.system import System
 
 
 def sha(body):
@@ -639,9 +639,9 @@ class DiscoveryChecks(unittest.TestCase):
     def test_p9_7_head_index_v3_discovery_parity_and_domain_api_view(self):
         """P9-7 & P9-4: HeadIndex v3 (exact-base + delta) discovery matches unindexed discovery
         identically."""
-        from managed_ai.deployment.identity import code_identity
-        from managed_ai.host.continuing_work.capture_native import _engine_code_identity
-        from managed_ai.store import domain_api
+        from managed_ai_information.deployment.identity import code_identity
+        from managed_ai_information.host.continuing_work.capture_native import _engine_code_identity
+        from managed_ai_information.store import domain_api
 
         # P9-4: parallelized code_identity matches capture_native._engine_code_identity
         # byte-for-byte.

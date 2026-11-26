@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# Minimal multi-stage Containerfile for Managed AI (zero third-party runtime dependencies).
+# Minimal multi-stage Containerfile for Managed AI Information (zero third-party runtime dependencies).
 
 FROM python:3.15.2-slim AS builder
 
@@ -19,24 +19,24 @@ FROM python:3.15.2-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    MANAGED_AI_HOME=/var/lib/managed-ai
+    MANAGED_AI_INFORMATION_HOME=/var/lib/managed-ai-information
 
-RUN groupadd --gid 10001 managed-ai \
-    && useradd --uid 10001 --gid 10001 --home-dir /var/lib/managed-ai --shell /usr/sbin/nologin --create-home managed-ai \
-    && mkdir -p /var/lib/managed-ai \
-    && chown -R 10001:10001 /var/lib/managed-ai
+RUN groupadd --gid 10001 managed-ai-information \
+    && useradd --uid 10001 --gid 10001 --home-dir /var/lib/managed-ai-information --shell /usr/sbin/nologin --create-home managed-ai-information \
+    && mkdir -p /var/lib/managed-ai-information \
+    && chown -R 10001:10001 /var/lib/managed-ai-information
 
 COPY --from=builder /wheels /wheels
 
-RUN python -m pip install --no-cache-dir --no-deps /wheels/managed_ai-*.whl \
+RUN python -m pip install --no-cache-dir --no-deps /wheels/managed_ai_information-*.whl \
     && rm -rf /wheels
 
-VOLUME ["/var/lib/managed-ai"]
-WORKDIR /var/lib/managed-ai
+VOLUME ["/var/lib/managed-ai-information"]
+WORKDIR /var/lib/managed-ai-information
 
 USER 10001:10001
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD ["managed-ai", "--help"]
+    CMD ["managed-ai-information", "--help"]
 
-ENTRYPOINT ["managed-ai"]
+ENTRYPOINT ["managed-ai-information"]

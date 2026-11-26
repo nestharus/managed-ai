@@ -21,8 +21,8 @@ for _entry in (str(REPO_ROOT / "src"), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai.library.catalogue import Library  # noqa: E402
-from managed_ai.library.format import (  # noqa: E402
+from managed_ai_information.library.catalogue import Library  # noqa: E402
+from managed_ai_information.library.format import (  # noqa: E402
     FORMAT,
     MAX_BODY,
     MAX_MANIFEST,
@@ -36,13 +36,13 @@ from managed_ai.library.format import (  # noqa: E402
     read_bytes,
     relative,
 )
-from managed_ai.library.format import (  # noqa: E402
+from managed_ai_information.library.format import (  # noqa: E402
     text as check_text,
 )
-from managed_ai.platform import sync_dir  # noqa: E402
+from managed_ai_information.platform import sync_dir  # noqa: E402
 
-DEFAULT_SOURCE_MAP = REPO_ROOT / "src/managed_ai/library/source-map.json"
-DEFAULT_LIBRARY = REPO_ROOT / "src/managed_ai/library/library"
+DEFAULT_SOURCE_MAP = REPO_ROOT / "src/managed_ai_information/library/source-map.json"
+DEFAULT_LIBRARY = REPO_ROOT / "src/managed_ai_information/library/library"
 
 
 def owner(root: Path, overlay: Path | None, path: str) -> Path:

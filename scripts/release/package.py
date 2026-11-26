@@ -16,7 +16,7 @@ for _entry in (str(REPO_ROOT / "src"), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai.platform import check_unfollowed_ancestors  # noqa: E402
+from managed_ai_information.platform import check_unfollowed_ancestors  # noqa: E402
 from scripts.release._manifest import (  # noqa: E402
     manifest_name,
     members,
@@ -89,7 +89,7 @@ def _validate_output_path(root: Path, output_arg: Path, *, replace: bool) -> Pat
 def _build_archive(root: Path, core: Path | None, source: dict[str, dict], output: Path) -> dict:
     output.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(
-        prefix=".managed-ai-package-", suffix=".partial", dir=output.parent
+        prefix=".managed-ai-information-package-", suffix=".partial", dir=output.parent
     )
     os.close(fd)
     try:

@@ -23,9 +23,9 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 OWNED_PACKAGE_ROOTS = (
-    SRC_ROOT / "managed_ai/host",
-    SRC_ROOT / "managed_ai/companions",
-    SRC_ROOT / "managed_ai/collective",
+    SRC_ROOT / "managed_ai_information/host",
+    SRC_ROOT / "managed_ai_information/companions",
+    SRC_ROOT / "managed_ai_information/collective",
 )
 
 FORBIDDEN_OS_MODULES = frozenset({"fcntl", "msvcrt", "ctypes", "resource"})
@@ -144,9 +144,9 @@ class Wave7ArchitectureGuardTests(unittest.TestCase):
         )
 
     def test_domain_native_contracts_and_no_top_level_contracts_bucket(self) -> None:
-        self.assertFalse((SRC_ROOT / "managed_ai/contracts").exists())
+        self.assertFalse((SRC_ROOT / "managed_ai_information/contracts").exists())
 
-        from managed_ai.companions.contracts import (
+        from managed_ai_information.companions.contracts import (
             ModelBridge,
             PeerHarnessService,
             PeerTurnRunner,
@@ -155,23 +155,23 @@ class Wave7ArchitectureGuardTests(unittest.TestCase):
             SourceServiceProtocol,
             WorkbenchService,
         )
-        from managed_ai.host.continuing_work.continuing_work import Host
-        from managed_ai.host.continuing_work.contract import (
+        from managed_ai_information.host.continuing_work.continuing_work import Host
+        from managed_ai_information.host.continuing_work.contract import (
             DEFAULT_HOST_CONFIG,
             ContinuingWorkService,
             HostConfig,
         )
-        from managed_ai.host.material_retention.config import (
+        from managed_ai_information.host.material_retention.config import (
             DEFAULT_LIMITS,
             MaterialRetentionService,
             RetentionLimits,
         )
-        from managed_ai.host.signal_field.config import (
+        from managed_ai_information.host.signal_field.config import (
             DEFAULT_CONFIG,
             SignalFieldConfig,
             SignalFieldService,
         )
-        from managed_ai.host.signal_field.operations import Field
+        from managed_ai_information.host.signal_field.operations import Field
 
         for cfg in (DEFAULT_HOST_CONFIG, DEFAULT_CONFIG, DEFAULT_LIMITS):
             self.assertIsInstance(cfg, (HostConfig, SignalFieldConfig, RetentionLimits))
@@ -209,7 +209,7 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
     """Targeted regression tests for owned P7 and QA7 Wave 7 fixes."""
 
     def test_p7_2_verify_clears_cache_and_export_streams_standalone_zip(self) -> None:
-        from managed_ai.host.material_retention import managed_material as mm
+        from managed_ai_information.host.material_retention import managed_material as mm
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -267,7 +267,8 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
                         "store = mm.Store(sys.argv[1]); "
                         "res = mm.verify(store); "
                         "leaked = [m for m in sys.modules "
-                        "if m == 'managed_ai' or m.startswith('managed_ai.')]; "
+                        "if m == 'managed_ai_information' "
+                        "or m.startswith('managed_ai_information.')]; "
                         "print(json.dumps({'manifest': res['manifest'], 'leaked': leaked}))"
                     ),
                     str(extracted),
@@ -289,7 +290,7 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
                 "-c",
                 (
                     "import json, sys; sys.path.insert(0, sys.argv[1]); "
-                    "from managed_ai.host.material_retention import snapshot_ops; "
+                    "from managed_ai_information.host.material_retention import snapshot_ops; "
                     "before = snapshot_ops.load_portable_bundle.cache_info().currsize; "
                     "bundle = snapshot_ops.load_portable_bundle(); "
                     "after = snapshot_ops.load_portable_bundle.cache_info().currsize; "
@@ -308,9 +309,9 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
         self.assertGreater(payload["files"], 0)
 
     def test_p7_5_single_store_io_module_and_weakref_lock_pools_gc(self) -> None:
-        from managed_ai.host.continuing_work import occurrence_files
-        from managed_ai.host.material_retention import managed_material as mm
-        from managed_ai.host.material_retention import store_io
+        from managed_ai_information.host.continuing_work import occurrence_files
+        from managed_ai_information.host.material_retention import managed_material as mm
+        from managed_ai_information.host.material_retention import store_io
 
         self.assertIs(mm._store_io, store_io)
 
@@ -330,9 +331,9 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
         self.assertEqual(len(occurrence_files._LOCK_POOL._locks), 0)
 
     def test_p7_6_signal_field_exec_compat_and_single_read_guard_planning_snapshot(self) -> None:
-        from managed_ai.host.signal_field.operations import Field
+        from managed_ai_information.host.signal_field.operations import Field
 
-        queue_file = SRC_ROOT / "managed_ai/host/signal_field/queue.py"
+        queue_file = SRC_ROOT / "managed_ai_information/host/signal_field/queue.py"
         namespace: dict[str, object] = {
             "__name__": "signal_field_queue",
             "__file__": str(queue_file),
@@ -398,7 +399,7 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
             self.assertEqual(len(snap["sources"]), 1)
 
     def test_p7_7_search_cache_canonical_ledger_and_source_service_del(self) -> None:
-        from managed_ai.companions.workbench import source_tools
+        from managed_ai_information.companions.workbench import source_tools
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -464,7 +465,7 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
         self.assertIsNone(orphan.db)
 
     def test_p7_8_immutable_below_enforces_integrity_and_relative_reparse_checks(self) -> None:
-        from managed_ai.host.material_retention import store_io
+        from managed_ai_information.host.material_retention import store_io
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "store"
@@ -475,7 +476,7 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
                 store_io.immutable_below(root, "manifests/m1.json", b'{"ok":false}\n')
 
     def test_p7_14_peer_harness_closes_events_handle_on_init_failure(self) -> None:
-        from managed_ai.companions.peer import peer_harness
+        from managed_ai_information.companions.peer import peer_harness
 
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run"
@@ -510,8 +511,8 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
             self.assertFalse(events_file.exists())
 
     def test_qa7_2_reserved_windows_names_and_trailing_dots_rejected(self) -> None:
-        from managed_ai.host.continuing_work import occurrence_files
-        from managed_ai.host.material_retention import store_io
+        from managed_ai_information.host.continuing_work import occurrence_files
+        from managed_ai_information.host.material_retention import store_io
 
         bad_segments = ("CON", "PRN", "AUX", "NUL", "COM1", "LPT9", "con.txt", "name.", "name ")
         for bad in bad_segments:
@@ -523,10 +524,10 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
                 store_io.safe_relative(f"dir/{bad}")
 
     def test_qa7_3_and_qa7_8_cli_clean_errors_and_roots_validation(self) -> None:
-        from managed_ai.collective import record_evidence, run_study
-        from managed_ai.companions.workbench import workbench_agent
-        from managed_ai.host.continuing_work import continuing_work
-        from managed_ai.host.material_retention import managed_material as mm
+        from managed_ai_information.collective import record_evidence, run_study
+        from managed_ai_information.companions.workbench import workbench_agent
+        from managed_ai_information.host.continuing_work import continuing_work
+        from managed_ai_information.host.material_retention import managed_material as mm
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -599,13 +600,13 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
             assert_clean_rc2(run_study.main, ["--directory", str(existing_dir)])
 
     def test_c47_3_direct_script_execution_and_portable_zip_isolation(self) -> None:
-        from managed_ai.host.material_retention import managed_material as mm
+        from managed_ai_information.host.material_retention import managed_material as mm
 
         scripts = (
-            SRC_ROOT / "managed_ai/host/material_retention/managed_material.py",
-            SRC_ROOT / "managed_ai/companions/workbench/workbench_agent.py",
-            SRC_ROOT / "managed_ai/companions/workbench/durable_agent.py",
-            SRC_ROOT / "managed_ai/collective/__main__.py",
+            SRC_ROOT / "managed_ai_information/host/material_retention/managed_material.py",
+            SRC_ROOT / "managed_ai_information/companions/workbench/workbench_agent.py",
+            SRC_ROOT / "managed_ai_information/companions/workbench/durable_agent.py",
+            SRC_ROOT / "managed_ai_information/collective/__main__.py",
         )
         clean_env = {k: v for k, v in dict(__import__("os").environ).items() if k != "PYTHONPATH"}
         clean_env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -661,8 +662,8 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
             self.assertIn("usage:", direct_zip_script.stdout.lower())
 
     def test_c47_o1_retire_guards_selection_descendant_path(self) -> None:
-        from managed_ai.host.material_retention import managed_material as mm
-        from managed_ai.host.material_retention import retirement
+        from managed_ai_information.host.material_retention import managed_material as mm
+        from managed_ai_information.host.material_retention import retirement
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -701,7 +702,7 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
             mocked_guard.assert_called_once()
 
     def test_qa7_4_and_qa7_7_check_representation_import_safe_and_strict_engine(self) -> None:
-        from managed_ai.companions.representation import check_representation
+        from managed_ai_information.companions.representation import check_representation
 
         self.assertTrue(callable(check_representation.main))
 
@@ -715,18 +716,22 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
             self.assertNotIn("Traceback", err.getvalue())
 
     def test_wave8_layout_cleanup_and_declarative_routers(self) -> None:
-        from managed_ai.collective.store import cli as collective_cli
-        from managed_ai.host.continuing_work import capture_native, native_bridge
+        from managed_ai_information.collective.store import cli as collective_cli
+        from managed_ai_information.host.continuing_work import capture_native, native_bridge
 
-        self.assertFalse((SRC_ROOT / "managed_ai/optional").exists())
+        self.assertFalse((SRC_ROOT / "managed_ai_information/optional").exists())
         self.assertFalse((REPO_ROOT / "tests/optional").exists())
-        self.assertFalse((SRC_ROOT / "managed_ai/companions/workbench/core").exists())
-        self.assertFalse((SRC_ROOT / "managed_ai/companions/workbench/controller").exists())
-        self.assertTrue((SRC_ROOT / "managed_ai/companions/workbench/configs").is_dir())
-        self.assertFalse((SRC_ROOT / "managed_ai/collective/collective.py").exists())
-        self.assertFalse((SRC_ROOT / "managed_ai/collective/manage_collective.py").exists())
-        self.assertTrue((SRC_ROOT / "managed_ai/collective/__main__.py").is_file())
-        self.assertTrue((SRC_ROOT / "managed_ai/collective/store/cli.py").is_file())
+        self.assertFalse((SRC_ROOT / "managed_ai_information/companions/workbench/core").exists())
+        self.assertFalse(
+            (SRC_ROOT / "managed_ai_information/companions/workbench/controller").exists()
+        )
+        self.assertTrue((SRC_ROOT / "managed_ai_information/companions/workbench/configs").is_dir())
+        self.assertFalse((SRC_ROOT / "managed_ai_information/collective/collective.py").exists())
+        self.assertFalse(
+            (SRC_ROOT / "managed_ai_information/collective/manage_collective.py").exists()
+        )
+        self.assertTrue((SRC_ROOT / "managed_ai_information/collective/__main__.py").is_file())
+        self.assertTrue((SRC_ROOT / "managed_ai_information/collective/store/cli.py").is_file())
 
         expected_ops = {
             "init",
@@ -752,18 +757,18 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
         self.assertNotIn("optional", capture_native._CODE_ID_EXCLUDED_DIRS)
 
         argv, env = native_bridge.build_sibling_cli_command(
-            SRC_ROOT / "managed_ai/store/manage_store.py",
-            "managed_ai.core.attention",
+            SRC_ROOT / "managed_ai_information/store/manage_store.py",
+            "managed_ai_information.core.attention",
             "core/attention.py",
             "track_attention.py",
             "--help",
         )
-        self.assertEqual(argv[2:4], ["-m", "managed_ai.core.attention"])
+        self.assertEqual(argv[2:4], ["-m", "managed_ai_information.core.attention"])
         self.assertIsNotNone(env)
         self.assertEqual(Path(env["PYTHONPATH"]).resolve(), SRC_ROOT.resolve())
 
         module_help = subprocess.run(
-            [sys.executable, "-B", "-m", "managed_ai.collective", "--help"],
+            [sys.executable, "-B", "-m", "managed_ai_information.collective", "--help"],
             capture_output=True,
             text=True,
             env={

@@ -17,12 +17,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from managed_ai.deployment.controller import Deployment, encode, exclusive, sha
-from managed_ai.store.governance.feedback import Feedback
-from managed_ai.store.query.information import Information, record_identity
-from managed_ai.store.records import record_import, record_transfer
-from managed_ai.store.selection.store_configuration import configure
-from managed_ai.store.system import System
+from managed_ai_information.deployment.controller import Deployment, encode, exclusive, sha
+from managed_ai_information.store.governance.feedback import Feedback
+from managed_ai_information.store.query.information import Information, record_identity
+from managed_ai_information.store.records import record_import, record_transfer
+from managed_ai_information.store.selection.store_configuration import configure
+from managed_ai_information.store.system import System
 
 
 def write(path, value):
@@ -196,7 +196,7 @@ class SharedInstances(unittest.TestCase):
             with exclusive(path):
                 yield
 
-        with patch("managed_ai.deployment.controller.exclusive", configure_then_lock):
+        with patch("managed_ai_information.deployment.controller.exclusive", configure_then_lock):
             result, _, _ = Deployment(deployment).system(
                 ["put", "--record", str(update), "--expected", "1"]
             )
@@ -384,7 +384,7 @@ class SharedInstances(unittest.TestCase):
             self.sa.catalogue("alpha-source")
 
     def test_installed_catalogue_rebinds_roots_on_each_read(self):
-        from managed_ai.store.selection.installed_catalogue import InstalledCatalogue
+        from managed_ai_information.store.selection.installed_catalogue import InstalledCatalogue
 
         app = self.bundle / "sample-app"
         app.mkdir()
@@ -413,7 +413,7 @@ class SharedInstances(unittest.TestCase):
 
     def test_06_portable_archive_uses_relocated_shared_engine(self):
         # An isolated release fixture, not a deployment-produced engine copy.
-        engine = self.bundle / "src" / "managed_ai"
+        engine = self.bundle / "src" / "managed_ai_information"
         shutil.copytree(ENGINE, engine, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         dep = self.bundle / "deployments/a"
         Deployment.initialize(dep, self.a, engine)
@@ -422,7 +422,7 @@ class SharedInstances(unittest.TestCase):
         command = [
             sys.executable,
             "-B",
-            str(moved / "src/managed_ai/deployment/select_deployment.py"),
+            str(moved / "src/managed_ai_information/deployment/select_deployment.py"),
             "--deployment",
             str(moved / "deployments/a"),
             "system",
@@ -431,7 +431,9 @@ class SharedInstances(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         status = json.loads(result.stdout)
         self.assertEqual(status["instance_id"], "instance-a")
-        self.assertEqual(status["engine_entry"], str(moved / "src/managed_ai/store/system.py"))
+        self.assertEqual(
+            status["engine_entry"], str(moved / "src/managed_ai_information/store/system.py")
+        )
         result = subprocess.run(
             [*command, "context", "after-move", "--task", "Current use after relocation."],
             capture_output=True,

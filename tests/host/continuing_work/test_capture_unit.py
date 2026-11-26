@@ -13,23 +13,23 @@ from types import SimpleNamespace
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC_ROOT = REPO_ROOT / "src"
-HOST_DIR = SRC_ROOT / "managed_ai/host/continuing_work"
+HOST_DIR = SRC_ROOT / "managed_ai_information/host/continuing_work"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.host.continuing_work import (  # noqa: E402
+from managed_ai_information.host.continuing_work import (  # noqa: E402
     capture_native,
     native_bridge,
     repair_custody,
     scope_lifecycle,
 )
-from managed_ai.host.continuing_work.continuing_work import Host  # noqa: E402
+from managed_ai_information.host.continuing_work.continuing_work import Host  # noqa: E402
 
 
 class Wave4HostArchitectureTests(unittest.TestCase):
     def test_native_sources_narrows_to_deployment_core_store_only(self):
         with tempfile.TemporaryDirectory() as tmp:
-            engine = Path(tmp) / "src/managed_ai"
+            engine = Path(tmp) / "src/managed_ai_information"
             included = (
                 "platform/files.py",
                 "deployment/select_deployment.py",
@@ -202,7 +202,7 @@ class Wave4HostArchitectureTests(unittest.TestCase):
         self.assertNotIn("1 through 2000", combined)
         self.assertIn("from 1 through 200", combined)
 
-    # --- C41-2b: qualified_engine context keeps external managed_ai mounted across lazy imports ---
+    # --- C41-2b: qualified_engine keeps external package mounted across lazy imports ---
     def test_qualified_engine_context_keeps_external_managed_ai_mounted_for_lazy_imports(self):
         import importlib
 
@@ -253,8 +253,8 @@ class Wave4HostArchitectureTests(unittest.TestCase):
                             "    def packet_summary(self, directory, consumer, publications,"
                             " *, returned, outcome):"
                         ),
-                        "        from managed_ai import ENGINE_MARKER",
-                        "        from managed_ai.store.lazy_helper import SOURCE",
+                        "        from managed_ai_information import ENGINE_MARKER",
+                        "        from managed_ai_information.store.lazy_helper import SOURCE",
                         (
                             "        return {'packet': directory.name, 'transport': 'prepared',"
                             " 'publications': publications,"
@@ -267,8 +267,8 @@ class Wave4HostArchitectureTests(unittest.TestCase):
                         "        self.attention = Attention()",
                         "    def assess(self, turn, receipt, producer): return {}",
                         "def resolve_lazy():",
-                        "    from managed_ai import ENGINE_MARKER",
-                        "    from managed_ai.store.lazy_helper import SOURCE",
+                        "    from managed_ai_information import ENGINE_MARKER",
+                        "    from managed_ai_information.store.lazy_helper import SOURCE",
                         "    return (ENGINE_MARKER, SOURCE)",
                     ]
                 )
@@ -280,10 +280,12 @@ class Wave4HostArchitectureTests(unittest.TestCase):
             _, programs = capture_native.native_sources(ext_entry)
             live_profile = capture_native._profile_digest(programs)
 
-            colocated_init = (SRC_ROOT / "managed_ai/__init__.py").resolve()
-            self.assertEqual(Path(sys.modules["managed_ai"].__file__).resolve(), colocated_init)
+            colocated_init = (SRC_ROOT / "managed_ai_information/__init__.py").resolve()
+            self.assertEqual(
+                Path(sys.modules["managed_ai_information"].__file__).resolve(), colocated_init
+            )
 
-            # In-process context keeps external managed_ai.* mounted for lazy imports and blocks
+            # In-process context keeps external package mounted for lazy imports and blocks
             # co-located leaks.
             with capture_native.qualified_engine(ext_entry, expected_profile=live_profile) as (
                 mod,
@@ -293,15 +295,21 @@ class Wave4HostArchitectureTests(unittest.TestCase):
                 self.assertEqual(info["profile"], live_profile)
                 self.assertEqual(mod.resolve_lazy(), ("EXTERNAL_ENGINE", "EXTERNAL_LAZY_HELPER"))
                 self.assertEqual(
-                    Path(sys.modules["managed_ai.store.lazy_helper"].__file__).resolve(),
+                    Path(
+                        sys.modules["managed_ai_information.store.lazy_helper"].__file__
+                    ).resolve(),
                     (ext_engine / "store/lazy_helper.py").resolve(),
                 )
                 with self.assertRaises(ModuleNotFoundError):
-                    importlib.import_module("managed_ai.host.continuing_work.occurrence_files")
+                    importlib.import_module(
+                        "managed_ai_information.host.continuing_work.occurrence_files"
+                    )
 
-            # Context exit cleanly restores co-located managed_ai.* and removes external submodules.
-            self.assertEqual(Path(sys.modules["managed_ai"].__file__).resolve(), colocated_init)
-            self.assertNotIn("managed_ai.store.lazy_helper", sys.modules)
+            # Context exit restores co-located package and removes external submodules.
+            self.assertEqual(
+                Path(sys.modules["managed_ai_information"].__file__).resolve(), colocated_init
+            )
+            self.assertNotIn("managed_ai_information.store.lazy_helper", sys.modules)
 
             # End-to-end CLI invocation executes System + packet_summary lazy imports inside
             # qualified_engine().
@@ -334,7 +342,7 @@ class Wave4HostArchitectureTests(unittest.TestCase):
     # --- Wave 5 (#213 Part B): Co-located auto-admission + external --expected-profile /
     # --deployment ---
     def test_colocated_engine_auto_admits_and_records_live_profile_and_git_commit(self):
-        entry = SRC_ROOT / "managed_ai/store/manage_store.py"
+        entry = SRC_ROOT / "managed_ai_information/store/manage_store.py"
         module, info = capture_native.qualify_engine(entry)
         self.assertEqual(info["admission"], "colocated")
         self.assertEqual(len(info["profile"]), 64)
@@ -378,10 +386,12 @@ class Wave4HostArchitectureTests(unittest.TestCase):
             root = Path(tmp)
             ext_engine = root / "ext_engine"
             ext_engine.mkdir()
-            shutil.copy2(SRC_ROOT / "managed_ai/__init__.py", ext_engine / "__init__.py")
+            shutil.copy2(
+                SRC_ROOT / "managed_ai_information/__init__.py", ext_engine / "__init__.py"
+            )
             for subdir in ("deployment", "core", "store", "platform"):
                 shutil.copytree(
-                    SRC_ROOT / "managed_ai" / subdir,
+                    SRC_ROOT / "managed_ai_information" / subdir,
                     ext_engine / subdir,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
                 )
@@ -430,7 +440,7 @@ class Wave4HostArchitectureTests(unittest.TestCase):
 
             # Initialize real Deployment pointing to ext_engine, then qualify via --deployment!
             dep_dir = root / "deployment"
-            from managed_ai.deployment.controller import Deployment
+            from managed_ai_information.deployment.controller import Deployment
 
             Deployment.initialize(dep_dir, store_dir, engine=ext_engine)
 

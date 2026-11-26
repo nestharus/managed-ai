@@ -16,9 +16,9 @@ from tests._paths import ENGINE as ROOT  # noqa: E402
 from tests._paths import cleanup_tempdir  # noqa: E402
 
 # isort: split
-from managed_ai.core.exchange import Exchange  # noqa: E402
-from managed_ai.core.exchange.transport.collector import Collector  # noqa: E402
-from managed_ai.core.storage import MAX_BYTES, encode, read_json, sha, write_json  # noqa: E402
+from managed_ai_information.core.exchange import Exchange  # noqa: E402
+from managed_ai_information.core.exchange.transport.collector import Collector  # noqa: E402
+from managed_ai_information.core.storage import MAX_BYTES, encode, read_json, sha, write_json  # noqa: E402
 
 
 class LifecycleOutcomes(unittest.TestCase):
@@ -89,7 +89,8 @@ class LifecycleOutcomes(unittest.TestCase):
         if after_target:
             with (
                 patch(
-                    "managed_ai.core.exchange.publication.write_json", side_effect=completion_write
+                    "managed_ai_information.core.exchange.publication.write_json",
+                    side_effect=completion_write,
                 ),
                 self.assertRaises(OSError),
             ):
@@ -97,7 +98,7 @@ class LifecycleOutcomes(unittest.TestCase):
         else:
             with (
                 patch(
-                    "managed_ai.core.exchange.publication._atomic_bytes",
+                    "managed_ai_information.core.exchange.publication._atomic_bytes",
                     side_effect=OSError("controlled write error"),
                 ),
                 self.assertRaises(OSError),
@@ -254,7 +255,7 @@ class LifecycleOutcomes(unittest.TestCase):
         before = self.snapshot()
         expected = sha(self.proposal.read_bytes())
         with patch(
-            "managed_ai.core.exchange.publication._atomic_bytes",
+            "managed_ai_information.core.exchange.publication._atomic_bytes",
             side_effect=AssertionError("target replay"),
         ):
             record = self.ex.reconcile_publication("one", "one.txt", expected, self.account)

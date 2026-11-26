@@ -13,10 +13,10 @@ _REPO = Path(__file__).resolve().parents[3]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from managed_ai.core.storage import exclusive, now, sha, write_json  # noqa: E402
-from managed_ai.store.system import System  # noqa: E402
-from managed_ai.store.turns.preparation_journal import TurnPreparation  # noqa: E402
-from managed_ai.store.turns.turn_retirement import (  # noqa: E402
+from managed_ai_information.core.storage import exclusive, now, sha, write_json  # noqa: E402
+from managed_ai_information.store.system import System  # noqa: E402
+from managed_ai_information.store.turns.preparation_journal import TurnPreparation  # noqa: E402
+from managed_ai_information.store.turns.turn_retirement import (  # noqa: E402
     PLAN_FORMAT,
     RECEIPT_DIRECTORY,
     RECEIPT_FORMAT,

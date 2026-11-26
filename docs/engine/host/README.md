@@ -2,7 +2,7 @@
 
 This optional adapter repairs an enrollment and continuation gap in extended research and construction. It makes the original commission, explicit owed duties, current selected sources, forecasts, changed-source notices and nominated overlaps actual inputs to the native producing context. It uses the existing runtime for source capture, Attention, retained returns, guarded publication and goal interpretation. It does not add a model client, universal planner or domain ontology.
 
-For repeated broad, local or joint observing work, the optional [continuing observation adapter](SIGNAL-FIELD.md) serves supplied receiving uses through [the signal queue](../../../src/managed_ai/host/signal_field/queue.py). Domain data supplies the observing agreement, exact source dependencies and live, historical or occurrence lifetime; the adapter carries eligibility across changes and restart, fences stale returns and exposes bounded recovery. A capable host must actually invoke the worker, receive its semantic result and apply accepted domain updates. Its service state neither fulfills the original commission nor grants native effect authority. See the domain's current field for meanings, qualified coverage and remaining work.
+For repeated broad, local or joint observing work, the optional [continuing observation adapter](SIGNAL-FIELD.md) serves supplied receiving uses through [the signal queue](../../../src/managed_ai_information/host/signal_field/queue.py). Domain data supplies the observing agreement, exact source dependencies and live, historical or occurrence lifetime; the adapter carries eligibility across changes and restart, fences stale returns and exposes bounded recovery. A capable host must actually invoke the worker, receive its semantic result and apply accepted domain updates. Its service state neither fulfills the original commission nor grants native effect authority. See the domain's current field for meanings, qualified coverage and remaining work.
 
 ## Start one continuing commission
 
@@ -196,7 +196,7 @@ Write a host specification that identifies that receipt and its actual producer:
 Invoke the selected host against the existing host root:
 
 ```bash
-python -B /installed/managed-ai/host/continuing_work/continuing_work.py --root /work/host \
+python -B /installed/managed-ai-information/host/continuing_work/continuing_work.py --root /work/host \
   capture CURRENT-SCOPE --spec /work/partial-first-capture.json
 ```
 
@@ -244,9 +244,9 @@ of history or establish a measured wall-time improvement. Ordinary native
 Recover the receipt and then its product through the existing supported route:
 
 ```bash
-python -B /installed/managed-ai/runtime/track_attention.py --root /work/host/native/exchange \
+python -B /installed/managed-ai-information/runtime/track_attention.py --root /work/host/native/exchange \
   object RECEIPT-OBJECT --text
-python -B /installed/managed-ai/runtime/track_attention.py --root /work/host/native/exchange \
+python -B /installed/managed-ai-information/runtime/track_attention.py --root /work/host/native/exchange \
   object PRODUCT-OBJECT --text
 ```
 

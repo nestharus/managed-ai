@@ -9,12 +9,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC_ROOT = REPO_ROOT / "src"
-ENGINE_ROOT = SRC_ROOT / "managed_ai"
+ENGINE_ROOT = SRC_ROOT / "managed_ai_information"
 HOST_DIR = ENGINE_ROOT / "host/continuing_work"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.host.continuing_work.continuing_work import Host  # noqa: E402
+from managed_ai_information.host.continuing_work.continuing_work import Host  # noqa: E402
 
 HERE = HOST_DIR
 ENGINE = (
@@ -32,7 +32,7 @@ COLLECT_RETURNS = (
 CUT = """
 import os, sys
 sys.path.insert(0, sys.argv.pop(1))
-from managed_ai.host.continuing_work import continuing_work as host
+from managed_ai_information.host.continuing_work import continuing_work as host
 point = sys.argv.pop(1)
 call = host.Host.call
 event = host.Host.event
@@ -56,8 +56,8 @@ PUBLICATION_CUT = """
 import os, sys
 sys.path.insert(0, sys.argv.pop(1))
 try:
-    from managed_ai.store import system
-    from managed_ai.core.exchange import publication
+    from managed_ai_information.store import system
+    from managed_ai_information.core.exchange import publication
 except ImportError:
     try:
         from store import system
@@ -335,7 +335,7 @@ class HandoffRecovery(unittest.TestCase):
         self.receive("old", cut="receive", code=73)
         before = self.host.inspect_native("old")["return"]
         target = "outputs/old/reading.md"
-        if ENGINE.parent.name == "store" and ENGINE.parents[1].name == "managed_ai":
+        if ENGINE.parent.name == "store" and ENGINE.parents[1].name == "managed_ai_information":
             native_root = SRC_ROOT
         elif ENGINE.parent.name == "store":
             native_root = ENGINE.parent.parent

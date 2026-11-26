@@ -16,9 +16,9 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.host.material_retention import managed_material as material  # noqa: E402
+from managed_ai_information.host.material_retention import managed_material as material  # noqa: E402
 
-IMPL_MODULE = "managed_ai.host.material_retention"
+IMPL_MODULE = "managed_ai_information.host.material_retention"
 
 
 def _subproc_env() -> dict[str, str]:
@@ -134,7 +134,7 @@ class MaterialRetentionHardening(unittest.TestCase):
             [
                 "import sys, time",
                 "from pathlib import Path",
-                "from managed_ai.host.material_retention import managed_material as mm",
+                "from managed_ai_information.host.material_retention import managed_material as mm",
                 "with mm.store_lock(Path(sys.argv[1])):",
                 "    Path(sys.argv[2]).write_text('ready')",
                 "    deadline = time.monotonic() + 15",
@@ -430,7 +430,7 @@ class MaterialRetentionHardening(unittest.TestCase):
             [
                 "import sys, time",
                 "from pathlib import Path",
-                "from managed_ai.host.material_retention import managed_material as mm",
+                "from managed_ai_information.host.material_retention import managed_material as mm",
                 "with mm.store_lock(Path(sys.argv[1]), shared=True):",
                 "    Path(sys.argv[2]).write_text('ready', encoding='utf-8')",
                 "    deadline = time.monotonic() + 15",
@@ -482,7 +482,7 @@ class MaterialRetentionHardening(unittest.TestCase):
             [
                 "import sys, time",
                 "from pathlib import Path",
-                "from managed_ai.host.material_retention import managed_material as mm",
+                "from managed_ai_information.host.material_retention import managed_material as mm",
                 "with mm.store_lock(Path(sys.argv[1]), shared=False):",
                 "    Path(sys.argv[2]).write_text('ready', encoding='utf-8')",
                 "    deadline = time.monotonic() + 15",

@@ -17,7 +17,7 @@ from tests._paths import ENGINE as ROOT  # noqa: E402
 from tests._paths import SRC, cleanup_tempdir  # noqa: E402
 
 # isort: split
-from managed_ai.core.exchange import Exchange, main  # noqa: E402
+from managed_ai_information.core.exchange import Exchange, main  # noqa: E402
 
 
 class ExchangeTests(unittest.TestCase):
@@ -72,7 +72,7 @@ class ExchangeTests(unittest.TestCase):
             "test broker",
             ["engine/guide.md=" + str(self.proposal), "result.txt=" + str(self.proposal)],
         )
-        with patch("managed_ai.core.ownership.__file__", str(engine / "ownership.py")):
+        with patch("managed_ai_information.core.ownership.__file__", str(engine / "ownership.py")):
             with self.assertRaisesRegex(ValueError, "publication destination"):
                 self.ex.publish(
                     "one", "engine/guide.md", "Try to publish inside the running package."
@@ -107,7 +107,7 @@ class ExchangeTests(unittest.TestCase):
                 sys.executable,
                 "-B",
                 "-m",
-                "managed_ai.core.exchange",
+                "managed_ai_information.core.exchange",
                 "--root",
                 str(self.root),
                 "inspect",

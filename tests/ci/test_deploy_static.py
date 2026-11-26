@@ -35,7 +35,7 @@ def _copy_deploy_tree(dest: Path) -> Path:
             shutil.copytree(src, dst)
         else:
             shutil.copy2(src, dst)
-    (dest / "src" / "managed_ai").mkdir(parents=True, exist_ok=True)
+    (dest / "src" / "managed_ai_information").mkdir(parents=True, exist_ok=True)
     return dest
 
 
@@ -189,7 +189,7 @@ class DeployStaticValidationTests(unittest.TestCase):
 
     def test_rejects_wheel_package_leak(self) -> None:
         repo = _copy_deploy_tree(self.tmp_root / "bad-wheel")
-        (repo / "src" / "managed_ai" / "gitops").mkdir(parents=True)
+        (repo / "src" / "managed_ai_information" / "gitops").mkdir(parents=True)
         report = validate_repository(repo)
         self.assertEqual(report["status"], "failed")
         self.assertTrue(

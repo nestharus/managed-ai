@@ -25,7 +25,7 @@ from pathlib import Path
 
 API = runpy.run_path(str(APP / "system.py"))
 System, exclusive = API["System"], API["exclusive"]
-from managed_ai.store.query.information import Information, pointer, record_identity  # noqa: E402
+from managed_ai_information.store.query.information import Information, pointer, record_identity  # noqa: E402
 
 
 class InformationChecks(unittest.TestCase):

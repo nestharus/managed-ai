@@ -1,13 +1,13 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: managed-ai
+namespace: managed-ai-information
 resources:
   - ../../base
 labels:
   - pairs:
-      managed-ai.dev/channel: local
+      managed-ai-information.dev/channel: local
     includeSelectors: false
 images:
-  - name: ghcr.io/nestharus/managed-ai
-    newName: managed-ai-local:5000/managed-ai
+  - name: ghcr.io/nestharus/managed-ai-information
+    newName: managed-ai-information-local:5000/managed-ai-information
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

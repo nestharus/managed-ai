@@ -15,7 +15,7 @@ for _entry in (str(REPO_ROOT / "src"), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai.platform import is_reparse_or_symlink_stat  # noqa: E402
+from managed_ai_information.platform import is_reparse_or_symlink_stat  # noqa: E402
 from scripts.release._verify import (  # noqa: E402
     CATALOGUE,
     SCRIPTS_SELECTION,

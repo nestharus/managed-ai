@@ -12,11 +12,11 @@ from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC_ROOT = REPO_ROOT / "src"
-PUB_DIR = SRC_ROOT / "managed_ai/companions/publication_review"
+PUB_DIR = SRC_ROOT / "managed_ai_information/companions/publication_review"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.companions.publication_review import (  # noqa: E402
+from managed_ai_information.companions.publication_review import (  # noqa: E402
     continuation_assessor,
     publication_observer,
     publication_review,

@@ -19,7 +19,7 @@ class ReleaseAcceptance(unittest.TestCase):
             candidate_repo = root / "candidate"
             inherited_repo = root / "inherited"
             for repo, label in ((candidate_repo, "candidate"), (inherited_repo, "inherited")):
-                pkg = repo / "src/managed_ai"
+                pkg = repo / "src/managed_ai_information"
                 store = pkg / "store"
                 store.mkdir(parents=True)
                 (pkg / "__init__.py").write_text("", encoding="utf-8")
@@ -32,11 +32,13 @@ class ReleaseAcceptance(unittest.TestCase):
                 "import os, sys\n"
                 "from pathlib import Path\n"
                 'sys.path.insert(0, str(Path(os.environ["G60_TEST_PRODUCT"]).parent))\n'
-                "from managed_ai.store.edition import NAME\n"
+                "from managed_ai_information.store.edition import NAME\n"
                 "print(NAME)\n",
                 encoding="utf-8",
             )
-            env = dict(os.environ, G60_TEST_PRODUCT=str(inherited_repo / "src/managed_ai"))
+            env = dict(
+                os.environ, G60_TEST_PRODUCT=str(inherited_repo / "src/managed_ai_information")
+            )
             standalone = subprocess.check_output(
                 [sys.executable, "-B", str(program)], env=env, text=True
             )
@@ -47,7 +49,7 @@ class ReleaseAcceptance(unittest.TestCase):
                     "-B",
                     str(CHECK_SCRIPT),
                     "--product",
-                    str(candidate_repo / "src/managed_ai"),
+                    str(candidate_repo / "src/managed_ai_information"),
                     "--records",
                     str(root),
                 ],
@@ -58,13 +60,13 @@ class ReleaseAcceptance(unittest.TestCase):
             report = json.loads((root / "ACCEPTANCE.json").read_bytes())
             self.assertEqual(report["stdout"].strip(), "candidate")
             self.assertEqual(report["program"], str(program))
-            self.assertEqual(report["product"], str(candidate_repo / "src/managed_ai"))
+            self.assertEqual(report["product"], str(candidate_repo / "src/managed_ai_information"))
 
     def test_w5_b8b_rejects_junction_or_symlink_records_and_abbreviated_flags(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = root / "repo"
-            (repo / "src/managed_ai").mkdir(parents=True)
+            (repo / "src/managed_ai_information").mkdir(parents=True)
             suites = repo / "tests/store"
             suites.mkdir(parents=True)
             (suites / "test_shared_instances.py").write_text('print("ok")\n', encoding="utf-8")
@@ -88,7 +90,7 @@ class ReleaseAcceptance(unittest.TestCase):
                     "-B",
                     str(CHECK_SCRIPT),
                     "--product",
-                    str(repo / "src/managed_ai"),
+                    str(repo / "src/managed_ai_information"),
                     "--records",
                     str(alias_rec),
                 ],
@@ -107,7 +109,7 @@ class ReleaseAcceptance(unittest.TestCase):
                     "-B",
                     str(CHECK_SCRIPT),
                     "--product",
-                    str(repo / "src/managed_ai"),
+                    str(repo / "src/managed_ai_information"),
                     "--records",
                     str(alias_rec) + os.sep + ".." + os.sep + "real_records",
                 ],
@@ -125,7 +127,7 @@ class ReleaseAcceptance(unittest.TestCase):
                     "-B",
                     str(CHECK_SCRIPT),
                     "--product",
-                    str(repo / "src/managed_ai"),
+                    str(repo / "src/managed_ai_information"),
                     "--rec",
                     str(real_rec),
                 ],

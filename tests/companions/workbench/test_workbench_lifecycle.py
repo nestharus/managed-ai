@@ -10,15 +10,15 @@ from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC_ROOT = REPO_ROOT / "src"
-WORKBENCH_DIR = SRC_ROOT / "managed_ai/companions/workbench"
+WORKBENCH_DIR = SRC_ROOT / "managed_ai_information/companions/workbench"
 for _p in (str(SRC_ROOT), str(REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from managed_ai.companions.workbench import (  # noqa: E402
+from managed_ai_information.companions.workbench import (  # noqa: E402
     config as wb_config,
 )
-from managed_ai.companions.workbench import (  # noqa: E402
+from managed_ai_information.companions.workbench import (  # noqa: E402
     durable_agent,
     model_bridges,
     resumable_workbench,

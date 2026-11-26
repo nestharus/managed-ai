@@ -17,13 +17,13 @@ for _entry in (str(REPO_ROOT / "src"), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai.platform import (  # noqa: E402
+from managed_ai_information.platform import (  # noqa: E402
     check_ordinary_ancestors,
     is_reparse_or_symlink_stat,
     strict_json_loads,
 )
 
-ROOT = REPO_ROOT / "src/managed_ai"
+ROOT = REPO_ROOT / "src/managed_ai_information"
 
 
 def digest(raw: bytes) -> str:
@@ -149,7 +149,7 @@ def render_sources_markdown(selected: dict, nav: dict) -> bytes:
 
 
 def _engine_layout(root: Path) -> tuple[bool, Path, str, int]:
-    if root.name == "managed_ai" and root.parent.name == "src":
+    if root.name == "managed_ai_information" and root.parent.name == "src":
         bundle_root = _ordinary_path(root.parents[1], S_ISDIR, "ordinary bundle root required")
         return True, bundle_root, "../../..", -2
 

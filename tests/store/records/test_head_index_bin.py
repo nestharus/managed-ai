@@ -21,12 +21,15 @@ else:
 
 _ = _ENGINE
 
-from managed_ai.core.formats import HEAD_INDEX_FORMAT, HEAD_INDEX_FORMAT_V1  # noqa: E402
-from managed_ai.core.storage import encode, exclusive, sha  # noqa: E402
-from managed_ai.store.query import graph_query  # noqa: E402
-from managed_ai.store.records.head_index import INDEX_DOMAIN  # noqa: E402
-from managed_ai.store.records.head_index_bin import HEAD_INDEX_FORMAT_V3, read_current_pointer  # noqa: E402
-from managed_ai.store.system import System  # noqa: E402
+from managed_ai_information.core.formats import HEAD_INDEX_FORMAT, HEAD_INDEX_FORMAT_V1  # noqa: E402
+from managed_ai_information.core.storage import encode, exclusive, sha  # noqa: E402
+from managed_ai_information.store.query import graph_query  # noqa: E402
+from managed_ai_information.store.records.head_index import INDEX_DOMAIN  # noqa: E402
+from managed_ai_information.store.records.head_index_bin import (  # noqa: E402
+    HEAD_INDEX_FORMAT_V3,
+    read_current_pointer,
+)
+from managed_ai_information.store.system import System  # noqa: E402
 
 
 class HeadIndexBinTests(unittest.TestCase):
@@ -322,7 +325,7 @@ class HeadIndexBinTests(unittest.TestCase):
         bin_path.unlink()
         entries = {}
         for rec in system.record_store.scan_records():
-            from managed_ai.store.records.head_index import build_entry
+            from managed_ai_information.store.records.head_index import build_entry
 
             raw = system.record_path(rec["id"]).read_bytes()
             entries[rec["id"]] = build_entry(rec, raw, system.record_path(rec["id"]).lstat())

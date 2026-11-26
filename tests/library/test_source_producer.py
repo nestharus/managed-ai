@@ -13,10 +13,10 @@ sys.dont_write_bytecode = True
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
-from managed_ai.library import catalogue  # noqa: E402
-from managed_ai.library import format as lib_format  # noqa: E402
-from managed_ai.library.catalogue import Library  # noqa: E402
-from managed_ai.library.producer import Producer  # noqa: E402
+from managed_ai_information.library import catalogue  # noqa: E402
+from managed_ai_information.library import format as lib_format  # noqa: E402
+from managed_ai_information.library.catalogue import Library  # noqa: E402
+from managed_ai_information.library.producer import Producer  # noqa: E402
 
 
 def has_fts5():

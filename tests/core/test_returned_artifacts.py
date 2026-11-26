@@ -14,8 +14,8 @@ if str(_REPO) not in sys.path:
 from tests._paths import ENGINE as ROOT  # noqa: E402
 
 # isort: split
-from managed_ai.core.exchange import Exchange  # noqa: E402
-from managed_ai.core.exchange.transport.collector import encode, sha  # noqa: E402
+from managed_ai_information.core.exchange import Exchange  # noqa: E402
+from managed_ai_information.core.exchange.transport.collector import encode, sha  # noqa: E402
 
 
 class ReturnedArtifactTests(unittest.TestCase):
@@ -174,7 +174,7 @@ class ReturnedArtifactTests(unittest.TestCase):
         self.ex.prepare("large", "author", "brief.md", [], [], ["large.txt"], [])
         self.ex.receive("large", self.reply, "test", ["large.txt=" + str(self.proposal)])
         with (
-            patch("managed_ai.core.exchange.packet_context.MAX_PACKET_BYTES", 2048),
+            patch("managed_ai_information.core.exchange.packet_context.MAX_PACKET_BYTES", 2048),
             self.assertRaisesRegex(ValueError, "total packet limit"),
         ):
             self.current(artifacts=["large:large.txt"])

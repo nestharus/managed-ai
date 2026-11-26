@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from managed_ai.store.system import System, exclusive
+from managed_ai_information.store.system import System, exclusive
 
 
 class CompositionContextChecks(unittest.TestCase):

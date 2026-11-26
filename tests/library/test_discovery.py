@@ -18,9 +18,9 @@ if str(_REPO) not in sys.path:
 from tests._paths import ENGINE  # noqa: E402
 
 # isort: split
-from managed_ai.library import catalogue  # noqa: E402
-from managed_ai.library import format as lib_format  # noqa: E402
-from managed_ai.library.catalogue import (  # noqa: E402
+from managed_ai_information.library import catalogue  # noqa: E402
+from managed_ai_information.library import format as lib_format  # noqa: E402
+from managed_ai_information.library.catalogue import (  # noqa: E402
     MAX_BATCH_INPUT,
     MAX_BATCH_QUERIES,
     MAX_BATCH_RESULT,

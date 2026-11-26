@@ -10,11 +10,11 @@ from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC_ROOT = REPO_ROOT / "src"
-REP_DIR = SRC_ROOT / "managed_ai/companions/representation"
+REP_DIR = SRC_ROOT / "managed_ai_information/companions/representation"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.companions.representation import representation  # noqa: E402
+from managed_ai_information.companions.representation import representation  # noqa: E402
 
 
 class RepresentationWave4Tests(unittest.TestCase):
@@ -215,7 +215,7 @@ class RepresentationWave4Tests(unittest.TestCase):
         import shutil
         import subprocess
 
-        ext_engine = self.root / "ext_synth" / "managed_ai"
+        ext_engine = self.root / "ext_synth" / "managed_ai_information"
         marker_log = self.root / "synth_marker.log"
         for sub in ("core", "store", "store/protocol"):
             (ext_engine / sub).mkdir(parents=True, exist_ok=True)
@@ -283,17 +283,19 @@ class RepresentationWave4Tests(unittest.TestCase):
             newline="\n",
         )
 
-        local_pkg_file = Path(sys.modules["managed_ai"].__file__).resolve()
+        local_pkg_file = Path(sys.modules["managed_ai_information"].__file__).resolve()
         with representation.mount_engine(ext_engine) as (sys_cls, _, _, _, _):
             self.assertEqual(getattr(sys_cls, "ENGINE_SOURCE", None), "EXTERNAL_SYNTH")
             self.assertEqual(
-                Path(sys.modules["managed_ai.store.system"].__file__).resolve(),
+                Path(sys.modules["managed_ai_information.store.system"].__file__).resolve(),
                 (ext_engine / "store/system.py").resolve(),
             )
             self.assertEqual(representation._packet_id_fn()("t-1"), "t-1")
             self.assertEqual(representation._artifact_target_fn()("a.json"), "a.json")
 
-        self.assertEqual(Path(sys.modules["managed_ai"].__file__).resolve(), local_pkg_file)
+        self.assertEqual(
+            Path(sys.modules["managed_ai_information"].__file__).resolve(), local_pkg_file
+        )
 
         store_root = self.root / "cli_store"
         (store_root / "exchange").mkdir(parents=True)
@@ -326,9 +328,9 @@ class RepresentationWave4Tests(unittest.TestCase):
         self.assertIn("external_system_init", events)
         self.assertIn("external_artifact_target", events)
 
-        ext_real = self.root / "ext_real" / "managed_ai"
+        ext_real = self.root / "ext_real" / "managed_ai_information"
         ext_real.mkdir(parents=True)
-        local_engine = SRC_ROOT / "managed_ai"
+        local_engine = SRC_ROOT / "managed_ai_information"
         shutil.copy2(local_engine / "__init__.py", ext_real / "__init__.py")
         for sub in ("platform", "core", "store"):
             shutil.copytree(

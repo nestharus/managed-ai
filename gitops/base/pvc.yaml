@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: managed-ai-store
-  namespace: managed-ai
+  name: managed-ai-information-store
+  namespace: managed-ai-information
   labels:
-    app.kubernetes.io/name: managed-ai
+    app.kubernetes.io/name: managed-ai-information
     app.kubernetes.io/component: store
 spec:
   accessModes:

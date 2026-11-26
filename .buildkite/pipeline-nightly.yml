@@ -1,7 +1,7 @@
 env:
   PYTHONDONTWRITEBYTECODE: "1"
   IMAGE_REGISTRY: "ghcr.io/nestharus"
-  IMAGE_NAME: "managed-ai"
+  IMAGE_NAME: "managed-ai-information"
   KEEP_MAIN_IMAGES: "5"
   PR_IMAGE_TTL_DAYS: "7"
 
@@ -35,11 +35,11 @@ steps:
       set -euo pipefail
       DRILL_DIR="$(mktemp -d)"
       trap 'rm -rf "$DRILL_DIR"' EXIT
-      python3 -B src/managed_ai/store/manage_store.py --root "$DRILL_DIR/store" init \
+      python3 -B src/managed_ai_information/store/manage_store.py --root "$DRILL_DIR/store" init \
         --instance-id nightly-drill --goal-text "Nightly pack and readback qualification"
-      python3 -B src/managed_ai/store/manage_store.py --root "$DRILL_DIR/store" reindex
-      python3 -B src/managed_ai/store/manage_store.py --root "$DRILL_DIR/store" pack-objects --apply
-      python3 -B src/managed_ai/store/manage_store.py --root "$DRILL_DIR/store" status --summary
+      python3 -B src/managed_ai_information/store/manage_store.py --root "$DRILL_DIR/store" reindex
+      python3 -B src/managed_ai_information/store/manage_store.py --root "$DRILL_DIR/store" pack-objects --apply
+      python3 -B src/managed_ai_information/store/manage_store.py --root "$DRILL_DIR/store" status --summary
 
   - wait
 

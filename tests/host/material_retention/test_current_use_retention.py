@@ -19,7 +19,7 @@ if str(SRC_ROOT) not in sys.path:
 IMPL = Path(
     os.environ.get(
         "MATERIAL_IMPLEMENTATION",
-        REPO_ROOT / "src/managed_ai/host/material_retention/managed_material.py",
+        REPO_ROOT / "src/managed_ai_information/host/material_retention/managed_material.py",
     )
 )
 if os.environ.get("MATERIAL_IMPLEMENTATION"):
@@ -27,7 +27,7 @@ if os.environ.get("MATERIAL_IMPLEMENTATION"):
     material = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(material)
 else:
-    from managed_ai.host.material_retention import managed_material as material
+    from managed_ai_information.host.material_retention import managed_material as material
 
 
 class RetentionContract(unittest.TestCase):

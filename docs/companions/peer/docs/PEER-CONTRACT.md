@@ -1,15 +1,15 @@
-# Peer Workbench Contract (`src/managed_ai/companions/peer/peer_workbench.py`)
+# Peer Workbench Contract (`src/managed_ai_information/companions/peer/peer_workbench.py`)
 
-`peer_workbench.py` adapts the shared workbench (`src/managed_ai/companions/workbench/`) to participate as a single declared owner inside a [Peer Harness v1](PROTOCOL.md) run without introducing a second runtime or scheduler.
+`peer_workbench.py` adapts the shared workbench (`src/managed_ai_information/companions/workbench/`) to participate as a single declared owner inside a [Peer Harness v1](PROTOCOL.md) run without introducing a second runtime or scheduler.
 
 ## Entrypoint and shared component manifest
 
 ```sh
-python -B src/managed_ai/companions/peer/peer_workbench.py --config /path/to/owner-config.json
+python -B src/managed_ai_information/companions/peer/peer_workbench.py --config /path/to/owner-config.json
 ```
 
-- Shared workbench modules are declared in `src/managed_ai/companions/peer/COMPONENTS.json` (`schema: peer-workbench-acquired-components/1`) using `src/managed_ai/companions/`-relative POSIX keys with zero `..`.
-- In Git checkouts, `COMPONENTS.json` is declarative (`{"source": "..."}`); `peer_workbench.py` loads strictly from `src/managed_ai/companions/` inside an isolated private package namespace, verifies `"identity"` (`bytes` + `sha256`) whenever present (e.g., in stamped release bundles produced by `scripts/release/package.py`), and always hashes every loaded component live into `input-identities.json` for run provenance.
+- Shared workbench modules are declared in `src/managed_ai_information/companions/peer/COMPONENTS.json` (`schema: peer-workbench-acquired-components/1`) using `src/managed_ai_information/companions/`-relative POSIX keys with zero `..`.
+- In Git checkouts, `COMPONENTS.json` is declarative (`{"source": "..."}`); `peer_workbench.py` loads strictly from `src/managed_ai_information/companions/` inside an isolated private package namespace, verifies `"identity"` (`bytes` + `sha256`) whenever present (e.g., in stamped release bundles produced by `scripts/release/package.py`), and always hashes every loaded component live into `input-identities.json` for run provenance.
 
 ## Request, turn state, and return handling
 

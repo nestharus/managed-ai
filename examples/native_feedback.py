@@ -157,7 +157,7 @@ def exercise(engine: Path | str, work: Path) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    default_engine = Path(__file__).resolve().parents[1] / "src" / "managed_ai"
+    default_engine = Path(__file__).resolve().parents[1] / "src" / "managed_ai_information"
     parser = argparse.ArgumentParser(
         description=(
             "Run the standalone native feedback example against a temporary store and "
@@ -169,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
         "--engine",
         type=Path,
         default=default_engine,
-        help="Path to the managed_ai package directory (default: src/managed_ai).",
+        help="Path to the managed_ai_information package directory (default: src/managed_ai_information).",
     )
     parser.add_argument(
         "--work",

@@ -1,15 +1,15 @@
-# Local IP-hiding control surface stack for Managed AI.
-# The managed-ai store worker lives exclusively on an internal bridge network with zero
+# Local IP-hiding control surface stack for Managed AI Information.
+# The managed-ai-information store worker lives exclusively on an internal bridge network with zero
 # host port bindings. Only the pinned non-root gateway exposes 127.0.0.1 control access.
 
-name: managed-ai
+name: managed-ai-information
 
 services:
-  managed-ai:
+  managed-ai-information:
     build:
       context: ../..
       dockerfile: containers/Containerfile
-    image: managed-ai-local:dev
+    image: managed-ai-information-local:dev
     user: "10001:10001"
     read_only: true
     init: true
@@ -17,7 +17,7 @@ services:
     entrypoint: ["python3", "-B", "-c", "import signal; signal.pause()"]
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
-      MANAGED_AI_HOME: /var/lib/managed-ai
+      MANAGED_AI_INFORMATION_HOME: /var/lib/managed-ai-information
     cap_drop:
       - ALL
     security_opt:
@@ -25,11 +25,11 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
     volumes:
-      - managed_ai_store:/var/lib/managed-ai
+      - managed_ai_information_store:/var/lib/managed-ai-information
     networks:
-      - managed_ai_internal
+      - managed_ai_information_internal
     healthcheck:
-      test: ["CMD", "managed-ai", "--help"]
+      test: ["CMD", "managed-ai-information", "--help"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -49,15 +49,15 @@ services:
       - /tmp:rw,noexec,nosuid,size=16m
       - /var/cache/nginx:rw,noexec,nosuid,size=16m
     ports:
-      - "127.0.0.1:${MANAGED_AI_CONTROL_PORT:-8480}:8080"
+      - "127.0.0.1:${MANAGED_AI_INFORMATION_CONTROL_PORT:-8480}:8080"
     volumes:
       - ./gateway.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      managed-ai:
+      managed-ai-information:
         condition: service_healthy
     networks:
-      - managed_ai_internal
-      - managed_ai_edge
+      - managed_ai_information_internal
+      - managed_ai_information_edge
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1"]
       interval: 30s
@@ -66,12 +66,12 @@ services:
       start_period: 5s
 
 networks:
-  managed_ai_internal:
+  managed_ai_information_internal:
     driver: bridge
     internal: true
-  managed_ai_edge:
+  managed_ai_information_edge:
     driver: bridge
 
 volumes:
-  managed_ai_store:
+  managed_ai_information_store:
     driver: local

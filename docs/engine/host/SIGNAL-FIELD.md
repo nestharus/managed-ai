@@ -6,7 +6,7 @@
 
 The maintained Attention implementation captures caller-nominated questions, complete selected source bindings, actual public treatment and omitted-item identities. `Attention.feedback` orders by status and then bounds delivery. It has no persistent service age across repeatedly changed early items. Its current metadata and source scans also retain costs outside the bounded returned context. Keep that interface's meaning intact.
 
-The new host adapter supplies the missing continuing pull/receive relationship. It can sit beside `src/managed_ai/host/continuing_work/continuing_work.py`, which currently prepares and reconciles explicit scopes but does not call a model or schedule semantics. `src/managed_ai/host/material_retention/managed_material.py` still owns byte custody and selected retention. `engine/companion_representation/representation.py` still binds authored construction to native captured inputs and guarded adoption. Existing `collective-work` watches, required offers, cursor inboxes and fenced claims remain adequate mechanisms for actual shared source/receiver admission. This queue does not replace them or grant permission for an external effect.
+The new host adapter supplies the missing continuing pull/receive relationship. It can sit beside `src/managed_ai_information/host/continuing_work/continuing_work.py`, which currently prepares and reconciles explicit scopes but does not call a model or schedule semantics. `src/managed_ai_information/host/material_retention/managed_material.py` still owns byte custody and selected retention. `engine/companion_representation/representation.py` still binds authored construction to native captured inputs and guarded adoption. Existing `collective-work` watches, required offers, cursor inboxes and fenced claims remain adequate mechanisms for actual shared source/receiver admission. This queue does not replace them or grant permission for an external effect.
 
 The proposal follows existing `research/patterns/collective-knowledge.md` (supply invocation explicitly), `continuous-consolidation.md` (give each receiving use another turn), `cards/change-signals.md` (recoverable changes and current admission), `retaining-useful-state.md` (retention by receiving use), and `scoped-understanding.md` (partial qualified views and signal lifetimes). No domain name or dimension count occurs in producer behavior.
 
@@ -102,7 +102,7 @@ The received scheduling study (`stores/research/work/findings/signal-field-evide
 For actual enrollment, use the `Field` API under its local owner or send one CLI request:
 
 ```bash
-python3 -B src/managed_ai/host/signal_field/queue.py --db /absolute/host/signal-field.sqlite --request /absolute/operation.json
+python3 -B src/managed_ai_information/host/signal_field/queue.py --db /absolute/host/signal-field.sqlite --request /absolute/operation.json
 ```
 
 An operation is `{"op":"enroll","spec":...}`, `{"op":"change","source":...,"epoch":...,"position":...,"value":...}`, or `{"op":"run","argv":["/absolute/permitted-worker"],"budget":5,"timeout":60}`. A budget is a resource bound, not a mandated five-dimension batch. `pull`, `receive`, `retry`, `retain`, `pending`, `inspect`, `reconcile` and `status` are also available. A change of receiving lifetime requires a distinct use identity so that an existing owed lifetime is not silently repurposed. Keep the runtime database outside shipped source; the queue is one host's continuing state, not another copy of the core engine.

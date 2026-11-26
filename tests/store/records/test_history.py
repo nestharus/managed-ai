@@ -17,7 +17,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from managed_ai.store.system import System, encode, sha
+from managed_ai_information.store.system import System, encode, sha
 
 
 class HistoryChecks(unittest.TestCase):

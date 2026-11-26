@@ -22,7 +22,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from managed_ai.core.storage import (
+from managed_ai_information.core.storage import (
     MAX_BYTES,
     ObjectStore,
     encode,
@@ -31,16 +31,16 @@ from managed_ai.core.storage import (
     sha,
     shared,
 )
-from managed_ai.deployment.controller import Deployment
-from managed_ai.store.composition.composition import Composition
-from managed_ai.store.query.context_discovery import Discovery
-from managed_ai.store.records.record_batch import put_batch
-from managed_ai.store.records.record_import import import_records, read_receipt
-from managed_ai.store.selection.domain_selection import (
+from managed_ai_information.deployment.controller import Deployment
+from managed_ai_information.store.composition.composition import Composition
+from managed_ai_information.store.query.context_discovery import Discovery
+from managed_ai_information.store.records.record_batch import put_batch
+from managed_ai_information.store.records.record_import import import_records, read_receipt
+from managed_ai_information.store.selection.domain_selection import (
     validate_payload,
     validate_schema,
 )
-from managed_ai.store.system import System
+from managed_ai_information.store.system import System
 
 
 def _write_json(path: Path, value: dict) -> Path:
@@ -557,7 +557,7 @@ class Wave2RuntimeTests(unittest.TestCase):
             return real_read(path)
 
         with patch.object(Path, "read_bytes", guard_sealed):
-            from managed_ai.store.records.cold_archive import plan_archive_records
+            from managed_ai_information.store.records.cold_archive import plan_archive_records
 
             plan = plan_archive_records(
                 System(self.store),
@@ -812,7 +812,7 @@ class Wave2RuntimeTests(unittest.TestCase):
                 0,
             )
             cold_obj = system.show("cold-rec")["basis"][0]["sha256"]
-            from managed_ai.store.records.cold_archive import (
+            from managed_ai_information.store.records.cold_archive import (
                 execute_archive_records,
                 plan_archive_records,
             )
@@ -1240,8 +1240,8 @@ class Wave2RuntimeTests(unittest.TestCase):
     def test_perf68_raw_hmac_head_index_legacy_fallback_and_nofollow_body_read(self):
         import hmac as hmac_mod
 
-        from managed_ai.store.records.head_index import INDEX_DOMAIN, INDEX_FORMAT
-        from managed_ai.store.selection.domain_selection import read_selected_body
+        from managed_ai_information.store.records.head_index import INDEX_DOMAIN, INDEX_FORMAT
+        from managed_ai_information.store.selection.domain_selection import read_selected_body
 
         system = System(self.store)
         with exclusive(system.ex.root / "owner.lock"):

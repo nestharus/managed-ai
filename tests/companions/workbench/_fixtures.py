@@ -1,4 +1,4 @@
-"""Temporary src/managed_ai/library source layouts for workbench binding and replay tests."""
+"""Temporary library source layouts for workbench binding and replay tests."""
 
 from pathlib import Path
 
@@ -6,9 +6,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def search_layout(root):
-    """Build a hermetically pinned src/managed_ai/library lexical fixture under root."""
-    engine = REPO_ROOT / "src/managed_ai"
-    lib = root / "src/managed_ai/library"
+    """Build a hermetically pinned src/managed_ai_information/library lexical fixture under root."""
+    engine = REPO_ROOT / "src/managed_ai_information"
+    lib = root / "src/managed_ai_information/library"
     lib.mkdir(parents=True, exist_ok=True)
     copies = (
         (engine / "library/lexical.py", lib / "lexical.py"),

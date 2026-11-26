@@ -1,10 +1,10 @@
 # Selected existing CLI and field reference
 
-Runtime state, source derivatives, indexes and outputs belong to selected stores outside the engine directory. In the commands below, `G60_BASE` names the selected engine root; other uppercase tokens name caller-selected paths or retained IDs. In this package, select `src/managed_ai/deployment/select_deployment.py` or `src/managed_ai/store/manage_store.py`. The underlying field contracts remain useful; [instance contracts](INSTANCES.md) add the current deployment, domain, typed-record, import and retention interfaces.
+Runtime state, source derivatives, indexes and outputs belong to selected stores outside the engine directory. In the commands below, `G60_BASE` names the selected engine root; other uppercase tokens name caller-selected paths or retained IDs. In this package, select `src/managed_ai_information/deployment/select_deployment.py` or `src/managed_ai_information/store/manage_store.py`. The underlying field contracts remain useful; [instance contracts](INSTANCES.md) add the current deployment, domain, typed-record, import and retention interfaces.
 
 ## Read the configured store
 
-From the package root, use `python3 -B src/managed_ai/library/cli.py --store STORE discover --query TEXT` for selected metadata and `python3 -B src/managed_ai/library/cli.py --store STORE show SOURCE_ID --text` for exact acquisition.
+From the package root, use `python3 -B src/managed_ai_information/library/cli.py --store STORE discover --query TEXT` for selected metadata and `python3 -B src/managed_ai_information/library/cli.py --store STORE show SOURCE_ID --text` for exact acquisition.
 
 ## Publish and discover bodies in an explicit knowledge library
 

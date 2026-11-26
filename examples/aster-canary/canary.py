@@ -9,11 +9,11 @@ ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / 'src'
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
-from managed_ai.store.system import System
-from managed_ai.collective.store import Collective, Session
-from managed_ai.collective.store.contract import pin, require
-from managed_ai.core.storage import encode, exclusive, read_json, sha
-from managed_ai.store.protocol.inputs import accounted_closure
+from managed_ai_information.store.system import System
+from managed_ai_information.collective.store import Collective, Session
+from managed_ai_information.collective.store.contract import pin, require
+from managed_ai_information.core.storage import encode, exclusive, read_json, sha
+from managed_ai_information.store.protocol.inputs import accounted_closure
 
 
 PROFILE = 'canary-west/1'

@@ -16,8 +16,11 @@ sys.path.insert(0, str(PRODUCT))
 
 from collective.store.cli import main
 
-leaked = [m for m in sys.modules if m == 'managed_ai' or m.startswith('managed_ai.')]
-assert not leaked, f'Unexpected managed_ai imports: {leaked}'
+leaked = [
+    m for m in sys.modules
+    if m == 'managed_ai_information' or m.startswith('managed_ai_information.')
+]
+assert not leaked, f'Unexpected managed_ai_information imports: {leaked}'
 raise SystemExit(main(product=PRODUCT))
 """
 
@@ -30,7 +33,7 @@ class DistributionEntry(unittest.TestCase):
         self.product = self.base / "renamed-product"
         self.component = self.product / "collective"
         self.component.mkdir(parents=True)
-        source = Path(__file__).resolve().parents[2] / "src/managed_ai/collective"
+        source = Path(__file__).resolve().parents[2] / "src/managed_ai_information/collective"
         shutil.copy2(source / "__init__.py", self.component / "__init__.py")
         shutil.copy2(source / "__main__.py", self.component / "__main__.py")
         shutil.copytree(source / "store", self.component / "store")

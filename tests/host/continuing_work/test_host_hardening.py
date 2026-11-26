@@ -14,31 +14,31 @@ from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC_ROOT = REPO_ROOT / "src"
-HERE = SRC_ROOT / "managed_ai/host/continuing_work"
+HERE = SRC_ROOT / "managed_ai_information/host/continuing_work"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from managed_ai.host.continuing_work import (  # noqa: E402
+from managed_ai_information.host.continuing_work import (  # noqa: E402
     capture_native,
     continuing_work,
     native_bridge,
     occurrence_files,
 )
-from managed_ai.host.continuing_work.continuing_work import (  # noqa: E402
+from managed_ai_information.host.continuing_work.continuing_work import (  # noqa: E402
     MAX_EVENT_LINE_BYTES,
     MAX_EVENT_STREAM_BYTES,
     Host,
 )
 
 ENGINE = (
-    SRC_ROOT / "managed_ai/store/manage_store.py"
-    if (SRC_ROOT / "managed_ai/store/manage_store.py").is_file()
+    SRC_ROOT / "managed_ai_information/store/manage_store.py"
+    if (SRC_ROOT / "managed_ai_information/store/manage_store.py").is_file()
     else REPO_ROOT / "engine/runtime/manage_store.py"
 )
 
 
 def _native_engine_available() -> bool:
-    if not (SRC_ROOT / "managed_ai/store/manage_store.py").is_file():
+    if not (SRC_ROOT / "managed_ai_information/store/manage_store.py").is_file():
         try:
             capture_native.reviewed_engine(ENGINE)
             return True
@@ -70,7 +70,10 @@ class ContinuingWorkCrossPlatformTests(unittest.TestCase):
                 "import sys, time",
                 "from pathlib import Path",
                 "sys.path.insert(0, sys.argv[1])",
-                "from managed_ai.host.continuing_work.occurrence_files import file_lock",
+                (
+                    "from managed_ai_information.host.continuing_work.occurrence_files "
+                    "import file_lock"
+                ),
                 "with file_lock(Path(sys.argv[2])):",
                 "    Path(sys.argv[3]).write_text('ready', encoding='utf-8')",
                 "    deadline = time.monotonic() + 15",
@@ -158,7 +161,7 @@ class ContinuingWorkCrossPlatformTests(unittest.TestCase):
         threads = [threading.Thread(target=worker, args=(t,)) for t in range(3)]
         child_code = (
             "import sys; sys.path.insert(0, sys.argv[1]); "
-            "from managed_ai.host.continuing_work.continuing_work import Host; "
+            "from managed_ai_information.host.continuing_work.continuing_work import Host; "
             "h = Host(sys.argv[2]); "
             "[h.event('xplat-proc', {'seq': i, 'pad': 'p' * 120}) for i in range(15)]"
         )
@@ -379,7 +382,7 @@ class ContinuingWorkHardening(unittest.TestCase):
         threads = [threading.Thread(target=worker, args=(t,)) for t in range(4)]
         child_code = (
             "import sys; sys.path.insert(0, sys.argv[1]); "
-            "from managed_ai.host.continuing_work.continuing_work import Host; "
+            "from managed_ai_information.host.continuing_work.continuing_work import Host; "
             "h = Host(sys.argv[2]); "
             "[h.event('proc-write', {'seq': i, 'pad': 'p' * 200}) for i in range(20)]"
         )

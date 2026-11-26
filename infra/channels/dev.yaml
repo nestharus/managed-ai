@@ -1,9 +1,9 @@
-# Development Vultr VM channel contract for Managed AI.
+# Development Vultr VM channel contract for Managed AI Information.
 # Populate ssh_key_ids, admin_cidrs, and object-storage credentials via SOPS/env at apply time.
 channel: dev
 provider: vultr-vms
 region: ewr
-cluster_name: managed-ai-dev
+cluster_name: managed-ai-information-dev
 exposure: internal-gateway
 network:
   vpc_cidr: 10.42.0.0/24
@@ -17,10 +17,10 @@ compute:
 tfstate:
   backend: vultr-object-storage
   bucket: ""
-  key: managed-ai/dev/terraform.tfstate
+  key: managed-ai-information/dev/terraform.tfstate
   endpoint: ""
   region: ewr
 state:
-  authoritative_volume: managed-ai-store
+  authoritative_volume: managed-ai-information-store
   storage_class: vultr-block-storage
   size: 20Gi

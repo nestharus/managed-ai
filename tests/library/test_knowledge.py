@@ -12,12 +12,16 @@ sys.dont_write_bytecode = True
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
-from managed_ai.library.bundle import context as bundle_context  # noqa: E402
-from managed_ai.library.bundle import export, import_bundle, inspect_bundle, product  # noqa: E402
-from managed_ai.library.catalogue import Library  # noqa: E402
-from managed_ai.library.config import LibraryConfig  # noqa: E402
-from managed_ai.library.contract import LibraryReader, SearchBackend, SourceProducerService  # noqa: E402
-from managed_ai.library.format import (  # noqa: E402
+from managed_ai_information.library.bundle import context as bundle_context  # noqa: E402
+from managed_ai_information.library.bundle import export, import_bundle, inspect_bundle, product  # noqa: E402
+from managed_ai_information.library.catalogue import Library  # noqa: E402
+from managed_ai_information.library.config import LibraryConfig  # noqa: E402
+from managed_ai_information.library.contract import (  # noqa: E402
+    LibraryReader,
+    SearchBackend,
+    SourceProducerService,
+)
+from managed_ai_information.library.format import (  # noqa: E402
     FORMAT,
     SELECTION,
     check_manifest,
@@ -25,9 +29,9 @@ from managed_ai.library.format import (  # noqa: E402
     digest,
     encoded,
 )
-from managed_ai.library.index import SearchIndex  # noqa: E402
-from managed_ai.library.lexical import search_query  # noqa: E402
-from managed_ai.library.producer import Producer  # noqa: E402
+from managed_ai_information.library.index import SearchIndex  # noqa: E402
+from managed_ai_information.library.lexical import search_query  # noqa: E402
+from managed_ai_information.library.producer import Producer  # noqa: E402
 
 
 def _load_publish_module():
@@ -309,7 +313,7 @@ class KnowledgeTest(unittest.TestCase):
 
             # Unchanged current observation must hit SHA-256 fast-path without reparsing manifest.
             with patch(
-                "managed_ai.library.format.check_manifest",
+                "managed_ai_information.library.format.check_manifest",
                 side_effect=AssertionError("should not reparse"),
             ):
                 desc = producer.handle({"operation": "describe"})
@@ -392,7 +396,7 @@ class KnowledgeTest(unittest.TestCase):
         import io
         from contextlib import redirect_stderr
 
-        from managed_ai.library import cli as lib_cli
+        from managed_ai_information.library import cli as lib_cli
 
         for argv in (
             ["show", "nonexistent-item-xyz"],

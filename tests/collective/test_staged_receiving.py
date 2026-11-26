@@ -8,7 +8,7 @@ from pathlib import Path
 SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
-from managed_ai.collective import Collective, pin  # noqa: E402
+from managed_ai_information.collective import Collective, pin  # noqa: E402
 
 
 class StagedReceiving(unittest.TestCase):

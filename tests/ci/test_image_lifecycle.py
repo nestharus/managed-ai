@@ -71,12 +71,12 @@ class ImageLifecycleTests(unittest.TestCase):
 
     def test_context_hash_determinism_ignores_docs_tests_and_rejects_links(self) -> None:
         repo = self.root / "mini-repo"
-        (repo / "src/managed_ai").mkdir(parents=True)
+        (repo / "src/managed_ai_information").mkdir(parents=True)
         (repo / "containers").mkdir()
         (repo / "docs").mkdir()
         (repo / "tests").mkdir()
         (repo / "pyproject.toml").write_text('[project]\nname = "managed-ai"\n', encoding="utf-8")
-        (repo / "src/managed_ai/__init__.py").write_text(
+        (repo / "src/managed_ai_information/__init__.py").write_text(
             '__version__ = "0.5.0"\n', encoding="utf-8"
         )
         (repo / "containers/Containerfile").write_text(
@@ -90,13 +90,13 @@ class ImageLifecycleTests(unittest.TestCase):
         # Changes outside build inputs (docs/, tests/, __pycache__) must NOT change context_sha256.
         (repo / "docs/README.md").write_text("# Doc change\n", encoding="utf-8")
         (repo / "tests/test_dummy.py").write_text("# Test change\n", encoding="utf-8")
-        (repo / "src/managed_ai/__pycache__").mkdir()
-        (repo / "src/managed_ai/__pycache__/mod.cpython-312.pyc").write_bytes(b"pyc")
+        (repo / "src/managed_ai_information/__pycache__").mkdir()
+        (repo / "src/managed_ai_information/__pycache__/mod.cpython-312.pyc").write_bytes(b"pyc")
         second = json.loads(self._run_cli("context-hash", "--root", str(repo)).stdout)
         self.assertEqual(second["context_sha256"], first["context_sha256"])
 
-        # Editing src/managed_ai/ or Containerfile MUST change context_sha256.
-        (repo / "src/managed_ai/__init__.py").write_text(
+        # Editing src/managed_ai_information/ or Containerfile MUST change context_sha256.
+        (repo / "src/managed_ai_information/__init__.py").write_text(
             '__version__ = "0.5.1"\n', encoding="utf-8"
         )
         third = json.loads(self._run_cli("context-hash", "--root", str(repo)).stdout)
@@ -111,11 +111,11 @@ class ImageLifecycleTests(unittest.TestCase):
 
         # C60-2: dangling symlink or junction at containers/ must be rejected with exit 2.
         repo_dangling = self.root / "dangling-containers-repo"
-        (repo_dangling / "src/managed_ai").mkdir(parents=True)
+        (repo_dangling / "src/managed_ai_information").mkdir(parents=True)
         (repo_dangling / "pyproject.toml").write_text(
             '[project]\nname = "managed-ai"\n', encoding="utf-8"
         )
-        (repo_dangling / "src/managed_ai/__init__.py").write_text(
+        (repo_dangling / "src/managed_ai_information/__init__.py").write_text(
             '__version__ = "0.5.0"\n', encoding="utf-8"
         )
         missing_target = self.root / "gone-containers-dir"
@@ -262,7 +262,7 @@ class ImageLifecycleTests(unittest.TestCase):
         d_ctx_orphan = "sha256:" + "9" * 64
 
         (gitops / "prod.yaml").write_text(
-            f"image: ghcr.io/nestharus/managed-ai@{d_gitops}\n",
+            f"image: ghcr.io/nestharus/managed-ai-information@{d_gitops}\n",
             encoding="utf-8",
         )
 
@@ -271,7 +271,7 @@ class ImageLifecycleTests(unittest.TestCase):
             catalog,
             {
                 "format": image_lifecycle.CATALOG_FORMAT,
-                "repository": "ghcr.io/nestharus/managed-ai",
+                "repository": "ghcr.io/nestharus/managed-ai-information",
                 "manifests": [
                     {
                         "digest": d_gitops,
@@ -386,7 +386,7 @@ class ImageLifecycleTests(unittest.TestCase):
         d_unpinned = "sha256:" + "d" * 64
 
         (gitops / "base/deployment.yaml").write_text(
-            f"image: ghcr.io/nestharus/managed-ai@{d_base}\n",
+            f"image: ghcr.io/nestharus/managed-ai-information@{d_base}\n",
             encoding="utf-8",
         )
         (gitops / "channels/dev/kustomization.yaml").write_text(
@@ -395,7 +395,7 @@ class ImageLifecycleTests(unittest.TestCase):
                     "apiVersion: kustomize.config.k8s.io/v1beta1",
                     "kind: Kustomization",
                     "images:",
-                    "  - name: ghcr.io/nestharus/managed-ai",
+                    "  - name: ghcr.io/nestharus/managed-ai-information",
                     f"    digest: {d_dev}",
                     "",
                 ]
@@ -408,7 +408,7 @@ class ImageLifecycleTests(unittest.TestCase):
                     "apiVersion: kustomize.config.k8s.io/v1beta1",
                     "kind: Kustomization",
                     "images:",
-                    "  - name: ghcr.io/nestharus/managed-ai",
+                    "  - name: ghcr.io/nestharus/managed-ai-information",
                     f'    digest: "{d_local}"',
                     "",
                 ]
@@ -421,7 +421,7 @@ class ImageLifecycleTests(unittest.TestCase):
             catalog,
             {
                 "format": image_lifecycle.CATALOG_FORMAT,
-                "repository": "ghcr.io/nestharus/managed-ai",
+                "repository": "ghcr.io/nestharus/managed-ai-information",
                 "manifests": [
                     {
                         "digest": d_base,

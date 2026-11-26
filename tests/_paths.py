@@ -9,14 +9,16 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 SRC = REPO / "src"
-_DEFAULT_ENGINE = SRC / "managed_ai"
+_DEFAULT_ENGINE = SRC / "managed_ai_information"
 _RAW_ENGINE = os.environ.get("G60_TEST_ENGINE") or os.environ.get("G60_TEST_PRODUCT")
 ENGINE = Path(_RAW_ENGINE).resolve() if _RAW_ENGINE else _DEFAULT_ENGINE.resolve()
 PRODUCT = ENGINE
 APP = ENGINE / "store"
 
 _ACTIVE_SRC = (
-    ENGINE.parent if ENGINE.name == "managed_ai" and (ENGINE / "__init__.py").is_file() else SRC
+    ENGINE.parent
+    if ENGINE.name == "managed_ai_information" and (ENGINE / "__init__.py").is_file()
+    else SRC
 )
 for _path in (_ACTIVE_SRC, SRC):
     _text = str(_path)

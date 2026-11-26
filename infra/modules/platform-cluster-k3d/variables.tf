@@ -1,7 +1,7 @@
 variable "cluster_name" {
   description = "Local k3d cluster name."
   type        = string
-  default     = "managed-ai-local"
+  default     = "managed-ai-information-local"
 
   validation {
     condition     = can(regex("^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$", var.cluster_name))
@@ -23,7 +23,7 @@ variable "k3s_version" {
 variable "registry_name" {
   description = "Ephemeral local OCI registry container name."
   type        = string
-  default     = "managed-ai-local"
+  default     = "managed-ai-information-local"
 }
 
 variable "registry_port" {
@@ -51,5 +51,5 @@ variable "gateway_port" {
 variable "kubeconfig_path" {
   description = "Dedicated kubeconfig path for the local k3d cluster."
   type        = string
-  default     = "~/.kube/managed-ai-local.yaml"
+  default     = "~/.kube/managed-ai-information-local.yaml"
 }

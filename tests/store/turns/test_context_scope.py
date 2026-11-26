@@ -65,7 +65,7 @@ class ScopeChecks(unittest.TestCase):
     def test_large_head_receipt_cannot_hide_a_current_duty(self):
         import os
 
-        from managed_ai.store.records.head_receipts import ATTRIBUTE
+        from managed_ai_information.store.records.head_receipts import ATTRIBUTE
 
         store = self.system.record_store
         basis = self.file("sources/stock.txt", "six")

@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parents[2]
-ENGINE = REPO / "src/managed_ai"
+ENGINE = REPO / "src/managed_ai_information"
 RELEASE = REPO / "scripts/release"
 package = runpy.run_path(str(RELEASE / "package.py"))
 

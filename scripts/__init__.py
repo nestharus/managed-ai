@@ -1,1 +1,1 @@
-"""Maintainer, release, and publication scripts for Managed AI."""
+"""Maintainer, release, and publication scripts for Managed AI Information."""

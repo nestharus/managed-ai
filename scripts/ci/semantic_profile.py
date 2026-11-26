@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pure-stdlib AST and import-graph semantic profiler and CI budget gate for Managed AI."""
+"""Pure-stdlib AST and import-graph semantic profiler and CI budget gate."""
 
 import argparse
 import ast
@@ -16,7 +16,7 @@ for _entry in (str(SRC_ROOT), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai.platform import (  # noqa: E402
+from managed_ai_information.platform import (  # noqa: E402
     atomic_bytes,
     check_ordinary_ancestors,
     is_ordinary_dir_stat,
@@ -329,7 +329,7 @@ def _build_profile_report(
 def profile_repository(
     root: Path,
     *,
-    package_rel: str = "src/managed_ai",
+    package_rel: str = "src/managed_ai_information",
     top_n: int = 15,
 ) -> dict[str, Any]:
     """Profile all Python modules under package_rel and compute import-graph working sets."""
@@ -480,7 +480,7 @@ def load_baseline(path: Path) -> dict[str, Any]:
             for metric, val in entry.items()
         }
 
-    package_dir = data.get("package_dir", "src/managed_ai")
+    package_dir = data.get("package_dir", "src/managed_ai_information")
     if not isinstance(package_dir, str) or not package_dir.strip():
         raise ValueError("baseline package_dir must be a non-empty string")
 
@@ -560,7 +560,7 @@ def check_budget(profile: dict[str, Any], baseline: dict[str, Any]) -> dict[str,
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Compute AST and import-graph semantic complexity metrics for Managed AI and "
+            "Compute AST and import-graph semantic complexity metrics and "
             "enforce CI budget baselines."
         ),
         allow_abbrev=False,
@@ -573,8 +573,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--package-dir",
-        default="src/managed_ai",
-        help="Repository-relative Python package directory to scan (default: src/managed_ai).",
+        default="src/managed_ai_information",
+        help=(
+            "Repository-relative Python package directory to scan "
+            "(default: src/managed_ai_information)."
+        ),
     )
     parser.add_argument(
         "--top",

@@ -18,9 +18,9 @@ from tests._paths import ENGINE as ROOT  # noqa: E402
 from tests._paths import SRC, cleanup_tempdir  # noqa: E402
 
 # isort: split
-from managed_ai.core.exchange import Exchange  # noqa: E402
-from managed_ai.core.exchange.transport import collector  # noqa: E402
-from managed_ai.core.exchange.transport.collector import (  # noqa: E402
+from managed_ai_information.core.exchange import Exchange  # noqa: E402
+from managed_ai_information.core.exchange.transport import collector  # noqa: E402
+from managed_ai_information.core.exchange.transport.collector import (  # noqa: E402
     Collector,
     encode,
     exclusive,
@@ -99,10 +99,10 @@ class ReceivingViewTests(unittest.TestCase):
             import sys
 
             sys.path.insert(0, sys.argv[1])
-            name = 'managed_ai.core.exchange.transport.collector'
+            name = 'managed_ai_information.core.exchange.transport.collector'
             sys.modules[name] = None
-            from managed_ai.core.exchange import Exchange
-            from managed_ai.core.exchange.transport import packet_transport
+            from managed_ai_information.core.exchange import Exchange
+            from managed_ai_information.core.exchange.transport import packet_transport
             owner = Exchange(Path(sys.argv[2]))
             transport = owner.transport
             assert 'ORIGINAL-BRIEF' in owner.context('origin')['context']
@@ -118,7 +118,7 @@ class ReceivingViewTests(unittest.TestCase):
             del sys.modules[name]
             result = owner.receive('origin', None, 'fixture', [], wait=0)
             assert result['carrier']['status'] == 'queued'
-            from managed_ai.core.exchange.transport.collector import Collector
+            from managed_ai_information.core.exchange.transport.collector import Collector
             assert packet_transport.Collector is Collector
             assert owner.transport is transport
         """)

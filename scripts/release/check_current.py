@@ -13,7 +13,7 @@ for _entry in (str(REPO_ROOT / "src"), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai.platform import (  # noqa: E402
+from managed_ai_information.platform import (  # noqa: E402
     atomic_bytes,
     check_ordinary_ancestors,
     check_unfollowed_ancestors,
@@ -76,7 +76,7 @@ def _write_json_atomic(directory: Path, filename: str, payload: dict) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("--product", type=Path, default=REPO_ROOT / "src/managed_ai")
+    parser.add_argument("--product", type=Path, default=REPO_ROOT / "src/managed_ai_information")
     parser.add_argument("--records", type=Path)
     parser.add_argument(
         "--work", type=Path, help="Compatibility argument; tests own isolated temporary stores"
@@ -93,7 +93,7 @@ def main() -> int:
 
     repo_root = (
         product.parents[1]
-        if (product.name == "managed_ai" and product.parent.name == "src")
+        if (product.name == "managed_ai_information" and product.parent.name == "src")
         else product.parent
     )
     program = repo_root / "tests/store/test_shared_instances.py"

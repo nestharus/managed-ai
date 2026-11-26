@@ -22,7 +22,7 @@ for _entry in (str(REPO_ROOT / "src"), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai.platform import (  # noqa: E402
+from managed_ai_information.platform import (  # noqa: E402
     atomic_bytes,
     check_ordinary_ancestors,
     is_reparse_or_symlink_stat,
@@ -134,7 +134,7 @@ def _resolve_bundle_root(core: Path, bundle_root: Path | None) -> Path:
     if bundle_root is not None:
         return bundle_root.resolve(strict=True)
     resolved = core.resolve(strict=True)
-    if resolved.name == "managed_ai" and resolved.parent.name == "src":
+    if resolved.name == "managed_ai_information" and resolved.parent.name == "src":
         return resolved.parents[1]
     if resolved.name == "engine":
         return resolved.parent
@@ -182,14 +182,20 @@ def resolve_navigation_path(core: Path, bundle_root: Path | None = None) -> Path
 
 
 def inventory_engine(root: Path) -> Path | None:
-    if observed_path(root, Path("src/managed_ai"), stat.S_ISDIR, scope_probe=True) is not None and (
+    if observed_path(
+        root, Path("src/managed_ai_information"), stat.S_ISDIR, scope_probe=True
+    ) is not None and (
         observed_path(root, SCRIPTS_SELECTION, stat.S_ISREG, scope_probe=True) is not None
-        or observed_path(root, Path("src/managed_ai") / MARKER, stat.S_ISREG, scope_probe=True)
+        or observed_path(
+            root, Path("src/managed_ai_information") / MARKER, stat.S_ISREG, scope_probe=True
+        )
         is not None
-        or observed_path(root, Path("src/managed_ai") / SELECTION, stat.S_ISREG, scope_probe=True)
+        or observed_path(
+            root, Path("src/managed_ai_information") / SELECTION, stat.S_ISREG, scope_probe=True
+        )
         is not None
     ):
-        return (root / "src/managed_ai").resolve(strict=True)
+        return (root / "src/managed_ai_information").resolve(strict=True)
 
     if observed_path(root, Path("engine") / SELECTION, stat.S_ISREG, scope_probe=True) is not None:
         return (root / "engine").resolve(strict=True)
@@ -248,9 +254,9 @@ def with_engine(engine: Path, relative: str) -> Generator[dict[str, Any]]:
     saved_path = None
     try:
         if is_pkg:
-            mod_name = "managed_ai." + relative[:-3].replace("/", ".")
+            mod_name = "managed_ai_information." + relative[:-3].replace("/", ".")
             expected = (engine_path / relative).resolve(strict=True)
-            existing = sys.modules.get("managed_ai")
+            existing = sys.modules.get("managed_ai_information")
             existing_file = getattr(existing, "__file__", None) if existing is not None else None
             existing_paths = list(getattr(existing, "__path__", ())) if existing is not None else []
             already_same = existing is not None and (
@@ -264,17 +270,19 @@ def with_engine(engine: Path, relative: str) -> Generator[dict[str, Any]]:
                 saved_modules = {
                     key: sys.modules.pop(key)
                     for key in list(sys.modules)
-                    if key == "managed_ai" or key.startswith("managed_ai.")
+                    if key == "managed_ai_information" or key.startswith("managed_ai_information.")
                 }
                 spec = importlib.util.spec_from_file_location(
-                    "managed_ai",
+                    "managed_ai_information",
                     str(engine_path / "__init__.py"),
                     submodule_search_locations=[str(engine_path)],
                 )
                 if spec is None or spec.loader is None:
-                    raise ImportError("Unable to load managed_ai package from " + str(engine_path))
+                    raise ImportError(
+                        "Unable to load managed_ai_information package from " + str(engine_path)
+                    )
                 pkg_mod = importlib.util.module_from_spec(spec)
-                sys.modules["managed_ai"] = pkg_mod
+                sys.modules["managed_ai_information"] = pkg_mod
                 spec.loader.exec_module(pkg_mod)
                 importlib.invalidate_caches()
 
@@ -290,7 +298,7 @@ def with_engine(engine: Path, relative: str) -> Generator[dict[str, Any]]:
     finally:
         if saved_modules is not None:
             for key in list(sys.modules):
-                if key == "managed_ai" or key.startswith("managed_ai."):
+                if key == "managed_ai_information" or key.startswith("managed_ai_information."):
                     sys.modules.pop(key, None)
             sys.modules.update(saved_modules)
             importlib.invalidate_caches()
@@ -306,7 +314,7 @@ def received_compressed_text(
     if hasattr(system, "completed_import_records"):
         acknowledgements = system.completed_import_records()
     else:
-        target_engine = engine if engine is not None else (REPO_ROOT / "src/managed_ai")
+        target_engine = engine if engine is not None else (REPO_ROOT / "src/managed_ai_information")
         with with_engine(target_engine, "store/records/record_import.py") as api:
             acknowledgements = list(api["completed_receipt_records"](system))
 
@@ -424,7 +432,9 @@ def verify_core_selection(
     member_map = tree if (bundle_mode and tree is not None) else native
     if bundle_mode:
         expected_root_rel = (
-            "../../.." if (core.name == "managed_ai" and core.parent.name == "src") else "../.."
+            "../../.."
+            if (core.name == "managed_ai_information" and core.parent.name == "src")
+            else "../.."
         )
     else:
         expected_root_rel = ".."
@@ -541,13 +551,13 @@ def descriptors(root: Path, directory: str, filename: str) -> Iterator[Path]:
 
 
 def _locate_peer_manifest(root: Path) -> tuple[Path | None, Path | None]:
-    pkg_dir = exact_path(root, Path("src/managed_ai"), stat.S_ISDIR)
+    pkg_dir = exact_path(root, Path("src/managed_ai_information"), stat.S_ISDIR)
     companions_root = None
     manifest_label = "companions/peer/COMPONENTS.json"
     if pkg_dir is not None:
         companions_root = exact_path(pkg_dir, Path("companions"), stat.S_ISDIR)
         if companions_root is not None:
-            manifest_label = "src/managed_ai/companions/peer/COMPONENTS.json"
+            manifest_label = "src/managed_ai_information/companions/peer/COMPONENTS.json"
 
     if companions_root is None:
         companions_root = exact_path(root, Path("companions"), stat.S_ISDIR)

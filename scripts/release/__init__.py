@@ -1,1 +1,1 @@
-"""Release maintenance, verification, and packaging scripts for Managed AI."""
+"""Release maintenance, verification, and packaging scripts for Managed AI Information."""
