@@ -1,0 +1,6 @@
+# SOPS encryption policy for channel secrets (never commit plaintext secrets or private keys).
+# Replace the placeholder age public recipient with your channel age public key before encrypting.
+creation_rules:
+  - path_regex: ^gitops/channels/(local|dev)/secrets/.*\.enc\.yaml$
+    encrypted_regex: ^(data|stringData)$
+    age: age1replacewithchannelpublickey00000000000000000000000000000000
