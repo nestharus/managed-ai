@@ -33,38 +33,59 @@ steps:
 
       if [ -n "${BUILDKITE_TAG:-}" ]; then
         VERSION="${BUILDKITE_TAG#v}"
-        PLAN_JSON="$(python3 -B scripts/ci/image_lifecycle.py tag-plan --channel release --git-sha "$BUILDKITE_COMMIT" --version "$VERSION" --registry "$IMAGE_REGISTRY" --image "$IMAGE_NAME")"
+        PLAN_JSON="$(python3 -B scripts/ci/image_lifecycle.py tag-plan --channel release --git-sha "$BUILDKITE_COMMIT" --context-sha "$CONTEXT_SHA" --version "$VERSION" --registry "$IMAGE_REGISTRY" --image "$IMAGE_NAME")"
       elif [ "${BUILDKITE_BRANCH:-}" = "main" ]; then
-        PLAN_JSON="$(python3 -B scripts/ci/image_lifecycle.py tag-plan --channel main --git-sha "$BUILDKITE_COMMIT" --registry "$IMAGE_REGISTRY" --image "$IMAGE_NAME")"
+        PLAN_JSON="$(python3 -B scripts/ci/image_lifecycle.py tag-plan --channel main --git-sha "$BUILDKITE_COMMIT" --context-sha "$CONTEXT_SHA" --registry "$IMAGE_REGISTRY" --image "$IMAGE_NAME")"
       else
-        PR_ARGS=""
+        PR_ARGS=()
         if [ -n "${BUILDKITE_PULL_REQUEST:-}" ] && [ "${BUILDKITE_PULL_REQUEST}" != "false" ]; then
-          PR_ARGS="--pr-number ${BUILDKITE_PULL_REQUEST}"
+          PR_ARGS=(--pr-number "${BUILDKITE_PULL_REQUEST}")
         fi
-        PLAN_JSON="$(python3 -B scripts/ci/image_lifecycle.py tag-plan --channel pr --git-sha "$BUILDKITE_COMMIT" $PR_ARGS --registry "$IMAGE_REGISTRY" --image "$IMAGE_NAME")"
+        PLAN_JSON="$(python3 -B scripts/ci/image_lifecycle.py tag-plan --channel pr --git-sha "$BUILDKITE_COMMIT" --context-sha "$CONTEXT_SHA" "${PR_ARGS[@]}" --registry "$IMAGE_REGISTRY" --image "$IMAGE_NAME")"
       fi
 
       printf '%s\n' "$PLAN_JSON" > image-tag-plan.json
       PUSH_REMOTE="$(printf '%s' "$PLAN_JSON" | python3 -B -c "import json,sys; print('1' if json.load(sys.stdin)['push_remote'] else '0')")"
       PRIMARY_REF="$(printf '%s' "$PLAN_JSON" | python3 -B -c "import json,sys; print(json.load(sys.stdin)['references'][0])")"
+      CONTEXT_TAG="$(printf '%s' "$PLAN_JSON" | python3 -B -c "import json,sys; print(json.load(sys.stdin)['context_tag'])")"
+
+      PROMOTION_TAGS=()
+      while IFS= read -r TAG; do
+        [ -n "$TAG" ] && PROMOTION_TAGS+=("$TAG")
+      done < <(printf '%s' "$PLAN_JSON" | python3 -B -c "import json,sys; print('\n'.join(json.load(sys.stdin)['promotion_tags']))")
+
+      ALL_REFS=()
+      TAG_FLAGS=()
+      while IFS= read -r REF; do
+        if [ -n "$REF" ]; then
+          ALL_REFS+=("$REF")
+          TAG_FLAGS+=(-t "$REF")
+        fi
+      done < <(printf '%s' "$PLAN_JSON" | python3 -B -c "import json,sys; print('\n'.join(json.load(sys.stdin)['references']))")
 
       # Skip redundant container rebuilds if an image with this exact context digest already exists.
-      if [ "$PUSH_REMOTE" = "1" ] && command -v crane >/dev/null 2>&1; then
-        if EXISTING_DIGEST="$(crane digest "${IMAGE_REGISTRY}/${IMAGE_NAME}:ctx-${CONTEXT_SHA:0:12}" 2>/dev/null)"; then
+      if command -v crane >/dev/null 2>&1; then
+        if EXISTING_DIGEST="$(crane digest "${IMAGE_REGISTRY}/${IMAGE_NAME}:${CONTEXT_TAG}" 2>/dev/null)"; then
           echo "Context unchanged; reusing verified digest ${EXISTING_DIGEST}"
-          printf '%s\n' "${IMAGE_REGISTRY}/${IMAGE_NAME}@${EXISTING_DIGEST}" > image-digest.txt
+          if [ "$PUSH_REMOTE" = "1" ]; then
+            for TAG in "${PROMOTION_TAGS[@]}"; do
+              crane tag "${IMAGE_REGISTRY}/${IMAGE_NAME}@${EXISTING_DIGEST}" "$TAG"
+            done
+            printf '%s\n' "${IMAGE_REGISTRY}/${IMAGE_NAME}@${EXISTING_DIGEST}" > image-digest.txt
+          else
+            echo "PR build skipped via verified context cache hit (push_remote=false)."
+          fi
           exit 0
         fi
       fi
 
-      TAG_FLAGS="$(printf '%s' "$PLAN_JSON" | python3 -B -c "import json,sys; print(' '.join('-t ' + r for r in json.load(sys.stdin)['references']))")"
       docker build -f containers/Containerfile \
         --label "org.opencontainers.image.revision=${BUILDKITE_COMMIT}" \
         --label "io.managed-ai.context-sha256=${CONTEXT_SHA}" \
-        $TAG_FLAGS .
+        "${TAG_FLAGS[@]}" .
 
       if [ "$PUSH_REMOTE" = "1" ]; then
-        for REF in $(printf '%s' "$PLAN_JSON" | python3 -B -c "import json,sys; print('\n'.join(json.load(sys.stdin)['references']))"); do
+        for REF in "${ALL_REFS[@]}"; do
           docker push "$REF"
         done
         DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "$PRIMARY_REF")"

@@ -42,6 +42,7 @@ _RELEASE_TAG_RE = re.compile(
 _MAIN_TAG_RE = re.compile(r"^sha-[0-9a-f]{12}$")
 _PR_TAG_RE = re.compile(r"^pr-(?:[1-9][0-9]*-)?[0-9a-f]{12}$")
 _LOCAL_TAG_RE = re.compile(r"^local-[0-9a-f]{12}$")
+_CTX_TAG_RE = re.compile(r"^ctx-[0-9a-f]{12}$")
 _REGISTRY_RE = re.compile(r"^[a-z0-9._-]+(?::[0-9]{1,5})?(?:/[a-z0-9._-]+)*$")
 _IMAGE_RE = re.compile(r"^[a-z0-9]+(?:[._/-][a-z0-9]+)*$")
 
@@ -116,12 +117,17 @@ def compute_context_hash(root: Path) -> dict:
     )
     candidates.append(("pyproject.toml", pyproject))
 
-    containerfile = repo_root / "containers/Containerfile"
-    if containerfile.exists() or containerfile.is_symlink():
-        safe_cf = check_ordinary_ancestors(
-            containerfile, expect_dir=False, error_prefix="ordinary Containerfile required",
+    containers_dir = repo_root / "containers"
+    if os.path.lexists(containers_dir):
+        safe_containers = check_ordinary_ancestors(
+            containers_dir, expect_dir=True, error_prefix="ordinary containers directory required",
         )
-        candidates.append(("containers/Containerfile", safe_cf))
+        containerfile = safe_containers / "Containerfile"
+        if os.path.lexists(containerfile):
+            safe_cf = check_ordinary_ancestors(
+                containerfile, expect_dir=False, error_prefix="ordinary Containerfile required",
+            )
+            candidates.append(("containers/Containerfile", safe_cf))
 
     pkg_dir = check_ordinary_ancestors(
         repo_root / "src/managed_ai", expect_dir=True, error_prefix="ordinary src/managed_ai directory required",
@@ -148,6 +154,7 @@ def build_tag_plan(
     *,
     channel: str,
     git_sha: str,
+    context_sha: str | None = None,
     pr_number: int | None = None,
     version: str | None = None,
     registry: str = "ghcr.io/nestharus",
@@ -160,6 +167,8 @@ def build_tag_plan(
         raise ValueError(f"unsupported channel: {channel}")
     if not isinstance(git_sha, str) or not _SHA_HEX_RE.fullmatch(git_sha):
         raise ValueError("git_sha must be 12 to 40 hexadecimal characters")
+    if context_sha is not None and (not isinstance(context_sha, str) or not _SHA_HEX_RE.fullmatch(context_sha)):
+        raise ValueError("context_sha must be 12 to 40 hexadecimal characters")
     if not isinstance(registry, str) or not _REGISTRY_RE.fullmatch(registry) or ".." in registry:
         raise ValueError(f"invalid registry: {registry}")
     if not isinstance(image, str) or not _IMAGE_RE.fullmatch(image) or ".." in image:
@@ -171,12 +180,13 @@ def build_tag_plan(
 
     sha_lower = git_sha.lower()
     sha12 = sha_lower[:12]
+    ctx_tag = f"ctx-{context_sha.lower()[:12]}" if context_sha is not None else None
 
     if channel == "local":
         if allow_pr_push or version is not None:
             raise ValueError("local channel does not accept --allow-pr-push or --version")
         push_remote = False
-        tags = [f"local-{sha12}"]
+        promotion_tags = [f"local-{sha12}"]
         promote_by = "local-only"
         ttl_days: int | None = None
     elif channel == "pr":
@@ -185,14 +195,14 @@ def build_tag_plan(
         if allow_pr_push and pr_number is None:
             raise ValueError("--allow-pr-push requires --pr-number")
         push_remote = bool(allow_pr_push)
-        tags = [f"pr-{pr_number}-{sha12}" if pr_number is not None else f"pr-{sha12}"]
+        promotion_tags = [f"pr-{pr_number}-{sha12}" if pr_number is not None else f"pr-{sha12}"]
         promote_by = "none"
         ttl_days = pr_ttl_days
     elif channel == "main":
         if allow_pr_push or version is not None:
             raise ValueError("main channel does not accept --allow-pr-push or --version")
         push_remote = True
-        tags = [f"sha-{sha12}"]
+        promotion_tags = [f"sha-{sha12}"]
         promote_by = "digest"
         ttl_days = None
     else:
@@ -201,9 +211,13 @@ def build_tag_plan(
         if not isinstance(version, str) or not _SEMVER_RE.fullmatch(version):
             raise ValueError("release channel requires a valid SemVer --version (e.g. 0.5.0)")
         push_remote = True
-        tags = [f"v{version}", f"sha-{sha12}"]
+        promotion_tags = [f"v{version}", f"sha-{sha12}"]
         promote_by = "digest"
         ttl_days = None
+
+    tags = list(promotion_tags)
+    if channel in ("main", "release") and ctx_tag is not None:
+        tags.append(ctx_tag)
 
     if any(tag.lower() == "latest" or ":latest" in tag.lower() for tag in tags):
         raise ValueError("mutable :latest tags are strictly prohibited")
@@ -214,6 +228,7 @@ def build_tag_plan(
         "channel": channel,
         "git_sha": sha_lower,
         "sha12": sha12,
+        "context_tag": ctx_tag,
         "registry": registry,
         "image": image,
         "push_remote": push_remote,
@@ -221,6 +236,7 @@ def build_tag_plan(
         "forbids_latest": True,
         "promote_by": promote_by,
         "ttl_days": ttl_days,
+        "promotion_tags": promotion_tags,
         "tags": tags,
         "references": references,
     }
@@ -302,7 +318,82 @@ def _classify_tag(
         return False, f"pr-expired-{pr_ttl_days}d"
     if _LOCAL_TAG_RE.fullmatch(tag):
         return False, "ephemeral-local-tag"
+    if _CTX_TAG_RE.fullmatch(tag):
+        return False, "context-cache-tag-expired"
     return True, "unmanaged-tag-preserved"
+
+
+def _evaluate_manifest_gc(
+    manifest: dict,
+    *,
+    gitops_pins: dict[str, list[str]],
+    explicit_pins: set[str],
+    newest_main_tags: set[str],
+    keep_main: int,
+    pr_ttl_days: int,
+    now_dt: datetime,
+) -> tuple[dict | None, list[dict], dict | None]:
+    digest = manifest["digest"]
+    reasons: list[str] = []
+    durable_ctx_anchor = False
+    if digest in gitops_pins:
+        reasons.append("gitops-pinned:" + ",".join(gitops_pins[digest]))
+        durable_ctx_anchor = True
+    if digest in explicit_pins:
+        reasons.append("explicit-protected-digest")
+        durable_ctx_anchor = True
+
+    expired_tags: list[tuple[str, str]] = []
+    ctx_tags: list[str] = []
+    for tag in manifest["tags"]:
+        if _CTX_TAG_RE.fullmatch(tag):
+            ctx_tags.append(tag)
+            continue
+        protected, reason = _classify_tag(
+            tag,
+            manifest["created_dt"],
+            newest_main_tags=newest_main_tags,
+            keep_main=keep_main,
+            pr_ttl_days=pr_ttl_days,
+            now_dt=now_dt,
+        )
+        if protected:
+            reasons.append(f"tag:{tag}:{reason}")
+            if reason == "release-semver-tag" or reason.startswith("newest-main-top-"):
+                durable_ctx_anchor = True
+        else:
+            expired_tags.append((tag, reason))
+
+    for ctx_tag in ctx_tags:
+        if durable_ctx_anchor:
+            reasons.append(f"tag:{ctx_tag}:context-cache-anchor-live")
+        else:
+            expired_tags.append((ctx_tag, "context-cache-tag-expired"))
+
+    if reasons:
+        kept = {
+            "digest": digest,
+            "created_at": manifest["created_at"],
+            "tags": manifest["tags"],
+            "reasons": reasons,
+        }
+        untag = [
+            {"digest": digest, "tag": tag, "reason": reason, "digest_protected_by": reasons}
+            for tag, reason in expired_tags
+        ]
+        return kept, untag, None
+
+    prune_reasons = (
+        [f"tag:{tag}:{reason}" for tag, reason in expired_tags]
+        if expired_tags else ["unreferenced-dangling-manifest"]
+    )
+    pruned = {
+        "digest": digest,
+        "created_at": manifest["created_at"],
+        "tags": manifest["tags"],
+        "reasons": prune_reasons,
+    }
+    return None, [], pruned
 
 
 def plan_registry_gc(
@@ -344,53 +435,20 @@ def plan_registry_gc(
     untag_only: list[dict] = []
 
     for manifest in sorted(manifests, key=lambda item: (item["created_dt"], item["digest"])):
-        digest = manifest["digest"]
-        reasons: list[str] = []
-        if digest in gitops_pins:
-            reasons.append("gitops-pinned:" + ",".join(gitops_pins[digest]))
-        if digest in explicit_pins:
-            reasons.append("explicit-protected-digest")
-
-        expired_tags: list[tuple[str, str]] = []
-        for tag in manifest["tags"]:
-            protected, reason = _classify_tag(
-                tag,
-                manifest["created_dt"],
-                newest_main_tags=newest_main_tags,
-                keep_main=keep_main,
-                pr_ttl_days=pr_ttl_days,
-                now_dt=now_dt,
-            )
-            if protected:
-                reasons.append(f"tag:{tag}:{reason}")
-            else:
-                expired_tags.append((tag, reason))
-
-        if reasons:
-            keep_manifests.append({
-                "digest": digest,
-                "created_at": manifest["created_at"],
-                "tags": manifest["tags"],
-                "reasons": reasons,
-            })
-            for tag, reason in expired_tags:
-                untag_only.append({
-                    "digest": digest,
-                    "tag": tag,
-                    "reason": reason,
-                    "digest_protected_by": reasons,
-                })
-        else:
-            prune_reasons = (
-                [f"tag:{tag}:{reason}" for tag, reason in expired_tags]
-                if expired_tags else ["unreferenced-dangling-manifest"]
-            )
-            prune_manifests.append({
-                "digest": digest,
-                "created_at": manifest["created_at"],
-                "tags": manifest["tags"],
-                "reasons": prune_reasons,
-            })
+        kept, untag, pruned = _evaluate_manifest_gc(
+            manifest,
+            gitops_pins=gitops_pins,
+            explicit_pins=explicit_pins,
+            newest_main_tags=newest_main_tags,
+            keep_main=keep_main,
+            pr_ttl_days=pr_ttl_days,
+            now_dt=now_dt,
+        )
+        if kept is not None:
+            keep_manifests.append(kept)
+            untag_only.extend(untag)
+        if pruned is not None:
+            prune_manifests.append(pruned)
 
     return {
         "format": GC_PLAN_FORMAT,
@@ -423,6 +481,7 @@ def _build_parser() -> argparse.ArgumentParser:
     tag = sub.add_parser("tag-plan", allow_abbrev=False, help="Compute immutable image tags and push policy")
     tag.add_argument("--channel", required=True, choices=("local", "pr", "main", "release"))
     tag.add_argument("--git-sha", required=True, help="Git commit SHA (12-40 hex chars)")
+    tag.add_argument("--context-sha", default=None, help="Optional build context SHA-256 for ctx-<12> cache tag")
     tag.add_argument("--pr-number", type=int, default=None, help="Pull request number (for pr channel)")
     tag.add_argument("--version", default=None, help="SemVer version without leading v (for release channel)")
     tag.add_argument("--registry", default="ghcr.io/nestharus", help="Container registry prefix")
@@ -450,6 +509,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = build_tag_plan(
                 channel=args.channel,
                 git_sha=args.git_sha,
+                context_sha=args.context_sha,
                 pr_number=args.pr_number,
                 version=args.version,
                 registry=args.registry,

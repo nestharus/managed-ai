@@ -63,7 +63,7 @@ python -B -m unittest discover -s tests
 ## Container, Local Control Surface & Delivery
 
 - **Local Docker stack (`deploy/local/`):** Runs the non-root (`10001:10001`) `managed-ai` container on an `internal: true` bridge network with zero direct host ports, exposing only a single loopback `127.0.0.1` reverse-proxy control surface. Start locally via `docker compose -f deploy/local/compose.yaml up --build`.
-- **Cloud & GitOps substrate (`infra/`, `gitops/`):** OpenTofu/Vultr definitions (`infra/`) and Flux manifests (`gitops/`) separate `dev`, `staging`, and `prod` channels and pin container images strictly by immutable `@sha256` digest.
+- **Cloud & GitOps substrate (`infra/`, `gitops/`):** OpenTofu/Vultr definitions (`infra/`) and Flux manifests (`gitops/`) separate `local` and `dev` deployment channels and pin container images strictly by immutable `@sha256` digest.
 - **Buildkite CI/CD & anti-spam image lifecycle (`.buildkite/`, `scripts/ci/image_lifecycle.py`):**
   - Fast parallel gates (`unit-tests`, `release-check`, `deploy-static`, `wheel-audit`) run before `- wait` so failing PRs build zero images.
   - `scripts/ci/image_lifecycle.py context-hash` skips rebuilds when only docs/tests/infra change, `tag-plan` emits immutable `sha-<12>` / `v<semver>` tags (never `:latest`), and nightly `plan-gc` plans safe registry cleanup while protecting GitOps-pinned digests, SemVer releases, and rollback windows.

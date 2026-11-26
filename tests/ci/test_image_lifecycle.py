@@ -91,6 +91,22 @@ class ImageLifecycleTests(unittest.TestCase):
         self.assertNotIn("Traceback", bad.stderr)
         self.assertIn("image lifecycle error:", bad.stderr)
 
+        # C60-2: dangling symlink or junction at containers/ must be rejected with exit 2.
+        repo_dangling = self.root / "dangling-containers-repo"
+        (repo_dangling / "src/managed_ai").mkdir(parents=True)
+        (repo_dangling / "pyproject.toml").write_text('[project]\nname = "managed-ai"\n', encoding="utf-8")
+        (repo_dangling / "src/managed_ai/__init__.py").write_text('__version__ = "0.5.0"\n', encoding="utf-8")
+        missing_target = self.root / "gone-containers-dir"
+        if os.name == "nt":
+            missing_target.mkdir()
+            self._make_dir_link(repo_dangling / "containers", missing_target)
+            missing_target.rmdir()
+        else:
+            os.symlink(missing_target, repo_dangling / "containers")
+        bad_cf = self._run_cli("context-hash", "--root", str(repo_dangling), expected_rc=2)
+        self.assertNotIn("Traceback", bad_cf.stderr)
+        self.assertIn("ordinary containers directory required", bad_cf.stderr)
+
     def test_tag_plan_channels_forbids_latest_and_validates_inputs(self) -> None:
         sha_full = "a1b2c3d4e5f60123456789abcdef0123456789ab"
         sha12 = sha_full[:12]
@@ -120,17 +136,35 @@ class ImageLifecycleTests(unittest.TestCase):
 
         rel = json.loads(self._run_cli(
             "tag-plan", "--channel", "release", "--git-sha", sha_full, "--version", "1.2.3",
+            "--context-sha", "fedcba9876543210abcdef1234567890",
         ).stdout)
         self.assertTrue(rel["push_remote"])
-        self.assertEqual(rel["tags"], ["v1.2.3", f"sha-{sha12}"])
+        self.assertEqual(rel["promotion_tags"], ["v1.2.3", f"sha-{sha12}"])
+        self.assertEqual(rel["context_tag"], "ctx-fedcba987654")
+        self.assertEqual(rel["tags"], ["v1.2.3", f"sha-{sha12}", "ctx-fedcba987654"])
 
-        for plan in (local, pr_default, pr_push, main_plan, rel):
+        main_ctx = json.loads(self._run_cli(
+            "tag-plan", "--channel", "main", "--git-sha", sha_full,
+            "--context-sha", "fedcba9876543210abcdef1234567890",
+        ).stdout)
+        self.assertEqual(main_ctx["promotion_tags"], [f"sha-{sha12}"])
+        self.assertEqual(main_ctx["tags"], [f"sha-{sha12}", "ctx-fedcba987654"])
+
+        pr_ctx = json.loads(self._run_cli(
+            "tag-plan", "--channel", "pr", "--git-sha", sha_full, "--pr-number", "42",
+            "--context-sha", "fedcba9876543210abcdef1234567890",
+        ).stdout)
+        self.assertEqual(pr_ctx["context_tag"], "ctx-fedcba987654")
+        self.assertEqual(pr_ctx["tags"], [f"pr-42-{sha12}"])
+
+        for plan in (local, pr_default, pr_push, main_plan, rel, main_ctx, pr_ctx):
             self.assertNotIn("latest", plan["tags"])
             self.assertFalse(any(ref.endswith(":latest") for ref in plan["references"]))
 
         # Invalid inputs rejected with exit 2 and no traceback.
         for bad_args in (
             ("tag-plan", "--channel", "main", "--git-sha", "not-a-sha"),
+            ("tag-plan", "--channel", "main", "--git-sha", sha_full, "--context-sha", "bad-ctx"),
             ("tag-plan", "--channel", "release", "--git-sha", sha_full, "--version", "latest"),
             ("tag-plan", "--channel", "release", "--git-sha", sha_full, "--version", "v1.2.3"),
             ("tag-plan", "--channel", "pr", "--git-sha", sha_full, "--allow-pr-push"),
@@ -152,6 +186,7 @@ class ImageLifecycleTests(unittest.TestCase):
         d_pr_stale = "sha256:" + "6" * 64
         d_dangling = "sha256:" + "7" * 64
         d_explicit = "sha256:" + "8" * 64
+        d_ctx_orphan = "sha256:" + "9" * 64
 
         (gitops / "prod.yaml").write_text(
             f"image: ghcr.io/nestharus/managed-ai@{d_gitops}\n",
@@ -165,12 +200,13 @@ class ImageLifecycleTests(unittest.TestCase):
             "manifests": [
                 {"digest": d_gitops, "created_at": "2026-01-01T00:00:00Z", "tags": ["sha-000000000001"]},
                 {"digest": d_shared, "created_at": "2026-10-01T00:00:00Z", "tags": ["v1.0.0", "pr-9-000000000002"]},
-                {"digest": d_main_new, "created_at": "2026-11-25T00:00:00Z", "tags": ["sha-000000000003"]},
-                {"digest": d_main_old, "created_at": "2026-11-01T00:00:00Z", "tags": ["sha-000000000004"]},
-                {"digest": d_pr_fresh, "created_at": "2026-11-24T00:00:00Z", "tags": ["pr-10-000000000005"]},
+                {"digest": d_main_new, "created_at": "2026-11-25T00:00:00Z", "tags": ["sha-000000000003", "ctx-aaaaaaaaaaaa"]},
+                {"digest": d_main_old, "created_at": "2026-11-01T00:00:00Z", "tags": ["sha-000000000004", "ctx-bbbbbbbbbbbb"]},
+                {"digest": d_pr_fresh, "created_at": "2026-11-24T00:00:00Z", "tags": ["pr-10-000000000005", "ctx-cccccccccccc"]},
                 {"digest": d_pr_stale, "created_at": "2026-11-05T00:00:00Z", "tags": ["pr-8-000000000006"]},
                 {"digest": d_dangling, "created_at": "2026-11-02T00:00:00Z", "tags": []},
                 {"digest": d_explicit, "created_at": "2026-02-01T00:00:00Z", "tags": []},
+                {"digest": d_ctx_orphan, "created_at": "2026-10-15T00:00:00Z", "tags": ["ctx-dddddddddddd"]},
             ],
         })
 
@@ -189,11 +225,17 @@ class ImageLifecycleTests(unittest.TestCase):
         pruned = {row["digest"]: row for row in plan["prune_manifests"]}
 
         self.assertEqual(set(kept), {d_gitops, d_shared, d_main_new, d_pr_fresh, d_explicit})
-        self.assertEqual(set(pruned), {d_main_old, d_pr_stale, d_dangling})
+        self.assertEqual(set(pruned), {d_main_old, d_pr_stale, d_dangling, d_ctx_orphan})
         self.assertIn("unreferenced-dangling-manifest", pruned[d_dangling]["reasons"])
 
-        # Shared-digest safety: expired PR tag on d_shared and old sha-* tag on d_gitops go to untag_only, NEVER prune!
+        # Shared-digest & ctx-* safety:
+        # - ctx-aaaaaaaaaaaa on newest main is KEPT (not in untag_only)
+        # - ctx-bbbbbbbbbbbb on old main & ctx-dddddddddddd orphan are PRUNED
+        # - ctx-cccccccccccc on PR-only digest is untag_only
+        # - expired PR tag on d_shared & old sha-* tag on d_gitops go to untag_only, NEVER prune!
         untag_pairs = {(row["digest"], row["tag"]) for row in plan["untag_only"]}
+        self.assertNotIn((d_main_new, "ctx-aaaaaaaaaaaa"), untag_pairs)
+        self.assertIn((d_pr_fresh, "ctx-cccccccccccc"), untag_pairs)
         self.assertIn((d_shared, "pr-9-000000000002"), untag_pairs)
         self.assertIn((d_gitops, "sha-000000000001"), untag_pairs)
         self.assertNotIn(d_shared, pruned)
@@ -237,10 +279,16 @@ class ImageLifecycleTests(unittest.TestCase):
         for post_gate in (
             "scripts/ci/image_lifecycle.py context-hash",
             "scripts/ci/image_lifecycle.py tag-plan",
+            "--context-sha",
+            "crane tag",
+            '"${TAG_FLAGS[@]}"',
+            '"${PR_ARGS[@]}"',
             "containers/Containerfile",
         ):
             self.assertIn(post_gate, main_yaml)
             self.assertGreater(main_yaml.index(post_gate), wait_pos, f"{post_gate} must run after - wait")
+        self.assertNotIn(" $TAG_FLAGS", main_yaml)
+        self.assertNotIn(" $PR_ARGS", main_yaml)
 
         nightly_yaml = NIGHTLY.read_text(encoding="utf-8")
         self.assertIn("scripts/ci/image_lifecycle.py plan-gc", nightly_yaml)
