@@ -41,7 +41,7 @@ Example volume backup (tarball outside the repository):
 docker run --rm \
   -v managed-ai_managed_ai_store:/data:ro \
   -v "$PWD:/backup" \
-  python:3.12.9-slim \
+  python:3.15.2-slim \
   tar -czf /backup/managed-ai-store-backup.tar.gz -C /data .
 ```
 

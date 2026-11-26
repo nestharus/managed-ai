@@ -502,8 +502,14 @@ class ImageLifecycleTests(unittest.TestCase):
         main_yaml = PIPELINE.read_text(encoding="utf-8")
         wait_pos = main_yaml.index("- wait")
         for gate in (
-            "uvx ruff check src scripts tests && uvx ruff format --check src scripts",
-            "uvx ty check src scripts && uvx mypy src scripts",
+            (
+                "uvx --from ruff==0.17.6 ruff check src scripts tests"
+                " && uvx --from ruff==0.17.6 ruff format --check src scripts tests"
+            ),
+            (
+                "uvx --from ty==0.0.112 ty check src scripts"
+                " && uvx --from mypy==2.4.1 mypy src scripts"
+            ),
             "python3 -B -m unittest discover -s tests",
             "python3 -B scripts/release/check_current.py",
             "python3 -B scripts/ci/validate_deploy.py",

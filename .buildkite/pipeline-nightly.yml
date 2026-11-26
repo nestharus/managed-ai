@@ -8,11 +8,11 @@ env:
 steps:
   - label: ":ruff: Nightly lint & format check (ruff)"
     key: "nightly-lint"
-    command: "uvx ruff check src scripts tests && uvx ruff format --check src scripts"
+    command: "uvx --from ruff==0.17.6 ruff check src scripts tests && uvx --from ruff==0.17.6 ruff format --check src scripts tests"
 
   - label: ":mag_right: Nightly static typecheck (ty & mypy)"
     key: "nightly-typecheck"
-    command: "uvx ty check src scripts && uvx mypy src scripts"
+    command: "uvx --from ty==0.0.112 ty check src scripts && uvx --from mypy==2.4.1 mypy src scripts"
 
   - label: ":moon: Nightly full test suite"
     key: "nightly-full-tests"

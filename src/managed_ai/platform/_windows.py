@@ -328,19 +328,19 @@ class WindowsPlatformAdapter(PlatformAdapter):
 
         import subprocess
 
-        taskkill = shutil.which("taskkill") or os.path.join(
-            os.environ.get("SYSTEMROOT", r"C:\Windows"),
-            "System32",
-            "taskkill.exe",
+        system_root = os.environ.get("SYSTEMROOT") or os.environ.get("WINDIR") or ""
+        taskkill = shutil.which("taskkill") or (
+            os.path.join(system_root, "System32", "taskkill.exe") if system_root else None
         )
-        with suppress(OSError, subprocess.TimeoutExpired):
-            subprocess.run(  # noqa: S603
-                [taskkill, "/PID", str(proc.pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=5,
-            )
+        if taskkill:
+            with suppress(OSError, subprocess.TimeoutExpired):
+                subprocess.run(  # noqa: S603
+                    [taskkill, "/PID", str(proc.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=5,
+                )
 
         if proc.poll() is None:
             with suppress(OSError):
