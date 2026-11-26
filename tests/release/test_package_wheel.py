@@ -103,8 +103,11 @@ print(json.dumps([dist.version, managed_ai.__version__, sorted(commands)]))
                     "g60-collect",
                     "g60-work",
                     "managed-ai",
+                    "managed-ai-attend",
+                    "managed-ai-collect",
                     "managed-ai-deploy",
                     "managed-ai-library",
+                    "managed-ai-work",
                 ],
             )
 
