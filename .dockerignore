@@ -21,3 +21,4 @@ infra
 gitops
 scripts
 containers
+!containers/Containerfile

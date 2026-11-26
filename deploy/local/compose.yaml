@@ -12,7 +12,7 @@ services:
     read_only: true
     init: true
     restart: unless-stopped
-    entrypoint: ["python3", "-B", "-c", "import signal, time; signal.pause()"]
+    entrypoint: ["python3", "-B", "-c", "import signal; signal.pause()"]
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       MANAGED_AI_HOME: /var/lib/managed-ai

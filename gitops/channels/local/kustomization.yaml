@@ -3,8 +3,10 @@ kind: Kustomization
 namespace: managed-ai
 resources:
   - ../../base
-commonLabels:
-  managed-ai.dev/channel: local
+labels:
+  - pairs:
+      managed-ai.dev/channel: local
+    includeSelectors: false
 images:
   - name: ghcr.io/nestharus/managed-ai
     newName: managed-ai-local:5000/managed-ai

@@ -11,7 +11,8 @@ WORKDIR /build
 COPY pyproject.toml LICENSE README.md ./
 COPY src ./src
 
-RUN python -m pip wheel --no-deps --no-build-isolation -w /wheels .
+RUN python -m pip install --no-cache-dir setuptools==75.8.0 wheel==0.45.1 \
+    && python -m pip wheel --no-deps --no-build-isolation -w /wheels .
 
 
 FROM python:3.12.9-slim AS runtime

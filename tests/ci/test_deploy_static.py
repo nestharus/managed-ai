@@ -171,6 +171,24 @@ class DeployStaticValidationTests(unittest.TestCase):
         self.assertEqual(report["status"], "failed")
         self.assertTrue(any("forbidden deploy/CI directory" in err for err in report["errors"]), report["errors"])
 
+    def test_rejects_intermediate_dir_symlink_or_junction(self) -> None:
+        import os
+
+        repo = _copy_deploy_tree(self.tmp_root / "bad-link-dir")
+        external = self.tmp_root / "external-gitops"
+        (repo / "gitops").rename(external)
+        link = repo / "gitops"
+        if os.name == "nt":
+            proc = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(external)], capture_output=True)
+            self.assertEqual(proc.returncode, 0)
+            self.addCleanup(lambda: subprocess.run(["cmd", "/c", "rmdir", str(link)], capture_output=True))
+        else:
+            link.symlink_to(external)
+
+        report = validate_repository(repo)
+        self.assertEqual(report["status"], "failed")
+        self.assertTrue(any("ordinary non-symlink file required" in err for err in report["errors"]), report["errors"])
+
 
 if __name__ == "__main__":
     unittest.main()

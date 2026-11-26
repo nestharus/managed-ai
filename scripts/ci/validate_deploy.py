@@ -66,7 +66,20 @@ _SECRET_RE = re.compile(
 def _read_ordinary_text(root: Path, rel: str, errors: list[str]) -> str | None:
     target = root / rel
     try:
-        info = target.lstat()
+        checked = check_ordinary_ancestors(
+            target,
+            expect_dir=False,
+            error_prefix=f"ordinary non-symlink file required ({rel})",
+        )
+    except FileNotFoundError:
+        errors.append(f"missing required deploy file: {rel}")
+        return None
+    except (OSError, ValueError) as exc:
+        errors.append(str(exc))
+        return None
+
+    try:
+        info = checked.lstat()
     except OSError:
         errors.append(f"missing required deploy file: {rel}")
         return None
@@ -76,7 +89,7 @@ def _read_ordinary_text(root: Path, rel: str, errors: list[str]) -> str | None:
         return None
 
     try:
-        return target.read_text(encoding="utf-8")
+        return checked.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         errors.append(f"failed to read UTF-8 file {rel}: {exc}")
         return None
@@ -226,6 +239,9 @@ def validate_containerfile(root: Path, errors: list[str]) -> None:
             errors.append("containers/Containerfile: explicit non-root USER directive required")
         elif users[-1].lower() in ("0", "0:0", "root", "root:root"):
             errors.append(f"containers/Containerfile: final USER must be non-root (got {users[-1]!r})")
+
+        if "setuptools==" not in text:
+            errors.append("containers/Containerfile: builder stage must install pinned setuptools==")
 
         if "--no-deps" not in text:
             errors.append("containers/Containerfile: wheel build/install must use --no-deps")
@@ -384,6 +400,8 @@ def validate_gitops(root: Path, errors: list[str]) -> None:
         _check_no_secrets_or_public_ips(rel, text, errors)
         if _LATEST_TAG_RE.search(text):
             errors.append(f"{rel}: :latest image tags are prohibited")
+        if "commonLabels:" in text:
+            errors.append(f"{rel}: deprecated commonLabels is prohibited; use Kustomize v5+ labels with includeSelectors: false")
         if "../../base" not in text:
             errors.append(f"{rel}: channel overlay must reference ../../base")
         if not any(_KUSTOMIZE_DIGEST_RE.match(line) for line in text.splitlines()):
