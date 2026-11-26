@@ -1,0 +1,9 @@
+{
+  "receiver": "shift-lead",
+  "command": "sample-take-night-shift-pickup-v1",
+  "approval": {
+    "id": "receiving-0c9d17498bbcbe6ca21db9500d884261ddc7eb93614b290ab6250fc306e4941a-approval",
+    "revision": 2,
+    "sha256": "ec5c1712d9b6b8216e42aee0721e04641730046074af944ea353a06a80990b9a"
+  }
+}

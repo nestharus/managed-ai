@@ -1,0 +1,16 @@
+{
+  "namespace": "sample-night-shift-pickup-v1",
+  "producer": "ops-author",
+  "receiver": "shift-lead",
+  "account": "Verified pickup window against the lobby schedule and confirmed handover coverage.",
+  "candidate": {
+    "title": "Night-shift pickup instruction",
+    "summary": "Collect deliveries from the east lobby desk between 19:00 and 23:00."
+  },
+  "observation": {
+    "checked_by": "shift-lead",
+    "finding": "East lobby desk was staffed and accepted the test handoff at 19:15."
+  },
+  "sources": [],
+  "reconsider_from": []
+}

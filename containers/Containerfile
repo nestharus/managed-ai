@@ -11,7 +11,7 @@ WORKDIR /build
 COPY pyproject.toml LICENSE README.md ./
 COPY src ./src
 
-RUN python -m pip install --no-cache-dir setuptools==75.8.0 wheel==0.45.1 \
+RUN python -m pip install --no-cache-dir setuptools==80.9.0 wheel==0.45.1 \
     && python -m pip wheel --no-deps --no-build-isolation -w /wheels .
 
 

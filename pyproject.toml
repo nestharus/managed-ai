@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,16 +7,32 @@ name = "managed-ai"
 dynamic = ["version"]
 description = "Schema-governed local store, explicit continuation exchange, and shared deployment engine"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "nestharus" },
+]
+keywords = [
+    "agent-store",
+    "content-addressed",
+    "local-first",
+    "provenance",
+    "schema-validation",
+    "stdlib-only",
+]
 requires-python = ">=3.14"
 dependencies = []
 classifiers = [
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3.15",
     "Typing :: Typed",
 ]
+
+[project.urls]
+Homepage = "https://github.com/nestharus/managed-ai"
+Repository = "https://github.com/nestharus/managed-ai"
+Issues = "https://github.com/nestharus/managed-ai/issues"
 
 [dependency-groups]
 dev = [
@@ -29,6 +45,9 @@ dev = [
 managed-ai = "managed_ai.store.manage_store:main"
 managed-ai-deploy = "managed_ai.deployment.select_deployment:main"
 managed-ai-library = "managed_ai.library.cli:main"
+managed-ai-attend = "managed_ai.core.attention:main"
+managed-ai-work = "managed_ai.core.exchange.cli:main"
+managed-ai-collect = "managed_ai.core.exchange.transport.collector:main"
 g60-attend = "managed_ai.core.attention:main"
 g60-work = "managed_ai.core.exchange.cli:main"
 g60-collect = "managed_ai.core.exchange.transport.collector:main"

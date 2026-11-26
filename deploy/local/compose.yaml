@@ -2,6 +2,8 @@
 # The managed-ai store worker lives exclusively on an internal bridge network with zero
 # host port bindings. Only the pinned non-root gateway exposes 127.0.0.1 control access.
 
+name: managed-ai
+
 services:
   managed-ai:
     build:

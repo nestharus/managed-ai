@@ -9,6 +9,28 @@
 - External domain repositories supply reusable schemas, catalogues, guidance, and domain operations independently (`source_root: "."`). Keep domain changes in the owning domain repository and refresh its `catalogue.json` and `domain.json` pins.
 - Never open sealed source entries (marked `"exposure": "sealed"` in catalogues) as ordinary text sources.
 
+## Contributor Setup & Fast Inner Loop
+
+Install the editable package and pinned static tools (`ruff`, `ty`, `mypy`) in one command (~1.4s with `uv`):
+
+```sh
+uv sync --group dev
+# Or with standard pip:
+python -m pip install -e .
+```
+
+Run fast targeted suites during active development instead of waiting for the full integration suite:
+
+```sh
+python -B -m unittest discover -s tests/platform_adapter   # ~2-3s
+python -B -m unittest discover -s tests/library            # ~3-5s
+python -B -m unittest discover -s tests/deployment         # ~12-15s
+python -B -m unittest discover -s tests/ci                 # ~10-15s
+python -B -m unittest discover -s tests/release            # ~15-20s
+```
+
+*(Note: two provenance integration tests in `tests/store/` invoke the `git` CLI and skip automatically when `git` is absent in minimal container images.)*
+
 ## Development hygiene
 
 - **Python 3.14+ standard library only (primary/containerized runtime: Python 3.15.2):** Core packages require zero third-party runtime dependencies and ship a PEP 561 `src/managed_ai/py.typed` marker.
@@ -17,19 +39,20 @@
 - **Cross-platform safety:** Use `managed_ai.platform` for locking, atomic writes, streaming SHA-256, strict JSON parsing, Windows reserved-name validation, and unfollowed symlink / NTFS reparse-point checks. Always set `allow_abbrev=False` on argument parsers and subparsers.
 - **Package-time artifacts:** Do not commit `MANIFEST.json`, `src/managed_ai/MANIFEST.json`, or `src/managed_ai/SOURCES.md`; `scripts/release/package.py` generates them for release archives.
 
-## Running tests, linting, and type checks
+## Full Pre-PR Verification
 
 From the repository root:
 
 ```sh
 python -B -m unittest discover -s tests
 python -B scripts/release/check_current.py
-python -B -m unittest tests/ci/test_image_lifecycle.py
-uvx ruff check src scripts tests && uvx ruff format --check src scripts
+python -B scripts/ci/validate_deploy.py
+python -B scripts/ci/semantic_profile.py --check-budget --baseline scripts/ci/semantic-baseline.json
+uvx ruff check src scripts tests && uvx ruff format --check src scripts tests
 uvx ty check src scripts && uvx mypy src scripts
 ```
 
-CI pipelines in `.buildkite/pipeline.yml` enforce `ruff`, `ty`, `mypy`, unit tests, `check_current.py`, deployment static checks, and wheel isolation audits before building any container image.
+CI pipelines in `.buildkite/pipeline.yml` enforce `ruff`, `ty`, `mypy`, unit tests, `check_current.py`, deployment static checks, semantic complexity/working-set budgets, and wheel isolation audits before building any container image.
 
 ## Updating core guidance pins
 

@@ -24,6 +24,10 @@ steps:
     key: "deploy-static"
     command: "python3 -B scripts/ci/validate_deploy.py"
 
+  - label: ":chart_with_upwards_trend: Semantic complexity & working-set budget"
+    key: "semantic-profile"
+    command: "python3 -B scripts/ci/semantic_profile.py --check-budget --baseline scripts/ci/semantic-baseline.json"
+
   - label: ":package: PEP-517 wheel isolation audit"
     key: "wheel-audit"
     command: "python3 -B -m unittest tests/release/test_package_wheel.py"

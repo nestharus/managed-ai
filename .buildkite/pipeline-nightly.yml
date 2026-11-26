@@ -14,6 +14,10 @@ steps:
     key: "nightly-typecheck"
     command: "uvx --from ty==0.0.112 ty check src scripts && uvx --from mypy==2.4.1 mypy src scripts"
 
+  - label: ":chart_with_upwards_trend: Nightly semantic complexity & working-set budget"
+    key: "nightly-semantic-profile"
+    command: "python3 -B scripts/ci/semantic_profile.py --check-budget --baseline scripts/ci/semantic-baseline.json"
+
   - label: ":moon: Nightly full test suite"
     key: "nightly-full-tests"
     command: "python3 -B -m unittest discover -s tests -v"

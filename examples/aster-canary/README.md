@@ -1,6 +1,6 @@
 # Resume a canary investigation
 
-A worker has returned west-cohort latency. The release desk has a versioned rollout plan and its own observation of the rollback procedure. The receiving operation records a decision about that cohort. A separate process reads the decision and uses its measured latency and rollback command. This example runs from an exported system package or checkout with Python 3.11+ on Windows or POSIX. Choose a new directory to retain the independent desks.
+A worker has returned west-cohort latency. The release desk has a versioned rollout plan and its own observation of the rollback procedure. The receiving operation records a decision about that cohort. A separate process reads the decision and uses its measured latency and rollback command. This example runs from an exported system package or checkout with Python 3.14+ on Windows or POSIX. Choose a new directory to retain the independent desks.
 
 ```sh
 python3 -B examples/aster-canary/demo.py /tmp/aster-canary-study
