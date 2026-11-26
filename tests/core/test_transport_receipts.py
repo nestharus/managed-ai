@@ -17,7 +17,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
-from tests._paths import ENGINE as ROOT, SRC
+from tests._paths import ENGINE as ROOT, SRC, cleanup_tempdir
 from managed_ai.core.exchange.transport.collector import material, worker_active
 from managed_ai.core.exchange import Exchange, carrier_receipts
 from managed_ai.core import storage
@@ -45,7 +45,7 @@ class TransportReceiptTests(unittest.TestCase):
         self.ex = Exchange(self.root)
 
     def tearDown(self):
-        self.temporary.cleanup()
+        cleanup_tempdir(self.temporary)
 
     def prepare(self, packet='one', *, materials=None, targets=None, returns=None, artifacts=None):
         return self.ex.prepare(packet, 'reader', 'brief.md', [], materials or [],
@@ -442,42 +442,51 @@ class NativeTransportUseTests(unittest.TestCase):
     def test_fresh_native_cli_recovery_and_qualification(self):
         api = runpy.run_path(str(ROOT / 'store' / 'system.py'))
         System = api['System']
-        with tempfile.TemporaryDirectory(prefix='native-transport-use-') as temporary:
-            base = Path(temporary)
-            root = base / 'runtime'
-            System.initialize(root, {'contribution': 'Qualify captured work against a new source.'})
-            system = System(root)
-            source = system.work / 'sources' / 'current.txt'
-            source.write_text('Original source')
-            system.put({'id': 'source', 'kind': 'note', 'content': 'Current receiving dependency',
-                        'basis': ['sources/current.txt']}, 0)
-            system.context('original', {'records': ['source'], 'targets': ['outputs/result.txt']})
-            proposal = base / 'proposal.txt'
-            proposal.write_text('Retained contribution')
-            system.run('original', [sys.executable, '-B', '-c', 'print("actual worker reply")', '{context}'])
-            record = system.receive('original', None, 'actual worker', ['outputs/result.txt=' + str(proposal)], wait=8)
-            captured = system.recover_transport('original')
-            self.assertLess(len(encode(record)), 16 * 1024)
-            shutil.rmtree(system.ex.root / 'carrier')
-            source.write_text('Current source requires qualification')
-            process = subprocess.run([sys.executable, '-B', str(ROOT / 'store' / 'system.py'),
-                                      '--root', str(root), 'recover-transport', 'original'],
-                                     capture_output=True, timeout=15)
-            self.assertEqual(process.returncode, 0, process.stderr)
-            self.assertEqual(json.loads(process.stdout), captured)
-            with self.assertRaisesRegex(ValueError, 'basis changed'):
-                system.adopt('original', 'outputs/result.txt', 'Original basis has changed.')
-            system.context('qualified', {'records': ['source'], 'returns': ['original'],
-                                         'artifacts': ['original:outputs/result.txt'],
-                                         'targets': ['outputs/qualified.txt']})
-            fresh = system.recover('qualified')['context']
-            self.assertIn('Current source requires qualification', fresh)
-            self.assertIn('Retained contribution', fresh)
-            system.receive('qualified', proposal, 'caller-authored current qualification',
-                           ['outputs/qualified.txt=' + str(proposal)])
-            system.adopt('qualified', 'outputs/qualified.txt', 'Current recipient accepts the contribution.')
-            self.assertEqual((system.work / 'outputs/qualified.txt').read_text(), 'Retained contribution')
-            self.assertFalse((system.work / 'outputs/result.txt').exists())
+        temporary = tempfile.TemporaryDirectory(prefix='native-transport-use-')
+        self.addCleanup(cleanup_tempdir, temporary)
+        base = Path(temporary.name)
+        root = base / 'runtime'
+        System.initialize(root, {'contribution': 'Qualify captured work against a new source.'})
+        system = System(root)
+        source = system.work / 'sources' / 'current.txt'
+        source.write_text('Original source')
+        system.put({'id': 'source', 'kind': 'note', 'content': 'Current receiving dependency',
+                    'basis': ['sources/current.txt']}, 0)
+        system.context('original', {'records': ['source'], 'targets': ['outputs/result.txt']})
+        proposal = base / 'proposal.txt'
+        proposal.write_text('Retained contribution')
+        system.run('original', [sys.executable, '-B', '-c', 'print("actual worker reply")', '{context}'])
+        record = system.receive('original', None, 'actual worker', ['outputs/result.txt=' + str(proposal)], wait=8)
+        captured = system.recover_transport('original')
+        self.assertLess(len(encode(record)), 16 * 1024)
+        deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                shutil.rmtree(system.ex.root / 'carrier')
+                break
+            except PermissionError:
+                if os.name != 'nt' or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.02)
+        source.write_text('Current source requires qualification')
+        process = subprocess.run([sys.executable, '-B', str(ROOT / 'store' / 'system.py'),
+                                  '--root', str(root), 'recover-transport', 'original'],
+                                 capture_output=True, timeout=15)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(json.loads(process.stdout), captured)
+        with self.assertRaisesRegex(ValueError, 'basis changed'):
+            system.adopt('original', 'outputs/result.txt', 'Original basis has changed.')
+        system.context('qualified', {'records': ['source'], 'returns': ['original'],
+                                     'artifacts': ['original:outputs/result.txt'],
+                                     'targets': ['outputs/qualified.txt']})
+        fresh = system.recover('qualified')['context']
+        self.assertIn('Current source requires qualification', fresh)
+        self.assertIn('Retained contribution', fresh)
+        system.receive('qualified', proposal, 'caller-authored current qualification',
+                       ['outputs/qualified.txt=' + str(proposal)])
+        system.adopt('qualified', 'outputs/qualified.txt', 'Current recipient accepts the contribution.')
+        self.assertEqual((system.work / 'outputs/qualified.txt').read_text(), 'Retained contribution')
+        self.assertFalse((system.work / 'outputs/result.txt').exists())
 
 
 if __name__ == '__main__':

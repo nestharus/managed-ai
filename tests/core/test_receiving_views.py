@@ -13,7 +13,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
-from tests._paths import ENGINE as ROOT, SRC
+from tests._paths import ENGINE as ROOT, SRC, cleanup_tempdir
 from managed_ai.core.exchange.transport import collector
 from managed_ai.core.exchange.transport.collector import Collector, encode, exclusive, sha, write_json
 from managed_ai.core.exchange import Exchange
@@ -35,7 +35,7 @@ class ReceivingViewTests(unittest.TestCase):
                         ['source.md'], ['answer.md'], [])
 
     def tearDown(self):
-        self.temporary.cleanup()
+        cleanup_tempdir(self.temporary)
 
     def retained_bytes(self):
         return {p.relative_to(self.root).as_posix(): p.read_bytes()

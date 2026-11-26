@@ -20,7 +20,7 @@ sys.dont_write_bytecode = True
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
-from tests._paths import ENGINE as ROOT, SRC
+from tests._paths import ENGINE as ROOT, SRC, cleanup_tempdir
 from managed_ai.core.exchange.transport import collector
 HERE = Path(__file__).resolve().parent
 TOOL = ROOT / "core" / "exchange" / "transport" / "collector.py"
@@ -96,7 +96,7 @@ class CollectorBehavior(unittest.TestCase):
                 except subprocess.TimeoutExpired:
                     worker.kill()
                     worker.wait(timeout=3)
-        self.temporary.cleanup()
+        cleanup_tempdir(self.temporary)
 
     def cli(self, *args: str, expected_code: int = 0, env: dict[str, str] | None = None):
         process = subprocess.run(

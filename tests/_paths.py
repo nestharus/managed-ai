@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import sys
+import time
 
 REPO = Path(__file__).resolve().parents[1]
 SRC = REPO / 'src'
@@ -18,3 +19,16 @@ for _path in (_ACTIVE_SRC, SRC):
     _text = str(_path)
     if _text not in sys.path:
         sys.path.insert(0, _text)
+
+
+def cleanup_tempdir(tempdir, *, timeout: float = 5.0) -> None:
+    """Clean up a TemporaryDirectory, retrying transient Windows handle-release races."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            tempdir.cleanup()
+            return
+        except PermissionError:
+            if os.name != 'nt' or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)

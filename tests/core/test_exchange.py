@@ -12,7 +12,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
-from tests._paths import ENGINE as ROOT, SRC
+from tests._paths import ENGINE as ROOT, SRC, cleanup_tempdir
 from managed_ai.core.exchange import Exchange, main
 
 
@@ -31,16 +31,7 @@ class ExchangeTests(unittest.TestCase):
         self.proposal = self.base/'proposed.txt'; self.proposal.write_text('new result')
 
     def tearDown(self):
-        import time
-        deadline = time.monotonic() + 3.0
-        while True:
-            try:
-                self.temp.cleanup()
-                return
-            except PermissionError:
-                if os.name != 'nt' or time.monotonic() >= deadline:
-                    raise
-                time.sleep(0.02)
+        cleanup_tempdir(self.temp)
 
     def prepare(self, packet='one', targets=None, methods=None, materials=None, returns=None):
         return self.ex.prepare(packet, 'reader', 'brief.md', methods or ['method.md'],

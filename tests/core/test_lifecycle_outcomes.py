@@ -13,7 +13,7 @@ from unittest.mock import patch
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
-from tests._paths import ENGINE as ROOT, SRC
+from tests._paths import ENGINE as ROOT, SRC, cleanup_tempdir
 
 from managed_ai.core.exchange.transport.collector import Collector
 from managed_ai.core.exchange import Exchange
@@ -23,7 +23,7 @@ from managed_ai.core.storage import MAX_BYTES, encode, read_json, sha, write_jso
 class LifecycleOutcomes(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
+        self.addCleanup(cleanup_tempdir, temporary)
         self.base = Path(temporary.name)
         self.work = self.base / 'work'
         self.work.mkdir()
