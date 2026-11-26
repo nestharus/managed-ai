@@ -11,13 +11,13 @@
 
 ## Development hygiene
 
-- **Python 3.11+ standard library only:** Core packages require zero third-party runtime dependencies.
+- **Python 3.14+ standard library only (primary/containerized runtime: Python 3.15.2):** Core packages require zero third-party runtime dependencies and ship a PEP 561 `src/managed_ai/py.typed` marker.
 - **No bytecode clutter:** Run Python with `-B` (or `PYTHONDONTWRITEBYTECODE=1`).
 - **Line endings:** Use LF (`\n`). `.gitattributes` sets `* -text` so catalogue and manifest SHA-256 digests stay byte-identical across Windows and POSIX hosts.
 - **Cross-platform safety:** Use `managed_ai.platform` for locking, atomic writes, streaming SHA-256, strict JSON parsing, Windows reserved-name validation, and unfollowed symlink / NTFS reparse-point checks. Always set `allow_abbrev=False` on argument parsers and subparsers.
 - **Package-time artifacts:** Do not commit `MANIFEST.json`, `src/managed_ai/MANIFEST.json`, or `src/managed_ai/SOURCES.md`; `scripts/release/package.py` generates them for release archives.
 
-## Running tests
+## Running tests, linting, and type checks
 
 From the repository root:
 
@@ -25,9 +25,11 @@ From the repository root:
 python -B -m unittest discover -s tests
 python -B scripts/release/check_current.py
 python -B -m unittest tests/ci/test_image_lifecycle.py
+uvx ruff check src scripts tests && uvx ruff format --check src scripts
+uvx ty check src scripts && uvx mypy src scripts
 ```
 
-CI pipelines in `.buildkite/pipeline.yml` enforce unit tests, `check_current.py`, deployment static checks, and wheel isolation audits before building any container image.
+CI pipelines in `.buildkite/pipeline.yml` enforce `ruff`, `ty`, `mypy`, unit tests, `check_current.py`, deployment static checks, and wheel isolation audits before building any container image.
 
 ## Updating core guidance pins
 

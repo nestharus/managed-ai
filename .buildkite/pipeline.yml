@@ -4,6 +4,14 @@ env:
   IMAGE_NAME: "managed-ai"
 
 steps:
+  - label: ":ruff: Lint & format check (ruff)"
+    key: "lint"
+    command: "uvx ruff check src scripts tests && uvx ruff format --check src scripts"
+
+  - label: ":mag_right: Static typecheck (ty & mypy)"
+    key: "typecheck"
+    command: "uvx ty check src scripts && uvx mypy src scripts"
+
   - label: ":pytest: Unit & integration tests"
     key: "unit-tests"
     command: "python3 -B -m unittest discover -s tests"

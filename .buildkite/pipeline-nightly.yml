@@ -6,6 +6,14 @@ env:
   PR_IMAGE_TTL_DAYS: "7"
 
 steps:
+  - label: ":ruff: Nightly lint & format check (ruff)"
+    key: "nightly-lint"
+    command: "uvx ruff check src scripts tests && uvx ruff format --check src scripts"
+
+  - label: ":mag_right: Nightly static typecheck (ty & mypy)"
+    key: "nightly-typecheck"
+    command: "uvx ty check src scripts && uvx mypy src scripts"
+
   - label: ":moon: Nightly full test suite"
     key: "nightly-full-tests"
     command: "python3 -B -m unittest discover -s tests -v"

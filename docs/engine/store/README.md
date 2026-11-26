@@ -8,7 +8,7 @@ Domain and catalogue loading live under [selection](../../../src/managed_ai/stor
 
 ## Start with one useful context
 
-Use Python 3.11 or later on Linux, macOS or native Windows. From `src/managed_ai/store`:
+Use Python 3.14 or later (primary/containerized runtime: Python 3.15.2) on Linux, macOS or native Windows. From `src/managed_ai/store`:
 
 ```bash
 python3 -B manage_store.py --root ../../../my-ai-work init --goal-text "Review the current design and deliver a useful next version."

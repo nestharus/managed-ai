@@ -29,8 +29,8 @@
       "link_base": "../../docs/engine/store/README.md",
       "presentation": "../../docs/engine/store/README.md",
       "kind": "guide",
-      "sha256": "385e75d57bdf29faafad51e5666bdbbe7d6d9371c6552ed81d2bc0c440266739",
-      "bytes": 50901,
+      "sha256": "c57fbd895489eddc7f7155f4f0ad3fbe9d4eb0214815f792c33d47946083694a",
+      "bytes": 50948,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -49,8 +49,8 @@
       "link_base": "../../docs/collective/README.md",
       "presentation": "../../docs/collective/README.md",
       "kind": "guide",
-      "sha256": "06231fd96f35c9ee30a09755aab89f15b66e787349287da63bf1f98d0f2e9347",
-      "bytes": 34067,
+      "sha256": "e256b5f14b8641146910dbd16d03505cda2af77118e8660968e1b721ee709b27",
+      "bytes": 34161,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {

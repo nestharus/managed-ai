@@ -1,6 +1,6 @@
 # Continuation Core (`src/managed_ai/core/`)
 
-`src/managed_ai/core/` is the domain-neutral continuation, exchange, attention, and cross-platform custody layer (version `0.4.2`, Python 3.11+ standard library only, cross-platform on Windows and POSIX).
+`src/managed_ai/core/` is the domain-neutral continuation, exchange, attention, and cross-platform custody layer (version `0.4.2`, Python 3.14+ standard library only, primary/containerized runtime Python 3.15.2, cross-platform on Windows and POSIX).
 
 ## Components and CLIs
 

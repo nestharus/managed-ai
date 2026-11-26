@@ -1,16 +1,15 @@
-"""Dual-OS unit and contract tests for scripts/ci/image_lifecycle.py and .buildkite pipelines."""
-from __future__ import annotations
+"""Dual-OS unit and contract tests for image_lifecycle.py and Buildkite pipelines."""
 
 import ast
 import io
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
 import tokenize
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -22,12 +21,14 @@ NIGHTLY = REPO / ".buildkite/pipeline-nightly.yml"
 
 if str(REPO / "scripts/ci") not in sys.path:
     sys.path.insert(0, str(REPO / "scripts/ci"))
-import image_lifecycle
+import image_lifecycle  # noqa: E402
 
 
 def _write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes((json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n").encode("utf-8"))
+    path.write_bytes(
+        (json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n").encode("utf-8")
+    )
 
 
 class ImageLifecycleTests(unittest.TestCase):
@@ -40,10 +41,15 @@ class ImageLifecycleTests(unittest.TestCase):
         if os.name == "nt":
             proc = subprocess.run(
                 ["cmd", "/c", "mklink", "/J", str(link_path), str(target_dir)],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-            self.addCleanup(lambda p=link_path: subprocess.run(["cmd", "/c", "rmdir", str(p)], capture_output=True))
+            self.addCleanup(
+                lambda p=link_path: subprocess.run(
+                    ["cmd", "/c", "rmdir", str(p)], capture_output=True
+                )
+            )
         else:
             os.symlink(target_dir, link_path)
 
@@ -52,9 +58,15 @@ class ImageLifecycleTests(unittest.TestCase):
         env.pop("PYTHONPATH", None)
         proc = subprocess.run(
             [sys.executable, "-B", str(SCRIPT), *args],
-            capture_output=True, text=True, encoding="utf-8", env=env, timeout=30,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=env,
+            timeout=30,
         )
-        self.assertEqual(proc.returncode, expected_rc, f"args={args}\nstdout={proc.stdout}\nstderr={proc.stderr}")
+        self.assertEqual(
+            proc.returncode, expected_rc, f"args={args}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+        )
         return proc
 
     def test_context_hash_determinism_ignores_docs_tests_and_rejects_links(self) -> None:
@@ -64,8 +76,12 @@ class ImageLifecycleTests(unittest.TestCase):
         (repo / "docs").mkdir()
         (repo / "tests").mkdir()
         (repo / "pyproject.toml").write_text('[project]\nname = "managed-ai"\n', encoding="utf-8")
-        (repo / "src/managed_ai/__init__.py").write_text('__version__ = "0.5.0"\n', encoding="utf-8")
-        (repo / "containers/Containerfile").write_text("FROM python:3.12.9-slim\n", encoding="utf-8")
+        (repo / "src/managed_ai/__init__.py").write_text(
+            '__version__ = "0.5.0"\n', encoding="utf-8"
+        )
+        (repo / "containers/Containerfile").write_text(
+            "FROM python:3.15.2-slim\n", encoding="utf-8"
+        )
 
         first = json.loads(self._run_cli("context-hash", "--root", str(repo)).stdout)
         self.assertEqual(first["format"], image_lifecycle.CONTEXT_HASH_FORMAT)
@@ -80,7 +96,9 @@ class ImageLifecycleTests(unittest.TestCase):
         self.assertEqual(second["context_sha256"], first["context_sha256"])
 
         # Editing src/managed_ai/ or Containerfile MUST change context_sha256.
-        (repo / "src/managed_ai/__init__.py").write_text('__version__ = "0.5.1"\n', encoding="utf-8")
+        (repo / "src/managed_ai/__init__.py").write_text(
+            '__version__ = "0.5.1"\n', encoding="utf-8"
+        )
         third = json.loads(self._run_cli("context-hash", "--root", str(repo)).stdout)
         self.assertNotEqual(third["context_sha256"], first["context_sha256"])
 
@@ -94,8 +112,12 @@ class ImageLifecycleTests(unittest.TestCase):
         # C60-2: dangling symlink or junction at containers/ must be rejected with exit 2.
         repo_dangling = self.root / "dangling-containers-repo"
         (repo_dangling / "src/managed_ai").mkdir(parents=True)
-        (repo_dangling / "pyproject.toml").write_text('[project]\nname = "managed-ai"\n', encoding="utf-8")
-        (repo_dangling / "src/managed_ai/__init__.py").write_text('__version__ = "0.5.0"\n', encoding="utf-8")
+        (repo_dangling / "pyproject.toml").write_text(
+            '[project]\nname = "managed-ai"\n', encoding="utf-8"
+        )
+        (repo_dangling / "src/managed_ai/__init__.py").write_text(
+            '__version__ = "0.5.0"\n', encoding="utf-8"
+        )
         missing_target = self.root / "gone-containers-dir"
         if os.name == "nt":
             missing_target.mkdir()
@@ -111,54 +133,100 @@ class ImageLifecycleTests(unittest.TestCase):
         sha_full = "a1b2c3d4e5f60123456789abcdef0123456789ab"
         sha12 = sha_full[:12]
 
-        local = json.loads(self._run_cli("tag-plan", "--channel", "local", "--git-sha", sha_full).stdout)
+        local = json.loads(
+            self._run_cli("tag-plan", "--channel", "local", "--git-sha", sha_full).stdout
+        )
         self.assertFalse(local["push_remote"])
         self.assertEqual(local["tags"], [f"local-{sha12}"])
         self.assertTrue(local["forbids_latest"])
 
-        pr_default = json.loads(self._run_cli(
-            "tag-plan", "--channel", "pr", "--git-sha", sha_full, "--pr-number", "42",
-        ).stdout)
+        pr_default = json.loads(
+            self._run_cli(
+                "tag-plan",
+                "--channel",
+                "pr",
+                "--git-sha",
+                sha_full,
+                "--pr-number",
+                "42",
+            ).stdout
+        )
         self.assertFalse(pr_default["push_remote"])
         self.assertEqual(pr_default["tags"], [f"pr-42-{sha12}"])
         self.assertEqual(pr_default["ttl_days"], 7)
 
-        pr_push = json.loads(self._run_cli(
-            "tag-plan", "--channel", "pr", "--git-sha", sha_full, "--pr-number", "42", "--allow-pr-push",
-        ).stdout)
+        pr_push = json.loads(
+            self._run_cli(
+                "tag-plan",
+                "--channel",
+                "pr",
+                "--git-sha",
+                sha_full,
+                "--pr-number",
+                "42",
+                "--allow-pr-push",
+            ).stdout
+        )
         self.assertTrue(pr_push["push_remote"])
         self.assertEqual(pr_push["tags"], [f"pr-42-{sha12}"])
 
-        main_plan = json.loads(self._run_cli("tag-plan", "--channel", "main", "--git-sha", sha_full).stdout)
+        main_plan = json.loads(
+            self._run_cli("tag-plan", "--channel", "main", "--git-sha", sha_full).stdout
+        )
         self.assertTrue(main_plan["push_remote"])
         self.assertEqual(main_plan["promote_by"], "digest")
         self.assertEqual(main_plan["tags"], [f"sha-{sha12}"])
 
-        # C60B-1: pipe real 64-char context_sha256 from context-hash directly into tag-plan --context-sha.
+        # C60B-1: pipe real 64-char context_sha256 from context-hash into tag-plan --context-sha.
         real_ctx = json.loads(self._run_cli("context-hash", "--root", str(REPO)).stdout)
         ctx_sha64 = real_ctx["context_sha256"]
         self.assertEqual(len(ctx_sha64), 64)
 
-        rel = json.loads(self._run_cli(
-            "tag-plan", "--channel", "release", "--git-sha", sha_full, "--version", "1.2.3",
-            "--context-sha", ctx_sha64,
-        ).stdout)
+        rel = json.loads(
+            self._run_cli(
+                "tag-plan",
+                "--channel",
+                "release",
+                "--git-sha",
+                sha_full,
+                "--version",
+                "1.2.3",
+                "--context-sha",
+                ctx_sha64,
+            ).stdout
+        )
         self.assertTrue(rel["push_remote"])
         self.assertEqual(rel["promotion_tags"], ["v1.2.3", f"sha-{sha12}"])
         self.assertEqual(rel["context_tag"], f"ctx-{ctx_sha64[:12]}")
         self.assertEqual(rel["tags"], ["v1.2.3", f"sha-{sha12}", f"ctx-{ctx_sha64[:12]}"])
 
-        main_ctx = json.loads(self._run_cli(
-            "tag-plan", "--channel", "main", "--git-sha", sha_full,
-            "--context-sha", ctx_sha64,
-        ).stdout)
+        main_ctx = json.loads(
+            self._run_cli(
+                "tag-plan",
+                "--channel",
+                "main",
+                "--git-sha",
+                sha_full,
+                "--context-sha",
+                ctx_sha64,
+            ).stdout
+        )
         self.assertEqual(main_ctx["promotion_tags"], [f"sha-{sha12}"])
         self.assertEqual(main_ctx["tags"], [f"sha-{sha12}", f"ctx-{ctx_sha64[:12]}"])
 
-        pr_ctx = json.loads(self._run_cli(
-            "tag-plan", "--channel", "pr", "--git-sha", sha_full, "--pr-number", "42",
-            "--context-sha", ctx_sha64,
-        ).stdout)
+        pr_ctx = json.loads(
+            self._run_cli(
+                "tag-plan",
+                "--channel",
+                "pr",
+                "--git-sha",
+                sha_full,
+                "--pr-number",
+                "42",
+                "--context-sha",
+                ctx_sha64,
+            ).stdout
+        )
         self.assertEqual(pr_ctx["context_tag"], f"ctx-{ctx_sha64[:12]}")
         self.assertEqual(pr_ctx["tags"], [f"pr-42-{sha12}"])
 
@@ -199,31 +267,70 @@ class ImageLifecycleTests(unittest.TestCase):
         )
 
         catalog = self.root / "catalog.json"
-        _write_json(catalog, {
-            "format": image_lifecycle.CATALOG_FORMAT,
-            "repository": "ghcr.io/nestharus/managed-ai",
-            "manifests": [
-                {"digest": d_gitops, "created_at": "2026-01-01T00:00:00Z", "tags": ["sha-000000000001"]},
-                {"digest": d_shared, "created_at": "2026-10-01T00:00:00Z", "tags": ["v1.0.0", "pr-9-000000000002"]},
-                {"digest": d_main_new, "created_at": "2026-11-25T00:00:00Z", "tags": ["sha-000000000003", "ctx-aaaaaaaaaaaa"]},
-                {"digest": d_main_old, "created_at": "2026-11-01T00:00:00Z", "tags": ["sha-000000000004", "ctx-bbbbbbbbbbbb"]},
-                {"digest": d_pr_fresh, "created_at": "2026-11-24T00:00:00Z", "tags": ["pr-10-000000000005", "ctx-cccccccccccc"]},
-                {"digest": d_pr_stale, "created_at": "2026-11-05T00:00:00Z", "tags": ["pr-8-000000000006"]},
-                {"digest": d_dangling, "created_at": "2026-11-02T00:00:00Z", "tags": []},
-                {"digest": d_explicit, "created_at": "2026-02-01T00:00:00Z", "tags": []},
-                {"digest": d_ctx_orphan, "created_at": "2026-10-15T00:00:00Z", "tags": ["ctx-dddddddddddd"]},
-            ],
-        })
+        _write_json(
+            catalog,
+            {
+                "format": image_lifecycle.CATALOG_FORMAT,
+                "repository": "ghcr.io/nestharus/managed-ai",
+                "manifests": [
+                    {
+                        "digest": d_gitops,
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "tags": ["sha-000000000001"],
+                    },
+                    {
+                        "digest": d_shared,
+                        "created_at": "2026-10-01T00:00:00Z",
+                        "tags": ["v1.0.0", "pr-9-000000000002"],
+                    },
+                    {
+                        "digest": d_main_new,
+                        "created_at": "2026-11-25T00:00:00Z",
+                        "tags": ["sha-000000000003", "ctx-aaaaaaaaaaaa"],
+                    },
+                    {
+                        "digest": d_main_old,
+                        "created_at": "2026-11-01T00:00:00Z",
+                        "tags": ["sha-000000000004", "ctx-bbbbbbbbbbbb"],
+                    },
+                    {
+                        "digest": d_pr_fresh,
+                        "created_at": "2026-11-24T00:00:00Z",
+                        "tags": ["pr-10-000000000005", "ctx-cccccccccccc"],
+                    },
+                    {
+                        "digest": d_pr_stale,
+                        "created_at": "2026-11-05T00:00:00Z",
+                        "tags": ["pr-8-000000000006"],
+                    },
+                    {"digest": d_dangling, "created_at": "2026-11-02T00:00:00Z", "tags": []},
+                    {"digest": d_explicit, "created_at": "2026-02-01T00:00:00Z", "tags": []},
+                    {
+                        "digest": d_ctx_orphan,
+                        "created_at": "2026-10-15T00:00:00Z",
+                        "tags": ["ctx-dddddddddddd"],
+                    },
+                ],
+            },
+        )
 
-        plan = json.loads(self._run_cli(
-            "plan-gc",
-            "--catalog", str(catalog),
-            "--gitops-dir", str(gitops),
-            "--protected-digest", d_explicit,
-            "--keep-main", "1",
-            "--pr-ttl-days", "7",
-            "--now", "2026-11-26T00:00:00Z",
-        ).stdout)
+        plan = json.loads(
+            self._run_cli(
+                "plan-gc",
+                "--catalog",
+                str(catalog),
+                "--gitops-dir",
+                str(gitops),
+                "--protected-digest",
+                d_explicit,
+                "--keep-main",
+                "1",
+                "--pr-ttl-days",
+                "7",
+                "--now",
+                "2026-11-26T00:00:00Z",
+            ).stdout
+        )
 
         self.assertTrue(plan["dry_run"])
         kept = {row["digest"]: row for row in plan["keep_manifests"]}
@@ -253,14 +360,18 @@ class ImageLifecycleTests(unittest.TestCase):
         self.assertNotIn("Traceback", proc_dup.stderr)
 
         nan_cat = self.root / "nan.json"
-        nan_cat.write_text('{"format": "managed-ai-registry-catalog/1", "x": NaN}\n', encoding="utf-8")
+        nan_cat.write_text(
+            '{"format": "managed-ai-registry-catalog/1", "x": NaN}\n', encoding="utf-8"
+        )
         proc_nan = self._run_cli("plan-gc", "--catalog", str(nan_cat), expected_rc=2)
         self.assertNotIn("Traceback", proc_nan.stderr)
 
         # Symlink / junction gitops dir rejected with exit 2.
         linked_gitops = self.root / "linked-gitops"
         self._make_dir_link(linked_gitops, gitops)
-        proc_link = self._run_cli("plan-gc", "--catalog", str(catalog), "--gitops-dir", str(linked_gitops), expected_rc=2)
+        proc_link = self._run_cli(
+            "plan-gc", "--catalog", str(catalog), "--gitops-dir", str(linked_gitops), expected_rc=2
+        )
         self.assertNotIn("Traceback", proc_link.stderr)
 
     def test_plan_gc_protects_kustomize_digest_pins_and_live_repo_gitops(self) -> None:
@@ -279,54 +390,90 @@ class ImageLifecycleTests(unittest.TestCase):
             encoding="utf-8",
         )
         (gitops / "channels/dev/kustomization.yaml").write_text(
-            "\n".join([
-                "apiVersion: kustomize.config.k8s.io/v1beta1",
-                "kind: Kustomization",
-                "images:",
-                "  - name: ghcr.io/nestharus/managed-ai",
-                f"    digest: {d_dev}",
-                "",
-            ]),
+            "\n".join(
+                [
+                    "apiVersion: kustomize.config.k8s.io/v1beta1",
+                    "kind: Kustomization",
+                    "images:",
+                    "  - name: ghcr.io/nestharus/managed-ai",
+                    f"    digest: {d_dev}",
+                    "",
+                ]
+            ),
             encoding="utf-8",
         )
         (gitops / "channels/local/kustomization.yaml").write_text(
-            "\n".join([
-                "apiVersion: kustomize.config.k8s.io/v1beta1",
-                "kind: Kustomization",
-                "images:",
-                "  - name: ghcr.io/nestharus/managed-ai",
-                f'    digest: "{d_local}"',
-                "",
-            ]),
+            "\n".join(
+                [
+                    "apiVersion: kustomize.config.k8s.io/v1beta1",
+                    "kind: Kustomization",
+                    "images:",
+                    "  - name: ghcr.io/nestharus/managed-ai",
+                    f'    digest: "{d_local}"',
+                    "",
+                ]
+            ),
             encoding="utf-8",
         )
 
         catalog = self.root / "kustomize-catalog.json"
-        _write_json(catalog, {
-            "format": image_lifecycle.CATALOG_FORMAT,
-            "repository": "ghcr.io/nestharus/managed-ai",
-            "manifests": [
-                {"digest": d_base, "created_at": "2026-01-01T00:00:00Z", "tags": ["sha-00000000000a"]},
-                {"digest": d_dev, "created_at": "2026-01-02T00:00:00Z", "tags": ["sha-00000000000b"]},
-                {"digest": d_local, "created_at": "2026-01-03T00:00:00Z", "tags": ["sha-00000000000c"]},
-                {"digest": d_unpinned, "created_at": "2026-01-04T00:00:00Z", "tags": ["sha-00000000000d"]},
-                {"digest": "sha256:" + "e" * 64, "created_at": "2026-11-25T00:00:00Z", "tags": ["sha-00000000000e"]},
-            ],
-        })
+        _write_json(
+            catalog,
+            {
+                "format": image_lifecycle.CATALOG_FORMAT,
+                "repository": "ghcr.io/nestharus/managed-ai",
+                "manifests": [
+                    {
+                        "digest": d_base,
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "tags": ["sha-00000000000a"],
+                    },
+                    {
+                        "digest": d_dev,
+                        "created_at": "2026-01-02T00:00:00Z",
+                        "tags": ["sha-00000000000b"],
+                    },
+                    {
+                        "digest": d_local,
+                        "created_at": "2026-01-03T00:00:00Z",
+                        "tags": ["sha-00000000000c"],
+                    },
+                    {
+                        "digest": d_unpinned,
+                        "created_at": "2026-01-04T00:00:00Z",
+                        "tags": ["sha-00000000000d"],
+                    },
+                    {
+                        "digest": "sha256:" + "e" * 64,
+                        "created_at": "2026-11-25T00:00:00Z",
+                        "tags": ["sha-00000000000e"],
+                    },
+                ],
+            },
+        )
 
-        plan = json.loads(self._run_cli(
-            "plan-gc",
-            "--catalog", str(catalog),
-            "--gitops-dir", str(gitops),
-            "--keep-main", "1",
-            "--now", "2026-11-26T00:00:00Z",
-        ).stdout)
+        plan = json.loads(
+            self._run_cli(
+                "plan-gc",
+                "--catalog",
+                str(catalog),
+                "--gitops-dir",
+                str(gitops),
+                "--keep-main",
+                "1",
+                "--now",
+                "2026-11-26T00:00:00Z",
+            ).stdout
+        )
 
-        self.assertEqual(plan["protected_gitops_digests"], {
-            d_base: ["base/deployment.yaml"],
-            d_dev: ["channels/dev/kustomization.yaml"],
-            d_local: ["channels/local/kustomization.yaml"],
-        })
+        self.assertEqual(
+            plan["protected_gitops_digests"],
+            {
+                d_base: ["base/deployment.yaml"],
+                d_dev: ["channels/dev/kustomization.yaml"],
+                d_local: ["channels/local/kustomization.yaml"],
+            },
+        )
         kept = {row["digest"] for row in plan["keep_manifests"]}
         pruned = {row["digest"] for row in plan["prune_manifests"]}
         self.assertTrue({d_base, d_dev, d_local}.issubset(kept))
@@ -335,11 +482,14 @@ class ImageLifecycleTests(unittest.TestCase):
         # Verify against the live repository gitops/ directory: all 3 manifests are collected.
         live_pins = image_lifecycle._collect_gitops_pins(REPO / "gitops")
         live_sources = sorted({src for sources in live_pins.values() for src in sources})
-        self.assertEqual(live_sources, [
-            "base/deployment.yaml",
-            "channels/dev/kustomization.yaml",
-            "channels/local/kustomization.yaml",
-        ])
+        self.assertEqual(
+            live_sources,
+            [
+                "base/deployment.yaml",
+                "channels/dev/kustomization.yaml",
+                "channels/local/kustomization.yaml",
+            ],
+        )
 
     def test_buildkite_pipelines_structure_gates_and_hygiene(self) -> None:
         for path in (PIPELINE, NIGHTLY):
@@ -352,6 +502,8 @@ class ImageLifecycleTests(unittest.TestCase):
         main_yaml = PIPELINE.read_text(encoding="utf-8")
         wait_pos = main_yaml.index("- wait")
         for gate in (
+            "uvx ruff check src scripts tests && uvx ruff format --check src scripts",
+            "uvx ty check src scripts && uvx mypy src scripts",
             "python3 -B -m unittest discover -s tests",
             "python3 -B scripts/release/check_current.py",
             "python3 -B scripts/ci/validate_deploy.py",
@@ -369,7 +521,9 @@ class ImageLifecycleTests(unittest.TestCase):
             "containers/Containerfile",
         ):
             self.assertIn(post_gate, main_yaml)
-            self.assertGreater(main_yaml.index(post_gate), wait_pos, f"{post_gate} must run after - wait")
+            self.assertGreater(
+                main_yaml.index(post_gate), wait_pos, f"{post_gate} must run after - wait"
+            )
         self.assertNotIn(" $TAG_FLAGS", main_yaml)
         self.assertNotIn(" $PR_ARGS", main_yaml)
 
@@ -393,13 +547,21 @@ class ImageLifecycleTests(unittest.TestCase):
                 self.assertLessEqual(span, 120, f"{node.name} is {span}L > 120L")
             if isinstance(node, ast.Call):
                 fn = node.func
-                name = fn.attr if isinstance(fn, ast.Attribute) else (fn.id if isinstance(fn, ast.Name) else None)
+                name = (
+                    fn.attr
+                    if isinstance(fn, ast.Attribute)
+                    else (fn.id if isinstance(fn, ast.Name) else None)
+                )
                 if name in ("ArgumentParser", "add_parser"):
                     ok = any(
-                        kw.arg == "allow_abbrev" and isinstance(kw.value, ast.Constant) and kw.value.value is False
+                        kw.arg == "allow_abbrev"
+                        and isinstance(kw.value, ast.Constant)
+                        and kw.value.value is False
                         for kw in node.keywords
                     )
-                    self.assertTrue(ok, f"Parser call at line {node.lineno} missing allow_abbrev=False")
+                    self.assertTrue(
+                        ok, f"Parser call at line {node.lineno} missing allow_abbrev=False"
+                    )
 
 
 if __name__ == "__main__":

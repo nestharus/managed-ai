@@ -1,6 +1,6 @@
 # Managed AI
 
-A domain-neutral, standard-library Python 3.11+ engine for persistent goals, schema-validated records, source-pinned catalogues, guarded context/receive/adopt cycles, and cross-store provenance. Loadable domains plug in externally as data; optional companions and collective coordination layer on top through public boundaries.
+A domain-neutral, standard-library Python 3.14+ (primary/containerized runtime: Python 3.15.2) engine for persistent goals, schema-validated records, source-pinned catalogues, guarded context/receive/adopt cycles, and cross-store provenance. Loadable domains plug in externally as data; optional companions and collective coordination layer on top through public boundaries.
 
 ## Repository layout
 
@@ -18,7 +18,7 @@ A domain-neutral, standard-library Python 3.11+ engine for persistent goals, sch
 
 ## Quickstart (Windows and POSIX)
 
-Requires **Python 3.11+** (standard library only; zero third-party runtime dependencies).
+Requires **Python 3.14+** (primary/containerized runtime: **Python 3.15.2**; standard library only; zero third-party runtime dependencies; PEP 561 typed via `py.typed`).
 
 ### 1. Clone and optionally install in editable mode
 
@@ -54,18 +54,20 @@ python -B src/managed_ai/deployment/select_deployment.py --deployment ../my-work
 python -B src/managed_ai/deployment/select_deployment.py --deployment ../my-workspace system catalogue --query composition --limit 5
 ```
 
-### 4. Run the full test suite
+### 4. Run tests, lint, and static type checks
 
 ```sh
 python -B -m unittest discover -s tests
+uvx ruff check src scripts tests && uvx ruff format --check src scripts
+uvx ty check src scripts && uvx mypy src scripts
 ```
 
 ## Container, Local Control Surface & Delivery
 
-- **Local Docker stack (`deploy/local/`):** Runs the non-root (`10001:10001`) `managed-ai` container on an `internal: true` bridge network with zero direct host ports, exposing only a single loopback `127.0.0.1` reverse-proxy control surface. Start locally via `docker compose -f deploy/local/compose.yaml up --build`.
+- **Local Docker stack (`deploy/local/`):** Runs the non-root (`10001:10001`) `managed-ai` container (`python:3.15.2-slim`) on an `internal: true` bridge network with zero direct host ports, exposing only a single loopback `127.0.0.1` reverse-proxy control surface. Start locally via `docker compose -f deploy/local/compose.yaml up --build`.
 - **Cloud & GitOps substrate (`infra/`, `gitops/`):** OpenTofu/Vultr definitions (`infra/`) and Flux manifests (`gitops/`) separate `local` and `dev` deployment channels and pin container images strictly by immutable `@sha256` digest.
 - **Buildkite CI/CD & anti-spam image lifecycle (`.buildkite/`, `scripts/ci/image_lifecycle.py`):**
-  - Fast parallel gates (`unit-tests`, `release-check`, `deploy-static`, `wheel-audit`) run before `- wait` so failing PRs build zero images.
+  - Fast parallel gates (`lint`, `typecheck`, `unit-tests`, `release-check`, `deploy-static`, `wheel-audit`) run before `- wait` so failing PRs build zero images.
   - `scripts/ci/image_lifecycle.py context-hash` skips rebuilds when only docs/tests/infra change, `tag-plan` emits immutable `sha-<12>` / `v<semver>` tags (never `:latest`), and nightly `plan-gc` plans safe registry cleanup while protecting GitOps-pinned digests, SemVer releases, and rollback windows.
 
 ## Versioning & State Strategy

@@ -4,8 +4,8 @@ Choose the package scope needed by the receiver:
 
 | Release | Contents |
 | --- | --- |
-| Python wheel / sdist | Standard PEP-517 package built from `pyproject.toml` and `src/managed_ai/` (excluding repo-local `scripts/`, `containers/`, `deploy/`, `infra/`, `gitops/`, `.buildkite/`) |
-| Container image | Multi-stage non-root image built from `containers/Containerfile`, tagged immutably (`sha-<12>`, `v<semver>`; never `:latest`) and promoted across `gitops/` channels by `@sha256` digest |
+| Python wheel / sdist | Standard PEP-517 package (`requires-python >= 3.14`, PEP 561 `py.typed`) built from `pyproject.toml` and `src/managed_ai/` (excluding repo-local `scripts/`, `containers/`, `deploy/`, `infra/`, `gitops/`, `.buildkite/`) |
+| Container image | Multi-stage non-root `python:3.15.2-slim` image built from `containers/Containerfile`, tagged immutably (`sha-<12>`, `v<semver>`; never `:latest`) and promoted across `gitops/` channels by `@sha256` digest |
 | Software bundle | Clean export of `src/managed_ai/`, `docs/`, `examples/`, `pyproject.toml`, `LICENSE`, plus optional initialized stores and deployments |
 | External domain | One external domain repository's `domain.json`, `catalogue.json`, sources, and tools exported at an exact Git commit |
 
