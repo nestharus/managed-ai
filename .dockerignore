@@ -1,0 +1,24 @@
+# Exclude non-runtime repository assets from container build contexts.
+.git
+.gitignore
+.buildkite
+.sops.yaml
+.pytest_cache
+.venv
+venv
+dist
+build
+*.egg-info
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+tests
+docs
+examples
+deploy
+infra
+gitops
+scripts
+containers
+!containers/Containerfile
