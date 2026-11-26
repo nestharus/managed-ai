@@ -10,9 +10,9 @@ from typing import Any
 
 from .io_utils import canonical_bytes, loads_strict, pin_file, sha256_bytes
 
-CORE_DIR = Path(__file__).resolve().parent
-WORKBENCH_ROOT = CORE_DIR.parent
-DEFAULT_CONTROLLER_DIR = WORKBENCH_ROOT / "controller"
+WORKBENCH_ROOT = Path(__file__).resolve().parent
+CORE_DIR = WORKBENCH_ROOT
+DEFAULT_CONTROLLER_DIR = WORKBENCH_ROOT
 
 CORE_MODULES = (
     "io_utils.py",
@@ -27,18 +27,6 @@ CORE_MODULES = (
 BUNDLED_SEARCH_ENTRY = Path("library/lexical.py")
 BUNDLED_SEARCH_DEPS = (
     Path("library/config.py"),
-)
-_COMPAT_SEARCH_ENTRY = Path("library/reader/knowledge.py")
-_COMPAT_SEARCH_DEPS = (
-    Path("library/reader/library_format.py"),
-    Path("library/search/lexical_search.py"),
-    Path("library/bundles/product_bundle.py"),
-)
-_LEGACY_SEARCH_ENTRY = Path("runtime/source_library/knowledge.py")
-_LEGACY_SEARCH_DEPS = (
-    Path("runtime/source_library/library_format.py"),
-    Path("runtime/source_library/lexical_search.py"),
-    Path("runtime/source_library/product_bundle.py"),
 )
 
 RESOLVE_FIELDS = frozenset(
@@ -55,13 +43,10 @@ RESOLVE_FIELDS = frozenset(
 def default_search_paths(repo_root: Path | str | None = None) -> tuple[Path, list[Path]]:
     """Return (entry_path, dependency_paths) for the bundled lexical search library."""
     if repo_root is None:
-        engine = CORE_DIR.parents[2]
+        engine = WORKBENCH_ROOT.parents[1]
         candidates = (
             (engine, BUNDLED_SEARCH_ENTRY, BUNDLED_SEARCH_DEPS),
             (engine / "engine", BUNDLED_SEARCH_ENTRY, BUNDLED_SEARCH_DEPS),
-            (engine, _COMPAT_SEARCH_ENTRY, _COMPAT_SEARCH_DEPS),
-            (engine / "engine", _COMPAT_SEARCH_ENTRY, _COMPAT_SEARCH_DEPS),
-            (engine / "engine", _LEGACY_SEARCH_ENTRY, _LEGACY_SEARCH_DEPS),
         )
     else:
         base = Path(repo_root)
@@ -69,10 +54,6 @@ def default_search_paths(repo_root: Path | str | None = None) -> tuple[Path, lis
             (base / "src/managed_ai", BUNDLED_SEARCH_ENTRY, BUNDLED_SEARCH_DEPS),
             (base, BUNDLED_SEARCH_ENTRY, BUNDLED_SEARCH_DEPS),
             (base / "engine", BUNDLED_SEARCH_ENTRY, BUNDLED_SEARCH_DEPS),
-            (base / "src/managed_ai", _COMPAT_SEARCH_ENTRY, _COMPAT_SEARCH_DEPS),
-            (base, _COMPAT_SEARCH_ENTRY, _COMPAT_SEARCH_DEPS),
-            (base / "engine", _COMPAT_SEARCH_ENTRY, _COMPAT_SEARCH_DEPS),
-            (base / "engine", _LEGACY_SEARCH_ENTRY, _LEGACY_SEARCH_DEPS),
         )
 
     for root, entry_rel, dep_rels in candidates:

@@ -8,13 +8,13 @@ from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC_ROOT = REPO_ROOT / 'src'
-WORKBENCH_CORE = SRC_ROOT / 'managed_ai/companions/workbench/core'
+WORKBENCH_DIR = SRC_ROOT / 'managed_ai/companions/workbench'
 for _p in (str(SRC_ROOT), str(REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from managed_ai.companions.workbench.core import durable_agent, inspect_config, resumable_workbench
-from managed_ai.companions.workbench.core.source_tools import SearchImplementation
+from managed_ai.companions.workbench import durable_agent, inspect_config, resumable_workbench
+from managed_ai.companions.workbench.source_tools import SearchImplementation
 from tests.companions.workbench_fixtures import change_query_parser, search_layout
 
 
@@ -162,7 +162,7 @@ class SourceReplay(unittest.TestCase):
             "import sys, time",
             "from pathlib import Path",
             "sys.path.insert(0, sys.argv[1])",
-            "from managed_ai.companions.workbench.core import durable_agent",
+            "from managed_ai.companions.workbench import durable_agent",
             "with durable_agent._lock(Path(sys.argv[2])):",
             "    Path(sys.argv[3]).write_text('ready', encoding='utf-8')",
             "    deadline = time.monotonic() + 15",

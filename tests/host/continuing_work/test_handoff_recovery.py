@@ -22,8 +22,8 @@ ENGINE = (
     else REPO_ROOT / 'engine/runtime/manage_store.py'
 )
 COLLECT_RETURNS = (
-    ENGINE_ROOT / 'core/cli/collect_returns.py'
-    if (ENGINE_ROOT / 'core/cli/collect_returns.py').is_file()
+    ENGINE_ROOT / 'core/exchange/transport/collector.py'
+    if (ENGINE_ROOT / 'core/exchange/transport/collector.py').is_file()
     else ENGINE.with_name('collect_returns.py')
 )
 # Drop a successful native reply before the host can log it or update its scope.

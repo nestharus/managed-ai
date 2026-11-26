@@ -1,4 +1,4 @@
-"""Wave 7 architecture guards and regression tests for host, companions, and optional."""
+"""Wave 7/8 architecture guards and regression tests for host, companions, and collective."""
 from __future__ import annotations
 
 import ast
@@ -24,7 +24,7 @@ if str(SRC_ROOT) not in sys.path:
 OWNED_PACKAGE_ROOTS = (
     SRC_ROOT / "managed_ai/host",
     SRC_ROOT / "managed_ai/companions",
-    SRC_ROOT / "managed_ai/optional",
+    SRC_ROOT / "managed_ai/collective",
 )
 
 FORBIDDEN_OS_MODULES = frozenset({"fcntl", "msvcrt", "ctypes", "resource"})
@@ -387,7 +387,7 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
             self.assertEqual(len(snap["sources"]), 1)
 
     def test_p7_7_search_cache_canonical_ledger_and_source_service_del(self) -> None:
-        from managed_ai.companions.workbench.core import source_tools
+        from managed_ai.companions.workbench import source_tools
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -503,10 +503,10 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
                 store_io.safe_relative(f"dir/{bad}")
 
     def test_qa7_3_and_qa7_8_cli_clean_errors_and_roots_validation(self) -> None:
-        from managed_ai.companions.workbench.core import workbench_agent
+        from managed_ai.collective import record_evidence, run_study
+        from managed_ai.companions.workbench import workbench_agent
         from managed_ai.host.continuing_work import continuing_work
         from managed_ai.host.material_retention import managed_material as mm
-        from managed_ai.optional.collective import record_evidence, run_study
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -583,8 +583,9 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
 
         scripts = (
             SRC_ROOT / "managed_ai/host/material_retention/managed_material.py",
-            SRC_ROOT / "managed_ai/companions/workbench/core/workbench_agent.py",
-            SRC_ROOT / "managed_ai/companions/workbench/core/durable_agent.py",
+            SRC_ROOT / "managed_ai/companions/workbench/workbench_agent.py",
+            SRC_ROOT / "managed_ai/companions/workbench/durable_agent.py",
+            SRC_ROOT / "managed_ai/collective/__main__.py",
         )
         clean_env = {k: v for k, v in dict(__import__("os").environ).items() if k != "PYTHONPATH"}
         clean_env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -682,6 +683,62 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
                 rc = check_representation.main(["--engine", str(not_an_engine)])
             self.assertEqual(rc, 2)
             self.assertNotIn("Traceback", err.getvalue())
+
+    def test_wave8_layout_cleanup_and_declarative_routers(self) -> None:
+        from managed_ai.collective.store import cli as collective_cli
+        from managed_ai.host.continuing_work import capture_native, native_bridge
+
+        self.assertFalse((SRC_ROOT / "managed_ai/optional").exists())
+        self.assertFalse((REPO_ROOT / "tests/optional").exists())
+        self.assertFalse((SRC_ROOT / "managed_ai/companions/workbench/core").exists())
+        self.assertFalse((SRC_ROOT / "managed_ai/companions/workbench/controller").exists())
+        self.assertTrue((SRC_ROOT / "managed_ai/companions/workbench/configs").is_dir())
+        self.assertFalse((SRC_ROOT / "managed_ai/collective/collective.py").exists())
+        self.assertFalse((SRC_ROOT / "managed_ai/collective/manage_collective.py").exists())
+        self.assertTrue((SRC_ROOT / "managed_ai/collective/__main__.py").is_file())
+        self.assertTrue((SRC_ROOT / "managed_ai/collective/store/cli.py").is_file())
+
+        expected_ops = {
+            "init",
+            "upgrade",
+            "call",
+            "show",
+            "context",
+            "proposal",
+            "receipt",
+            "notice",
+            "next-review",
+            "use-source",
+            "encounters",
+            "inbox",
+            "changes",
+        }
+        registered_ops = set(collective_cli._LIFECYCLE_HANDLERS) | set(collective_cli._STORE_HANDLERS)
+        self.assertEqual(registered_ops, expected_ops)
+
+        self.assertIn("collective", capture_native._CODE_ID_EXCLUDED_DIRS)
+        self.assertNotIn("optional", capture_native._CODE_ID_EXCLUDED_DIRS)
+
+        argv, env = native_bridge.build_sibling_cli_command(
+            SRC_ROOT / "managed_ai/store/manage_store.py",
+            "managed_ai.core.attention",
+            "core/attention.py",
+            "track_attention.py",
+            "--help",
+        )
+        self.assertEqual(argv[2:4], ["-m", "managed_ai.core.attention"])
+        self.assertIsNotNone(env)
+        self.assertEqual(Path(env["PYTHONPATH"]).resolve(), SRC_ROOT.resolve())
+
+        module_help = subprocess.run(
+            [sys.executable, "-B", "-m", "managed_ai.collective", "--help"],
+            capture_output=True,
+            text=True,
+            env={**dict(__import__("os").environ), "PYTHONPATH": str(SRC_ROOT), "PYTHONDONTWRITEBYTECODE": "1"},
+            check=False,
+        )
+        self.assertEqual(module_help.returncode, 0, module_help.stderr)
+        self.assertIn("usage:", module_help.stdout.lower())
 
 
 if __name__ == "__main__":

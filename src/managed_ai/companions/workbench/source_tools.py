@@ -43,8 +43,6 @@ _LEDGER_CATEGORIES = ("inventories", "selections", "sources", "uses")
 _SCHEMA_VALUE_BYTES = json.dumps(VERSION, ensure_ascii=False, allow_nan=False).encode("utf-8")
 
 _RUNTIME_ENTRY = Path("library/lexical.py")
-_COMPAT_RUNTIME_ENTRY = Path("library/reader/knowledge.py")
-_LEGACY_RUNTIME_ENTRY = Path("runtime/source_library/knowledge.py")
 _MAX_SEARCH_FILES = 8
 _MAX_SEARCH_FILE_BYTES = 256 * 1024
 
@@ -92,10 +90,6 @@ def _default_runtime_entry(base_root: Path | str) -> Path:
         base / _RUNTIME_ENTRY,
         base / "src/managed_ai" / _RUNTIME_ENTRY,
         base / "engine" / _RUNTIME_ENTRY,
-        base / _COMPAT_RUNTIME_ENTRY,
-        base / "src/managed_ai" / _COMPAT_RUNTIME_ENTRY,
-        base / "engine" / _COMPAT_RUNTIME_ENTRY,
-        base / "engine" / _LEGACY_RUNTIME_ENTRY,
     )
     for candidate in candidates:
         if candidate.exists() or candidate.is_symlink():
@@ -131,12 +125,7 @@ def _search_bytes(path: Path | str) -> bytes:
 
 def _library_root_for(entry: Path) -> Path:
     """Determine the bounded root directory for verified library relative imports."""
-    parent = entry.parent
-    if parent.name in {"reader", "search", "bundles"} and (
-        (parent.parent / "lexical.py").is_file() or (parent.parent / "search").is_dir()
-    ):
-        return parent.parent
-    return parent
+    return entry.parent
 
 
 def _matches_cached_pins(implementation: SearchImplementation) -> bool:
@@ -183,7 +172,7 @@ class SearchImplementation:
     """Select and execute one bounded snapshot of the trusted lexical code."""
 
     def __init__(self, module_path: Path | str | None = None) -> None:
-        repo_root = Path(__file__).resolve().parents[3]
+        repo_root = Path(__file__).resolve().parents[2]
         self.runtime_entry = _default_runtime_entry(repo_root)
         if module_path is None:
             module_path = self.runtime_entry
@@ -215,7 +204,7 @@ class SearchImplementation:
     @classmethod
     def cached(cls, module_path: Path | str | None = None) -> SearchImplementation:
         """Return a digest-verified cached SearchImplementation, recompiling immediately on any drift."""
-        repo_root = Path(__file__).resolve().parents[3]
+        repo_root = Path(__file__).resolve().parents[2]
         resolved_entry = Path(os.path.abspath(module_path or _default_runtime_entry(repo_root)))
         cache_key = str(resolved_entry)
 

@@ -11,11 +11,11 @@ import sys
 from typing import Any
 
 if __package__ in (None, ""):
-    _src_root = str(Path(__file__).resolve().parents[3])
+    _src_root = str(Path(__file__).resolve().parents[2])
     if _src_root not in sys.path:
         sys.path.insert(0, _src_root)
 
-from managed_ai.optional.collective.collective import Collective, PRODUCT
+from managed_ai.collective import Collective, PRODUCT
 from managed_ai.platform import check_unfollowed_ancestors, is_reparse_or_symlink
 
 COUNT = 12

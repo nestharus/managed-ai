@@ -49,13 +49,13 @@ COMPANIONS_ROOT = HERE.parent
 COUNT_KEYS = ("model_calls", "tool_calls", "peer_read_calls", "peer_read_bytes")
 CONTRACT_FILES = ("docs/PEER-CONTRACT.md",)
 _COMPONENT_ROLES = (
-    ("io_utils", "core"),
-    ("config", "core"),
-    ("model_bridges", "core"),
-    ("source_tools", "core"),
-    ("evidence_support", "controller"),
-    ("agent_runtime", "controller"),
-    ("workbench_agent", "core"),
+    "io_utils",
+    "config",
+    "model_bridges",
+    "source_tools",
+    "evidence_support",
+    "agent_runtime",
+    "workbench_agent",
 )
 _MODULES: tuple[tuple[Path, str], dict[str, ModuleType]] | None = None
 
@@ -85,7 +85,7 @@ def _verify_component_manifest() -> tuple[dict[str, Path], dict[str, Any]]:
         "Invalid peer component manifest",
     )
 
-    role_names = {name for name, _ in _COMPONENT_ROLES}
+    role_names = set(_COMPONENT_ROLES)
     aliases: dict[str, Path] = {}
     measured_files: dict[str, dict[str, Any]] = {}
 
@@ -108,31 +108,25 @@ def _verify_component_manifest() -> tuple[dict[str, Path], dict[str, Any]]:
             need(role not in aliases and path.suffix == ".py", "Ambiguous peer component: " + role)
             aliases[role] = path
 
-    missing = [name for name, _ in _COMPONENT_ROLES if name not in aliases]
+    missing = [name for name in _COMPONENT_ROLES if name not in aliases]
     need(not missing, "Missing peer component: " + ", ".join(missing))
     return aliases, {**manifest, "files": measured_files}
 
 
 def _load_component_namespace(aliases: dict[str, Path]) -> dict[str, ModuleType]:
     pkg_root = "_g60_peer_" + digest(str(COMPANIONS_ROOT).encode("utf-8"))[:16]
-    subpackages = {
-        pkg_root: COMPANIONS_ROOT / "workbench",
-        pkg_root + ".core": COMPANIONS_ROOT / "workbench/core",
-        pkg_root + ".controller": COMPANIONS_ROOT / "workbench/controller",
-    }
-    created = list(subpackages) + [f"{pkg_root}.{sub}.{name}" for name, sub in _COMPONENT_ROLES]
+    created = [pkg_root, *(f"{pkg_root}.{name}" for name in _COMPONENT_ROLES)]
     prior = {key: sys.modules.get(key) for key in created}
     loaded: dict[str, ModuleType] = {}
 
     try:
-        for pkg_name, pkg_dir in subpackages.items():
-            pkg = ModuleType(pkg_name)
-            pkg.__path__ = [str(pkg_dir)]
-            pkg.__package__ = pkg_name
-            sys.modules[pkg_name] = pkg
+        pkg = ModuleType(pkg_root)
+        pkg.__path__ = [str(COMPANIONS_ROOT / "workbench")]
+        pkg.__package__ = pkg_root
+        sys.modules[pkg_root] = pkg
 
-        for name, sub in _COMPONENT_ROLES:
-            mod_name = f"{pkg_root}.{sub}.{name}"
+        for name in _COMPONENT_ROLES:
+            mod_name = f"{pkg_root}.{name}"
             spec = importlib.util.spec_from_file_location(mod_name, aliases[name])
             module = importlib.util.module_from_spec(spec)
             sys.modules[mod_name] = module

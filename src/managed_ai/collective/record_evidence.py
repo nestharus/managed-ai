@@ -59,7 +59,7 @@ def _loads_strict(raw: bytes | bytearray | str) -> Any:
 
 def native(db: Path | str, *args: Any) -> Any:
     result = subprocess.run(
-        [sys.executable, "-B", str(HERE / "manage_collective.py"), "--db", str(db), *map(str, args)],
+        [sys.executable, "-B", str(HERE / "__main__.py"), "--db", str(db), *map(str, args)],
         capture_output=True,
         text=True,
         encoding="utf-8",

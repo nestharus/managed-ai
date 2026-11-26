@@ -11,10 +11,10 @@ import time
 from typing import Any
 
 if __name__ == "__main__" and not __package__:
-    _src_root = str(Path(__file__).resolve().parents[4])
+    _src_root = str(Path(__file__).resolve().parents[3])
     if _src_root not in sys.path:
         sys.path.insert(0, _src_root)
-    __package__ = "managed_ai.companions.workbench.core"
+    __package__ = "managed_ai.companions.workbench"
     __import__(__package__)
 
 from .config import DEFAULT_CONTROLLER_DIR, build_model_transport, is_clean_relative_posix, load_controller

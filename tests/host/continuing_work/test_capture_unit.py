@@ -38,12 +38,12 @@ class Wave4HostArchitectureTests(unittest.TestCase):
             )
             excluded = (
                 'store/test_ignored.py',
-                'library/reader/knowledge.py',
+                'library/lexical.py',
                 'tools/collect_returns.py',
                 'host/continuing_work/continuing_work.py',
                 'release/__init__.py',
                 'companions/peer/peer_harness.py',
-                'optional/collective/collective.py',
+                'collective/store/__init__.py',
             )
             for rel in included + excluded:
                 path = engine / rel
@@ -54,7 +54,7 @@ class Wave4HostArchitectureTests(unittest.TestCase):
             self.assertEqual(native_path, (engine / 'store/system.py').resolve())
             self.assertEqual(set(programs), set(included))
             self.assertFalse(any(
-                k.startswith(('library/', 'tools/', 'host/', 'release/', 'companions/', 'optional/'))
+                k.startswith(('library/', 'tools/', 'host/', 'release/', 'companions/', 'collective/'))
                 for k in programs
             ))
             self.assertNotIn('store/test_ignored.py', programs)
