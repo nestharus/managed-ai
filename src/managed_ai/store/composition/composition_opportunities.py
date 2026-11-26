@@ -6,11 +6,11 @@ record. The caller supplies only a generation pin. No domain rule is inferred.
 from contextlib import contextmanager
 from pathlib import Path
 
-from core.formats import OPPORTUNITY_INVENTORY_FORMAT
-from core.ownership import NativeLayout
-from core.storage import MAX_BYTES, admission_deadline, is_ordinary_file_stat, owner_admission, sha, shared
-from store.protocol.identities import digest, exact_fields, identity, nonempty, record_identity, require, strict_json
-from store.query.context_discovery import canonical
+from managed_ai.core.formats import OPPORTUNITY_INVENTORY_FORMAT
+from managed_ai.core.ownership import NativeLayout
+from managed_ai.core.storage import MAX_BYTES, admission_deadline, is_ordinary_file_stat, owner_admission, sha, shared
+from managed_ai.store.protocol.identities import digest, exact_fields, identity, nonempty, record_identity, require, strict_json
+from managed_ai.store.query.context_discovery import canonical
 
 
 WIDTH = 'maximal-contained-groups'

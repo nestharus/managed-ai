@@ -12,21 +12,21 @@ import posixpath
 import stat
 from typing import Any
 
-from core.exchange.carrier_receipts import transport_outcome
-from core.exchange.publication_receipts import (
+from managed_ai.core.exchange.carrier_receipts import transport_outcome
+from managed_ai.core.exchange.publication_receipts import (
     publication_inventory,
     publication_matches,
     publication_name,
     validate_publication_record,
 )
-from core.formats import (
+from managed_ai.core.formats import (
     TURN_RETIRE_PLAN_FORMAT as PLAN_FORMAT,
     TURN_RETIRE_RECEIPT_FORMAT as RECEIPT_FORMAT,
     TURN_SELECTION_FORMAT,
     validate_optional_format,
 )
-from core.ownership import packet_id
-from core.storage import (
+from managed_ai.core.ownership import packet_id
+from managed_ai.core.storage import (
     MAX_BYTES,
     encode,
     is_ordinary_dir_stat,
@@ -39,9 +39,9 @@ from core.storage import (
     sync_dir,
     write_json,
 )
-from store.protocol.identities import digest, exact_fields, nonempty, require, strict_json
-from store.turns.preparation_journal import feedback_id
-from store.turns.turn_retirement_scan import (
+from managed_ai.store.protocol.identities import digest, exact_fields, nonempty, require, strict_json
+from managed_ai.store.turns.preparation_journal import feedback_id
+from managed_ai.store.turns.turn_retirement_scan import (
     _collect_attention_references,
     _collect_cross_packet_references,
     _collect_interpretation_references,

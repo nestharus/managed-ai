@@ -1,9 +1,9 @@
 """Issue or recover contact openings under the native owner lock."""
-from core.ownership import packet_id, relative_path
-from core.storage import read_bytes
-from store.governance.feedback import Feedback, KIND
-from store.protocol.identities import exact_fields, identity, nonempty, record_identity, require
-from store.protocol.inputs import strings
+from managed_ai.core.ownership import packet_id, relative_path
+from managed_ai.core.storage import read_bytes
+from managed_ai.store.governance.feedback import Feedback, KIND
+from managed_ai.store.protocol.identities import exact_fields, identity, nonempty, record_identity, require
+from managed_ai.store.protocol.inputs import strings
 
 
 class InquiryConflict(ValueError):

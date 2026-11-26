@@ -1,13 +1,13 @@
-"""Curated public store & deployment API for domain plugins (domains/*/operations/**).
+"""Curated public store & deployment API for domain plugins (standalone domain repositories).
 
 Domain operations must import runtime primitives exclusively through this module
 rather than reaching into private core.* or store.* internals.
 """
 from __future__ import annotations
 
-from core.formats import HEAD_INDEX_FORMAT
-from core.ownership import NativeLayout, external_root, packet_id, relative_path
-from core.storage import (
+from managed_ai.core.formats import HEAD_INDEX_FORMAT
+from managed_ai.core.ownership import NativeLayout, external_root, packet_id, relative_path
+from managed_ai.core.storage import (
     AdmissionContended,
     MAX_BYTES,
     ObjectStore,
@@ -24,7 +24,7 @@ from core.storage import (
     shared,
     strict_json_loads,
 )
-from deployment.controller import (
+from managed_ai.deployment.controller import (
     Deployment,
     DeploymentSelection,
     code_identity,
@@ -33,11 +33,11 @@ from deployment.controller import (
     report_admission,
     runtime_binding,
 )
-from store.composition.composition import Composition
-from store.composition.composition_opportunities import routes
-from store.composition.composition_revision import revise
-from store.governance.feedback import Feedback
-from store.protocol.identities import (
+from managed_ai.store.composition.composition import Composition
+from managed_ai.store.composition.composition_opportunities import routes
+from managed_ai.store.composition.composition_revision import revise
+from managed_ai.store.governance.feedback import Feedback
+from managed_ai.store.protocol.identities import (
     digest,
     exact_fields,
     identity,
@@ -46,16 +46,16 @@ from store.protocol.identities import (
     require,
     strict_json,
 )
-from store.protocol.inputs import strings
-from store.query.context_discovery import Discovery as ContextDiscovery, canonical, request as discovery_request
-from store.query.information import Information, pointer
-from store.records.record_import import import_records, read_receipt
-from store.records.record_transfer import inspect as inspect_transfer
-from store.records.records import RecordStore
-from store.selection.domain_selection import DomainSelection, source_path
-from store.selection.installed_catalogue import InstalledCatalogue
-from store.system import NativeError, System
-from store.turns.preparation_journal import TurnPreparation
+from managed_ai.store.protocol.inputs import strings
+from managed_ai.store.query.context_discovery import Discovery as ContextDiscovery, canonical, request as discovery_request
+from managed_ai.store.query.information import Information, pointer
+from managed_ai.store.records.record_import import import_records, read_receipt
+from managed_ai.store.records.record_transfer import inspect as inspect_transfer
+from managed_ai.store.records.records import RecordStore
+from managed_ai.store.selection.domain_selection import DomainSelection, source_path
+from managed_ai.store.selection.installed_catalogue import InstalledCatalogue
+from managed_ai.store.system import NativeError, System
+from managed_ai.store.turns.preparation_journal import TurnPreparation
 
 __all__ = [
     'AdmissionContended',

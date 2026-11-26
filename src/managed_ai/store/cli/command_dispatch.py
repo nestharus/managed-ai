@@ -6,9 +6,9 @@ import math
 from pathlib import Path
 import sys
 
-from store.governance.feedback import Feedback
-from store.protocol.inputs import read, strings, text
-from store.query.information import Information
+from managed_ai.store.governance.feedback import Feedback
+from managed_ai.store.protocol.inputs import read, strings, text
+from managed_ai.store.query.information import Information
 
 
 def emit(result, args):
@@ -54,17 +54,17 @@ def _compose(system, args):
     if args.interaction_map:
         if any(x is not None for x in (args.boundary, args.changed_since, args.repo, args.focus)) or args.pair_limit != 200:
             raise ValueError('interaction map takes --record and optional --limit')
-        from store.composition.composition import Composition
+        from managed_ai.store.composition.composition import Composition
         return Composition(system).interaction_map(args.record, args.limit)
     if args.boundary is not None:
         if args.changed_since is not None or args.repo is not None or args.focus is not None or args.pair_limit != 200:
             raise ValueError('boundary inspection takes --record, --boundary and optional --limit')
-        from store.composition.composition_boundary import inspect_boundary
+        from managed_ai.store.composition.composition_boundary import inspect_boundary
         return inspect_boundary(system, args.record, args.boundary, args.limit)
     if args.changed_since is not None or args.repo is not None:
         if not args.changed_since or args.repo is None or args.focus or args.pair_limit != 200:
             raise ValueError('change notice requires --changed-since BASE and --repo CHECKOUT; use --limit for detail')
-        from store.composition.composition_change_notice import notice
+        from managed_ai.store.composition.composition_change_notice import notice
         return notice(system, args.record, args.repo, args.changed_since, args.limit)
     return system.compose(args.record, args.focus, args.limit, args.pair_limit)
 
@@ -132,7 +132,7 @@ def _discover_request(args) -> dict:
 
 
 def _act_transfer(system, args):
-    from store.records import record_transfer
+    from managed_ai.store.records import record_transfer
     if args.transfer_action == 'inspect':
         return record_transfer.inspect(system, args.id)
     if args.transfer_action == 'export':
@@ -141,7 +141,7 @@ def _act_transfer(system, args):
 
 
 def _act_dedup(system, args):
-    from store.records import object_audit
+    from managed_ai.store.records import object_audit
     if args.dedup_action == 'plan':
         return object_audit.plan_deduplicate_originals(system, prefix=args.prefix)
     return object_audit.execute_deduplicate_originals(
@@ -149,7 +149,7 @@ def _act_dedup(system, args):
 
 
 def _act_compact(system, args):
-    from store.records import object_audit
+    from managed_ai.store.records import object_audit
     if args.compact_action == 'plan':
         return object_audit.plan_compact_objects(system, min_savings_bytes=args.min_savings_bytes)
     return object_audit.execute_compact_objects(
@@ -157,7 +157,7 @@ def _act_compact(system, args):
 
 
 def _act_archive(system, args):
-    from store.records import cold_archive
+    from managed_ai.store.records import cold_archive
     if args.archive_action == 'plan':
         return cold_archive.plan_archive_records(system, ids=args.ids, kinds=args.kinds)
     if args.archive_action == 'restore':
@@ -167,7 +167,7 @@ def _act_archive(system, args):
 
 
 def _act_graph(system, args):
-    from store.query import graph_query
+    from managed_ai.store.query import graph_query
     if args.graph_action == 'neighbors':
         return graph_query.neighbors(
             system, args.id, direction=args.direction, hops=args.hops,
@@ -200,8 +200,8 @@ def _act_run(system, args):
     if args.proposal and args.wait == 0:
         raise ValueError('run --proposal requires a positive --wait')
     producer = text(args.producer, 'positive run --wait producer') if args.wait > 0 else None
-    from core.storage import strict_json_loads
-    from store.protocol.inputs import _open_ordinary_bytes
+    from managed_ai.core.storage import strict_json_loads
+    from managed_ai.store.protocol.inputs import _open_ordinary_bytes
     argv = strict_json_loads(_open_ordinary_bytes(args.argv_json, 'JSON'), args.argv_json, require_object=False)
     if args.wait > 0:
         result = system.run(args.turn, argv, proposals=args.proposal, producer=producer, wait=args.wait)
@@ -211,7 +211,7 @@ def _act_run(system, args):
 
 
 def _act_inquiry(system, args):
-    from store.governance.inquiry import Inquiry
+    from managed_ai.store.governance.inquiry import Inquiry
     inquiry = Inquiry(system)
     if args.inquiry_action == 'stages':
         return {'stages': inquiry.stages(args.id)}
@@ -236,27 +236,27 @@ def _act_info(system, args):
 
 
 def _act_import(system, args):
-    from store.records import record_import
+    from managed_ai.store.records import record_import
     return record_import.import_records(system, read(args.spec))
 
 
 def _act_put_batch(system, args):
-    from store.records import record_batch
+    from managed_ai.store.records import record_batch
     return record_batch.put_batch(system, read(args.spec))
 
 
 def _act_configure(system, args):
-    from store.selection import store_configuration
+    from managed_ai.store.selection import store_configuration
     return store_configuration.configure(system, read(args.spec))
 
 
 def _act_audit_objects(system, _args):
-    from store.records import object_audit
+    from managed_ai.store.records import object_audit
     return object_audit.audit_objects(system)
 
 
 def _act_gc_objects(system, args):
-    from store.records import object_audit
+    from managed_ai.store.records import object_audit
     return object_audit.gc_objects(
         system, plan=read(args.plan), expected_plan=args.expected_plan, reason=args.reason)
 
@@ -325,8 +325,8 @@ _ACTION_HANDLERS = {
 def act(system, args, *, proof_store_locked: bool = False):
     action = args.action
     if action == 'recompose':
-        from store.composition.composition_revision import revise
-        from store.protocol.inputs import read_input
+        from managed_ai.store.composition.composition_revision import revise
+        from managed_ai.store.protocol.inputs import read_input
         proposal, _ = read_input(args.request, byte_limit=4 * 1024 * 1024)
         return revise(system, proposal, accept=args.accept, retain=args.retain, reason=args.reason,
                       proof_store=getattr(args, 'proof_store', None),

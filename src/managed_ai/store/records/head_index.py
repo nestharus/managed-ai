@@ -7,13 +7,13 @@ import os
 from pathlib import Path
 import re
 
-from core.storage import atomic_bytes, has_ordinary_file, is_ordinary_file_stat, sha, sync_dir
-from core.formats import (
+from managed_ai.core.storage import atomic_bytes, has_ordinary_file, is_ordinary_file_stat, sha, sync_dir
+from managed_ai.core.formats import (
     HEAD_INDEX_FORMAT as INDEX_FORMAT,
     HEAD_INDEX_FORMAT_V1 as INDEX_FORMAT_V1,
     HEAD_INDEX_SUPPORTED_FORMATS,
 )
-from store.protocol.inputs import parse_input_bytes
+from managed_ai.store.protocol.inputs import parse_input_bytes
 
 INDEX_DOMAIN = b'g60/verified-head-index/1\0'
 DELTA_DOMAIN = b'g60/verified-head-index-delta/1\0'

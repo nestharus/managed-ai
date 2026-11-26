@@ -8,10 +8,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[3] / 'engine'
-sys.path.insert(0, str(ROOT))
-from core.exchange import publication as module
-from core.exchange import Exchange
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from tests._paths import ENGINE as ROOT, SRC
+from managed_ai.core.exchange import publication as module
+from managed_ai.core.exchange import Exchange
 
 
 class InspectionTests(unittest.TestCase):

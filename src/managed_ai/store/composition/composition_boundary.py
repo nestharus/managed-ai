@@ -2,13 +2,13 @@
 import hashlib
 import json
 
-from core.storage import is_ordinary_file_stat
-from store.query.information import CONTRACT_KIND
-from store.protocol.identities import exact_fields, identity, record_identity, require, strict_json
-from store.composition.composition import Composition, MAX_PROFILE_BYTES, MAX_VIEW_BYTES, _integer, _strings, _text
+from managed_ai.core.storage import is_ordinary_file_stat
+from managed_ai.store.query.information import CONTRACT_KIND
+from managed_ai.store.protocol.identities import exact_fields, identity, record_identity, require, strict_json
+from managed_ai.store.composition.composition import Composition, MAX_PROFILE_BYTES, MAX_VIEW_BYTES, _integer, _strings, _text
 
 
-from core.formats import (
+from managed_ai.core.formats import (
     BOUNDARY_CONTRACT_FORMAT,
     BOUNDARY_OBSERVATIONS_V1 as TRIAL_V1,
     BOUNDARY_OBSERVATIONS_V2 as TRIAL_V2,

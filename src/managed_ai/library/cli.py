@@ -6,6 +6,8 @@ Explicit top-level --library requests use the maintained complete-library reader
 from __future__ import annotations
 
 import argparse
+from importlib.machinery import ModuleSpec
+import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -14,8 +16,23 @@ sys.dont_write_bytecode = True
 
 HERE = Path(__file__).resolve().parent
 ENGINE = HERE.parent
-if str(ENGINE) not in sys.path:
-    sys.path.insert(0, str(ENGINE))
+if ENGINE.name == 'managed_ai' and (ENGINE / '__init__.py').is_file():
+    _SRC = str(ENGINE.parent)
+    if _SRC not in sys.path:
+        sys.path.insert(0, _SRC)
+elif 'managed_ai' not in sys.modules:
+    _init = ENGINE / '__init__.py'
+    if _init.is_file():
+        _spec = importlib.util.spec_from_file_location(
+            'managed_ai', str(_init), submodule_search_locations=[str(ENGINE)],
+        )
+    else:
+        _spec = ModuleSpec('managed_ai', None, is_package=True)
+        _spec.submodule_search_locations = [str(ENGINE)]
+    _mod = importlib.util.module_from_spec(_spec)
+    sys.modules['managed_ai'] = _mod
+    if _spec.loader is not None:
+        _spec.loader.exec_module(_mod)
 
 _SUBCOMMANDS = frozenset({
     'verify', 'show', 'discover', 'modules', 'prepare-index',
@@ -98,7 +115,7 @@ def _execute_catalogue_action(catalogue, args):
 def main(argv: list[str] | None = None):
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     if _is_top_level_library_invocation(raw_argv):
-        from library.reader import knowledge
+        from managed_ai.library.reader import knowledge
         saved = sys.argv
         try:
             sys.argv = [sys.argv[0], *raw_argv]
@@ -107,9 +124,9 @@ def main(argv: list[str] | None = None):
             sys.argv = saved
         return
 
-    from core.ownership import NativeLayout, external_root
-    from core.storage import AdmissionContended, admission_deadline, owner_admission, shared
-    from store.selection.installed_catalogue import InstalledCatalogue
+    from managed_ai.core.ownership import NativeLayout, external_root
+    from managed_ai.core.storage import AdmissionContended, admission_deadline, owner_admission, shared
+    from managed_ai.store.selection.installed_catalogue import InstalledCatalogue
 
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--store', type=Path)
@@ -129,7 +146,7 @@ def main(argv: list[str] | None = None):
     args = parser.parse_args(_normalize_query_arg(raw_argv))
 
     if args.store:
-        from store.system import System
+        from managed_ai.store.system import System
         root = external_root(args.store)
         lock_path = external_root(NativeLayout(root).exchange) / 'owner.lock'
         try:

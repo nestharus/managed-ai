@@ -61,9 +61,9 @@ class SystemChecks(unittest.TestCase):
                                    [target + '=' + str(proposal)])
 
     def test_recomposition_rejects_different_basis_captured_by_put(self):
-        from store.composition.composition import Composition
-        from store.composition.composition_revision import revise
-        from store.protocol.identities import record_identity
+        from managed_ai.store.composition.composition import Composition
+        from managed_ai.store.composition.composition_revision import revise
+        from managed_ai.store.protocol.identities import record_identity
 
         source = self.write('sources/contract', 'Both obligations apply.')
         profile = {'format': 'g60-composition/1', 'purpose': 'Check an allocation.'}
@@ -93,8 +93,8 @@ class SystemChecks(unittest.TestCase):
         self.assertEqual(accepted['head']['revision'], 2)
 
     def test_selected_receiver_reuses_one_guarded_read_and_pays_both_charges(self):
-        from store.composition.composition_revision import revise
-        from store.protocol.identities import record_identity
+        from managed_ai.store.composition.composition_revision import revise
+        from managed_ai.store.protocol.identities import record_identity
 
         store = self.system.record_store
         target = self.system.put(dict(id='plan', kind='note', content=dict(
@@ -120,9 +120,9 @@ class SystemChecks(unittest.TestCase):
             revise(self.system, q, accept=review['review_sha256'], reason='Use the checked goal.')
 
     def test_delayed_consumer_uses_only_a_verified_selected_capture(self):
-        from store.composition.composition_revision import revise
-        from store.protocol.identities import record_identity
-        from store.records import record_transfer
+        from managed_ai.store.composition.composition_revision import revise
+        from managed_ai.store.protocol.identities import record_identity
+        from managed_ai.store.records import record_transfer
 
         store = self.system.record_store
         def put(ident, content, rev=0, basis=()):
@@ -224,8 +224,8 @@ class SystemChecks(unittest.TestCase):
         self.assertEqual(binding(q), found)
 
     def test_recomposition_locates_consumers_by_edition_and_typed_row(self):
-        from store.composition.composition_revision import revise
-        from store.protocol.identities import record_identity
+        from managed_ai.store.composition.composition_revision import revise
+        from managed_ai.store.protocol.identities import record_identity
 
         def put(name, content, revision=0):
             self.system.put(dict(id=name, kind='note', content=content), revision)
@@ -264,7 +264,7 @@ class SystemChecks(unittest.TestCase):
             revise(self.system, dict(q, bounds=dict(q['bounds'], scan_limit=3)))
         with self.assertRaisesRegex(ValueError, 'byte bound'):
             revise(self.system, dict(q, bounds=dict(q['bounds'], max_bytes=self.system.record_store.size('goal') + 1)))
-        with patch('store.composition.composition_revision.MAX_VIEW_BYTES', 128):
+        with patch('managed_ai.store.composition.composition_revision.MAX_VIEW_BYTES', 128):
             with self.assertRaisesRegex(ValueError, 'view byte bound'):
                 revise(self.system, q)
         put('remarks', parent, 1)
@@ -278,8 +278,8 @@ class SystemChecks(unittest.TestCase):
         self.assertEqual(self.system.show('named')['revision'], 1)
 
     def test_recomposition_rechecks_external_original_at_reviewed_write(self):
-        from store.composition.composition_revision import revise
-        from store.protocol.identities import record_identity
+        from managed_ai.store.composition.composition_revision import revise
+        from managed_ai.store.protocol.identities import record_identity
 
         self.system.put(dict(id='plan', kind='note', content=dict(format='g60-composition/1', purpose='Read grant.')), 0)
         target = record_identity(self.system.show('plan'))

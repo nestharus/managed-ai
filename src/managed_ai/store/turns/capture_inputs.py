@@ -3,17 +3,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.ownership import packet_id, relative_path
-from core.storage import encode, write_json
-from store.composition.composition import Composition
-from store.query.context_discovery import Discovery
-from store.governance.feedback import Feedback
-from store.query.information import Information
-from store.protocol.inputs import (accounted_closure, artifact_target, fields, integer, strings,
+from managed_ai.core.ownership import packet_id, relative_path
+from managed_ai.core.storage import encode, write_json
+from managed_ai.store.composition.composition import Composition
+from managed_ai.store.query.context_discovery import Discovery
+from managed_ai.store.governance.feedback import Feedback
+from managed_ai.store.query.information import Information
+from managed_ai.store.protocol.inputs import (accounted_closure, artifact_target, fields, integer, strings,
                                    text, write_input)
-from store.records.records import is_content_addressed_basis
-from store.turns.record_scope import TurnScope, additional_basis
-from store.turns.preparation_journal import TurnPreparation, feedback_id
+from managed_ai.store.records.records import is_content_addressed_basis
+from managed_ai.store.turns.record_scope import TurnScope, additional_basis
+from managed_ai.store.turns.preparation_journal import TurnPreparation, feedback_id
 
 
 class TurnCapture:
@@ -177,7 +177,7 @@ class TurnCapture:
         return self._write_input(directory, 'discovery-summary.json', encode(summary))
 
     def _working_view(self, directory, turn, techniques, view):
-        from core.formats import TURN_EXPOSURE_FORMAT, TURN_VIEW_FORMAT
+        from managed_ai.core.formats import TURN_EXPOSURE_FORMAT, TURN_VIEW_FORMAT
         view_doc = dict(view, format=TURN_VIEW_FORMAT)
         encoded = encode(view_doc)
         full_view = self._write_input(directory, 'view.json', encoded)
@@ -312,7 +312,7 @@ class TurnCapture:
             path = relative_path(path)
             self._origin('artifacts', 'prior-proposal:' + prior + ':' + path,
                          kind='selected-retained-proposal', packet=prior, target=path)
-        from core.formats import INCLUSION_ORIGINS_FORMAT, TURN_SELECTION_FORMAT
+        from managed_ai.core.formats import INCLUSION_ORIGINS_FORMAT, TURN_SELECTION_FORMAT
         view['inclusion_origins'] = {
             'format': INCLUSION_ORIGINS_FORMAT,
             'units': [dict(role=role, path=path, reasons=reasons)

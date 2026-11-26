@@ -3,9 +3,9 @@
 The enclosing system holds its ordinary owner lock. Each mutation is one record
 replacement. The exchange retains superseded revisions and the bodies of pins.
 """
-from core.storage import now, sha, encode
-from core.ownership import packet_id
-from store.protocol.identities import (exact_fields, identity, nonempty, record_identity,
+from managed_ai.core.storage import now, sha, encode
+from managed_ai.core.ownership import packet_id
+from managed_ai.store.protocol.identities import (exact_fields, identity, nonempty, record_identity,
                                        require, strict_json)
 
 KIND = 'feedback-use'
@@ -189,7 +189,7 @@ class Feedback:
         require(isinstance(observed, str) and observed.strip(),
                 'feedback evidence content.observed must be nonempty text describing the returned result. '
                 'Keep structured output in content.details. Revise the evidence record and retry with its new pin. '
-                'See engine/store/README.md.')
+                'See docs/engine/store/README.md.')
         require(source['updated_at'] >= content['forecast_at'], 'observation predates the prospective forecast')
         route = spec['route']
         require(route in ('work', 'hold', 'progress', 'review'), 'unknown feedback route')

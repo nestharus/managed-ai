@@ -1,8 +1,8 @@
 """End-to-end regressions from the external system-integrity review."""
 if __package__:
-    from .native_test_paths import APP, ENGINE, PRODUCT
+    from .native_test_paths import APP, ENGINE, PRODUCT, REPO
 else:
-    from native_test_paths import APP, ENGINE, PRODUCT
+    from native_test_paths import APP, ENGINE, PRODUCT, REPO
 import hashlib
 import importlib.util
 import os
@@ -15,9 +15,9 @@ import unittest
 from unittest.mock import patch
 from zipfile import ZipFile
 
-from store import system
-from store.composition.composition import MAX_PROFILE_BYTES
-from core.storage import MAX_BYTES
+from managed_ai.store import system
+from managed_ai.store.composition.composition import MAX_PROFILE_BYTES
+from managed_ai.core.storage import MAX_BYTES
 
 PRODUCT = Path(system.__file__).resolve().parents[1]
 
@@ -36,7 +36,7 @@ class Integrity(unittest.TestCase):
         for ident, kind in [('note','note'), ('goal','goal'), ('field','note'),
                             ('frontier','note'), ('outstanding','obligation')]:
             for delta in (-1, 0, 1):
-                with self.subTest(ident=ident, delta=delta), patch('store.records.records.now', return_value='2026-11-06T00:00:00.123456+00:00'):
+                with self.subTest(ident=ident, delta=delta), patch('managed_ai.store.records.records.now', return_value='2026-11-06T00:00:00.123456+00:00'):
                     rec = {'id':ident, 'kind':kind, 'content':{'contribution':'Turn the panel.', 'detail':''}}
                     prev = self.s.show(ident)['revision'] if self.s.record_path(ident).exists() else 0
                     # A small native revision supplies the exact next-revision envelope.
@@ -102,9 +102,9 @@ class Integrity(unittest.TestCase):
             self.assertEqual(o,{'neg':'needs-qualification','alt':'available-under-declared-premises','blocked':'unavailable-under-declared-premises'})
 
     def test_f05_native_census_capture_verify_recover(self):
-        adapter = ENGINE.parent / 'patterns/continuing-state/support.py'
+        adapter = REPO / 'examples/continuing_state_support.py'
         if not adapter.is_file():
-            adapter = ENGINE / 'runtime/patterns/continuing-state/support.py'
+            adapter = ENGINE.parents[1] / 'examples/continuing_state_support.py'
         spec=importlib.util.spec_from_file_location('capture_native',adapter)
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         for ident,kind in [('_note','note'),('-ob','obligation'),('-ob-extra','obligation'),('_'+'a'*119,'note')]:
@@ -158,7 +158,8 @@ class Integrity(unittest.TestCase):
         with self.assertRaises(ValueError):self.s.abandon_context('east','Already installed.')
 
     def test_f07_placement_checks_effective_argv(self):
-        product=self.base/'product';product.mkdir()
+        product=self.base/'product'/'src'/'managed_ai';product.mkdir(parents=True)
+        shutil.copy2(PRODUCT/'__init__.py',product/'__init__.py')
         shutil.copytree(PRODUCT/'core',product/'core')
         shutil.copy2(PRODUCT/'CURRENT-RELEASE.json',product/'CURRENT-RELEASE.json')
         cli=product/'core'/'cli'/'collect_returns.py'

@@ -7,8 +7,8 @@ from pathlib import Path
 import stat
 import zlib
 
-from core.ownership import packet_id
-from core.storage import (
+from managed_ai.core.ownership import packet_id
+from managed_ai.core.storage import (
     _OPEN_RO_NOFOLLOW,
     atomic_bytes,
     encode,
@@ -19,24 +19,24 @@ from core.storage import (
     sync_dir,
     write_json,
 )
-from store.governance.feedback import KIND as FEEDBACK_KIND
-from core.formats import (
+from managed_ai.store.governance.feedback import KIND as FEEDBACK_KIND
+from managed_ai.core.formats import (
     ARCHIVE_PLAN_FORMAT as PLAN_FORMAT,
     ARCHIVE_RECEIPT_FORMAT as RECEIPT_FORMAT,
     COLD_ARCHIVE_MANIFEST_FORMAT as MANIFEST_FORMAT,
     COMPOSITION_FORMAT,
     RESTORE_RECEIPT_FORMAT,
 )
-from store.records.head_index import build_entry, extract_content_record_links
-from store.records.hot_refs import (
+from managed_ai.store.records.head_index import build_entry, extract_content_record_links
+from managed_ai.store.records.hot_refs import (
     extract_hot_record_id,
     scan_attention_refs,
     scan_interpretation_refs,
     scan_packet_refs,
     scan_uncommitted_turn_refs,
 )
-from store.protocol.identities import digest, exact_fields, require, strict_json
-from store.protocol.inputs import strings, text
+from managed_ai.store.protocol.identities import digest, exact_fields, require, strict_json
+from managed_ai.store.protocol.inputs import strings, text
 
 
 PROTECTED_IDS = frozenset({'goal'})

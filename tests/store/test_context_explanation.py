@@ -16,10 +16,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from store.composition.composition import Composition
-from deployment.controller import Deployment
-from store.turns.capture_inputs import TurnCapture
-from store.system import System
+from managed_ai.store.composition.composition import Composition
+from managed_ai.deployment.controller import Deployment
+from managed_ai.store.turns.capture_inputs import TurnCapture
+from managed_ai.store.system import System
 
 
 

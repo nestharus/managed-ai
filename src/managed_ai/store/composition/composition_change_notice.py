@@ -6,8 +6,8 @@ import subprocess
 import threading
 import time
 
-from core.formats import CHANGE_NOTICE_FORMAT
-from store.composition.composition import Composition, MAX_VIEW_BYTES, _integer
+from managed_ai.core.formats import CHANGE_NOTICE_FORMAT
+from managed_ai.store.composition.composition import Composition, MAX_VIEW_BYTES, _integer
 
 GIT_BYTES = 4 * 1024 * 1024
 GIT_SECONDS = 15

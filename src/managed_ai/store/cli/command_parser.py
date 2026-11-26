@@ -56,7 +56,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def _store_commands(sub):
-    from store.selection.store_configuration import REVIEWED_CONFIGURE
+    from managed_ai.store.selection.store_configuration import REVIEWED_CONFIGURE
 
     init = sub.add_parser('init', allow_abbrev=False)
     goal = init.add_mutually_exclusive_group(required=True)

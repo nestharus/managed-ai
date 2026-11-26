@@ -12,20 +12,20 @@ from pathlib import Path
 import posixpath
 from typing import Any, Callable
 
-from core.exchange.carrier_receipts import transport_outcome
-from core.exchange.publication_receipts import (
+from managed_ai.core.exchange.carrier_receipts import transport_outcome
+from managed_ai.core.exchange.publication_receipts import (
     publication_name,
     publication_inventory,
     publication_matches,
 )
-from core.storage import (
+from managed_ai.core.storage import (
     MAX_BYTES,
     is_ordinary_dir_stat,
     is_ordinary_file_stat,
     read_bytes,
     read_json,
 )
-from store.protocol.identities import require, strict_json
+from managed_ai.store.protocol.identities import require, strict_json
 
 
 def normalize_work_relpath(path_value: Any) -> str | None:

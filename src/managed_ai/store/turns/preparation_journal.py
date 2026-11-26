@@ -3,10 +3,10 @@ import os
 import shutil
 from pathlib import Path
 
-from core.attention import Attention
-from core.storage import now, read_json, sha, sync_dir, write_json
-from core.ownership import packet_id
-from core.formats import TURN_PREPARATION_FORMAT, validate_optional_format
+from managed_ai.core.attention import Attention
+from managed_ai.core.storage import now, read_json, sha, sync_dir, write_json
+from managed_ai.core.ownership import packet_id
+from managed_ai.core.formats import TURN_PREPARATION_FORMAT, validate_optional_format
 
 
 def feedback_id(turn):

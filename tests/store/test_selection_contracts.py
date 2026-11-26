@@ -8,13 +8,13 @@ if __package__:
 else:
     from native_test_paths import ENGINE
 
-from core.exchange import Exchange
-from core.storage import read_json, sha, write_json
-from deployment.controller import runtime_binding
-from store.selection.store_configuration import configure
-from store.selection.domain_selection import validate_payload
-from store.selection.installed_catalogue import InstalledCatalogue
-from store.system import System
+from managed_ai.core.exchange import Exchange
+from managed_ai.core.storage import read_json, sha, write_json
+from managed_ai.deployment.controller import runtime_binding
+from managed_ai.store.selection.store_configuration import configure
+from managed_ai.store.selection.domain_selection import validate_payload
+from managed_ai.store.selection.installed_catalogue import InstalledCatalogue
+from managed_ai.store.system import System
 
 
 class SelectionContracts(unittest.TestCase):

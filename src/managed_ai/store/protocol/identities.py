@@ -2,8 +2,8 @@
 import re
 from typing import Any
 
-from core._platform import strict_json_loads
-from core.ownership import packet_id
+from managed_ai.core._platform import strict_json_loads
+from managed_ai.core.ownership import packet_id
 
 
 def require(condition: bool, message: str):

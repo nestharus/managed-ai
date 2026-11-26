@@ -1,8 +1,8 @@
 """Admit dispatch and publication against the selected native owner's current state."""
-from core.ownership import packet_id
-from store.protocol.inputs import artifact_target
-from store.turns.preparation_journal import feedback_id
-from store.turns.record_scope import TurnScope, additional_basis, feedback_guard
+from managed_ai.core.ownership import packet_id
+from managed_ai.store.protocol.inputs import artifact_target
+from managed_ai.store.turns.preparation_journal import feedback_id
+from managed_ai.store.turns.record_scope import TurnScope, additional_basis, feedback_guard
 
 
 class NativeEffects:

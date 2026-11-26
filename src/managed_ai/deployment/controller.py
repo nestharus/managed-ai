@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
-from importlib.machinery import EXTENSION_SUFFIXES
+from importlib.machinery import EXTENSION_SUFFIXES, ModuleSpec
+import importlib.util
 from pathlib import Path
 import argparse
 import ast
@@ -22,18 +23,44 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 ENGINE_ROOT = HERE.parent
-if str(ENGINE_ROOT) not in sys.path:
-    sys.path.insert(0, str(ENGINE_ROOT))
+SRC_ROOT = ENGINE_ROOT.parent
 
-from core._platform import admission_deadline
-from core.formats import (
+
+def _bind_managed_ai_package(engine: Path, *, force: bool = False) -> None:
+    if not force and 'managed_ai' in sys.modules:
+        return
+    if engine.name == 'managed_ai' and (engine / '__init__.py').is_file():
+        src = str(engine.parent)
+        if src not in sys.path:
+            sys.path.insert(0, src)
+        return
+    init = engine / '__init__.py'
+    if init.is_file():
+        spec = importlib.util.spec_from_file_location(
+            'managed_ai', str(init), submodule_search_locations=[str(engine)],
+        )
+    else:
+        spec = ModuleSpec('managed_ai', None, is_package=True)
+        spec.submodule_search_locations = [str(engine)]
+    if spec is None:
+        raise ImportError(f'unable to load managed_ai package from {engine}')
+    module = importlib.util.module_from_spec(spec)
+    sys.modules['managed_ai'] = module
+    if spec.loader is not None:
+        spec.loader.exec_module(module)
+
+
+_bind_managed_ai_package(ENGINE_ROOT)
+
+from managed_ai.core._platform import admission_deadline
+from managed_ai.core.formats import (
     DEPLOYMENT_FORMAT as FORMAT,
     ENGINE_API,
     STORE_FORMAT,
     STORE_SCHEMA,
 )
-from core.ownership import NativeLayout, external_root, packet_id
-from core.storage import (
+from managed_ai.core.ownership import NativeLayout, external_root, packet_id
+from managed_ai.core.storage import (
     AdmissionContended,
     atomic_bytes,
     check_ordinary_ancestors,
@@ -52,8 +79,8 @@ VERSION = '0.3.0'
 NATIVE_ENTRY = Path('store/system.py')
 NATIVE_CONTRACT = Path('store/selection/domain_selection.py')
 NON_SOURCE_SUFFIXES = ('.pyc', '.pyo', '.pyd', '.so', *EXTENSION_SUFFIXES)
-CODE_IDENTITY_EXCLUDED_DIRS = frozenset({'tests', 'examples', 'patterns'})
-_ISOLATED_ROOT_PACKAGES = frozenset({'core', 'store', 'library', 'deployment'})
+CODE_IDENTITY_EXCLUDED_DIRS = frozenset({'tests', 'examples', 'patterns', 'companions', 'optional'})
+_ISOLATED_ROOT_PACKAGES = frozenset({'managed_ai', 'core', 'store', 'library', 'deployment'})
 
 
 def read_descriptor_bytes(path):
@@ -176,7 +203,7 @@ def _ordinary_dir(path: Path, error_prefix: str = 'ordinary deployment, engine a
 
 
 def code_identity(engine):
-    """Hash executable Python source modules under engine/ (excluding tests, examples, patterns)."""
+    """Hash executable Python source modules under the engine root (excluding tests, examples, patterns, companions, optional)."""
     engine = _engine_directory(engine)
     paths: list[Path] = []
     pending: list[tuple[Path, bool]] = [(engine, False)]
@@ -284,7 +311,7 @@ def _load_entrypoint(engine: Path):
     """Load the verified typed EngineEntrypoint from this engine or an isolated external engine."""
     engine = Path(engine).resolve(strict=True)
     if engine == ENGINE_ROOT:
-        from store.system import ENTRYPOINT
+        from managed_ai.store.system import ENTRYPOINT
         return ENTRYPOINT
     api = runpy.run_path(str(engine / NATIVE_ENTRY))
     ep = api.get('ENTRYPOINT')
@@ -589,7 +616,16 @@ class Deployment(DeploymentSelection):
         previous = {name: sys.modules.pop(name) for name in tuple(sys.modules) if selected_name(name)}
         search = sys.path[:]
         try:
-            sys.path[:] = [str(self.engine), *(p for p in search if Path(p).resolve() not in (HERE, ENGINE_ROOT))]
+            excluded = {HERE, ENGINE_ROOT, SRC_ROOT}
+            filtered = [p for p in search if Path(p).resolve() not in excluded]
+            if (self.engine / '__init__.py').is_file():
+                if self.engine.name == 'managed_ai':
+                    sys.path[:] = [str(self.engine.parent), *filtered]
+                else:
+                    sys.path[:] = filtered
+                    _bind_managed_ai_package(self.engine, force=True)
+            else:
+                sys.path[:] = [str(self.engine), *filtered]
             return self._system_action(arguments, deadline, already_admitted=already_admitted,
                                        proof_store_locked=proof_store_locked)
         finally:
@@ -726,7 +762,7 @@ def _precheck_local_system_args(engine, runtime, arguments):
     """Parse arguments with THIS trusted controller's parser before locks (zero unverified external execution)."""
     if not arguments or any(v == '--root' or v.startswith('--root=') for v in arguments):
         raise ValueError('supply a native command; deployment owns its selected store')
-    from store.cli.command_parser import is_readonly_action, parser as native_parser
+    from managed_ai.store.cli.command_parser import is_readonly_action, parser as native_parser
     if engine != ENGINE_ROOT:
         # Never execute external engine code prior to code_identity(engine) verification.
         # Classify read-only actions conservatively without leaking argparse usage/help output.

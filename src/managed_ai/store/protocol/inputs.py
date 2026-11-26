@@ -8,8 +8,8 @@ from pathlib import Path
 from stat import S_ISREG
 from typing import Any
 
-from core.storage import atomic_bytes, is_ordinary_file_stat, strict_json_loads
-from core.ownership import relative_path
+from managed_ai.core.storage import atomic_bytes, is_ordinary_file_stat, strict_json_loads
+from managed_ai.core.ownership import relative_path
 
 _OPEN_RO_NOFOLLOW = (
     os.O_RDONLY

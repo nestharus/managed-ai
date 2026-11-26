@@ -5,9 +5,12 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'engine'))
-from core import storage
-from core.storage import AdmissionContended, OwnerBusy, exclusive, owner_admission, shared
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from tests._paths import ENGINE, SRC
+from managed_ai.core import storage
+from managed_ai.core.storage import AdmissionContended, OwnerBusy, exclusive, owner_admission, shared
 
 
 class OwnerAdmission(unittest.TestCase):

@@ -1,9 +1,9 @@
 """Accepted project membership and verified reads shared by capture and discovery."""
 from pathlib import Path
 
-from core.ownership import relative_path
-from core.storage import is_reparse_or_symlink, sha
-from store.protocol.inputs import bounded_source_bytes
+from managed_ai.core.ownership import relative_path
+from managed_ai.core.storage import is_reparse_or_symlink, sha
+from managed_ai.store.protocol.inputs import bounded_source_bytes
 
 
 class ProjectSelection:

@@ -16,8 +16,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from store.query.context_discovery import Discovery
-from store.system import System
+from managed_ai.store.query.context_discovery import Discovery
+from managed_ai.store.system import System
 
 
 def sha(body):

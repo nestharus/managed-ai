@@ -4,16 +4,16 @@ from __future__ import annotations
 from collections import deque
 import re
 
-from core.formats import (
+from managed_ai.core.formats import (
     GRAPH_LINKS_FORMAT,
     GRAPH_LINT_FORMAT,
     GRAPH_NEIGHBORS_FORMAT,
     GRAPH_PATH_FORMAT,
     HEAD_INDEX_FORMAT,
 )
-from store.records.head_index import extract_graph_hints
-from store.protocol.identities import require
-from store.protocol.inputs import integer, strings, text
+from managed_ai.store.records.head_index import extract_graph_hints
+from managed_ai.store.protocol.identities import require
+from managed_ai.store.protocol.inputs import integer, strings, text
 
 _RECORD_ID_RE = re.compile(r'^[A-Za-z0-9_-]{1,120}$')
 _PROVENANCE_RELATION_LABELS = frozenset({

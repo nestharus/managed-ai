@@ -2,10 +2,10 @@
 from pathlib import Path
 import json
 
-from core.ownership import packet_id
-from core.storage import encode, sha, strict_json_loads, write_json
-from core.formats import REVIEWED_CONFIGURE_FORMAT as REVIEWED_CONFIGURE
-from store.selection.domain_selection import DomainSelection, ordinary, pin
+from managed_ai.core.ownership import packet_id
+from managed_ai.core.storage import encode, sha, strict_json_loads, write_json
+from managed_ai.core.formats import REVIEWED_CONFIGURE_FORMAT as REVIEWED_CONFIGURE
+from managed_ai.store.selection.domain_selection import DomainSelection, ordinary, pin
 
 
 SELECTION_KEYS = ('domains', 'catalogues')
@@ -88,7 +88,7 @@ def configure(system, spec):
     descriptor = system.root / 'system.json'
     current = configuration_descriptor(system.root, spec)
     selected = DomainSelection(system.root, current)
-    from store.selection.installed_catalogue import InstalledCatalogue
+    from managed_ai.store.selection.installed_catalogue import InstalledCatalogue
     selected.validate_catalogue({e['id']: e for e in InstalledCatalogue(system.techniques.root, selected).index()['entries']})
     previous_kinds = system.persisted_descriptor.get('schema_bindings', system.domain_selection.schemas)
     for record in system.record_store.all():

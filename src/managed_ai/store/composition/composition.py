@@ -10,7 +10,7 @@ import hashlib
 import json
 
 
-from core.formats import COMPOSITION_FORMAT as PROFILE, COMPOSITION_VIEW_FORMAT as FORMAT, INTERACTION_MAP_FORMAT
+from managed_ai.core.formats import COMPOSITION_FORMAT as PROFILE, COMPOSITION_VIEW_FORMAT as FORMAT, INTERACTION_MAP_FORMAT
 MAX_ROWS = 2000
 MAX_REFERENCES = 20000
 MAX_PROFILE_BYTES = 2 * 1024 * 1024
@@ -164,8 +164,8 @@ class Composition:
         return body, rows, input_bytes, references
 
     def _basis(self, record):
-        from core.storage import is_ordinary_file_stat
-        from store.records.records import is_content_addressed_basis
+        from managed_ai.core.storage import is_ordinary_file_stat
+        from managed_ai.store.records.records import is_content_addressed_basis
 
         captured, used = {}, 0
         declared = record.get('basis', [])

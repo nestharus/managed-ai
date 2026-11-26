@@ -17,17 +17,17 @@ if __package__:
 else:
     from native_test_paths import APP, ENGINE
 
-from core.attention import Attention
-from core.exchange import Exchange
-from core.ownership import external_root
-from core.storage import AdmissionContended, encode, exclusive, sha, shared
-from deployment.controller import Deployment
-from store import domain_api
-from store.cli.command_dispatch import emit
-from store.composition.composition_change_notice import notice
-from store.composition.composition_opportunities import guarded_inventory
-from store.system import ENTRYPOINT, EngineEntrypoint, System
-from tools import open_contact
+from managed_ai.core.attention import Attention
+from managed_ai.core.exchange import Exchange
+from managed_ai.core.ownership import external_root
+from managed_ai.core.storage import AdmissionContended, encode, exclusive, sha, shared
+from managed_ai.deployment.controller import Deployment
+from managed_ai.store import domain_api
+from managed_ai.store.cli.command_dispatch import emit
+from managed_ai.store.composition.composition_change_notice import notice
+from managed_ai.store.composition.composition_opportunities import guarded_inventory
+from managed_ai.store.system import ENTRYPOINT, EngineEntrypoint, System
+from managed_ai.tools import open_contact
 
 
 class Wave4CoreTests(unittest.TestCase):
@@ -251,12 +251,12 @@ class Wave4CoreTests(unittest.TestCase):
     def test_c29_2_drive_relative_paths_and_materialize_escape_rejected(self):
         """C29-2 / C29-1: reject Windows drive-relative paths across ownership/store/library and emit Wave 4 exchange CLI path."""
         import zipfile
-        from core.ownership import relative_path
-        from core.exchange.publication import _publication_basis
-        from store.protocol.inputs import artifact_target
-        from store.selection.domain_selection import source_path
-        from store.selection.installed_catalogue import InstalledCatalogue
-        from library.reader.library_format import relative as lib_relative
+        from managed_ai.core.ownership import relative_path
+        from managed_ai.core.exchange.publication import _publication_basis
+        from managed_ai.store.protocol.inputs import artifact_target
+        from managed_ai.store.selection.domain_selection import source_path
+        from managed_ai.store.selection.installed_catalogue import InstalledCatalogue
+        from managed_ai.library.reader.library_format import relative as lib_relative
 
         bad_paths = (
             'C:escape.txt',

@@ -1,8 +1,8 @@
 """Reopen a native context after actual process exits at its two local owners."""
 if __package__:
-    from .native_test_paths import APP, ENGINE, PRODUCT
+    from .native_test_paths import APP, ENGINE, PRODUCT, SRC
 else:
-    from native_test_paths import APP, ENGINE, PRODUCT
+    from native_test_paths import APP, ENGINE, PRODUCT, SRC
 import json
 import os
 from pathlib import Path
@@ -18,9 +18,9 @@ CUT = """
 import os,sys
 sys.path.insert(0,sys.argv.pop(1))
 point=sys.argv.pop(1)
-from store import system
-from store.turns import preparation_journal as turn_preparation
-from core import attention
+from managed_ai.store import system
+from managed_ai.store.turns import preparation_journal as turn_preparation
+from managed_ai.core import attention
 if point=='private-packet':
     turn_preparation.TurnPreparation.seal=lambda *args: os._exit(61)
 elif point=='sealed':
@@ -55,7 +55,7 @@ class TurnCommit(unittest.TestCase):
 
     def call(self,*args,cut=None,expected=0):
         program = [str(ENGINE/'store/manage_store.py')] if not cut else [
-            '-c',CUT,str(ENGINE),cut]
+            '-c',CUT,str(SRC),cut]
         p=subprocess.run([sys.executable,'-B',*program,'--root',self.root,*map(str,args)],
                          capture_output=True,text=True)
         self.assertEqual(p.returncode,expected,p.stderr)

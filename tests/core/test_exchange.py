@@ -9,9 +9,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[3] / 'engine'
-sys.path.insert(0, str(ROOT))
-from core.exchange import Exchange, main
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from tests._paths import ENGINE as ROOT, SRC
+from managed_ai.core.exchange import Exchange, main
 
 
 class ExchangeTests(unittest.TestCase):
@@ -56,7 +58,7 @@ class ExchangeTests(unittest.TestCase):
         self.prepare(targets=['engine/guide.md','result.txt'])
         self.ex.receive('one',self.reply,'test broker',[
             'engine/guide.md='+str(self.proposal),'result.txt='+str(self.proposal)])
-        with patch('core.ownership.__file__',str(engine/'ownership.py')):
+        with patch('managed_ai.core.ownership.__file__',str(engine/'ownership.py')):
             with self.assertRaisesRegex(ValueError,'publication destination'):
                 self.ex.publish('one','engine/guide.md','Try to publish inside the running package.')
             self.ex.publish('one','result.txt','Deliver the independent result.')
@@ -74,9 +76,9 @@ class ExchangeTests(unittest.TestCase):
     def test_module_entry_reopens_external_context(self):
         self.prepare()
         result = subprocess.run(
-            [sys.executable, '-B', '-m', 'core.exchange',
+            [sys.executable, '-B', '-m', 'managed_ai.core.exchange',
              '--root', str(self.root), 'inspect', 'one'],
-            cwd=ROOT, capture_output=True, text=True,
+            cwd=SRC, capture_output=True, text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)['consumer'], 'reader')

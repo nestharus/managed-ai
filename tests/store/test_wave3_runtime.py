@@ -17,8 +17,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from core.exchange.publication_receipts import publication_inventory
-from core.storage import (
+from managed_ai.core.exchange.publication_receipts import publication_inventory
+from managed_ai.core.storage import (
     OwnerBusy,
     encode,
     exclusive,
@@ -26,9 +26,9 @@ from core.storage import (
     sha,
     shared,
 )
-from deployment.controller import Deployment, DeploymentSelection, code_identity, read_descriptor_bytes
-from store.records.cold_archive import plan_archive_records
-from core.formats import (
+from managed_ai.deployment.controller import Deployment, DeploymentSelection, code_identity, read_descriptor_bytes
+from managed_ai.store.records.cold_archive import plan_archive_records
+from managed_ai.core.formats import (
     HEAD_INDEX_FORMAT,
     HEAD_INDEX_FORMAT_V1,
     PACKET_BINDING_FORMAT,
@@ -37,12 +37,12 @@ from core.formats import (
     TURN_SELECTION_FORMAT,
     TURN_VIEW_FORMAT,
 )
-from store.selection.domain_selection import (
+from managed_ai.store.selection.domain_selection import (
     DomainSelection,
     validate_payload,
 )
-from store.selection.store_configuration import configure
-from store.system import ENTRYPOINT, System
+from managed_ai.store.selection.store_configuration import configure
+from managed_ai.store.system import ENTRYPOINT, System
 
 
 def _write_json(path: Path, value: dict) -> Path:
@@ -221,6 +221,8 @@ class Wave3RuntimeTests(unittest.TestCase):
         self.assertIn('nonfinite', proc.stderr)
 
     def _copy_minimal_engine(self, dest: Path) -> Path:
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ENGINE / '__init__.py', dest / '__init__.py')
         ignore = shutil.ignore_patterns('tests', '__pycache__', '*.pyc')
         for sub in ('core', 'deployment', 'store', 'library'):
             shutil.copytree(ENGINE / sub, dest / sub, ignore=ignore)
@@ -240,6 +242,10 @@ class Wave3RuntimeTests(unittest.TestCase):
         (eng_copy / 'examples/demo.py').write_text('y = 2\n', encoding='utf-8')
         (eng_copy / 'patterns').mkdir(exist_ok=True)
         (eng_copy / 'patterns/pat.py').write_text('z = 3\n', encoding='utf-8')
+        (eng_copy / 'companions').mkdir(exist_ok=True)
+        (eng_copy / 'companions/comp.py').write_text('c = 4\n', encoding='utf-8')
+        (eng_copy / 'optional').mkdir(exist_ok=True)
+        (eng_copy / 'optional/opt.py').write_text('o = 6\n', encoding='utf-8')
         (eng_copy / 'store/test_stray.py').write_text('t = 5\n', encoding='utf-8')
         self.assertEqual(code_identity(eng_copy), before)
 
@@ -259,7 +265,7 @@ class Wave3RuntimeTests(unittest.TestCase):
         self.assertNotIn('prototype', ' '.join(bound_sys.command_prefix))
 
         # LB-13: Direct Deployment.system() takes deployment.lock (fails AdmissionContended if exclusive held)
-        from core.storage import AdmissionContended
+        from managed_ai.core.storage import AdmissionContended
         with exclusive(self.dep / 'deployment.lock'):
             with patch.dict(os.environ, {'MANAGED_AI_DOMAIN_ADMISSION_SECONDS': '0.05'}):
                 with self.assertRaises(AdmissionContended):
@@ -360,7 +366,7 @@ class Wave3RuntimeTests(unittest.TestCase):
             parsed = json.loads(idx_path.read_bytes())
             self.assertEqual(parsed['format'], HEAD_INDEX_FORMAT)
             import hmac as hmac_mod
-            from store.records.head_index import INDEX_DOMAIN
+            from managed_ai.store.records.head_index import INDEX_DOMAIN
             body_v1 = {k: v for k, v in parsed.items() if k != 'hmac'}
             body_v1['format'] = HEAD_INDEX_FORMAT_V1
             payload = json.dumps(body_v1, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
@@ -500,10 +506,10 @@ class Wave3RuntimeTests(unittest.TestCase):
 
     def test_posix_relative_paths_serialized_in_descriptors(self):
         """Wave 3.5: relative paths written to deployment.json, system.json, and host.json always use POSIX '/'."""
-        from core._platform import safe_relpath
+        from managed_ai.core._platform import safe_relpath
 
         base = self.root / 'posix-check'
-        eng_copy = self._copy_minimal_engine(base / 'trunk/engine')
+        eng_copy = self._copy_minimal_engine(base / 'trunk/src/managed_ai')
         dom_dir = base / 'trunk/domains/sample'
         dom_dir.mkdir(parents=True)
         cat_bytes = encode({'format': 'managed-ai-source-catalogue/1', 'sources': []})
@@ -529,7 +535,7 @@ class Wave3RuntimeTests(unittest.TestCase):
 
         Deployment.initialize(dep_dir, store_dir, eng_copy)
         dep_doc = json.loads((dep_dir / 'deployment.json').read_text(encoding='utf-8'))
-        self.assertEqual(dep_doc['engine']['path'], '../../trunk/engine')
+        self.assertEqual(dep_doc['engine']['path'], '../../trunk/src/managed_ai')
         self.assertEqual(dep_doc['store']['path'], 'stores/main')
 
         # Stage also normalizes any pre-existing Windows backslash store path and writes POSIX engine path.
@@ -539,13 +545,13 @@ class Wave3RuntimeTests(unittest.TestCase):
         sel = DeploymentSelection(dep_dir)
         staged = sel.stage('posix-ed', eng_copy)
         cand = json.loads((dep_dir / 'candidate.json').read_text(encoding='utf-8'))
-        self.assertEqual(cand['engine']['path'], '../../trunk/engine')
+        self.assertEqual(cand['engine']['path'], '../../trunk/src/managed_ai')
         self.assertEqual(cand['store']['path'], 'stores/main')
         sel.activate('posix-ed', prior_sha, staged['candidate_sha256'], 'Normalize POSIX paths.')
         act_doc = json.loads((dep_dir / 'deployment.json').read_text(encoding='utf-8'))
-        self.assertEqual(act_doc['engine']['path'], '../../trunk/engine')
+        self.assertEqual(act_doc['engine']['path'], '../../trunk/src/managed_ai')
         self.assertEqual(act_doc['store']['path'], 'stores/main')
-        self.assertEqual(safe_relpath(eng_copy, dep_dir), '../../trunk/engine')
+        self.assertEqual(safe_relpath(eng_copy, dep_dir), '../../trunk/src/managed_ai')
 
         # Host continuing_work config also serializes POSIX relative paths for engine, native_root, and object pins.
         cw_dir = str(ENGINE / 'host/continuing_work')
@@ -553,7 +559,7 @@ class Wave3RuntimeTests(unittest.TestCase):
             sys.path.insert(0, cw_dir)
         import continuing_work
         self.assertEqual(continuing_work._safe_relpath(eng_copy / 'store/manage_store.py', dep_dir / 'host'),
-                         '../../../trunk/engine/store/manage_store.py')
+                         '../../../trunk/src/managed_ai/store/manage_store.py')
         host_root = dep_dir / 'host'
         comm = base / 'commission.md'
         comm.write_text('Keep host paths portable.\n', encoding='utf-8')

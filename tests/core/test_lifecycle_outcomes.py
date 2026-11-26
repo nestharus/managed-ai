@@ -10,12 +10,14 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[3] / 'engine'
-sys.path.insert(0, str(ROOT))
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from tests._paths import ENGINE as ROOT, SRC
 
-from core.exchange.transport.collector import Collector
-from core.exchange import Exchange
-from core.storage import MAX_BYTES, encode, read_json, sha, write_json
+from managed_ai.core.exchange.transport.collector import Collector
+from managed_ai.core.exchange import Exchange
+from managed_ai.core.storage import MAX_BYTES, encode, read_json, sha, write_json
 
 
 class LifecycleOutcomes(unittest.TestCase):
@@ -74,11 +76,11 @@ class LifecycleOutcomes(unittest.TestCase):
             return write_json(path, value)
 
         if after_target:
-            with patch('core.exchange.publication.write_json', side_effect=completion_write):
+            with patch('managed_ai.core.exchange.publication.write_json', side_effect=completion_write):
                 with self.assertRaises(OSError):
                     self.ex.publish('one', 'one.txt', 'owner attempts publication')
         else:
-            with patch('core.exchange.publication._atomic_bytes', side_effect=OSError('controlled write error')):
+            with patch('managed_ai.core.exchange.publication._atomic_bytes', side_effect=OSError('controlled write error')):
                 with self.assertRaises(OSError):
                     self.ex.publish('one', 'one.txt', 'owner attempts publication')
         return self.ex.directory('one') / ('publish-' + sha(b'one.txt') + '.json')
@@ -202,7 +204,7 @@ class LifecycleOutcomes(unittest.TestCase):
         intent = self.interrupted_publication(after_target=True)
         before = self.snapshot()
         expected = sha(self.proposal.read_bytes())
-        with patch('core.exchange.publication._atomic_bytes', side_effect=AssertionError('target replay')):
+        with patch('managed_ai.core.exchange.publication._atomic_bytes', side_effect=AssertionError('target replay')):
             record = self.ex.reconcile_publication('one', 'one.txt', expected, self.account)
             self.assertEqual(self.ex.reconcile_publication('one', 'one.txt', expected, self.account), record)
         self.assert_preserved(before)

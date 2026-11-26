@@ -5,12 +5,12 @@ import copy
 import json
 import stat
 
-from core.ownership import packet_id
-from core.storage import MAX_BYTES, check_ordinary_ancestors, encode, is_ordinary_file_stat, sha, sync_dir, write_json
-from store.protocol.identities import digest, exact_fields, nonempty, require, strict_json
-from store.protocol.inputs import integer, strings
+from managed_ai.core.ownership import packet_id
+from managed_ai.core.storage import MAX_BYTES, check_ordinary_ancestors, encode, is_ordinary_file_stat, sha, sync_dir, write_json
+from managed_ai.store.protocol.identities import digest, exact_fields, nonempty, require, strict_json
+from managed_ai.store.protocol.inputs import integer, strings
 
-from core.formats import BATCH_FORMAT, BATCH_RECEIPT_FORMAT as RECEIPT_FORMAT
+from managed_ai.core.formats import BATCH_FORMAT, BATCH_RECEIPT_FORMAT as RECEIPT_FORMAT
 RECEIPT_DIRECTORY = '.system/batches'
 RECEIPT_REQUIRED = {'format', 'id', 'instance_id', 'spec_sha256', 'pin_predecessors', 'complete', 'records'}
 RECEIPT_OPTIONAL = {'pending'}

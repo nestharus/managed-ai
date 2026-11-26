@@ -7,10 +7,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[3] / 'engine'
-sys.path.insert(0, str(ROOT))
-from core.exchange import Exchange
-from core.exchange.transport.collector import encode, sha
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from tests._paths import ENGINE as ROOT, SRC
+from managed_ai.core.exchange import Exchange
+from managed_ai.core.exchange.transport.collector import encode, sha
 
 
 class ReturnedArtifactTests(unittest.TestCase):
@@ -139,7 +141,7 @@ class ReturnedArtifactTests(unittest.TestCase):
         self.proposal.write_bytes(b'x' * 5000)
         self.ex.prepare('large', 'author', 'brief.md', [], [], ['large.txt'], [])
         self.ex.receive('large', self.reply, 'test', ['large.txt=' + str(self.proposal)])
-        with patch('core.exchange.packet_context.MAX_PACKET_BYTES', 2048):
+        with patch('managed_ai.core.exchange.packet_context.MAX_PACKET_BYTES', 2048):
             with self.assertRaisesRegex(ValueError, 'total packet limit'):
                 self.current(artifacts=['large:large.txt'])
 

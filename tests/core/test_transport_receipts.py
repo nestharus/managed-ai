@@ -14,12 +14,14 @@ import time
 import unittest
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[3] / 'engine'
-sys.path.insert(0, str(ROOT))
-from core.exchange.transport.collector import material, worker_active
-from core.exchange import Exchange, carrier_receipts
-from core import storage
-from core.storage import MAX_BYTES, encode, sha, write_json
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from tests._paths import ENGINE as ROOT, SRC
+from managed_ai.core.exchange.transport.collector import material, worker_active
+from managed_ai.core.exchange import Exchange, carrier_receipts
+from managed_ai.core import storage
+from managed_ai.core.storage import MAX_BYTES, encode, sha, write_json
 
 
 def until(predicate):

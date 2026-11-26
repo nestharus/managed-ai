@@ -11,8 +11,8 @@ import re
 import stat
 import zlib
 
-from core.ownership import relative_path
-from core.storage import (
+from managed_ai.core.ownership import relative_path
+from managed_ai.core.storage import (
     _OPEN_RO_NOFOLLOW,
     atomic_bytes,
     encode,
@@ -26,7 +26,7 @@ from core.storage import (
     sync_dir,
     write_json,
 )
-from core.formats import (
+from managed_ai.core.formats import (
     COMPACT_PLAN_FORMAT,
     COMPACT_RECEIPT_FORMAT,
     DEDUP_PLAN_FORMAT,
@@ -34,8 +34,8 @@ from core.formats import (
     OBJECT_AUDIT_FORMAT as AUDIT_FORMAT,
     OBJECT_GC_RECEIPT_FORMAT as GC_RECEIPT_FORMAT,
 )
-from store.protocol.identities import digest, exact_fields, require, strict_json
-from store.protocol.inputs import integer, text
+from managed_ai.store.protocol.identities import digest, exact_fields, require, strict_json
+from managed_ai.store.protocol.inputs import integer, text
 
 
 _SHA_RE = re.compile(r'^[0-9a-f]{64}$')

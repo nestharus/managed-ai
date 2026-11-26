@@ -9,20 +9,21 @@ import sys
 import tempfile
 import unittest
 
-ENGINE = Path(__file__).resolve().parents[3] / 'engine'
-if str(ENGINE) not in sys.path:
-    sys.path.insert(0, str(ENGINE))
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from tests._paths import ENGINE, SRC
 
-from core.storage import encode, exclusive, now, sha, write_json
-from store.turns.preparation_journal import TurnPreparation
-from store.turns.turn_retirement import (
+from managed_ai.core.storage import encode, exclusive, now, sha, write_json
+from managed_ai.store.turns.preparation_journal import TurnPreparation
+from managed_ai.store.turns.turn_retirement import (
     PLAN_FORMAT,
     RECEIPT_DIRECTORY,
     RECEIPT_FORMAT,
     execute_turn_retirement,
     plan_turn_retirement,
 )
-from store.system import System
+from managed_ai.store.system import System
 
 
 class TurnRetirementTests(unittest.TestCase):

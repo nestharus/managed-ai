@@ -4,11 +4,11 @@ from pathlib import Path
 import sys
 import unittest
 
-_STORE_TESTS = str(Path(__file__).resolve().parents[1] / 'store')
-if _STORE_TESTS not in sys.path:
-    sys.path.insert(0, _STORE_TESTS)
-
-from test_shared_instances import SharedInstances
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from tests._paths import ENGINE  # noqa: F401
+from tests.store.test_shared_instances import SharedInstances
 
 
 class DeploymentAcceptance(unittest.TestCase):

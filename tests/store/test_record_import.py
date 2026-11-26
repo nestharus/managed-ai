@@ -9,9 +9,9 @@ if __package__:
 else:
     from native_test_paths import APP
 
-from core.storage import write_json
-from store.records.record_import import import_records, read_receipt
-from store.system import System
+from managed_ai.core.storage import write_json
+from managed_ai.store.records.record_import import import_records, read_receipt
+from managed_ai.store.system import System
 
 
 def specification(ident):
@@ -57,7 +57,7 @@ class ImportReceiptTest(unittest.TestCase):
         # An as-issued receipt can have an older writer's whitespace.
         receipt.write_bytes(receipt.read_bytes() + b'\n')
         original = receipt.read_bytes()
-        with patch('store.records.record_import.write_json', side_effect=AssertionError('receipt rewrite')):
+        with patch('managed_ai.store.records.record_import.write_json', side_effect=AssertionError('receipt rewrite')):
             self.assertEqual(import_records(system, spec), issued)
             for revision, content in [(2, 'different content'), (3, row['content'])]:
                 with self.subTest(revision=revision):
@@ -115,7 +115,7 @@ class ImportReceiptTest(unittest.TestCase):
                 raise OSError('progress interrupted')
             write_json(path, value)
 
-        with patch('store.records.record_import.write_json', stop_at_second_progress):
+        with patch('managed_ai.store.records.record_import.write_json', stop_at_second_progress):
             with self.assertRaisesRegex(OSError, 'progress interrupted'):
                 import_records(system, spec)
         partial = read_receipt(system, spec)

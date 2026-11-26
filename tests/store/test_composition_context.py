@@ -9,7 +9,7 @@ import json
 import tempfile
 import unittest
 
-from store.system import System, exclusive
+from managed_ai.store.system import System, exclusive
 
 
 class CompositionContextChecks(unittest.TestCase):

@@ -11,8 +11,11 @@ import unittest
 from unittest.mock import patch
 
 sys.dont_write_bytecode = True
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'engine'))
-from library.reader import knowledge
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from tests._paths import ENGINE, SRC
+from managed_ai.library.reader import knowledge
 
 
 def has_fts5():

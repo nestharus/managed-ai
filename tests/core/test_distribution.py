@@ -6,7 +6,10 @@ import sys
 import tempfile
 import unittest
 
-ROOT = Path(__file__).resolve().parents[3] / 'engine'
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from tests._paths import ENGINE as ROOT, SRC
 
 class DistributionContract(unittest.TestCase):
     def call(self, *args):

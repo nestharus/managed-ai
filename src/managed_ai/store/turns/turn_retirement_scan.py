@@ -9,7 +9,7 @@ from pathlib import Path
 import stat
 from typing import Any
 
-from core.storage import (
+from managed_ai.core.storage import (
     _OPEN_RO_NOFOLLOW,
     encode,
     is_ordinary_dir_stat,
@@ -17,8 +17,8 @@ from core.storage import (
     is_reparse_or_symlink,
     sha,
 )
-from store.protocol.identities import require, strict_json
-from store.records.hot_refs import (
+from managed_ai.store.protocol.identities import require, strict_json
+from managed_ai.store.records.hot_refs import (
     extract_turn_ref as _extract_referenced_turn,
     scan_attention_refs,
     scan_interpretation_refs,

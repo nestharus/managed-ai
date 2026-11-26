@@ -3,13 +3,13 @@ from collections import defaultdict
 from contextlib import ExitStack
 from types import SimpleNamespace
 
-from core.formats import RECOMPOSITION_FORMAT, RECOMPOSITION_VIEW_FORMAT, TRANSFER_FORMAT
-from core.ownership import NativeLayout
-from core.storage import sha
-from store.composition.composition import COLLECTIONS, MAX_VIEW_BYTES, PREFIXES, PROFILE, Composition
-from store.protocol.identities import exact_fields, identity, nonempty, record_identity, require, strict_json
-from store.query.context_discovery import canonical, request as discovery_request
-from store.query.information import pointer
+from managed_ai.core.formats import RECOMPOSITION_FORMAT, RECOMPOSITION_VIEW_FORMAT, TRANSFER_FORMAT
+from managed_ai.core.ownership import NativeLayout
+from managed_ai.core.storage import sha
+from managed_ai.store.composition.composition import COLLECTIONS, MAX_VIEW_BYTES, PREFIXES, PROFILE, Composition
+from managed_ai.store.protocol.identities import exact_fields, identity, nonempty, record_identity, require, strict_json
+from managed_ai.store.query.context_discovery import canonical, request as discovery_request
+from managed_ai.store.query.information import pointer
 
 
 COLLECTION = {prefix: name for name, prefix in PREFIXES.items()}
@@ -358,7 +358,7 @@ def read_evidence(system, req, row_sources, external_reader, selected_basis=None
             source = value.get('source')
             if isinstance(source, dict) and (source.get('instance_id'), source.get('record_id')) == (
                     system.instance_id, req['target']['id']):
-                from store.records.record_transfer import unpack_transfer
+                from managed_ai.store.records.record_transfer import unpack_transfer
                 _, edition, _ = unpack_transfer(value, system.record_store)
                 transfers.setdefault((edition['revision'], edition['sha256']),
                                      (pin, value['object_sha256'], edition))
@@ -428,7 +428,7 @@ def revise(system, req, *, accept=None, retain=None, reason=None, external_reade
     with ExitStack() as stack:
         bound = None
         if 'proof_preservation' in req:
-            from store.composition.composition_opportunities import BoundOpportunities, guarded_inventory
+            from managed_ai.store.composition.composition_opportunities import BoundOpportunities, guarded_inventory
             try:
                 before = original['content']['content']
                 after = staged['content']['content']

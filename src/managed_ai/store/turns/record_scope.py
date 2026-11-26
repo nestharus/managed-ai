@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from store.governance.feedback import KIND as FEEDBACK_KIND
+from managed_ai.store.governance.feedback import KIND as FEEDBACK_KIND
 
 
 @dataclass

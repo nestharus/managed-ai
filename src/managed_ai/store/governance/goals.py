@@ -4,9 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 import uuid
 
-from core.ownership import relative_path
-from core.storage import now, write_json
-from store.protocol.inputs import integer, read, strings, text
+from managed_ai.core.ownership import relative_path
+from managed_ai.core.storage import now, write_json
+from managed_ai.store.protocol.inputs import integer, read, strings, text
 
 
 class GoalUse:

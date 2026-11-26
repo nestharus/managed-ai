@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "managed-ai"
+dynamic = ["version"]
+description = "Schema-governed local store, explicit continuation exchange, and shared deployment engine"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+managed-ai = "managed_ai.store.manage_store:main"
+managed-ai-deploy = "managed_ai.deployment.select_deployment:main"
+managed-ai-library = "managed_ai.library.cli:main"
+g60-attend = "managed_ai.core.attention:main"
+g60-work = "managed_ai.core.exchange.cli:main"
+g60-collect = "managed_ai.core.exchange.transport.collector:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "managed_ai.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+managed_ai = [
+    "CURRENT-RELEASE.json",
+    "core/NOTICE.md",
+    "store/GUIDE.md",
+    "store/catalogue.json",
+    "store/bodies/*.txt",
+    "library/source-map.json",
+    "release/*.json",
+    "companions/peer/COMPONENTS.json",
+    "companions/peer/configs/*.json",
+    "companions/workbench/configs/*.json",
+]

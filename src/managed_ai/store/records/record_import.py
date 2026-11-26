@@ -1,11 +1,11 @@
 """Own native import receipts and resume acknowledgements against verified heads."""
 import stat
 
-from core.ownership import packet_id
-from core.storage import check_ordinary_ancestors, encode, is_ordinary_file_stat, sha, sync_dir, write_json
-from store.protocol.identities import digest, exact_fields, identity, record_identity, require, strict_json
+from managed_ai.core.ownership import packet_id
+from managed_ai.core.storage import check_ordinary_ancestors, encode, is_ordinary_file_stat, sha, sync_dir, write_json
+from managed_ai.store.protocol.identities import digest, exact_fields, identity, record_identity, require, strict_json
 
-from core.formats import IMPORT_FORMAT, IMPORT_RECEIPT_FORMAT as RECEIPT_FORMAT
+from managed_ai.core.formats import IMPORT_FORMAT, IMPORT_RECEIPT_FORMAT as RECEIPT_FORMAT
 RECEIPT_DIRECTORY = '.system/imports'
 RECEIPT_FIELDS = {'format', 'id', 'instance_id', 'spec_sha256', 'complete', 'records'}
 

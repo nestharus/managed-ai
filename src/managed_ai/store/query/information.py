@@ -12,12 +12,12 @@ from pathlib import Path
 import re
 from typing import Any
 
-from core.storage import encode, sha
-from store.protocol.identities import (digest, exact_fields, identity, nonempty, record_identity,
+from managed_ai.core.storage import encode, sha
+from managed_ai.store.protocol.identities import (digest, exact_fields, identity, nonempty, record_identity,
                                        require, strict_json)
-from store.protocol.inputs import write_input
+from managed_ai.store.protocol.inputs import write_input
 
-from core.formats import INFORMATION_FORMAT as FORMAT, STORE_FORMAT as RECORD_FORMAT
+from managed_ai.core.formats import INFORMATION_FORMAT as FORMAT, STORE_FORMAT as RECORD_FORMAT
 NAMESPACE = 'g60-information/'
 CONTRACT_KIND = 'content-contract'
 RESERVED_IDS = frozenset({'goal', 'field', 'frontier'})

@@ -8,11 +8,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[3] / 'engine'
-sys.path.insert(0, str(ROOT))
-from core.attention import Attention
-from core.exchange.transport.collector import encode, sha
-from core.exchange import Exchange
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from tests._paths import ENGINE as ROOT, SRC
+from managed_ai.core.attention import Attention
+from managed_ai.core.exchange.transport.collector import encode, sha
+from managed_ai.core.exchange import Exchange
 
 class AttentionTests(unittest.TestCase):
     def setUp(self):

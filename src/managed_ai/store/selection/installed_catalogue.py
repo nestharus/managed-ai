@@ -5,10 +5,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import uuid
 
-from core.ownership import packet_id, relative_path
-from core.storage import is_ordinary_file_stat, sha
-from core.formats import INSTALLED_CATALOGUE_FORMAT
-from store.protocol.inputs import bounded_source_bytes, integer, read
+from managed_ai.core.ownership import packet_id, relative_path
+from managed_ai.core.storage import is_ordinary_file_stat, sha
+from managed_ai.core.formats import INSTALLED_CATALOGUE_FORMAT
+from managed_ai.store.protocol.inputs import bounded_source_bytes, integer, read
 
 
 class InstalledCatalogue:
@@ -91,7 +91,7 @@ class InstalledCatalogue:
 
             body_cache: dict[str, str] = {}
             if need_body:
-                from store.selection.domain_selection import _verify_ordinary_dir
+                from managed_ai.store.selection.domain_selection import _verify_ordinary_dir
                 validated_roots: set[str] = set()
                 if self.selection is not None:
                     validated_roots.update(getattr(self.selection, '_validated_roots', ()))
@@ -142,7 +142,7 @@ class InstalledCatalogue:
 
     def body(self, entry: dict, *, byte_limit: int | None = None, validated_root: bool = False) -> bytes:
         if entry.get('body_role') == 'complete-current-source-reference':
-            from store.selection.domain_selection import read_selected_body
+            from managed_ai.store.selection.domain_selection import read_selected_body
             if not validated_root and self.selection is not None:
                 validated_root = entry.get('source_root') in getattr(self.selection, '_validated_roots', ())
             return read_selected_body(entry, byte_limit=byte_limit, validated_root=validated_root)

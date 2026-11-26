@@ -17,10 +17,9 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, str(APP))
 API = runpy.run_path(str(APP / 'system.py'))
 System, exclusive = API['System'], API['exclusive']
-from store.query.information import Information, FORMAT, record_identity, pointer
+from managed_ai.store.query.information import Information, FORMAT, record_identity, pointer
 
 
 class InformationChecks(unittest.TestCase):

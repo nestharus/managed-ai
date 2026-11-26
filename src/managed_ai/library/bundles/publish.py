@@ -18,10 +18,27 @@ import uuid
 
 sys.dont_write_bytecode = True
 if not __package__:
-    _engine = str(Path(__file__).resolve().parents[2])
-    if _engine not in sys.path:
-        sys.path.insert(0, _engine)
-    __package__ = 'library.bundles'
+    from importlib.machinery import ModuleSpec as _ModuleSpec
+    import importlib.util as _importlib_util
+    _engine = Path(__file__).resolve().parents[2]
+    if _engine.name == 'managed_ai' and (_engine / '__init__.py').is_file():
+        _src = str(_engine.parent)
+        if _src not in sys.path:
+            sys.path.insert(0, _src)
+    elif 'managed_ai' not in sys.modules:
+        _init = _engine / '__init__.py'
+        if _init.is_file():
+            _spec = _importlib_util.spec_from_file_location(
+                'managed_ai', str(_init), submodule_search_locations=[str(_engine)],
+            )
+        else:
+            _spec = _ModuleSpec('managed_ai', None, is_package=True)
+            _spec.submodule_search_locations = [str(_engine)]
+        _mod = _importlib_util.module_from_spec(_spec)
+        sys.modules['managed_ai'] = _mod
+        if _spec.loader is not None:
+            _spec.loader.exec_module(_mod)
+    __package__ = 'managed_ai.library.bundles'
 
 from ..reader import knowledge
 

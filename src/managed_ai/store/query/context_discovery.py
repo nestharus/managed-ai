@@ -19,12 +19,12 @@ from pathlib import Path, PurePosixPath
 import stat
 import sys
 
-from core.formats import DISCOVERY_FORMAT as FORMAT
-from core.ownership import packet_id
-from core.storage import _OPEN_RO_NOFOLLOW, is_ordinary_file_stat
-from store.protocol.inputs import parse_input_bytes
-from store.records.head_index import extract_content_record_links
-from store.records.records import RecordStore
+from managed_ai.core.formats import DISCOVERY_FORMAT as FORMAT
+from managed_ai.core.ownership import packet_id
+from managed_ai.core.storage import _OPEN_RO_NOFOLLOW, is_ordinary_file_stat
+from managed_ai.store.protocol.inputs import parse_input_bytes
+from managed_ai.store.records.head_index import extract_content_record_links
+from managed_ai.store.records.records import RecordStore
 PROJECT_CONTEXT_BYTES = 2 * 1024 * 1024
 SCOPES = ('records', 'project', 'techniques')
 PREFIX_SCOPE = {'record': 'records', 'project': 'project', 'technique': 'techniques'}

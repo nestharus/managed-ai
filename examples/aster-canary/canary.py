@@ -6,14 +6,14 @@ import sqlite3
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
-ENGINE = ROOT / 'engine'
-COLLECTIVE = ROOT / 'optional/collective'
-sys.path[:0] = [str(ENGINE), str(COLLECTIVE)]
-from store.system import System
-from collective_store import Collective, Session
-from collective_store.contract import pin, require
-from core.storage import encode, exclusive, read_json, sha
-from store.protocol.inputs import accounted_closure
+SRC = ROOT / 'src'
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+from managed_ai.store.system import System
+from managed_ai.optional.collective.collective_store import Collective, Session
+from managed_ai.optional.collective.collective_store.contract import pin, require
+from managed_ai.core.storage import encode, exclusive, read_json, sha
+from managed_ai.store.protocol.inputs import accounted_closure
 
 
 PROFILE = 'canary-west/1'

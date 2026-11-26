@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from importlib.machinery import ModuleSpec
+import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -21,16 +23,32 @@ def _ensure_engine_path(product: Path) -> None:
         root = candidate
     else:
         root = ENGINE_ROOT
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
+    if root.name == 'managed_ai' and (root / '__init__.py').is_file():
+        src = str(root.parent)
+        if src not in sys.path:
+            sys.path.insert(0, src)
+        return
+    if 'managed_ai' not in sys.modules:
+        init = root / '__init__.py'
+        if init.is_file():
+            spec = importlib.util.spec_from_file_location(
+                'managed_ai', str(init), submodule_search_locations=[str(root)],
+            )
+        else:
+            spec = ModuleSpec('managed_ai', None, is_package=True)
+            spec.submodule_search_locations = [str(root)]
+        module = importlib.util.module_from_spec(spec)
+        sys.modules['managed_ai'] = module
+        if spec.loader is not None:
+            spec.loader.exec_module(module)
 
 
 @contextmanager
 def _admitted_history(product: Path, root: Path, ident: str):
     _ensure_engine_path(product)
-    from core.ownership import NativeLayout, external_root
-    from core.storage import admission_deadline, owner_admission, shared
-    from store.system import System
+    from managed_ai.core.ownership import NativeLayout, external_root
+    from managed_ai.core.storage import admission_deadline, owner_admission, shared
+    from managed_ai.store.system import System
 
     resolved_root = external_root(root)
     lock_path = external_root(NativeLayout(resolved_root).exchange) / 'owner.lock'
@@ -59,7 +77,7 @@ def history(product: Path, root: Path, ident: str):
 def scan(product: Path, root: Path, ident: str):
     with _admitted_history(product, root, ident) as records:
         current = next(records)
-        from store.governance.feedback import Feedback, KIND
+        from managed_ai.store.governance.feedback import Feedback, KIND
         if current['kind'] != KIND:
             raise ValueError('record does not own a feedback use')
         head_revision = current['revision']
@@ -130,7 +148,7 @@ def scan_obligation(product: Path, root: Path, ident: str):
 
 if __name__ == '__main__':
     _ensure_engine_path(ENGINE_ROOT)
-    from core.storage import AdmissionContended
+    from managed_ai.core.storage import AdmissionContended
     cli = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     cli.add_argument('product', type=Path)
     cli.add_argument('root', type=Path)

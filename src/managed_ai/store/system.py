@@ -7,6 +7,8 @@ carry public work; the actual host supplies interpretation and current authority
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib.machinery import ModuleSpec
+import importlib.util
 import json
 import math
 import os
@@ -22,15 +24,30 @@ if __name__ == '__main__':
 APP = Path(__file__).resolve().parent
 ENGINE_ROOT = APP.parent
 CORE_CATALOGUE = APP
-if str(ENGINE_ROOT) not in sys.path:
-    sys.path.insert(0, str(ENGINE_ROOT))
+if ENGINE_ROOT.name == 'managed_ai' and (ENGINE_ROOT / '__init__.py').is_file():
+    _SRC_ROOT = str(ENGINE_ROOT.parent)
+    if _SRC_ROOT not in sys.path:
+        sys.path.insert(0, _SRC_ROOT)
+elif 'managed_ai' not in sys.modules:
+    _init = ENGINE_ROOT / '__init__.py'
+    if _init.is_file():
+        _spec = importlib.util.spec_from_file_location(
+            'managed_ai', str(_init), submodule_search_locations=[str(ENGINE_ROOT)],
+        )
+    else:
+        _spec = ModuleSpec('managed_ai', None, is_package=True)
+        _spec.submodule_search_locations = [str(ENGINE_ROOT)]
+    _mod = importlib.util.module_from_spec(_spec)
+    sys.modules['managed_ai'] = _mod
+    if _spec.loader is not None:
+        _spec.loader.exec_module(_mod)
 
-from core import exchange
-from core.attention import Attention
-from core.exchange import Exchange
-from core.formats import DEPLOYMENT_FORMAT, STORE_FORMAT
-from core.ownership import NativeLayout, external_root, packet_id
-from core.storage import (
+from managed_ai.core import exchange
+from managed_ai.core.attention import Attention
+from managed_ai.core.exchange import Exchange
+from managed_ai.core.formats import DEPLOYMENT_FORMAT, STORE_FORMAT
+from managed_ai.core.ownership import NativeLayout, external_root, packet_id
+from managed_ai.core.storage import (
     AdmissionContended,
     admission_deadline,
     encode,
@@ -42,20 +59,20 @@ from core.storage import (
     shared,
     write_json,
 )
-from store.cli.command_dispatch import act, emit
-from store.cli.command_parser import is_readonly_action, parser
-from store.governance.feedback import Feedback
-from store.governance.goals import GoalUse
-from store.governance.projects import ProjectSelection
-from store.protocol.inputs import accounted_closure, read, strings, text, write_input
-from store.query.information import InformationEnvelope
-from store.records.records import RecordStore
-from store.selection.domain_selection import DomainSelection, ENGINE_API, STORE_SCHEMA, pin
-from store.selection.installed_catalogue import InstalledCatalogue
-from store.selection.store_configuration import configuration_descriptor
-from store.turns.capture_inputs import TurnCapture
-from store.turns.effect_authority import NativeEffects
-from store.turns.preparation_journal import TurnPreparation, feedback_id
+from managed_ai.store.cli.command_dispatch import act, emit
+from managed_ai.store.cli.command_parser import is_readonly_action, parser
+from managed_ai.store.governance.feedback import Feedback
+from managed_ai.store.governance.goals import GoalUse
+from managed_ai.store.governance.projects import ProjectSelection
+from managed_ai.store.protocol.inputs import accounted_closure, read, strings, text, write_input
+from managed_ai.store.query.information import InformationEnvelope
+from managed_ai.store.records.records import RecordStore
+from managed_ai.store.selection.domain_selection import DomainSelection, ENGINE_API, STORE_SCHEMA, pin
+from managed_ai.store.selection.installed_catalogue import InstalledCatalogue
+from managed_ai.store.selection.store_configuration import configuration_descriptor
+from managed_ai.store.turns.capture_inputs import TurnCapture
+from managed_ai.store.turns.effect_authority import NativeEffects
+from managed_ai.store.turns.preparation_journal import TurnPreparation, feedback_id
 
 
 VERSION = '0.5.0'
@@ -74,6 +91,18 @@ def adopt_basis(exc):
     if isinstance(exc, getattr(exchange, 'PublicationBasisChanged', ())):
         return exc.native_basis
     return None
+
+
+def _resolve_guide_file() -> Path:
+    local = APP / 'GUIDE.md'
+    if local.is_file():
+        return local
+    if (APP.name == 'store' and len(APP.parents) >= 3
+            and APP.parent.name == 'managed_ai' and APP.parents[1].name == 'src'):
+        fallback = APP.parents[2] / 'docs/engine/store/GUIDE.md'
+        if fallback.is_file():
+            return fallback
+    return local
 
 
 def external(root: Path) -> Path:
@@ -174,7 +203,7 @@ class System:
 
     def completed_import_records(self):
         """Yield the exact record identities acknowledged by this store's complete imports."""
-        from store.records.record_import import completed_receipt_records
+        from managed_ai.store.records.record_import import completed_receipt_records
         return completed_receipt_records(self)
 
     def record_path(self, ident: str) -> Path:
@@ -184,7 +213,7 @@ class System:
         return self.record_store.put(record, expected)
 
     def put_batch(self, spec: dict) -> dict:
-        from store.records.record_batch import put_batch
+        from managed_ai.store.records.record_batch import put_batch
         return put_batch(self, spec)
 
     def reindex(self) -> dict:
@@ -304,7 +333,7 @@ class System:
         explicit_techniques = tuple(request.get('techniques', []))
         request['techniques'] = list(dict.fromkeys([*self.domain_selection.entry_sources,
                                                   *request.get('techniques', [])]))
-        capture = TurnCapture(self, APP / 'GUIDE.md',
+        capture = TurnCapture(self, _resolve_guide_file(),
                               entry_sources=self.domain_selection.entry_sources,
                               explicit_techniques=explicit_techniques)
         return TurnPreparation(self, turn).prepare(capture, request)
@@ -325,25 +354,25 @@ class System:
         return self.ex.reconcile_publication(turn, target, expected_sha256, account)
 
     def view(self, turn: str) -> dict:
-        from store.turns.explain_delivery import captured_view
+        from managed_ai.store.turns.explain_delivery import captured_view
         _, request = self.ex.load(turn)
         return captured_view(self.ex, turn, request)
 
     def explain_context(self, turn: str) -> dict:
-        from store.turns.explain_delivery import explain_context
+        from managed_ai.store.turns.explain_delivery import explain_context
         return explain_context(self.ex, turn)
 
     def plan_turn_retirement(self, *, turns: list[str] | tuple[str, ...] | None = None,
                              all_eligible: bool = False) -> dict:
-        from store.turns.turn_retirement import plan_turn_retirement
+        from managed_ai.store.turns.turn_retirement import plan_turn_retirement
         return plan_turn_retirement(self, turns=turns, all_eligible=all_eligible)
 
     def execute_turn_retirement(self, *, plan: dict, expected_plan: str, reason: str) -> dict:
-        from store.turns.turn_retirement import execute_turn_retirement
+        from managed_ai.store.turns.turn_retirement import execute_turn_retirement
         return execute_turn_retirement(self, plan=plan, expected_plan=expected_plan, reason=reason)
 
     def restore_archived_records(self, *, ids: list[str], reason: str) -> dict:
-        from store.records.cold_archive import restore_archived_records
+        from managed_ai.store.records.cold_archive import restore_archived_records
         return restore_archived_records(self, ids=ids, reason=reason)
 
     def _proposal_recovery_command(self, turn: str, producer: str, proposals: list[str]) -> str:
@@ -422,18 +451,18 @@ class System:
         return {'dispatch': dispatch, 'return': received}
 
     def discover(self, request: dict) -> dict:
-        from store.query.context_discovery import Discovery
+        from managed_ai.store.query.context_discovery import Discovery
         return Discovery(self).search(request)
 
     def compose(self, record: str, focus: str | None = None, limit: int = 20,
                 pair_limit: int = 200) -> dict:
-        from store.composition.composition import Composition
+        from managed_ai.store.composition.composition import Composition
         return Composition(self).inspect(record, focus=focus, limit=limit, pair_limit=pair_limit)
 
 
 @dataclass(frozen=True)
 class EngineEntrypoint:
-    """Typed boundary consumed by engine/deployment/controller.py instead of raw runpy dicts."""
+    """Typed boundary consumed by managed_ai.deployment.controller instead of raw runpy dicts."""
     deployment_api: str
     engine_api: str
     store_schema: str

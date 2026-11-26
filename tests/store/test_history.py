@@ -10,7 +10,7 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-from store.system import System, encode, sha
+from managed_ai.store.system import System, encode, sha
 
 
 

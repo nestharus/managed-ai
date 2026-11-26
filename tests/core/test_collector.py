@@ -17,9 +17,11 @@ import unittest
 import uuid
 
 sys.dont_write_bytecode = True
-ROOT = Path(__file__).resolve().parents[3] / 'engine'
-sys.path.insert(0, str(ROOT))
-from core.exchange.transport import collector
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from tests._paths import ENGINE as ROOT, SRC
+from managed_ai.core.exchange.transport import collector
 HERE = Path(__file__).resolve().parent
 TOOL = ROOT / "core" / "exchange" / "transport" / "collector.py"
 OBSERVATIONS: list[dict] = []

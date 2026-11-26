@@ -14,9 +14,9 @@ import unittest
 from unittest.mock import patch
 import zlib
 
-from store.composition.composition import Composition
-from store.query.context_discovery import Discovery
-from core.storage import (
+from managed_ai.store.composition.composition import Composition
+from managed_ai.store.query.context_discovery import Discovery
+from managed_ai.core.storage import (
     MAX_BYTES,
     ObjectStore,
     encode,
@@ -25,11 +25,11 @@ from core.storage import (
     sha,
     shared,
 )
-from deployment.controller import Deployment
-from store.records.record_batch import put_batch
-from store.records.record_import import import_records, read_receipt
-from store.selection.domain_selection import DomainSelection, validate_payload, validate_schema
-from store.system import System
+from managed_ai.deployment.controller import Deployment
+from managed_ai.store.records.record_batch import put_batch
+from managed_ai.store.records.record_import import import_records, read_receipt
+from managed_ai.store.selection.domain_selection import DomainSelection, validate_payload, validate_schema
+from managed_ai.store.system import System
 
 
 def _write_json(path: Path, value: dict) -> Path:
@@ -388,7 +388,7 @@ class Wave2RuntimeTests(unittest.TestCase):
             return real_read(path)
 
         with patch.object(Path, 'read_bytes', guard_sealed):
-            from store.records.cold_archive import plan_archive_records
+            from managed_ai.store.records.cold_archive import plan_archive_records
             plan = plan_archive_records(
                 System(self.store),
                 ids=['goal', 'duty-open', 'active-parent', 'inactive-referenced',
@@ -532,7 +532,7 @@ class Wave2RuntimeTests(unittest.TestCase):
             system.put({'id': 'cold-rec', 'kind': 'note', 'content': {'v': 1},
                         'basis': ['sources/cold-basis.txt'], 'active': False}, 0)
             cold_obj = system.show('cold-rec')['basis'][0]['sha256']
-            from store.records.cold_archive import execute_archive_records, plan_archive_records
+            from managed_ai.store.records.cold_archive import execute_archive_records, plan_archive_records
             cplan = plan_archive_records(system, ids=['cold-rec'])
             execute_archive_records(system, plan=cplan, expected_plan=cplan['plan_sha256'], reason='archive for audit')
 
@@ -752,8 +752,8 @@ class Wave2RuntimeTests(unittest.TestCase):
 
     def test_perf68_raw_hmac_head_index_legacy_fallback_and_nofollow_body_read(self):
         import hmac as hmac_mod
-        from store.records.head_index import INDEX_DOMAIN, INDEX_FORMAT
-        from store.selection.domain_selection import read_selected_body
+        from managed_ai.store.records.head_index import INDEX_DOMAIN, INDEX_FORMAT
+        from managed_ai.store.selection.domain_selection import read_selected_body
 
         system = System(self.store)
         with exclusive(system.ex.root / 'owner.lock'):

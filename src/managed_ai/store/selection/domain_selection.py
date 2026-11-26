@@ -11,8 +11,8 @@ import os
 import re
 import stat
 
-from core.ownership import packet_id
-from core.storage import (
+from managed_ai.core.ownership import packet_id
+from managed_ai.core.storage import (
     _OPEN_RO_NOFOLLOW,
     check_ordinary_ancestors,
     encode,
@@ -23,8 +23,8 @@ from core.storage import (
     sha,
     strict_json_loads,
 )
-from core import formats as _formats
-from core.formats import CATALOGUE_FORMAT, DOMAIN_FORMAT, INFORMATION_FORMAT
+from managed_ai.core import formats as _formats
+from managed_ai.core.formats import CATALOGUE_FORMAT, DOMAIN_FORMAT, INFORMATION_FORMAT
 
 # Literal assignments preserved for static AST engine-API verification in controller.code_identity().
 ENGINE_API = 'managed-ai-runtime/1'

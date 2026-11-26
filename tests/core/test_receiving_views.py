@@ -10,11 +10,13 @@ import textwrap
 import unittest
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[3] / 'engine'
-sys.path.insert(0, str(ROOT))
-from core.exchange.transport import collector
-from core.exchange.transport.collector import Collector, encode, exclusive, sha, write_json
-from core.exchange import Exchange
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+from tests._paths import ENGINE as ROOT, SRC
+from managed_ai.core.exchange.transport import collector
+from managed_ai.core.exchange.transport.collector import Collector, encode, exclusive, sha, write_json
+from managed_ai.core.exchange import Exchange
 
 
 class ReceivingViewTests(unittest.TestCase):
@@ -71,10 +73,10 @@ class ReceivingViewTests(unittest.TestCase):
             import sys
 
             sys.path.insert(0, sys.argv[1])
-            name = 'core.exchange.transport.collector'
+            name = 'managed_ai.core.exchange.transport.collector'
             sys.modules[name] = None
-            from core.exchange import Exchange
-            from core.exchange.transport import packet_transport
+            from managed_ai.core.exchange import Exchange
+            from managed_ai.core.exchange.transport import packet_transport
             owner = Exchange(Path(sys.argv[2]))
             transport = owner.transport
             assert 'ORIGINAL-BRIEF' in owner.context('origin')['context']
@@ -90,11 +92,11 @@ class ReceivingViewTests(unittest.TestCase):
             del sys.modules[name]
             result = owner.receive('origin', None, 'fixture', [], wait=0)
             assert result['carrier']['status'] == 'queued'
-            from core.exchange.transport.collector import Collector
+            from managed_ai.core.exchange.transport.collector import Collector
             assert packet_transport.Collector is Collector
             assert owner.transport is transport
         """)
-        result = subprocess.run([sys.executable, '-B', '-c', probe, str(ROOT), str(self.root)],
+        result = subprocess.run([sys.executable, '-B', '-c', probe, str(SRC), str(self.root)],
                                 capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.ex.directory('origin') / 'return.json').exists())

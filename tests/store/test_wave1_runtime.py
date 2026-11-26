@@ -15,8 +15,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from store.system import System
-from deployment.controller import Deployment, DeploymentSelection, code_identity, encode, exclusive, sha, shared
+from managed_ai.store.system import System
+from managed_ai.deployment.controller import Deployment, DeploymentSelection, code_identity, encode, exclusive, sha, shared
 
 
 def _write_json(path: Path, value: dict) -> Path:
@@ -146,7 +146,7 @@ class Wave1RuntimeTests(unittest.TestCase):
                     self.assertIn('LOCKED=[True]', proc.stderr)
 
     def test_cli_system_and_direct_api_do_not_read_store_before_lock(self):
-        from core.storage import AdmissionContended
+        from managed_ai.core.storage import AdmissionContended
         owner_lock = self.store / 'exchange/owner.lock'
         system_json = self.store / 'system.json'
         workspace_json = self.store / 'exchange/workspace.json'
@@ -429,7 +429,7 @@ class Wave1RuntimeTests(unittest.TestCase):
         self.run_cli([*self.select_cli, 'system', 'put-batch', '--spec', str(conflict_spec)], expected_rc=2)
 
     def test_put_batch_resumes_after_interruption(self):
-        from store.records.record_batch import put_batch
+        from managed_ai.store.records.record_batch import put_batch
         system = System(self.store)
         with exclusive(system.ex.root / 'owner.lock'):
             r1 = system.put({'id': 'res-a', 'kind': 'note', 'content': {'v': 1}}, 0)
@@ -469,7 +469,7 @@ class Wave1RuntimeTests(unittest.TestCase):
             self.assertEqual(system.show('res-b')['content'], {'v': 2})
 
     def test_put_batch_reconciles_crash_after_replace_before_receipt_for_patch_and_replace(self):
-        from store.records import record_batch
+        from managed_ai.store.records import record_batch
         system = System(self.store)
         with exclusive(system.ex.root / 'owner.lock'):
             p1 = system.put({'id': 'wal-patch', 'kind': 'note', 'content': {'v': 1}}, 0)
@@ -523,7 +523,7 @@ class Wave1RuntimeTests(unittest.TestCase):
                              r1['sha256'])
 
     def test_put_batch_refreshes_head_index_on_partial_failure_and_resume(self):
-        from store.records.record_batch import put_batch
+        from managed_ai.store.records.record_batch import put_batch
         system = System(self.store)
         with exclusive(system.ex.root / 'owner.lock'):
             r1 = system.put({'id': 'idx-a', 'kind': 'note', 'content': {'v': 1}}, 0)
@@ -569,8 +569,8 @@ class Wave1RuntimeTests(unittest.TestCase):
             self.assertEqual(after['idx-b']['revision'], 2)
 
     def test_put_batch_pin_predecessors_supports_legacy_over_2mib_head(self):
-        from core.storage import MAX_BYTES
-        from store.records.record_batch import put_batch
+        from managed_ai.core.storage import MAX_BYTES
+        from managed_ai.store.records.record_batch import put_batch
         system = System(self.store)
         with exclusive(system.ex.root / 'owner.lock'):
             big_payload = 'L' * (MAX_BYTES + 4096)

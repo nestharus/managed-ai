@@ -3,11 +3,11 @@ import base64
 import json
 from pathlib import Path
 
-from core.formats import SOURCE_OBSERVATION_FORMAT, TRANSFER_FORMAT
-from core.ownership import packet_id
-from core.storage import atomic_bytes, check_ordinary_ancestors, encode, is_ordinary_file_stat, is_reparse_or_symlink, sha
-from store.protocol.identities import identity, record_identity, require, strict_json
-from store.selection.domain_selection import load_json
+from managed_ai.core.formats import SOURCE_OBSERVATION_FORMAT, TRANSFER_FORMAT
+from managed_ai.core.ownership import packet_id
+from managed_ai.core.storage import atomic_bytes, check_ordinary_ancestors, encode, is_ordinary_file_stat, is_reparse_or_symlink, sha
+from managed_ai.store.protocol.identities import identity, record_identity, require, strict_json
+from managed_ai.store.selection.domain_selection import load_json
 
 
 def unpack_transfer(bundle, records):

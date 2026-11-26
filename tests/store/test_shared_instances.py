@@ -19,12 +19,12 @@ import unittest
 from contextlib import contextmanager
 from unittest.mock import patch
 
-from store.system import System
-from deployment.controller import Deployment, code_identity, encode, exclusive, sha
-from store.governance.feedback import Feedback
-from store.query.information import Information, record_identity
-from store.records import record_import, record_transfer
-from store.selection.store_configuration import configure
+from managed_ai.store.system import System
+from managed_ai.deployment.controller import Deployment, code_identity, encode, exclusive, sha
+from managed_ai.store.governance.feedback import Feedback
+from managed_ai.store.query.information import Information, record_identity
+from managed_ai.store.records import record_import, record_transfer
+from managed_ai.store.selection.store_configuration import configure
 
 
 
@@ -128,7 +128,7 @@ class SharedInstances(unittest.TestCase):
             with exclusive(path):
                 yield
 
-        with patch('deployment.controller.exclusive', configure_then_lock):
+        with patch('managed_ai.deployment.controller.exclusive', configure_then_lock):
             result, _, _ = Deployment(deployment).system(['put', '--record', str(update), '--expected', '1'])
         self.assertEqual(result['record']['previous_object'], sha(prior))
         page = next(System(self.a).record_store.history_pages('decision'))
@@ -236,7 +236,7 @@ class SharedInstances(unittest.TestCase):
             self.sa.catalogue('alpha-source')
 
     def test_installed_catalogue_rebinds_roots_on_each_read(self):
-        from store.selection.installed_catalogue import InstalledCatalogue
+        from managed_ai.store.selection.installed_catalogue import InstalledCatalogue
 
         app = self.bundle / 'sample-app'
         app.mkdir()
@@ -260,19 +260,19 @@ class SharedInstances(unittest.TestCase):
 
     def test_06_portable_archive_uses_relocated_shared_engine(self):
         # An isolated release fixture, not a deployment-produced engine copy.
-        engine = self.bundle / 'engine'
+        engine = self.bundle / 'src' / 'managed_ai'
         shutil.copytree(ENGINE, engine, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
         dep = self.bundle / 'deployments/a'
         Deployment.initialize(dep, self.a, engine)
         moved = self.bundle.with_name('relocated')
         self.bundle.rename(moved)
-        command = [sys.executable, '-B', str(moved / 'engine/deployment/select_deployment.py'),
+        command = [sys.executable, '-B', str(moved / 'src/managed_ai/deployment/select_deployment.py'),
                    '--deployment', str(moved / 'deployments/a'), 'system']
         result = subprocess.run([*command, 'status'], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         status = json.loads(result.stdout)
         self.assertEqual(status['instance_id'], 'instance-a')
-        self.assertEqual(status['engine_entry'], str(moved / 'engine/store/system.py'))
+        self.assertEqual(status['engine_entry'], str(moved / 'src/managed_ai/store/system.py'))
         result = subprocess.run([*command, 'context', 'after-move', '--task', 'Current use after relocation.'], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Alpha complete source.', Path(json.loads(result.stdout)['context']).read_text())

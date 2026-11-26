@@ -5,7 +5,7 @@ import hmac
 import json
 import os
 
-from core.storage import atomic_bytes, encode, is_ordinary_file_stat, sha
+from managed_ai.core.storage import atomic_bytes, encode, is_ordinary_file_stat, sha
 
 ATTRIBUTE = 'user.g60.scope.v1'
 DOMAIN = b'g60/verified-record-scope/1\0'

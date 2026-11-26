@@ -3,12 +3,14 @@
 
 Admit records a request; resume dispatches it at most once; receive returns actual
 bytes and a conservative outcome. No shell, automatic retry, semantic acceptance,
-or follow-up command execution is provided. See engine/core/README.md for the support scope.
+or follow-up command execution is provided. See docs/engine/core/README.md for the support scope.
 """
 from __future__ import annotations
 
 import argparse
 import base64
+from importlib.machinery import ModuleSpec
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -21,8 +23,25 @@ import uuid
 # A detached worker is invoked by absolute script path in both source and deployed engines.
 if not __package__:
     sys.dont_write_bytecode = True  # A worker may run from an exact, pinned engine.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-    __package__ = 'core.exchange.transport'
+    _engine = Path(__file__).resolve().parents[3]
+    if _engine.name == 'managed_ai' and (_engine / '__init__.py').is_file():
+        _src = str(_engine.parent)
+        if _src not in sys.path:
+            sys.path.insert(0, _src)
+    elif 'managed_ai' not in sys.modules:
+        _init = _engine / '__init__.py'
+        if _init.is_file():
+            _spec = importlib.util.spec_from_file_location(
+                'managed_ai', str(_init), submodule_search_locations=[str(_engine)],
+            )
+        else:
+            _spec = ModuleSpec('managed_ai', None, is_package=True)
+            _spec.submodule_search_locations = [str(_engine)]
+        _mod = importlib.util.module_from_spec(_spec)
+        sys.modules['managed_ai'] = _mod
+        if _spec.loader is not None:
+            _spec.loader.exec_module(_mod)
+    __package__ = 'managed_ai.core.exchange.transport'
 
 from ...ownership import NativeLayout
 from ...storage import (

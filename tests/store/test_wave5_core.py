@@ -17,20 +17,20 @@ if __package__:
 else:
     from native_test_paths import APP, ENGINE
 
-from core.storage import encode, exclusive, sha, shared
-from deployment.controller import Deployment, DeploymentSelection, code_identity
-from library.bundles import product_bundle, publish
-from library.reader import library_format
-from library.reader.knowledge import Library
-from store.composition import composition_boundary
-from store.records import record_batch, record_import, record_transfer
-from store.records.cold_archive import execute_archive_records, plan_archive_records
-from store.records.head_index import HeadIndex, entry_matches_exact_ref
-from store.records.object_audit import audit_objects
-from store.selection.domain_selection import DomainSelection
-from store.system import System
-from store.turns.turn_retirement import plan_turn_retirement
-from tools import open_contact
+from managed_ai.core.storage import encode, exclusive, sha, shared
+from managed_ai.deployment.controller import Deployment, DeploymentSelection, code_identity
+from managed_ai.library.bundles import product_bundle, publish
+from managed_ai.library.reader import library_format
+from managed_ai.library.reader.knowledge import Library
+from managed_ai.store.composition import composition_boundary
+from managed_ai.store.records import record_batch, record_import, record_transfer
+from managed_ai.store.records.cold_archive import execute_archive_records, plan_archive_records
+from managed_ai.store.records.head_index import HeadIndex, entry_matches_exact_ref
+from managed_ai.store.records.object_audit import audit_objects
+from managed_ai.store.selection.domain_selection import DomainSelection
+from managed_ai.store.system import System
+from managed_ai.store.turns.turn_retirement import plan_turn_retirement
+from managed_ai.tools import open_contact
 
 
 class Wave5CoreTests(unittest.TestCase):
@@ -200,10 +200,14 @@ class Wave5CoreTests(unittest.TestCase):
                 for node in ast.walk(tree):
                     if isinstance(node, ast.Import):
                         for alias in node.names:
-                            if alias.name.split('.', 1)[0] in forbidden:
+                            parts = alias.name.split('.')
+                            root = parts[1] if parts[0] == 'managed_ai' and len(parts) > 1 else parts[0]
+                            if root in forbidden:
                                 violations.append(f'{py.name}:{node.lineno}: import {alias.name}')
                     elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                        if node.module.split('.', 1)[0] in forbidden:
+                        parts = node.module.split('.')
+                        root = parts[1] if parts[0] == 'managed_ai' and len(parts) > 1 else parts[0]
+                        if root in forbidden:
                             violations.append(f'{py.name}:{node.lineno}: from {node.module}')
         self.assertEqual(violations, [], f'Library sandbox leakage: {violations}')
 
@@ -355,11 +359,11 @@ class Wave5CoreTests(unittest.TestCase):
         self.assertNotIn('verified', lib_sum)
 
         # W5-DF7: single code_identity() per status, git provenance in deployment.json, stage --from-head
-        with patch('deployment.controller.code_identity', wraps=code_identity) as spy:
+        with patch('managed_ai.deployment.controller.code_identity', wraps=code_identity) as spy:
             Deployment.current_status(self.dep)
             self.assertEqual(spy.call_count, 1)
         git_repo = self.base / 'git-eng-repo'
-        git_engine = git_repo / 'engine'
+        git_engine = git_repo / 'src' / 'managed_ai'
         shutil.copytree(ENGINE, git_engine, ignore=shutil.ignore_patterns('__pycache__'))
         git_env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
         git_env.update({

@@ -1,9 +1,9 @@
 """Explain a frozen context from its captured evidence, without reselecting work."""
 from __future__ import annotations
 
-from core.exchange import MAX_PACKET_BYTES
-from core.storage import encode, read_bytes, read_json, sha, strict_json_loads
-from core.formats import (
+from managed_ai.core.exchange import MAX_PACKET_BYTES
+from managed_ai.core.storage import encode, read_bytes, read_json, sha, strict_json_loads
+from managed_ai.core.formats import (
     PACKET_BINDING_FORMAT,
     TURN_EXPOSURE_FORMAT,
     TURN_VIEW_FORMAT,
@@ -11,7 +11,7 @@ from core.formats import (
 )
 
 
-from core.formats import CONTEXT_EXPLANATION_FORMAT as FORMAT, INCLUSION_ORIGINS_FORMAT as ORIGINS
+from managed_ai.core.formats import CONTEXT_EXPLANATION_FORMAT as FORMAT, INCLUSION_ORIGINS_FORMAT as ORIGINS
 ROLES = ('methods', 'materials', 'targets', 'returns', 'artifacts')
 
 

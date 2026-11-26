@@ -71,4 +71,4 @@ def exercise(engine, work):
 
 if __name__ == '__main__':
     with TemporaryDirectory() as td:
-        print(json.dumps(exercise(Path(__file__).resolve().parents[1] / 'engine', Path(td)), indent=2))
+        print(json.dumps(exercise(Path(__file__).resolve().parents[1] / 'src' / 'managed_ai', Path(td)), indent=2))

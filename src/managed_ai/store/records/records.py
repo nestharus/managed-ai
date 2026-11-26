@@ -11,9 +11,9 @@ from pathlib import Path
 import re
 import stat
 
-from core.formats import COMPOSITION_FORMAT
-from core.ownership import packet_id, relative_path
-from core.storage import (
+from managed_ai.core.formats import COMPOSITION_FORMAT
+from managed_ai.core.ownership import packet_id, relative_path
+from managed_ai.core.storage import (
     MAX_BYTES,
     _OPEN_RO_NOFOLLOW,
     atomic_bytes,
@@ -24,12 +24,12 @@ from core.storage import (
     read_bytes,
     sha,
 )
-from store.records.cold_archive import ColdArchive
-from store.governance.feedback import KIND as FEEDBACK_KIND
-from store.records.head_index import HeadIndex, build_entry
-from store.records.head_receipts import HeadReceipts, MIN_BYTES
-from store.protocol.identities import digest, exact_fields, identity, record_identity, require, strict_json
-from store.protocol.inputs import accounted_closure, fields, integer, parse_input_bytes, read_input, strings, text
+from managed_ai.store.records.cold_archive import ColdArchive
+from managed_ai.store.governance.feedback import KIND as FEEDBACK_KIND
+from managed_ai.store.records.head_index import HeadIndex, build_entry
+from managed_ai.store.records.head_receipts import HeadReceipts, MIN_BYTES
+from managed_ai.store.protocol.identities import digest, exact_fields, identity, record_identity, require, strict_json
+from managed_ai.store.protocol.inputs import accounted_closure, fields, integer, parse_input_bytes, read_input, strings, text
 
 
 _SHARD_CONTENT_RE = re.compile(r'^([0-9a-f]{2})/([0-9a-f]{64})\.[A-Za-z0-9._-]+$')
@@ -752,7 +752,7 @@ class RecordStore:
         self.envelope.validate_write(record, previous, mode=information_mode)
         content = record.get('content')
         if isinstance(content, dict) and content.get('format') == COMPOSITION_FORMAT:
-            from store.composition.composition import Composition
+            from managed_ai.store.composition.composition import Composition
             Composition(None).profile(record)
         if self.payload_validator is not None:
             self.payload_validator(record, previous)

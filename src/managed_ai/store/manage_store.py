@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Run the small agent system from this standalone distribution."""
+from __future__ import annotations
+
+import importlib.util
 import json
 import os
 from pathlib import Path
-import runpy
 import sys
 
 
@@ -34,13 +36,37 @@ def enter_proposal_origin(argument):
         raise SystemExit(2)
 
 
-if __name__ == '__main__':
+def _ensure_package(engine: Path) -> None:
+    if engine.name == 'managed_ai':
+        src = str(engine.parent)
+        if src not in sys.path:
+            sys.path.insert(0, src)
+        return
+    loaded = sys.modules.get('managed_ai')
+    if loaded is not None and getattr(loaded, '__file__', None):
+        if Path(loaded.__file__).resolve().parent == engine:
+            return
+    spec = importlib.util.spec_from_file_location(
+        'managed_ai',
+        str(engine / '__init__.py'),
+        submodule_search_locations=[str(engine)],
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f'unable to load managed_ai package from {engine}')
+    module = importlib.util.module_from_spec(spec)
+    sys.modules['managed_ai'] = module
+    spec.loader.exec_module(module)
+
+
+def main() -> None:
     sys.dont_write_bytecode = True
-    here = Path(__file__).resolve().parent
-    engine = here.parent
-    if str(engine) not in sys.path:
-        sys.path.insert(0, str(engine))
-    entry = here / 'system.py'
+    engine = Path(__file__).resolve().parents[1]
+    _ensure_package(engine)
     if len(sys.argv) > 1 and sys.argv[1].startswith('--file-origin='):
         enter_proposal_origin(sys.argv.pop(1))
-    runpy.run_path(str(entry), run_name='__main__')
+    from managed_ai.store.system import main as system_main
+    system_main()
+
+
+if __name__ == '__main__':
+    main()
