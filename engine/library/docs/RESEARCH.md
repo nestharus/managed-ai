@@ -75,6 +75,6 @@ A source-record byte bound is useful input to a resource argument; it supplies n
 
 ## Specialized investigations
 
-When a large inventory bears on a live construction choice, the [discovery companion](../../../patterns/prospective-reception/discovery/OPERATE.md) can help investigate the relationships that matter to that choice.
+When a large inventory bears on a live construction choice, the [discovery companion](../../../patterns/prospective-reception/discovery/README.md) can help investigate the relationships that matter to that choice.
 
 For a comparative claim about whether G60 changed a decision, the [prospective reception study](../../../patterns/prospective-reception/README.md) distinguishes unaided product use from informed source comparison. Its independent receiving opportunities, exposure records and matched comparisons support judgments within the scope actually exercised. A changed product or interpretation can reopen a judgment.

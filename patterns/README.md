@@ -11,4 +11,4 @@ Current executable adapters are retained where their source is actually installe
 | Coordinate changing overlapping contributions | [Continuous consolidation](continuous-consolidation/README.md) |
 | Prepare a qualified external method invocation | [Method invocation](method-invocation/README.md) |
 
-Broad design knowledge lives in the sibling [research pattern collection](../../../domains/research/sources/knowledge/research/patterns/README.md): editor state, data ownership, shared workspaces, artifacts, discovery and composition. Documentation-only copies of older demonstrations are not separate installed implementations. The current [capability map](../../CAPABILITIES.md) names executable and explanatory routes with their limits.
+Broad design knowledge lives in the sibling [research pattern collection](../domains/research/sources/knowledge/research/patterns/README.md): editor state, data ownership, shared workspaces, artifacts, discovery and composition. Documentation-only copies of older demonstrations are not separate installed implementations. The current [capability map](../engine/CAPABILITIES.md) names executable and explanatory routes with their limits.

@@ -1,0 +1,26 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and build outputs
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Package-time generated release manifests and source index
+/MANIFEST.json
+/engine/MANIFEST.json
+/engine/SOURCES.md
+
+# OS and editor metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/

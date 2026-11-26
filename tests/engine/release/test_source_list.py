@@ -60,7 +60,8 @@ class SourceListTest(unittest.TestCase):
             (core / "release/navigation.json").write_text("{}", encoding="utf-8")
             (core / "neighbor.md").write_bytes(b"neighbor")
             (core / "guide.md").write_bytes(b"current")
-            subprocess.run([sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(core)],
+            subprocess.run([sys.executable, "-B", str(RELEASE / "refresh_guidance.py"),
+                            "--root", str(core), "--write-sources-md"],
                            check=True, capture_output=True)
 
             page = core / "SOURCES.md"
@@ -83,6 +84,33 @@ class SourceListTest(unittest.TestCase):
                     self.assertIn("Run release guidance refresh", result.stderr)
                     for path in protected:
                         self.assertEqual(path.read_bytes(), b"prior contents")
+
+    def test_package_generates_sources_md_when_absent_in_git_export(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary) / "bundle"
+            core = root / "engine"
+            (core / "release").mkdir(parents=True)
+            (core / "store").mkdir(parents=True)
+            rows = [{"id": "guide", "source": "guide.md"}]
+            (core / "release/current_sources.json").write_text(
+                json.dumps({"edition": "test", "bodies": rows}), encoding="utf-8"
+            )
+            (core / "store/catalogue.json").write_text(json.dumps({"entries": rows}), encoding="utf-8")
+            (core / "release/navigation.json").write_text("{}", encoding="utf-8")
+            (core / "guide.md").write_bytes(b"# Guide\n\nBody.\n")
+            subprocess.run([sys.executable, "-B", str(RELEASE / "refresh_guidance.py"), "--root", str(core)],
+                           check=True, capture_output=True)
+            # Default refresh_guidance does not create SOURCES.md in Git checkouts
+            self.assertFalse((core / "SOURCES.md").exists())
+            result = subprocess.run(
+                [sys.executable, "-B", str(RELEASE / "package.py"), "--root", str(root), "--refresh-only"],
+                check=True, capture_output=True, text=True,
+            )
+            self.assertEqual(json.loads(result.stdout)["status"], "verified")
+            self.assertTrue((core / "SOURCES.md").is_file())
+            self.assertTrue((core / "MANIFEST.json").is_file())
+            self.assertTrue((root / "MANIFEST.json").is_file())
+            self.assertIn("guide.md", (core / "SOURCES.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

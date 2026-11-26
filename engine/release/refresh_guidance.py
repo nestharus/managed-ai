@@ -106,7 +106,49 @@ def _read_strict_object(path, boundary=None):
     return data
 
 
-def render(root):
+def render_sources_markdown(selected, nav):
+    """Render engine/SOURCES.md bytes from current_sources and navigation objects."""
+    lines = [
+        '# Current source owners',
+        '',
+        'The native catalogue verifies the same canonical files linked here. Domain sources are selected by each store. '
+        'No second library of source copies or predecessor runtime is required.',
+        '',
+    ]
+    selected_ids = set()
+    for row in selected['bodies']:
+        selected_ids.add(row['id'])
+        lines += [
+            '<a id="' + anchor(row['id']) + '"></a>',
+            '## ' + row['id'],
+            '',
+            source_identity_line(row),
+            '',
+        ]
+    for ident, route in sorted(nav.get('reference_routes', {}).items()):
+        if ident in selected_ids:
+            continue
+        lines += [
+            '<a id="' + anchor(ident) + '"></a>',
+            '## ' + ident,
+            '',
+            '[' + route['label'] + '](' + route['path'] + ').',
+            '',
+            route['scope'],
+            '',
+        ]
+    for ident in nav.get('unavailable_references', []):
+        lines += [
+            '<a id="' + anchor(ident) + '"></a>',
+            '## ' + ident,
+            '',
+            'The former source is not installed at this logical path. Select a maintained account or explicitly acquire the exact original when its identity matters.',
+            '',
+        ]
+    return '\n'.join(lines).encode('utf-8')
+
+
+def render(root, *, include_sources_md=False):
     """Read canonical UTF-8 inputs and prepare each projection without writing."""
     root = _ordinary_path(root, S_ISDIR, 'ordinary engine directory required')
     bundle_mode = root.name == 'engine'
@@ -173,43 +215,6 @@ def render(root):
         'relationship': 'References to one canonical source body; domain sources are selected per store.',
     }
     nav = _read_strict_object(root / 'release/navigation.json', root)
-    lines = [
-        '# Current source owners',
-        '',
-        'The native catalogue verifies the same canonical files linked here. Domain sources are selected by each store. '
-        'No second library of source copies or predecessor runtime is required.',
-        '',
-    ]
-    selected_ids = set()
-    for row in selected['bodies']:
-        selected_ids.add(row['id'])
-        lines += [
-            '<a id="' + anchor(row['id']) + '"></a>',
-            '## ' + row['id'],
-            '',
-            source_identity_line(row),
-            '',
-        ]
-    for ident, route in sorted(nav.get('reference_routes', {}).items()):
-        if ident in selected_ids:
-            continue
-        lines += [
-            '<a id="' + anchor(ident) + '"></a>',
-            '## ' + ident,
-            '',
-            '[' + route['label'] + '](' + route['path'] + ').',
-            '',
-            route['scope'],
-            '',
-        ]
-    for ident in nav.get('unavailable_references', []):
-        lines += [
-            '<a id="' + anchor(ident) + '"></a>',
-            '## ' + ident,
-            '',
-            'The former source is not installed at this logical path. Select a maintained account or explicitly acquire the exact original when its identity matters.',
-            '',
-        ]
     marker = {
         'format': 'managed-ai-shared-engine/1',
         'edition': selected['edition'],
@@ -224,21 +229,22 @@ def render(root):
     projections = {
         selection_name: selection,
         catalogue_name: json_bytes(catalogue),
-        'SOURCES.md': '\n'.join(lines).encode('utf-8'),
-        'CURRENT-RELEASE.json': json_bytes(marker),
     }
+    if include_sources_md:
+        projections['SOURCES.md'] = render_sources_markdown(selected, nav)
+    projections['CURRENT-RELEASE.json'] = json_bytes(marker)
     summary = {'status': 'refreshed', 'canonical_sources': len(entries), 'selection_sha256': selection_sha}
     return projections, summary
 
 
-def refresh(root):
+def refresh(root, *, include_sources_md=False):
     """Stage complete files, then replace targets in order with the marker last.
 
     The release owner serializes refreshes. A replacement failure can leave a
     prefix published. This sequence has no power-loss durability guarantee.
     """
     root = _ordinary_path(root, S_ISDIR, 'ordinary engine directory required')
-    projections, summary = render(root)
+    projections, summary = render(root, include_sources_md=include_sources_md)
     with ExitStack() as cleanup:
         staged_paths = []
         for name, raw in projections.items():
@@ -272,10 +278,12 @@ def refresh(root):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--root', type=Path, default=ROOT)
+    parser.add_argument('--write-sources-md', action='store_true',
+                        help='Also write generated SOURCES.md (normally generated at package time)')
     args = parser.parse_args()
     try:
-        print(json.dumps(refresh(args.root)))
+        print(json.dumps(refresh(args.root, include_sources_md=args.write_sources_md)))
     except (OSError, ValueError) as error:
         raise SystemExit(str(error)) from None

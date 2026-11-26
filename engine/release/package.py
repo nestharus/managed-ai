@@ -282,9 +282,25 @@ def members(root, engine=...):
     return result
 
 
+def _write_bytes_atomic(path, raw):
+    existing = optional_entry(path)
+    if existing is not None:
+        ordinary(path, existing, stat.S_ISREG)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
 def write_json(path, value):
     raw = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    path.write_bytes(raw)
+    _write_bytes_atomic(path, raw)
 
 
 def read_json(path):
@@ -440,13 +456,13 @@ def exact_path(root, relative, kind):
     return path
 
 
-def verify_workbench_components(root):
+def verify_workbench_components(root, *, stamp=False):
     companions_root = exact_path(root, Path("companions"), stat.S_ISDIR)
     if companions_root is None:
-        return
+        return None
     peer_root = exact_path(companions_root, Path("peer"), stat.S_ISDIR)
     if peer_root is None:
-        return
+        return None
     manifest_path = exact_path(peer_root, Path("COMPONENTS.json"), stat.S_ISREG)
     if manifest_path is None:
         raise ValueError("Missing shared peer component manifest: companions/peer/COMPONENTS.json")
@@ -458,9 +474,13 @@ def verify_workbench_components(root):
     if not isinstance(files, dict) or not files:
         raise ValueError("Invalid peer component manifest COMPONENTS.json: non-empty 'files' object required")
     resolved_companions = companions_root.resolve(strict=True)
+    stamped_files = {}
+    needs_stamp = False
     for name, row in files.items():
         if not isinstance(name, str) or not name or "\\" in name:
             raise ValueError("Invalid shared component path: " + repr(name))
+        if not isinstance(row, dict):
+            raise ValueError("Invalid shared component entry: " + name)
         relative = Path(name)
         if relative.anchor or ".." in relative.parts or not relative.parts or relative.as_posix() != name:
             raise ValueError("Unsafe shared component path: " + name)
@@ -469,13 +489,40 @@ def verify_workbench_components(root):
             raise ValueError("Missing shared component: " + name)
         if not target.resolve(strict=True).is_relative_to(resolved_companions):
             raise ValueError("Unsafe shared component path: " + name)
-        expected = row.get("identity") if isinstance(row, dict) else None
-        if (not isinstance(expected, dict) or set(expected) != {"sha256", "bytes"}
-                or not isinstance(expected["sha256"], str) or type(expected["bytes"]) is not int):
-            raise ValueError("Invalid shared component identity entry: " + name)
         actual = identity(target)
-        if {k: actual[k] for k in ("sha256", "bytes")} != expected:
-            raise ValueError("Shared component identity changed: " + name)
+        actual_pin = {"bytes": actual["bytes"], "sha256": actual["sha256"]}
+        if "identity" in row:
+            expected = row["identity"]
+            if (not isinstance(expected, dict) or set(expected) != {"sha256", "bytes"}
+                    or not isinstance(expected["sha256"], str)
+                    or re.fullmatch(r"[0-9a-f]{64}", expected["sha256"]) is None
+                    or type(expected["bytes"]) is not int or expected["bytes"] < 0):
+                raise ValueError("Invalid shared component identity entry: " + name)
+            if actual_pin != expected:
+                raise ValueError("Shared component identity changed: " + name)
+            stamped_files[name] = row
+        else:
+            needs_stamp = True
+            updated = dict(row)
+            updated["identity"] = actual_pin
+            stamped_files[name] = updated
+    if stamp and needs_stamp:
+        stamped_doc = dict(components)
+        stamped_doc["files"] = stamped_files
+        write_json(manifest_path, stamped_doc)
+        return manifest_path
+    return None
+
+
+def _generate_sources_markdown(core):
+    guidance = runpy.run_path(str(Path(__file__).with_name("refresh_guidance.py")))
+    selected = read_json(core / SELECTION)
+    nav_path = observed_path(core, Path("release/navigation.json"), stat.S_ISREG)
+    nav = read_json(nav_path) if nav_path is not None else {}
+    raw = guidance["render_sources_markdown"](selected, nav)
+    target = core / "SOURCES.md"
+    _write_bytes_atomic(target, raw)
+    return target
 
 
 def verify_store_schemas(root, core):
@@ -523,7 +570,12 @@ def refresh_manifests(root, core):
     tree = members(root, core)
     tree.pop(manifest_name(root), None)
     if core == root:
-        verify_core_selection(core, tree)
+        bodies = verify_core_selection(core, tree)
+        if "SOURCES.md" in tree:
+            verify_source_list(core / "SOURCES.md", bodies)
+        else:
+            generated = _generate_sources_markdown(core)
+            tree["SOURCES.md"] = identity(generated)
     elif core is not None:
         # The receiving bundle locates its engine at this exact member prefix.
         prefix = "engine/"
@@ -531,6 +583,14 @@ def refresh_manifests(root, core):
         inner = manifest_name(core)
         native.pop(inner, None)
         verify_bundle(root, core, native, tree=tree)
+        stamped_manifest = verify_workbench_components(root, stamp=True)
+        if stamped_manifest is not None:
+            tree["companions/peer/COMPONENTS.json"] = identity(stamped_manifest)
+        if "SOURCES.md" not in native:
+            generated = _generate_sources_markdown(core)
+            src_id = identity(generated)
+            native["SOURCES.md"] = src_id
+            tree[prefix + "SOURCES.md"] = src_id
         write_json(core / inner, {"format": "managed-ai-engine-manifest/1", "members": native})
         tree[prefix + inner] = identity(core / inner)
     write_json(root / "MANIFEST.json", {"format": "managed-ai-current-package/1", "members": tree,
@@ -538,7 +598,7 @@ def refresh_manifests(root, core):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--root", type=Path, default=ROOT, help="One current source tree to package")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--replace", action="store_true", help="Atomically replace the named current transport")

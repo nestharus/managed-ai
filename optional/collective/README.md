@@ -20,14 +20,14 @@ The selected source can itself be a compact qualified view or a local answer for
 
 Requires Python 3.11 or newer with SQLite 3.38 or newer and JSON support. Keep mutable state outside this product directory. The database is one local owner's durable admission boundary; do not treat copied databases as independent continuations of the same authority.
 
-The component enforces exclusion of its own directory. In the complete prototype distribution, use the root `runtime/manage_collective.py` entry, which additionally enforces that enclosing product's boundary for initialization and later opening. Another host can provide its own boundary before calling this component, or place this file at the root of its complete standalone product. The component does not infer an enclosing root from a fixed number of parent directories. The commands below assume this standalone component directory is the current directory.
+The component enforces exclusion of its own directory and the enclosing `engine/` directory. From the repository or package root, use `optional/collective/manage_collective.py`:
 
 ```sh
-python3 -B collective.py --db /absolute/runtime/collective.sqlite init
-python3 -B collective.py --db /absolute/runtime/collective.sqlite call --request /absolute/requests/create.json
-python3 -B collective.py --db /absolute/runtime/collective.sqlite inbox --actor product-composer
-python3 -B collective.py --db /absolute/runtime/collective.sqlite show product-promise
-python3 -B collective.py --db /absolute/runtime/collective.sqlite notice 1
+python -B optional/collective/manage_collective.py --db /path/to/runtime/collective.sqlite init
+python -B optional/collective/manage_collective.py --db /path/to/runtime/collective.sqlite call --request /path/to/requests/create.json
+python -B optional/collective/manage_collective.py --db /path/to/runtime/collective.sqlite inbox --actor product-composer
+python -B optional/collective/manage_collective.py --db /path/to/runtime/collective.sqlite show product-promise
+python -B optional/collective/manage_collective.py --db /path/to/runtime/collective.sqlite notice 1
 ```
 
 Each `call` reads exactly one JSON object with `actor`, `command` and `op`. The trusted host supplies the actor identity and permits effects. An actor string is not authentication. Every new attempt has a new command identity. Reusing an identity with the exact same request returns the historical result, including a refusal; a changed request under that identity conflicts.

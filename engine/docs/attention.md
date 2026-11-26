@@ -12,7 +12,7 @@ Questions and use descriptions are free text. Group labels are caller-defined na
 
 A useful question may remain open after substantial consideration. A speculative lead may be deferred. A supported direct contribution can proceed with other questions still open. No status makes all nominated work mandatory, and no status fulfills an actual duty. The caller's real requirements and effect permissions remain controlling.
 
-For a complete runnable setup, including workspace files and an explicitly authored receipt, use [quickstart.md](quickstart.md). The examples below explain the interface fields.
+For a complete runnable setup, including workspace files and an explicitly authored receipt, use [engine/core/README.md](../core/README.md). The examples below explain the interface fields.
 
 ## Start in an external workspace
 
@@ -147,7 +147,7 @@ The local contract supports at most 2,000 named identities, bounded source objec
 
 The interface uses the exchange's existing content-addressed objects. State changes are atomic index replacements under the same cooperative-owner CLI lock. An interruption can leave unused content objects; it cannot authorize an artifact effect. This is not a malicious-writer defense or a sandbox. A local adversary able to rewrite all bytes and hashes is outside the contract. No automatic compaction or garbage collection is included.
 
-For embedding, the [API](api.md#attention-companion) gives the calls and shared
+For embedding, [engine/core/README.md](../core/README.md) gives the calls and shared
 owner-lock requirement. The methods return ordinary structured data for the
 host's selected continuing use.
 

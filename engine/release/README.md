@@ -1,33 +1,29 @@
-# Maintain and package the unified system
+# Release maintenance and packaging
 
-Edit the canonical maintained files. `current_sources.json` names the core guidance owners; there is no separate library of copied source bodies. `navigation.json` owns routes to domain sources and qualified current accounts.
+`engine/release/` refreshes core guidance pins (`current_sources.json`, `engine/store/catalogue.json`, `engine/CURRENT-RELEASE.json`) and produces self-verifying release archives from a clean exported tree.
 
-After a core source change, run:
+## Refresh core guidance pins
 
-```sh
-python3 -B engine/release/refresh_guidance.py
-```
-
-This refreshes canonical source hashes, native catalogue references (`engine/store/catalogue.json`), the source index (`engine/SOURCES.md`) and release metadata (`engine/CURRENT-RELEASE.json`). It does not manufacture another source tree. Domain and instance catalogues are separately pinned by the stores that select them; use the native `configure` operation to qualify changed selections.
-
-The release owner serializes refresh and packaging. After an interrupted refresh, rerun with valid inputs and compare all four projections before using the recovered release. Each output reserves ordinary directories named `.<output filename>.<temporary suffix>` in its own parent. Both manifests and the transport omit those directories and their contents, including remnants named with filesystem-equivalent spellings. Packaging leaves remnants available for inspection. Selection paths are relative to `engine/` (and may point up one level to sibling `optional/` or `patterns/` bodies within the bundle root). Refresh writes native catalogue paths relative to the bundle root (`source_root_relative: "../.."` from `engine/store/`). The package gate checks that each selected source and its native catalogue entry identify the same exported body. A selection traversing a staging directory or symlink/reparse point is refused. Packaging an engine directory directly checks its selected core bodies and produces a single manifest.
-
-The package gate checks the exact catalogue member path (`engine/store/catalogue.json`), reads existing catalogue JSON with strict duplicate-key and non-finite checks, and verifies `companions/peer/COMPONENTS.json` whenever `companions/peer/` is present. If the inventory reports a spelling mismatch, correct the named file and directory spelling on disk before running guidance refresh. On a case-insensitive filesystem, a case-only correction may require a temporary name. If the catalogue contains duplicate `body_path` fields, guidance refresh can regenerate the selected references. Repair other invalid JSON or restore a valid catalogue before refreshing if the offending value survives refresh. Rerun packaging after guidance refresh succeeds.
-
-The release checks exercise the displayed source list, peer component manifest gating, domain pin checks, and admission of compressed Research originals. The shared-instance suite (`tests/engine/store/test_shared_instances.py`) exercises native deployment and store behavior. The release check selects both the suite and its engine from the requested product (`G60_TEST_PRODUCT`). From the repository root, run:
+After editing any core guidance file listed in `engine/release/current_sources.json`, run:
 
 ```sh
-python3 -B -m unittest discover -s tests/engine/release
-python3 -B engine/release/check_current.py
+python -B engine/release/refresh_guidance.py
 ```
 
-Export the selected tracked sources and domain pins into a clean packaging directory. The packager refuses Git metadata in a recognized product tree.
+This updates `engine/release/current_sources.json`, `engine/store/catalogue.json`, and `engine/CURRENT-RELEASE.json`. Generated release files (`MANIFEST.json`, `engine/MANIFEST.json`, and `engine/SOURCES.md`) are not tracked in Git; `package.py` generates them dynamically during release packaging. Pass `--write-sources-md` to `refresh_guidance.py` only when you explicitly want `engine/SOURCES.md` written locally.
 
-Package the single current tree from its parent or another working directory:
+## Verify and package an exported release
+
+Export tracked files (without `.git` directories) into a clean staging directory outside the repository, then verify and package:
 
 ```sh
-python3 -B /absolute/managed-ai/engine/release/package.py \
-  --root /absolute/managed-ai --output /absolute/managed-ai.zip --replace
+python -B -m unittest discover -s tests/engine/release
+python -B engine/release/check_current.py
+python -B engine/release/package.py --root /path/to/export --output /path/to/managed-ai.zip --replace
 ```
 
-`--refresh-only` verifies source/component identities, store schemas and current deployment bindings and refreshes member manifests without making a ZIP. A missing bundle selection or direct-engine marker can indicate generic source input. If the package command cannot determine the release scope or read its inventory, it reports the error. Output must be outside the source tree. The producer validates ordinary member paths, exact source bytes, ZIP CRCs and archive member hashes. It does not load a predecessor or nest previous transports.
+During packaging, `package.py`:
+- Refuses `.git` metadata, symlinks, NTFS reparse points/junctions, duplicate JSON keys, non-finite numbers, and nested archives (outside verified research evidence).
+- Verifies `engine/store/catalogue.json`, `engine/CURRENT-RELEASE.json`, store schemas, deployment bindings, and `companions/peer/COMPONENTS.json` (accepting declarative entries in Git exports, verifying any existing `identity` pins, and stamping exact `bytes` + `sha256` pins into the exported bundle).
+- Generates `engine/SOURCES.md` (when absent), `engine/MANIFEST.json`, and root `MANIFEST.json`, then verifies ZIP CRCs and member hashes before atomically replacing `--output`.
+- Use `--refresh-only` on a clean export directory to verify and stamp manifests without creating a ZIP.

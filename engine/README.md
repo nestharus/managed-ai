@@ -7,14 +7,13 @@ The production subsystems live directly under `engine/`. Use [select_deployment.
 [Stores, domains and deployments](INSTANCES.md) defines their actual contract. From the package root, operate the selected store through the same code:
 
 ```sh
-python3 -B engine/deployment/select_deployment.py --deployment deployments/research system status
-python3 -B engine/deployment/select_deployment.py --deployment deployments/novel system status
+python -B engine/deployment/select_deployment.py --deployment /path/to/deployment system status
 ```
 
 The [native operating contract](store/README.md), [CLI field reference](CLI-FIELD-REFERENCE.md) and [capability map](CAPABILITIES.md) explain source capture, real returns, guarded adoption and current-use interpretation. [Construction](host/CONSTRUCTION.md) supplies general operating guidance. [Peer communication](host/continuing_work/PEER-COMMUNICATION.md) applies when a comparison needs an exposure boundary.
 
 [Material maintenance](host/material_retention/MATERIAL-MAINTENANCE.md) selects current useful content and deliberately selected evidence. Native record replacement also defaults to current-use retention. Schema validation, source custody, semantic adequacy and completion remain distinct judgments.
 
-[SOURCES.md](SOURCES.md) names each canonical operating source. Broad theory, domain methods, human and agent guidance, research state and application material have their own owners under the enclosing package. The engine reads selected sources through verified references; it does not carry another complete source mirror.
+[Core source selection](release/current_sources.json) names each canonical operating source (and release packaging generates `SOURCES.md` for exported bundles). Broad theory, domain methods, human and agent guidance, research state and application material have their own owners under the enclosing package. The engine reads selected sources through verified references; it does not carry another complete source mirror.
 
 The optional [continuing-work host](host/README.md) can attach to a selected existing native store using `native_root`. The [shared companions](../companions/README.md) supply model/tool callbacks and peer adapters; they do not create a second engine implementation.

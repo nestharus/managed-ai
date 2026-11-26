@@ -29,8 +29,8 @@
       "link_base": "store/README.md",
       "presentation": "store/README.md",
       "kind": "guide",
-      "sha256": "a932d00676a3b823d360a4b746c4799fbd319bd2806681d0f506b906fbffa388",
-      "bytes": 50229,
+      "sha256": "3f1f708db3f38338f5fb86d40fa5900601bc8b83470a329965e45dbe87ac59ba",
+      "bytes": 50146,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -39,8 +39,8 @@
       "link_base": "docs/attention.md",
       "presentation": "docs/attention.md",
       "kind": "guide",
-      "sha256": "fe1e46987a5997a91fe4e254096cc296676168b3b35c6f84ebf58079084010ed",
-      "bytes": 14298,
+      "sha256": "0739ddcee8e074353634c6e1e7c6584703c41082d0e166ccebee26fa47588f65",
+      "bytes": 14315,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -49,8 +49,8 @@
       "link_base": "../optional/collective/README.md",
       "presentation": "../optional/collective/README.md",
       "kind": "guide",
-      "sha256": "48832dd8500678ff00b39dc2d3424c96c7d124b8e503cd3ec17503aeb06825da",
-      "bytes": 34305,
+      "sha256": "0a41226915bf89c72bd0fbddc33ae1627a6a50a74bdb323fd5733214a532c23a",
+      "bytes": 34043,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -89,8 +89,8 @@
       "link_base": "library/docs/RESEARCH.md",
       "presentation": "library/docs/RESEARCH.md",
       "kind": "guide",
-      "sha256": "882c5b770510291d30d2891010ef2af720c63f3f19c6701a2de3bff7117f8b24",
-      "bytes": 15316,
+      "sha256": "5a5537ec3fa17d442ddd20bc27d8c2a6b2348f197c97cd232ff2d69fb829345a",
+      "bytes": 15315,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -269,8 +269,8 @@
       "link_base": "INSTANCES.md",
       "presentation": "INSTANCES.md",
       "kind": "guide",
-      "sha256": "956bf407ef3cf0d40b27452899e3034d3d39eadbf73ac03b85cbe4c80e92fe2b",
-      "bytes": 14639,
+      "sha256": "2bd0fda68761f3b850aa32610acca925b959678aff1e7d5669e910dc37238759",
+      "bytes": 14542,
       "provenance": "Canonical current shared-engine, store, schema and domain contract."
     },
     {
@@ -279,8 +279,8 @@
       "link_base": "host/SIGNAL-FIELD.md",
       "presentation": "host/SIGNAL-FIELD.md",
       "kind": "guide",
-      "sha256": "574a4ec4a918222cc2c04e5b952eaf6666b65a3e18744de47f37c54c8ec70f8e",
-      "bytes": 17440,
+      "sha256": "3ccaf117d3f99da9951b9d1183d504618e2f351b874f83408fb4f0b8c463bdfe",
+      "bytes": 17430,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     }
   ]
