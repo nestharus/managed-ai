@@ -3,12 +3,12 @@
 Replaces scattered module-level limit constants with frozen dataclasses that
 can be constructed from defaults, dicts, JSON files, or environment variables.
 """
-from __future__ import annotations
 
-from dataclasses import dataclass, field
 import os
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 
 def _require_positive_int(value: Any, name: str) -> int:
@@ -183,13 +183,25 @@ class LibraryConfig:
             kwargs["selection_format"] = data["selection_format"]
         if "limits" in data:
             raw_limits = data["limits"]
-            kwargs["limits"] = raw_limits if isinstance(raw_limits, LibraryLimits) else LibraryLimits.from_dict(raw_limits)
+            kwargs["limits"] = (
+                raw_limits
+                if isinstance(raw_limits, LibraryLimits)
+                else LibraryLimits.from_dict(raw_limits)
+            )
         if "search" in data:
             raw_search = data["search"]
-            kwargs["search"] = raw_search if isinstance(raw_search, SearchConfig) else SearchConfig.from_dict(raw_search)
+            kwargs["search"] = (
+                raw_search
+                if isinstance(raw_search, SearchConfig)
+                else SearchConfig.from_dict(raw_search)
+            )
         if "batch" in data:
             raw_batch = data["batch"]
-            kwargs["batch"] = raw_batch if isinstance(raw_batch, BatchConfig) else BatchConfig.from_dict(raw_batch)
+            kwargs["batch"] = (
+                raw_batch
+                if isinstance(raw_batch, BatchConfig)
+                else BatchConfig.from_dict(raw_batch)
+            )
 
         return cls(**kwargs)
 
@@ -207,7 +219,11 @@ class LibraryConfig:
         batch_overrides: dict[str, Any] = {}
 
         env_map: tuple[tuple[str, dict[str, Any], str], ...] = (
-            ("MANAGED_AI_LIBRARY_MAX_RETAINED_CATALOGUES", search_overrides, "max_retained_catalogues"),
+            (
+                "MANAGED_AI_LIBRARY_MAX_RETAINED_CATALOGUES",
+                search_overrides,
+                "max_retained_catalogues",
+            ),
             ("MANAGED_AI_LIBRARY_DEFAULT_SCAN_LIMIT", search_overrides, "default_scan_limit"),
             ("MANAGED_AI_LIBRARY_DEFAULT_MAX_BYTES", search_overrides, "default_max_bytes"),
             ("MANAGED_AI_LIBRARY_MAX_BATCH_QUERIES", batch_overrides, "max_queries"),
@@ -222,7 +238,9 @@ class LibraryConfig:
                 except ValueError:
                     raise ValueError(f"{env_key} must be an integer") from None
 
-        search_cfg = SearchConfig.from_dict(search_overrides) if search_overrides else SearchConfig()
+        search_cfg = (
+            SearchConfig.from_dict(search_overrides) if search_overrides else SearchConfig()
+        )
         batch_cfg = BatchConfig.from_dict(batch_overrides) if batch_overrides else BatchConfig()
         return cls(search=search_cfg, batch=batch_cfg)
 

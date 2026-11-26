@@ -1,5 +1,4 @@
 """Domain-native configuration and service contract for material_retention."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,10 +42,10 @@ class RetentionLimits:
 
     max_zip_depth: int = 12
     max_zip_members: int = 200_000
-    max_member_bytes: int = 1024 ** 3
-    max_expanded_bytes: int = 4 * 1024 ** 3
-    max_cache_object_bytes: int = 64 * 1024 ** 2
-    max_cache_total_bytes: int = 96 * 1024 ** 2
+    max_member_bytes: int = 1024**3
+    max_expanded_bytes: int = 4 * 1024**3
+    max_cache_object_bytes: int = 64 * 1024**2
+    max_cache_total_bytes: int = 96 * 1024**2
     stream_chunk_bytes: int = 65_536
 
 

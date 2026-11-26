@@ -1,11 +1,10 @@
 """Shared peer harness/workbench protocol contract, strict JSON, and durable I/O."""
-from __future__ import annotations
 
 import hashlib
 import json
 import math
-from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from managed_ai.platform import (
@@ -53,7 +52,8 @@ def loads_strict(raw: bytes | bytearray | str) -> Any:
     """Decode strict UTF-8 JSON, rejecting duplicate object keys and nonfinite numbers."""
     if not isinstance(raw, (bytes, bytearray, str)):
         raise TypeError("JSON input must be bytes or str")
-    value = strict_json_loads(raw, label="Peer JSON", require_object=False)
+    payload: bytes | str = bytes(raw) if isinstance(raw, bytearray) else raw
+    value = strict_json_loads(payload, label="Peer JSON", require_object=False)
     canonical(value)
     return value
 
@@ -123,7 +123,11 @@ def positive_number(value: Any, integer_only: bool = False) -> bool:
 
 
 def identifier(value: Any) -> bool:
-    return isinstance(value, str) and ID_PATTERN.fullmatch(value) is not None and value not in (".", "..")
+    return (
+        isinstance(value, str)
+        and ID_PATTERN.fullmatch(value) is not None
+        and value not in (".", "..")
+    )
 
 
 def target_path(value: Any) -> list[str]:

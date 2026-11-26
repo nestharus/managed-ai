@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Small cooperative subprocess/inbox/checkpoint harness; see docs/PROTOCOL.md."""
-from __future__ import annotations
 
 import argparse
 import base64
 import binascii
-from collections import deque
+import contextlib
 import datetime as dt
 import json
 import os
-from pathlib import Path
 import queue
 import signal
 import sys
 import time
+from collections import deque
+from pathlib import Path
 from typing import Any
 
 if __package__ in (None, ""):
@@ -23,14 +23,26 @@ if __package__ in (None, ""):
 
 from managed_ai.companions.peer.peer_process import (
     PLATFORM,
-    child_cpu_times as _child_cpu_times,
-    env_policy_description as _env_policy_description,
     finish_worker_process,
-    group_exists as _group_exists,
-    pipe_reader as _pipe_reader,
-    signal_group as _signal_group,
     spawn_worker_process,
-    worker_environment as _worker_environment,
+)
+from managed_ai.companions.peer.peer_process import (
+    child_cpu_times as _child_cpu_times,
+)
+from managed_ai.companions.peer.peer_process import (
+    env_policy_description as _env_policy_description,
+)
+from managed_ai.companions.peer.peer_process import (
+    group_exists as _group_exists,
+)
+from managed_ai.companions.peer.peer_process import (
+    pipe_reader as _pipe_reader,  # noqa: F401
+)
+from managed_ai.companions.peer.peer_process import (
+    signal_group as _signal_group,
+)
+from managed_ai.companions.peer.peer_process import (
+    worker_environment as _worker_environment,  # noqa: F401
 )
 from managed_ai.companions.peer.peer_protocol import (
     HARNESS_CONFIG_SCHEMA,
@@ -46,10 +58,12 @@ from managed_ai.companions.peer.peer_protocol import (
     digest,
     fields,
     identifier,
-    loads_strict as load_json,
     path_conflicts,
     positive_number,
     target_path,
+)
+from managed_ai.companions.peer.peer_protocol import (
+    loads_strict as load_json,
 )
 
 VERSION = "study83-peer-harness/1"
@@ -64,7 +78,7 @@ class Rejection(Exception):
 
 
 def utc() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat()
+    return dt.datetime.now(dt.UTC).isoformat()
 
 
 def write_json(path: Path | str, value: Any) -> None:
@@ -74,7 +88,11 @@ def write_json(path: Path | str, value: Any) -> None:
 def validate_config(config: Any) -> None:
     """Validate harness configuration schema, worker definitions, and positive bounds."""
     fields(config, ("schema", "run_id", "brief", "workers", "limits"))
-    if config["schema"] != HARNESS_CONFIG_SCHEMA or not isinstance(config["run_id"], str) or not config["run_id"]:
+    if (
+        config["schema"] != HARNESS_CONFIG_SCHEMA
+        or not isinstance(config["run_id"], str)
+        or not config["run_id"]
+    ):
         raise ValueError("Invalid schema or run_id")
     if not isinstance(config["workers"], list) or not config["workers"]:
         raise ValueError("workers must be a nonempty array")
@@ -87,7 +105,11 @@ def validate_config(config: Any) -> None:
         names.add(worker["owner"])
 
         command = worker["command"]
-        if not isinstance(command, list) or not command or any(not isinstance(x, str) or not x for x in command):
+        if (
+            not isinstance(command, list)
+            or not command
+            or any(not isinstance(x, str) or not x for x in command)
+        ):
             raise ValueError("command must be a nonempty string array")
 
         environment = worker.get("env", {})
@@ -171,7 +193,9 @@ class Harness:
             raise
 
     def event(self, event: str, **values: Any) -> None:
-        self.events.write(canonical({"event": event, "at_utc": utc(), **values}).decode("utf-8") + "\n")
+        self.events.write(
+            canonical({"event": event, "at_utc": utc(), **values}).decode("utf-8") + "\n"
+        )
         self.events.flush()
         os.fsync(self.events.fileno())
 
@@ -219,7 +243,10 @@ class Harness:
             "limits_remaining": {
                 "wall_seconds": max(0.0, self.deadline - time.monotonic()),
                 "turns": self.limits["max_turns"] - turn,
-                **{key: self.limits[key] for key in ("turn_seconds", "max_output_bytes", "max_artifact_bytes")},
+                **{
+                    key: self.limits[key]
+                    for key in ("turn_seconds", "max_output_bytes", "max_artifact_bytes")
+                },
             },
         }
         request_path = directory / "request.json"
@@ -270,10 +297,8 @@ class Harness:
     def close_channel(self, item: dict[str, Any], channel: str) -> None:
         stream = item["streams"].pop(channel, None)
         if stream is not None:
-            try:
+            with contextlib.suppress(OSError):
                 stream.close()
-            except OSError:
-                pass
 
     def _consume_pipe_event(self, item: dict[str, Any], channel: str, data: bytes | None) -> None:
         if data is None:
@@ -359,9 +384,15 @@ class Harness:
             returncode=record["returncode"],
         )
 
-    def _validate_return_messages(self, item: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
+    def _validate_return_messages(
+        self, item: dict[str, Any], response: dict[str, Any]
+    ) -> dict[str, Any]:
         ack = response["ack"]
-        if not isinstance(ack, list) or any(not isinstance(x, str) for x in ack) or len(ack) != len(set(ack)):
+        if (
+            not isinstance(ack, list)
+            or any(not isinstance(x, str) for x in ack)
+            or len(ack) != len(set(ack))
+        ):
             raise ValueError("ack must be a unique string array")
 
         exposed = {message["id"] for message in item["request"]["inbox"]}
@@ -409,18 +440,33 @@ class Harness:
             raise Rejection("artifact_limit", "Owner checkpoint exceeds artifact byte limit")
         return captured
 
-    def validate_return(self, item: dict[str, Any]) -> tuple[bytes, dict[str, Any], dict[str, Any], dict[str, bytes]]:
+    def validate_return(
+        self, item: dict[str, Any]
+    ) -> tuple[bytes, dict[str, Any], dict[str, Any], dict[str, bytes]]:
         raw = (item["directory"] / "stdout.bin").read_bytes()
         try:
             response = load_json(raw)
             fields(
                 response,
-                ("schema", "owner", "revision", "state", "status", "obligations", "ack", "send", "files"),
+                (
+                    "schema",
+                    "owner",
+                    "revision",
+                    "state",
+                    "status",
+                    "obligations",
+                    "ack",
+                    "send",
+                    "files",
+                ),
                 ("reported_usage",),
             )
             if response["schema"] != RETURN_SCHEMA or response["owner"] != item["owner"]:
                 raise ValueError("Response schema/owner mismatch")
-            if type(response["revision"]) is not int or response["revision"] != item["request"]["revision"]:
+            if (
+                type(response["revision"]) is not int
+                or response["revision"] != item["request"]["revision"]
+            ):
                 raise ValueError("Response revision mismatch")
             if response["status"] not in OWNER_STATUSES:
                 raise ValueError("Invalid owner status")
@@ -433,7 +479,9 @@ class Harness:
             captured = self._validate_return_files(response)
             return raw, response, sends, captured
         except (ValueError, TypeError, KeyError, UnicodeError, binascii.Error) as exc:
-            raise Rejection("protocol_error", f"{item['owner']} turn {item['turn']}: {exc}") from exc
+            raise Rejection(
+                "protocol_error", f"{item['owner']} turn {item['turn']}: {exc}"
+            ) from exc
 
     def accept_return(self, item: dict[str, Any]) -> None:
         raw, response, sends, captured = self.validate_return(item)
@@ -451,7 +499,9 @@ class Harness:
         for path, value in sorted(captured.items()):
             destination = file_root.joinpath(*target_path(path))
             if not destination.resolve().is_relative_to(file_root_resolved):
-                raise Rejection("protocol_error", "Target path escapes checkpoint directory: " + path)
+                raise Rejection(
+                    "protocol_error", "Target path escapes checkpoint directory: " + path
+                )
             atomic_write_bytes(destination, value, exclusive=True)
             manifest.append(
                 {
@@ -523,7 +573,9 @@ class Harness:
         for owner, state in self.owners.items():
             for path, value in state["files"].items():
                 if path in files:
-                    raise Rejection("artifact_conflict", "Multiple owners claim target path: " + path)
+                    raise Rejection(
+                        "artifact_conflict", "Multiple owners claim target path: " + path
+                    )
                 files[path] = value
                 manifest.append(
                     {
@@ -551,7 +603,9 @@ class Harness:
         for path, value in sorted(files.items()):
             destination = staging.joinpath(*target_path(path))
             if not destination.resolve().is_relative_to(staging_resolved):
-                raise Rejection("protocol_error", "Target path escapes submission staging directory: " + path)
+                raise Rejection(
+                    "protocol_error", "Target path escapes submission staging directory: " + path
+                )
             atomic_write_bytes(destination, value, exclusive=True)
 
         destination = self.root / "submitted"
@@ -570,7 +624,9 @@ class Harness:
             if self.reason is not None:
                 break
             if time.monotonic() >= item["deadline"]:
-                self.fail("worker_timeout", f"{owner} turn {item['turn']} exceeded per-turn allowance")
+                self.fail(
+                    "worker_timeout", f"{owner} turn {item['turn']} exceeded per-turn allowance"
+                )
                 break
             if item["process"].poll() is None:
                 continue
@@ -585,7 +641,9 @@ class Harness:
                 self.fail("worker_timeout", "Turn deadline reached before return admission")
             if self.reason is None:
                 if reason != "completed":
-                    self.fail("worker_failed", f"{owner} exited with code {item['process'].returncode}")
+                    self.fail(
+                        "worker_failed", f"{owner} exited with code {item['process'].returncode}"
+                    )
                 else:
                     self.accept_return(item)
 
@@ -602,25 +660,43 @@ class Harness:
             "owners": {
                 owner: {
                     key: state[key]
-                    for key in ("revision", "status", "obligations", "return_path", "manifest_path", "artifacts_dir")
+                    for key in (
+                        "revision",
+                        "status",
+                        "obligations",
+                        "return_path",
+                        "manifest_path",
+                        "artifacts_dir",
+                    )
                 }
                 for owner, state in self.owners.items()
             },
             "messages": {
                 "admitted": len(self.messages),
                 "acknowledged": sum(message["acknowledged"] for message in self.messages.values()),
-                "pending": [mid for mid, message in self.messages.items() if not message["acknowledged"]],
+                "pending": [
+                    mid for mid, message in self.messages.items() if not message["acknowledged"]
+                ],
             },
             "artifact": self.artifact,
             "harness_identity": self.identity,
             "local_resources": {
                 "child_user_cpu_seconds": max(0.0, cpu_user - self.cpu_start[0]),
                 "child_system_cpu_seconds": max(0.0, cpu_sys - self.cpu_start[1]),
-                "process_wall_seconds_sum": sum(record["elapsed_seconds"] for record in self.process_records),
-                "captured_stdout_bytes": sum(record["stdout_bytes"] for record in self.process_records),
-                "captured_stderr_bytes": sum(record["stderr_bytes"] for record in self.process_records),
-                "observed_output_bytes": sum(record["observed_output_bytes"] for record in self.process_records),
-                "remote_model_usage": "unmeasured; worker reported_usage remains unverified in exact returns",
+                "process_wall_seconds_sum": sum(
+                    record["elapsed_seconds"] for record in self.process_records
+                ),
+                "captured_stdout_bytes": sum(
+                    record["stdout_bytes"] for record in self.process_records
+                ),
+                "captured_stderr_bytes": sum(
+                    record["stderr_bytes"] for record in self.process_records
+                ),
+                "observed_output_bytes": sum(
+                    record["observed_output_bytes"] for record in self.process_records
+                ),
+                "remote_model_usage": "unmeasured; worker reported_usage remains "
+                "unverified in exact returns",
                 "limits": self.limits,
             },
         }
@@ -632,7 +708,7 @@ class Harness:
             try:
                 old_signals[sig] = signal.getsignal(sig)
                 signal.signal(sig, lambda *_: setattr(self, "cancel_requested", True))
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 pass
 
         try:
@@ -652,7 +728,11 @@ class Harness:
                     self.submit()
                     break
 
-                while self.ready and len(self.active) < self.limits["parallelism"] and self.reason is None:
+                while (
+                    self.ready
+                    and len(self.active) < self.limits["parallelism"]
+                    and self.reason is None
+                ):
                     if self.turn_count >= self.limits["max_turns"]:
                         self.fail("turn_limit", "Total invocation allowance exhausted")
                         break
@@ -661,7 +741,9 @@ class Harness:
                     self.launch(owner)
 
                 if self.reason is None and not self.active and not self.ready:
-                    self.fail("stalled", "No runnable owner; selected completion obligations remain")
+                    self.fail(
+                        "stalled", "No runnable owner; selected completion obligations remain"
+                    )
                 if self.reason is None:
                     self.pump(0.02)
         except Rejection as exc:
@@ -675,10 +757,8 @@ class Harness:
                 self.finish_process(item, self.reason or "harness_error")
             self.active.clear()
             for sig, handler in old_signals.items():
-                try:
+                with contextlib.suppress(OSError, ValueError):
                     signal.signal(sig, handler)
-                except (OSError, ValueError):
-                    pass
 
         result = self._build_run_result()
         write_json(self.root / "result.json", result)

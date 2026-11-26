@@ -1,5 +1,4 @@
 """Judgments on an exact proposal and settlement of its captured or staged notices."""
-from __future__ import annotations
 
 from typing import Any
 
@@ -24,14 +23,24 @@ class ImpactReviews:
         account(treatment.get("account"))
 
     def review(self, r: dict[str, Any]) -> dict[str, Any]:
-        fields(r, {"actor", "command", "op", "proposal", "notice", "basis", "disposition", "account"})
+        fields(
+            r, {"actor", "command", "op", "proposal", "notice", "basis", "disposition", "account"}
+        )
         proposal, context, target = self.proposals.current(r.get("proposal"), r["actor"])
         self.revisions.verify(context["basis"], current=True, keep_bodies=False)
 
         no = integer(r.get("notice"), "notice", 1)
         row = self.db.execute("SELECT * FROM notices WHERE id=?", (no,)).fetchone()
-        require(row is not None and row["receiver"] == r["actor"], "wrong-recipient", "Notice is addressed elsewhere")
-        require(row["target"] == target["id"], "wrong-receiving-target", "Review belongs at the nominated target")
+        require(
+            row is not None and row["receiver"] == r["actor"],
+            "wrong-recipient",
+            "Notice is addressed elsewhere",
+        )
+        require(
+            row["target"] == target["id"],
+            "wrong-receiving-target",
+            "Review belongs at the nominated target",
+        )
         require(
             row["state"] == "pending" and row["required"] and row["kind"] == "proposed-impact",
             "notice-changed",
@@ -41,6 +50,8 @@ class ImpactReviews:
         self.validate_disposition(r)
         basis = r.get("basis")
         self.revisions.verify(basis, current=True, keep_bodies=False)
+        if not isinstance(basis, list):
+            raise ValueError("Invalid basis")
 
         cited = loads_strict(row["body"])["basis"]
         require(
@@ -82,7 +93,9 @@ class ImpactReviews:
             SELECT n.id FROM notices AS n
             WHERE n.target=? AND n.receiver=? AND n.required=1 AND n.state='pending'
                 AND n.id NOT IN (SELECT value FROM json_each(?))
-                AND NOT EXISTS (SELECT 1 FROM impact_reviews AS r WHERE r.proposal=? AND r.notice=n.id)
+                AND NOT EXISTS (
+                    SELECT 1 FROM impact_reviews AS r WHERE r.proposal=? AND r.notice=n.id
+                )
             ORDER BY n.id LIMIT 1""",
             (target["id"], target["owner"], encoded(list(direct)), proposal),
         ).fetchone()
@@ -95,7 +108,11 @@ class ImpactReviews:
         if row:
             return {"notice": row[0], "reason": "unreviewed"}
         row = self.changed(proposal["id"])
-        return {"notice": row[0], "reason": "changed-source"} if row else {"notice": None, "reason": None}
+        return (
+            {"notice": row[0], "reason": "changed-source"}
+            if row
+            else {"notice": None, "reason": None}
+        )
 
     def prepare(
         self,
@@ -186,7 +203,13 @@ class ImpactReviews:
                     receipt=json_set(r.judgment,'$.artifact',json(?),'$.context',?)
                     FROM impact_reviews AS r WHERE r.proposal=? AND notices.id=r.notice
                     AND notices.state='pending' AND notices.target=? AND notices.receiver=?""",
-                (encoded(pin(record)), context["id"], proposal["id"], target["id"], target["owner"]),
+                (
+                    encoded(pin(record)),
+                    context["id"],
+                    proposal["id"],
+                    target["id"],
+                    target["owner"],
+                ),
             )
             require(
                 updated.rowcount == staged,

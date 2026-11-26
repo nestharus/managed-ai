@@ -1,33 +1,35 @@
 """Verification helpers for release packaging: identity, engine isolation, and boundaries."""
-from __future__ import annotations
 
 import codecs
-from contextlib import contextmanager
 import gzip
 import hashlib
 import importlib
 import importlib.util
-from itertools import zip_longest
 import json
-from pathlib import Path
+import os
 import re
 import runpy
 import stat
 import sys
+from collections.abc import Callable, Generator, Iterable, Iterator
+from contextlib import contextmanager
+from itertools import zip_longest
+from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 for _entry in (str(REPO_ROOT / "src"), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai.platform import (
+from managed_ai.platform import (  # noqa: E402
     atomic_bytes,
     check_ordinary_ancestors,
     is_reparse_or_symlink_stat,
     sha256_file,
     strict_json_loads,
 )
-from scripts.release.refresh_guidance import source_identity_line
+from scripts.release.refresh_guidance import source_identity_line  # noqa: E402
 
 REPO_RELEASE_DIR = Path(__file__).resolve().parent
 SCRIPTS_SELECTION = Path("scripts/release/current_sources.json")
@@ -53,19 +55,19 @@ def identity(path: Path) -> dict:
     }
 
 
-def optional_entry(path: Path):
+def optional_entry(path: Path) -> os.stat_result | None:
     try:
         return path.lstat()
     except FileNotFoundError:
         return None
 
 
-def ordinary(path: Path, info, kind) -> None:
+def ordinary(path: Path, info: os.stat_result, kind: Callable[[int], bool]) -> None:
     if not kind(info.st_mode) or is_reparse_or_symlink_stat(info):
         raise ValueError(f"{ORDINARY_ERROR}: {path}")
 
 
-def check_ordinary_path(path: Path, kind) -> Path:
+def check_ordinary_path(path: Path, kind: Callable[[int], bool]) -> Path:
     validated = check_ordinary_ancestors(
         path,
         expect_dir=(kind is stat.S_ISDIR),
@@ -74,7 +76,13 @@ def check_ordinary_path(path: Path, kind) -> Path:
     return validated.resolve(strict=True)
 
 
-def observed_path(root: Path, relative: Path, kind, *, scope_probe: bool = False) -> Path | None:
+def observed_path(
+    root: Path,
+    relative: Path,
+    kind: Callable[[int], bool],
+    *,
+    scope_probe: bool = False,
+) -> Path | None:
     """Find an ordinary member or determine that it is absent."""
     path = root
     for parent in relative.parts[:-1]:
@@ -95,7 +103,7 @@ def observed_path(root: Path, relative: Path, kind, *, scope_probe: bool = False
     return None
 
 
-def exact_path(root: Path, relative: Path, kind) -> Path | None:
+def exact_path(root: Path, relative: Path, kind: Callable[[int], bool]) -> Path | None:
     """Find an ordinary member with exact on-disk spelling at every segment, or None if absent."""
     ordinary(root, root.lstat(), stat.S_ISDIR)
     path = root
@@ -134,7 +142,9 @@ def _resolve_bundle_root(core: Path, bundle_root: Path | None) -> Path:
 
 
 def resolve_selection_path(core: Path, bundle_root: Path | None = None) -> Path:
-    """Locate current_sources.json in bundle scripts/release/, legacy core/release/, or co-located scripts/release/."""
+    """Locate current_sources.json in bundle scripts/release/, legacy core/release/, or co-located
+    scripts/release/.
+    """
     resolved_core = core.resolve(strict=True)
     effective_bundle = _resolve_bundle_root(resolved_core, bundle_root)
     if effective_bundle != resolved_core:
@@ -150,7 +160,9 @@ def resolve_selection_path(core: Path, bundle_root: Path | None = None) -> Path:
 
 
 def resolve_navigation_path(core: Path, bundle_root: Path | None = None) -> Path | None:
-    """Locate navigation.json in bundle scripts/release/, legacy core/release/, or co-located scripts/release/."""
+    """Locate navigation.json in bundle scripts/release/, legacy core/release/, or co-located
+    scripts/release/.
+    """
     resolved_core = core.resolve(strict=True)
     effective_bundle = _resolve_bundle_root(resolved_core, bundle_root)
     if effective_bundle != resolved_core:
@@ -172,8 +184,10 @@ def resolve_navigation_path(core: Path, bundle_root: Path | None = None) -> Path
 def inventory_engine(root: Path) -> Path | None:
     if observed_path(root, Path("src/managed_ai"), stat.S_ISDIR, scope_probe=True) is not None and (
         observed_path(root, SCRIPTS_SELECTION, stat.S_ISREG, scope_probe=True) is not None
-        or observed_path(root, Path("src/managed_ai") / MARKER, stat.S_ISREG, scope_probe=True) is not None
-        or observed_path(root, Path("src/managed_ai") / SELECTION, stat.S_ISREG, scope_probe=True) is not None
+        or observed_path(root, Path("src/managed_ai") / MARKER, stat.S_ISREG, scope_probe=True)
+        is not None
+        or observed_path(root, Path("src/managed_ai") / SELECTION, stat.S_ISREG, scope_probe=True)
+        is not None
     ):
         return (root / "src/managed_ai").resolve(strict=True)
 
@@ -226,7 +240,7 @@ def read_catalogue(path: Path) -> dict:
 
 
 @contextmanager
-def with_engine(engine: Path, relative: str):
+def with_engine(engine: Path, relative: str) -> Generator[dict[str, Any]]:
     """Mount an external or co-located engine cleanly across the full caller operation."""
     engine_path = Path(engine).resolve(strict=True)
     is_pkg = is_package_engine(engine_path)
@@ -240,7 +254,10 @@ def with_engine(engine: Path, relative: str):
             existing_file = getattr(existing, "__file__", None) if existing is not None else None
             existing_paths = list(getattr(existing, "__path__", ())) if existing is not None else []
             already_same = existing is not None and (
-                (existing_file is not None and Path(existing_file).resolve() == (engine_path / "__init__.py").resolve())
+                (
+                    existing_file is not None
+                    and Path(existing_file).resolve() == (engine_path / "__init__.py").resolve()
+                )
                 or any(Path(path_item).resolve() == engine_path for path_item in existing_paths)
             )
             if not already_same:
@@ -262,7 +279,7 @@ def with_engine(engine: Path, relative: str):
                 importlib.invalidate_caches()
 
             mod = importlib.import_module(mod_name)
-            if Path(mod.__file__).resolve(strict=True) != expected:
+            if mod.__file__ is None or Path(mod.__file__).resolve(strict=True) != expected:
                 raise ValueError("Loaded engine module differs from selected engine: " + mod_name)
             yield vars(mod)
         else:
@@ -282,7 +299,9 @@ def with_engine(engine: Path, relative: str):
             importlib.invalidate_caches()
 
 
-def received_compressed_text(system, *, engine: Path | None = None) -> set[tuple[str, str, int]]:
+def received_compressed_text(
+    system: Any, *, engine: Path | None = None
+) -> set[tuple[str, str, int]]:
     """Select complete, source-bound compressed data from native import receipts."""
     if hasattr(system, "completed_import_records"):
         acknowledgements = system.completed_import_records()
@@ -332,8 +351,8 @@ def check_compressed_text(path: Path, *, max_bytes: int = MAX_COMPRESSED_TEXT_BY
         decode.decode(b"", final=True)
 
 
-def _normalize_prefixes(items) -> tuple[str, ...]:
-    prefixes = []
+def _normalize_prefixes(items: Iterable[object]) -> tuple[str, ...]:
+    prefixes: list[str] = []
     for prefix in items:
         if isinstance(prefix, str) and prefix:
             normalized = prefix if prefix.endswith("/") else prefix + "/"
@@ -342,10 +361,14 @@ def _normalize_prefixes(items) -> tuple[str, ...]:
     return tuple(prefixes)
 
 
-def store_compressed_prefixes(store) -> tuple[str, ...]:
+def store_compressed_prefixes(store: Any) -> tuple[str, ...]:
     """Return allowed content-addressed basis prefixes declared by the store's domains."""
     selection = getattr(store, "domain_selection", None)
-    declared = getattr(selection, "content_addressed_basis_prefixes", None) if selection is not None else None
+    declared = (
+        getattr(selection, "content_addressed_basis_prefixes", None)
+        if selection is not None
+        else None
+    )
     if declared:
         normalized = _normalize_prefixes(declared)
         if normalized:
@@ -363,7 +386,10 @@ def store_compressed_prefixes(store) -> tuple[str, ...]:
             expected_sha = binding.get("sha256")
             if not isinstance(rel, str) or not rel or Path(rel).anchor or "\\" in rel:
                 raise ValueError("Domain binding requires a relative POSIX path")
-            if not isinstance(expected_sha, str) or re.fullmatch(r"[0-9a-f]{64}", expected_sha) is None:
+            if (
+                not isinstance(expected_sha, str)
+                or re.fullmatch(r"[0-9a-f]{64}", expected_sha) is None
+            ):
                 raise ValueError("Domain binding requires an exact SHA-256 pin: " + rel)
             domain_path = check_ordinary_path(store_root / rel, stat.S_ISREG)
             domain_bytes = domain_path.read_bytes()
@@ -392,14 +418,20 @@ def verify_core_selection(
         )
 
     bundle_mode = bundle_root is not None
-    member_root = bundle_root.resolve(strict=True) if bundle_mode else core.resolve(strict=True)
+    member_root = (
+        bundle_root.resolve(strict=True) if bundle_root is not None else core.resolve(strict=True)
+    )
     member_map = tree if (bundle_mode and tree is not None) else native
     if bundle_mode:
-        expected_root_rel = "../../.." if (core.name == "managed_ai" and core.parent.name == "src") else "../.."
+        expected_root_rel = (
+            "../../.." if (core.name == "managed_ai" and core.parent.name == "src") else "../.."
+        )
     else:
         expected_root_rel = ".."
 
-    directories = {(member_root / parent).as_posix() for name in member_map for parent in Path(name).parents}
+    directories = {
+        (member_root / parent).as_posix() for name in member_map for parent in Path(name).parents
+    }
     selection_path = resolve_selection_path(core, bundle_root=bundle_root)
     selection = read_json(selection_path)
     current = read_json(core / MARKER)
@@ -419,8 +451,15 @@ def verify_core_selection(
 
     for row in selection["bodies"]:
         spelling = row["source"]
-        if not isinstance(spelling, str) or not spelling or "\\" in spelling or Path(spelling).anchor:
-            raise ValueError("Current source reference must be relative to the engine: " + row["id"])
+        if (
+            not isinstance(spelling, str)
+            or not spelling
+            or "\\" in spelling
+            or Path(spelling).anchor
+        ):
+            raise ValueError(
+                "Current source reference must be relative to the engine: " + row["id"]
+            )
 
         relative = Path(spelling)
         source = (core / relative).resolve(strict=True)
@@ -459,7 +498,7 @@ def verify_core_selection(
     return selection["bodies"]
 
 
-def displayed_source_rows(page: str, selected_ids: set[str]):
+def displayed_source_rows(page: str, selected_ids: set[str]) -> Iterator[str]:
     """Read the selected identity under each heading, ignoring navigation prose."""
     for section in ("\n" + page).split("\n## ")[1:]:
         ident, _, body = section.partition("\n")
@@ -476,7 +515,9 @@ def displayed_source_rows(page: str, selected_ids: set[str]):
 
 def verify_source_list(path: Path, bodies: list[dict]) -> None:
     expected = (f"{row['id']}: {source_identity_line(row)}" for row in bodies)
-    displayed = displayed_source_rows(path.read_text(encoding="utf-8"), {row["id"] for row in bodies})
+    displayed = displayed_source_rows(
+        path.read_text(encoding="utf-8"), {row["id"] for row in bodies}
+    )
     for wanted, found in zip_longest(expected, displayed, fillvalue="<no selected row>"):
         if wanted != found:
             raise ValueError(
@@ -485,7 +526,7 @@ def verify_source_list(path: Path, bodies: list[dict]) -> None:
             )
 
 
-def descriptors(root: Path, directory: str, filename: str):
+def descriptors(root: Path, directory: str, filename: str) -> Iterator[Path]:
     parent = observed_path(root, Path(directory), stat.S_ISDIR)
     if parent is None:
         return
@@ -536,7 +577,9 @@ def verify_workbench_components(root: Path, *, stamp: bool = False) -> Path | No
 
     files = components.get("files")
     if not isinstance(files, dict) or not files:
-        raise ValueError("Invalid peer component manifest COMPONENTS.json: non-empty 'files' object required")
+        raise ValueError(
+            "Invalid peer component manifest COMPONENTS.json: non-empty 'files' object required"
+        )
 
     resolved_companions = companions_root.resolve(strict=True)
     stamped_files = {}
@@ -549,7 +592,12 @@ def verify_workbench_components(root: Path, *, stamp: bool = False) -> Path | No
             raise ValueError("Invalid shared component entry: " + name)
 
         relative = Path(name)
-        if relative.anchor or ".." in relative.parts or not relative.parts or relative.as_posix() != name:
+        if (
+            relative.anchor
+            or ".." in relative.parts
+            or not relative.parts
+            or relative.as_posix() != name
+        ):
             raise ValueError("Unsafe shared component path: " + name)
 
         target = exact_path(companions_root, relative, stat.S_ISREG)

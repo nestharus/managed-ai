@@ -1,5 +1,4 @@
 """Domain-native contracts for the published source library and lexical search engines."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path

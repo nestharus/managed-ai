@@ -1,10 +1,9 @@
 """Explicit retirement planning and verified local materialization retirement."""
-from __future__ import annotations
 
 import os
-from pathlib import Path
 import shutil
 import stat
+from pathlib import Path
 from typing import Any
 
 from .retention_closures import read_manifest
@@ -27,7 +26,9 @@ from .store_io import (
 
 
 def _guard_subtree_no_junctions(source: Path) -> None:
-    """Refuse retirement if a target directory or any descendant is an NTFS reparse point / junction."""
+    """Refuse retirement if a target directory or any descendant is an NTFS reparse point /
+    junction.
+    """
     require(
         not is_reparse_or_symlink(source),
         "Cannot remove symlink or reparse point as directory: " + str(source),
@@ -85,6 +86,8 @@ def _load_and_validate_proposal(
     )
     prefixes = proposal.get("prefixes")
     require(isinstance(prefixes, list), "Retirement proposal prefixes must be a list")
+    if not isinstance(prefixes, list):
+        raise ValueError("Retirement proposal prefixes must be a list")
 
     groups = manifest.get("materialization_groups", [])
     protected = [*protected_raw, *(g["prefix"] for g in groups if g["state"] == "active")]
@@ -309,7 +312,8 @@ def _record_retirement(
         "previous_selection": expected_selection,
         "source_manifest": current["manifest"],
         "retired": removed,
-        "recovery": "Bodies, occurrences and original transports remain in the managed reference closure.",
+        "recovery": "Bodies, occurrences and original transports "
+        "remain in the managed reference closure.",
         "boundary": (
             "Cooperative local maintenance; store mutations serialize via cooperative store lock, "
             "with no cross-filesystem atomicity or lock against external editors."
@@ -390,7 +394,7 @@ def retire(
         sel_rel = safe_relative(pointer["path"])
         sel_path = check_unfollowed_descendant(
             store.root,
-            sel_rel,
+            sel_rel.as_posix(),
             role="Current selection",
         )
         current_raw = sel_path.read_bytes()

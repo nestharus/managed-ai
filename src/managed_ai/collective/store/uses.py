@@ -1,5 +1,4 @@
 """Continuing evidence enrollment and actual consumption at a receiving target."""
-from __future__ import annotations
 
 from typing import Any
 
@@ -66,16 +65,33 @@ class ReceivingUses:
         stale = self.changed(target)
         if stale:
             prior = loads_strict(stale[0])
-            raise Refused("basis-changed", "Requalify the receiving relationship for " + prior["id"])
+            raise Refused(
+                "basis-changed", "Requalify the receiving relationship for " + prior["id"]
+            )
 
     def qualify(self, r: dict[str, Any]) -> dict[str, Any]:
-        fields(r, {"actor", "command", "op", "target", "prior", "current", "disposition", "account", "token"})
+        fields(
+            r,
+            {
+                "actor",
+                "command",
+                "op",
+                "target",
+                "prior",
+                "current",
+                "disposition",
+                "account",
+                "token",
+            },
+        )
         (target,) = self.revisions.verify([r.get("target")], current=True)
         owned(target, r["actor"])
         self.claims.check(target["id"], r["actor"], r.get("token"))
 
         current = r.get("current")
         self.revisions.verify([current], current=True, keep_bodies=False)
+        if not isinstance(current, dict):
+            raise Refused("invalid-input", "Incomplete source pin")
         row = self.db.execute(
             "SELECT pin FROM use_sources WHERE target=? AND source=?",
             (target["id"], current["id"]),
@@ -181,7 +197,9 @@ class ReceivingUses:
         sources = {item["id"]: item for item in self.revisions.verify(outside, current=True)}
 
         require(
-            candidate_id != observation_id and candidate_id in sources and observation_id in sources,
+            candidate_id != observation_id
+            and candidate_id in sources
+            and observation_id in sources,
             "unbound-use",
             "Capture both the candidate and the receiving observation before approval",
         )
@@ -242,5 +260,8 @@ class ReceivingUses:
             "event": event,
             "artifact": pin(record),
             **bindings,
-            "scope": "One local admission. Follow the pinned editions for the actual payload and instructions.",
+            "scope": (
+                "One local admission. Follow the pinned editions for the actual payload and "
+                "instructions."
+            ),
         }

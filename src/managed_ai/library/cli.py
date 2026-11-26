@@ -4,12 +4,11 @@
 Explicit top-level --library requests dispatch directly to the published library
 reader without mutating sys.argv.
 """
-from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
 
 if __name__ == "__main__":
@@ -20,44 +19,48 @@ if __name__ == "__main__":
 
 from managed_ai.library.config import DEFAULT_LIBRARY_CONFIG
 
-_SUBCOMMANDS = frozenset({
-    "verify",
-    "show",
-    "discover",
-    "modules",
-    "prepare-index",
-    "discover-batch",
-    "context",
-    "export",
-    "inspect",
-    "import",
-})
-_DISCOVER_FLAGS = frozenset({
-    "--kind",
-    "--limit",
-    "--offset",
-    "--content",
-    "-h",
-    "--help",
-})
+_SUBCOMMANDS = frozenset(
+    {
+        "verify",
+        "show",
+        "discover",
+        "modules",
+        "prepare-index",
+        "discover-batch",
+        "context",
+        "export",
+        "inspect",
+        "import",
+    }
+)
+_DISCOVER_FLAGS = frozenset(
+    {
+        "--kind",
+        "--limit",
+        "--offset",
+        "--content",
+        "-h",
+        "--help",
+    }
+)
 
 
 def _is_top_level_library_invocation(argv: list[str]) -> bool:
     """Return True only when --library is given before the subcommand."""
     idx = 0
     while idx < len(argv):
-        token = argv[idx]
-        if token == "--":
+        arg = argv[idx]
+        if arg == "--":
             return False
-        if token == "--library" or token.startswith("--library="):
+        if arg == "--library" or arg.startswith("--library="):
             return True
-        if token == "--store":
+        if arg == "--store":
             idx += 2
             continue
-        if token.startswith("--store="):
+        if arg.startswith("--store="):
             idx += 1
             continue
-        if token in _SUBCOMMANDS or not token.startswith("-"):
+        if arg in _SUBCOMMANDS or not arg.startswith("-"):
             return False
         idx += 1
     return False
@@ -66,11 +69,15 @@ def _is_top_level_library_invocation(argv: list[str]) -> bool:
 def _normalize_query_arg(argv: list[str]) -> list[str]:
     """Allow `discover --query --something` without argparse treating the query as a flag."""
     out = list(argv)
-    for idx, token in enumerate(out):
-        if token == "--query" and idx + 1 < len(out):
+    for idx, arg in enumerate(out):
+        if arg == "--query" and idx + 1 < len(out):
             nxt = out[idx + 1]
-            if nxt.startswith("-") and nxt not in _DISCOVER_FLAGS and not any(
-                nxt.startswith(flag + "=") for flag in ("--kind", "--limit", "--offset")
+            if (
+                nxt.startswith("-")
+                and nxt not in _DISCOVER_FLAGS
+                and not any(
+                    nxt.startswith(flag + "=") for flag in ("--kind", "--limit", "--offset")
+                )
             ):
                 out[idx] = "--query=" + nxt
                 del out[idx + 1]
@@ -82,7 +89,9 @@ def _build_library_parser() -> argparse.ArgumentParser:
     scfg = DEFAULT_LIBRARY_CONFIG.search
     bcfg = DEFAULT_LIBRARY_CONFIG.batch
 
-    parser = argparse.ArgumentParser(description="Browse, verify and acquire published source libraries.", allow_abbrev=False)
+    parser = argparse.ArgumentParser(
+        description="Browse, verify and acquire published source libraries.", allow_abbrev=False
+    )
     parser.add_argument("--library", action="append", type=Path)
     sub = parser.add_subparsers(dest="action", required=True)
 
@@ -99,11 +108,23 @@ def _build_library_parser() -> argparse.ArgumentParser:
     discover.add_argument("--scan-limit", type=int, default=scfg.default_scan_limit)
     discover.add_argument("--max-bytes", type=int, default=scfg.default_max_bytes)
     discover.add_argument("--backend", choices=("bm25", "fts5", "literal"), default="bm25")
-    discover.add_argument("--index", type=Path, help="Nominate from this prepared derivative; requires FTS5 and digest")
-    discover.add_argument("--index-sha256", help="Exact expected digest from the selected prepare-index receipt")
+    discover.add_argument(
+        "--index",
+        type=Path,
+        help="Nominate from this prepared derivative; requires FTS5 and digest",
+    )
+    discover.add_argument(
+        "--index-sha256", help="Exact expected digest from the selected prepare-index receipt"
+    )
 
-    batch = sub.add_parser("discover-batch", allow_abbrev=False, help="Share one verified prepared image across queries")
-    batch.add_argument("--queries", type=Path, required=True, help="UTF-8 JSON array of 1 to 32 query strings")
+    batch = sub.add_parser(
+        "discover-batch",
+        allow_abbrev=False,
+        help="Share one verified prepared image across queries",
+    )
+    batch.add_argument(
+        "--queries", type=Path, required=True, help="UTF-8 JSON array of 1 to 32 query strings"
+    )
     batch.add_argument("--index", type=Path, required=True)
     batch.add_argument("--index-sha256", required=True)
     batch.add_argument("--limit", type=int, default=scfg.default_limit)
@@ -111,7 +132,9 @@ def _build_library_parser() -> argparse.ArgumentParser:
     batch.add_argument("--max-bytes", type=int, default=scfg.default_max_bytes)
     batch.add_argument("--max-result-bytes", type=int, default=bcfg.max_result_bytes)
 
-    prepare = sub.add_parser("prepare-index", allow_abbrev=False, help="Verify sources and build immutable FTS5 index")
+    prepare = sub.add_parser(
+        "prepare-index", allow_abbrev=False, help="Verify sources and build immutable FTS5 index"
+    )
     prepare.add_argument("--output", type=Path, required=True)
     prepare.add_argument("--scan-limit", type=int, default=scfg.default_scan_limit)
     prepare.add_argument("--max-bytes", type=int, default=scfg.default_max_bytes)
@@ -147,7 +170,10 @@ def _dispatch_library_action(args: argparse.Namespace, libraries: list[Any]) -> 
             "libraries": [
                 {
                     "library_sha256": lib.sha256,
-                    "modules": [{"pin": lib.pin(row, "module"), "entry": row} for row in lib.modules.values()],
+                    "modules": [
+                        {"pin": lib.pin(row, "module"), "entry": row}
+                        for row in lib.modules.values()
+                    ],
                 }
                 for lib in libraries
             ]
@@ -158,7 +184,8 @@ def _dispatch_library_action(args: argparse.Namespace, libraries: list[Any]) -> 
         need(found, f"identity absent from the selected libraries: {args.identity}")
         need(
             len(found) == 1,
-            f"identity is present in several selected libraries: {args.identity}; select one with --library",
+            f"identity is present in several selected libraries: {args.identity}; "
+            "select one with --library",
         )
         result = found[0].show(args.identity)
         if args.text:
@@ -171,7 +198,10 @@ def _dispatch_library_action(args: argparse.Namespace, libraries: list[Any]) -> 
         return libraries[0].prepare_index(args.output, args.scan_limit, args.max_bytes)
 
     if args.action == "discover":
-        need(args.index is None or len(libraries) == 1, "prepared discovery requires one selected library")
+        need(
+            args.index is None or len(libraries) == 1,
+            "prepared discovery requires one selected library",
+        )
         return {
             "libraries": [
                 lib.discover(
@@ -200,7 +230,9 @@ def _dispatch_library_action(args: argparse.Namespace, libraries: list[Any]) -> 
             max_result_bytes=args.max_result_bytes,
         )
 
-    selection = decoded(read_bytes(args.selection, DEFAULT_LIBRARY_CONFIG.limits.max_manifest_bytes))
+    selection = decoded(
+        read_bytes(args.selection, DEFAULT_LIBRARY_CONFIG.limits.max_manifest_bytes)
+    )
     if args.action == "context":
         return context(libraries, selection, args.max_bytes)
     return export(libraries, selection, args.edition, args.output)
@@ -216,6 +248,15 @@ def run_library_cli(argv: list[str] | None = None) -> None:
     from managed_ai.library.lexical import SQLITE_ERRORS
 
     libraries: list[Library] = []
+    cli_errors: tuple[type[BaseException], ...] = (
+        OSError,
+        ValueError,
+        KeyError,
+        UnicodeError,
+        RuntimeError,
+        zipfile.BadZipFile,
+        *SQLITE_ERRORS,
+    )
 
     try:
         if args.action == "inspect":
@@ -230,9 +271,12 @@ def run_library_cli(argv: list[str] | None = None) -> None:
                 return
 
         print(json.dumps(result, ensure_ascii=False, indent=2))
-    except (OSError, ValueError, KeyError, UnicodeError, RuntimeError, zipfile.BadZipFile, *SQLITE_ERRORS) as exc:
-        print(json.dumps({"status": "refused", "operation": args.action, "error": str(exc)}), file=sys.stderr)
-        raise SystemExit(2)
+    except cli_errors as exc:
+        print(
+            json.dumps({"status": "refused", "operation": args.action, "error": str(exc)}),
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
     finally:
         for lib in libraries:
             lib.close()
@@ -271,14 +315,21 @@ def _execute_catalogue_action(catalogue: Any, args: argparse.Namespace) -> Any:
             "verified_bytes": sum(row["bytes"] for row in verified),
             "sealed_count": len(sealed),
             "sealed_without_body_read": sealed,
-            "scope": "Exact canonical byte custody; no participant acquisition or semantic acceptance is inferred.",
+            "scope": (
+                "Exact canonical byte custody; no participant acquisition or semantic acceptance "
+                "is "
+                "inferred."
+            ),
         }
 
     return {
         "status": "verified",
         "sources": verified,
         "sealed_without_body_read": sealed,
-        "scope": "Exact canonical byte custody; no participant acquisition or semantic acceptance is inferred.",
+        "scope": (
+            "Exact canonical byte custody; no participant acquisition or semantic acceptance is "
+            "inferred."
+        ),
     }
 
 
@@ -316,7 +367,12 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     from managed_ai.core.ownership import NativeLayout, external_root
-    from managed_ai.core.storage import AdmissionContended, admission_deadline, owner_admission, shared
+    from managed_ai.core.storage import (
+        AdmissionContended,
+        admission_deadline,
+        owner_admission,
+        shared,
+    )
     from managed_ai.store.selection.installed_catalogue import InstalledCatalogue
 
     args = _build_store_catalogue_parser().parse_args(_normalize_query_arg(raw_argv))
@@ -337,13 +393,13 @@ def main(argv: list[str] | None = None) -> None:
                     result = _execute_catalogue_action(catalogue, args)
             except AdmissionContended as exc:
                 print(json.dumps(exc.result(args.action)), file=sys.stderr)
-                raise SystemExit(75)
+                raise SystemExit(75) from None
         else:
             catalogue = InstalledCatalogue(engine_root / "store")
             result = _execute_catalogue_action(catalogue, args)
     except (ValueError, OSError, KeyError, TypeError) as exc:
         print(json.dumps({"status": "unresolved", "error": str(exc)}), file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(2) from None
 
     if result is not None:
         print(json.dumps(result, ensure_ascii=False, indent=2))

@@ -1,10 +1,10 @@
 """Shared workbench configuration normalization, command pinning, and controller loading."""
-from __future__ import annotations
 
 import importlib.util
-from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
 import sys
+from collections.abc import Sequence
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import ModuleType
 from typing import Any
 
@@ -25,9 +25,7 @@ CORE_MODULES = (
 )
 
 BUNDLED_SEARCH_ENTRY = Path("library/lexical.py")
-BUNDLED_SEARCH_DEPS = (
-    Path("library/config.py"),
-)
+BUNDLED_SEARCH_DEPS = (Path("library/config.py"),)
 
 RESOLVE_FIELDS = frozenset(
     {
@@ -42,6 +40,7 @@ RESOLVE_FIELDS = frozenset(
 
 def default_search_paths(repo_root: Path | str | None = None) -> tuple[Path, list[Path]]:
     """Return (entry_path, dependency_paths) for the bundled lexical search library."""
+    candidates: tuple[tuple[Path, Path, tuple[Path, ...]], ...]
     if repo_root is None:
         engine = WORKBENCH_ROOT.parents[1]
         candidates = (
@@ -91,7 +90,7 @@ def paths_overlap(a: Path, b: Path) -> bool:
     return a == b or a.is_relative_to(b) or b.is_relative_to(a)
 
 
-def pin_files(paths: list[Path | str]) -> dict[str, dict[str, Any]]:
+def pin_files(paths: Sequence[Path | str]) -> dict[str, dict[str, Any]]:
     return {str(Path(path).resolve()): pin_file(Path(path).resolve()) for path in paths}
 
 
@@ -102,8 +101,10 @@ def parse_command_targets(
     allow_placeholders: bool = False,
 ) -> tuple[str, str | None]:
     """Identify the executable and directly named Python script target for a command argv."""
-    if not isinstance(command, list) or not command or any(
-        not isinstance(x, str) or "\x00" in x for x in command
+    if (
+        not isinstance(command, list)
+        or not command
+        or any(not isinstance(x, str) or "\x00" in x for x in command)
     ):
         raise ValueError("argv must be a nonempty list of strings without NUL characters")
 
@@ -165,7 +166,9 @@ def normalize_config(config: Any) -> dict[str, Any]:
         Path(result.get("controller_dir", DEFAULT_CONTROLLER_DIR)).resolve(),
     )
     result["source_state_dir"] = str(
-        Path(result.get("source_state_dir", Path(result["state_dir"]) / "source-service")).resolve(),
+        Path(
+            result.get("source_state_dir", Path(result["state_dir"]) / "source-service")
+        ).resolve(),
     )
 
     model = result.get("model")
@@ -250,8 +253,12 @@ def load_controller(controller_dir: Path | str | None = None) -> tuple[Any, dict
     pkg.__package__ = pkg_name
 
     support_spec = importlib.util.spec_from_file_location(support_name, support_path)
+    if support_spec is None or support_spec.loader is None:
+        raise ImportError(f"Unable to load controller support module from {support_path}")
     support = importlib.util.module_from_spec(support_spec)
     controller_spec = importlib.util.spec_from_file_location(controller_name, controller_path)
+    if controller_spec is None or controller_spec.loader is None:
+        raise ImportError(f"Unable to load controller runtime module from {controller_path}")
     controller = importlib.util.module_from_spec(controller_spec)
 
     created = (pkg_name, support_name, controller_name)

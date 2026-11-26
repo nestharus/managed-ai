@@ -1,5 +1,4 @@
 """Domain-native configuration and service contract for continuing_work."""
-from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable

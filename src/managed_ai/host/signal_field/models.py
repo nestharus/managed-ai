@@ -1,5 +1,4 @@
 """Structured worker capture models and job projection views for signal_field."""
-from __future__ import annotations
 
 import hashlib
 from typing import Any
@@ -10,7 +9,7 @@ from .config import MAX_WORKER_STREAM_BYTES, loads_strict
 class StreamCapture:
     """Memory-bounded pipe capture preserving exact streamed byte count and SHA-256."""
 
-    __slots__ = ("kept", "total_bytes", "sha256", "keep_limit", "limit_exceeded", "overflowed")
+    __slots__ = ("keep_limit", "kept", "limit_exceeded", "overflowed", "sha256", "total_bytes")
 
     def __init__(self, keep_limit: int) -> None:
         self.kept = bytearray()
@@ -24,7 +23,7 @@ class StreamCapture:
 class WorkerRunResult:
     """Outcome of one bounded worker subprocess invocation."""
 
-    __slots__ = ("returncode", "stdout", "stderr", "timed_out", "error")
+    __slots__ = ("error", "returncode", "stderr", "stdout", "timed_out")
 
     def __init__(
         self,
@@ -100,7 +99,10 @@ def worker_outcome(
 
 def job_view(row: Any) -> dict[str, Any]:
     """Project a SQLite jobs row into its structured inspection representation."""
-    outcome = row["worker_outcome"] if "worker_outcome" in row.keys() and row["worker_outcome"] else None
+    columns = tuple(row.keys())
+    outcome = (
+        row["worker_outcome"] if "worker_outcome" in columns and row["worker_outcome"] else None
+    )
     return {
         "job": row["id"],
         "use": row["use_id"],
@@ -117,7 +119,8 @@ def job_view(row: Any) -> dict[str, Any]:
 
 def oversized_job_summary(row: Any, full_bytes: int) -> dict[str, Any]:
     """Return a compact placeholder preserving monotone pagination for oversized jobs."""
-    has_outcome = bool(row["worker_outcome"]) if "worker_outcome" in row.keys() else False
+    columns = tuple(row.keys())
+    has_outcome = bool(row["worker_outcome"]) if "worker_outcome" in columns else False
     return {
         "job": row["id"],
         "use": row["use_id"],
@@ -129,5 +132,8 @@ def oversized_job_summary(row: Any, full_bytes: int) -> dict[str, Any]:
         "has_captured_attempt": row["attempt"] is not None,
         "has_blocked_recovery": row["gap"] is not None,
         "has_worker_outcome": has_outcome,
-        "detail": "Job exceeds pending max_bytes; call inspect(job_id=...) with a larger max_bytes for full details.",
+        "detail": (
+            "Job exceeds pending max_bytes; call inspect(job_id=...) with a larger max_bytes for "
+            "full details."
+        ),
     }

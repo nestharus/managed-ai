@@ -1,13 +1,12 @@
 """Source-grounded local workbench around the unchanged Study83 callable controller."""
-from __future__ import annotations
 
 import argparse
 import json
 import os
-from pathlib import Path, PurePosixPath
 import subprocess
 import sys
 import time
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 if __name__ == "__main__" and not __package__:
@@ -17,17 +16,26 @@ if __name__ == "__main__" and not __package__:
     __package__ = "managed_ai.companions.workbench"
     __import__(__package__)
 
-from .config import DEFAULT_CONTROLLER_DIR, build_model_transport, is_clean_relative_posix, load_controller
+from .config import (
+    DEFAULT_CONTROLLER_DIR,
+    build_model_transport,
+    is_clean_relative_posix,
+    load_controller,
+)
 from .io_utils import (
     BasisMismatchError,
     atomic_bytes,
     atomic_json,
-    canonical_bytes as encode,
     is_reparse_or_symlink,
     loads_strict,
-    pin_file as pin,
     sha256_bytes,
     sync_dir,
+)
+from .io_utils import (
+    canonical_bytes as encode,
+)
+from .io_utils import (
+    pin_file as pin,
 )
 from .model_bridges import write_mailbox_response
 from .source_tools import SourceService
@@ -89,7 +97,10 @@ class Workbench:
             raise ValueError("max_file_bytes must be positive")
 
         self.initial_sources = config.get("sources", {})
-        if any(not isinstance(k, str) or not isinstance(v, str) for k, v in self.initial_sources.items()):
+        if any(
+            not isinstance(k, str) or not isinstance(v, str)
+            for k, v in self.initial_sources.items()
+        ):
             raise TypeError("sources must map string IDs to complete string bodies")
 
         self.source_service = self._init_source_service(config, source_service, _source_search)
@@ -147,7 +158,10 @@ class Workbench:
             "workspace_list": {},
             "workspace_read": {"paths": "array of relative workspace paths"},
             "workspace_write": {"files": "mapping relative workspace path to complete UTF-8 text"},
-            "receiving_check": {"name": "one of the host-supplied receiver names", "available": self.receivers},
+            "receiving_check": {
+                "name": "one of the host-supplied receiver names",
+                "available": self.receivers,
+            },
             "accepted_artifacts": {},
             "accepted_read": {
                 "check_id": "one recorded acceptance ID",
@@ -178,7 +192,9 @@ class Workbench:
             if not entry_path.is_file():
                 raise ValueError("Cannot resume without the original workbench entry basis")
             if loads_strict(entry_path.read_bytes()) != self.basis:
-                raise WorkbenchBasisMismatch("Current workbench inputs differ from the original entry basis")
+                raise WorkbenchBasisMismatch(
+                    "Current workbench inputs differ from the original entry basis"
+                )
         else:
             atomic_json(entry_path, self.basis, exclusive=True)
 
@@ -277,7 +293,8 @@ class Workbench:
 
         if changed:
             raise WorkbenchBasisMismatch(
-                "Previously read, written or received working paths differ from the retained continuation.",
+                "Previously read, written or received working paths differ from the retained "
+                "continuation.",
                 code="workspace_changed",
                 details={"changed_paths": changed},
             )
@@ -292,7 +309,10 @@ class Workbench:
             raise WorkbenchBasisMismatch("Checkpoint belongs to another workbench basis")
 
         ledger = self.source_service.ledger
-        for key, category in (("source_receipt_ids", "sources"), ("selection_receipt_ids", "selections")):
+        for key, category in (
+            ("source_receipt_ids", "sources"),
+            ("selection_receipt_ids", "selections"),
+        ):
             ids = value.get(key)
             if (
                 not isinstance(ids, list)
@@ -312,9 +332,13 @@ class Workbench:
         def _selector_mismatch(message: str) -> None:
             raise WorkbenchBasisMismatch(message)
 
+        counters = value.get("source_counters")
+        if not isinstance(counters, dict):
+            raise ValueError("Invalid source counters in checkpoint")
+
         self.source_service.restore_state(
             value.get("source_inventory_id"),
-            value.get("source_counters"),
+            counters,
             on_selector_mismatch=_selector_mismatch,
         )
         self.source_receipt_ids = value["source_receipt_ids"]
@@ -342,19 +366,25 @@ class Workbench:
                     atomic_bytes(destination, data, exclusive=True)
                 except FileExistsError:
                     if pin(destination) != expected:
-                        raise ValueError("Conflicting stored accepted object")
+                        raise ValueError("Conflicting stored accepted object") from None
             objects[relative] = reference
 
         return objects
 
     def accepted_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        matches = [record for record in self.accepted if record["check_id"] == arguments.get("check_id")]
+        matches = [
+            record for record in self.accepted if record["check_id"] == arguments.get("check_id")
+        ]
         if len(matches) != 1:
             raise ValueError("An exact recorded acceptance ID is required")
 
         record = matches[0]
         paths = arguments.get("paths", list(record["artifacts"]))
-        if not isinstance(paths, list) or not paths or any(path not in record["artifacts"] for path in paths):
+        if (
+            not isinstance(paths, list)
+            or not paths
+            or any(path not in record["artifacts"] for path in paths)
+        ):
             raise ValueError("Select paths from that accepted artifact manifest")
 
         files: dict[str, dict[str, Any]] = {}
@@ -370,7 +400,10 @@ class Workbench:
         return {
             "check_id": record["check_id"],
             "files": files,
-            "scope": "Exact historical accepted bytes; this does not accept different current workspace bytes.",
+            "scope": (
+                "Exact historical accepted bytes; this does not accept different current workspace "
+                "bytes."
+            ),
         }
 
     def _remember(self, result: dict[str, Any], bucket: list[str]) -> dict[str, Any]:
@@ -387,7 +420,11 @@ class Workbench:
         paths = arguments.get("paths")
         if paths is None and "path" in arguments:
             paths = [arguments["path"]]
-        if not isinstance(paths, list) or not paths or any(not isinstance(path, str) for path in paths):
+        if (
+            not isinstance(paths, list)
+            or not paths
+            or any(not isinstance(path, str) for path in paths)
+        ):
             raise ValueError("paths must be a nonempty list of source paths")
 
         return {
@@ -429,7 +466,11 @@ class Workbench:
 
     def workspace_write(self, arguments: dict[str, Any]) -> dict[str, Any]:
         files = arguments.get("files")
-        if not isinstance(files, dict) or not files or any(not isinstance(x, str) for x in files.values()):
+        if (
+            not isinstance(files, dict)
+            or not files
+            or any(not isinstance(x, str) for x in files.values())
+        ):
             raise ValueError("files must be a nonempty mapping of paths to text")
 
         prepared: list[tuple[str, Path, bytes]] = []
@@ -462,8 +503,11 @@ class Workbench:
     ) -> None:
         started = time.monotonic()
         try:
-            with (directory / "stdout.txt").open("xb") as out, (directory / "stderr.txt").open("xb") as err:
-                result = subprocess.run(
+            with (
+                (directory / "stdout.txt").open("xb") as out,
+                (directory / "stderr.txt").open("xb") as err,
+            ):
+                result = subprocess.run(  # noqa: S603
                     argv,
                     cwd=self.workspace,
                     stdout=out,
@@ -503,7 +547,9 @@ class Workbench:
         directory.mkdir(parents=True)
 
         argv = [
-            part.replace("{workspace}", str(self.workspace)).replace("{receiving_dir}", str(directory))
+            part.replace("{workspace}", str(self.workspace)).replace(
+                "{receiving_dir}", str(directory)
+            )
             for part in receiver["argv"]
         ]
         record: dict[str, Any] = {
@@ -534,8 +580,8 @@ class Workbench:
             "semantic adequacy remains the receiver's contract."
         )
         for stream in ("stdout", "stderr"):
-            path = directory / (stream + ".txt")
-            data = path.read_bytes() if path.exists() else b""
+            stream_path = directory / (stream + ".txt")
+            data = stream_path.read_bytes() if stream_path.exists() else b""
             record[stream + "_identity"] = {"bytes": len(data), "sha256": sha256_bytes(data)}
             record[stream] = data[:32768].decode("utf-8", errors="replace")
             record[stream + "_truncated"] = len(data) > 32768
@@ -614,7 +660,9 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
         )
         result["workbench"] = {
             "elapsed_seconds": time.monotonic() - started,
-            "controller": {name: pin(controller / name) for name in ("agent_runtime.py", "evidence_support.py")},
+            "controller": {
+                name: pin(controller / name) for name in ("agent_runtime.py", "evidence_support.py")
+            },
             "basis": workbench.basis,
             "source_stats": workbench.source_service.stats(),
             "accepted_artifacts": workbench.accepted,
@@ -623,7 +671,11 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
             "provider_tokens": None,
             "provider_prices": None,
         }
-        atomic_json(workbench.state / "source-receipts.json", workbench.source_service.receipts(), exclusive=True)
+        atomic_json(
+            workbench.state / "source-receipts.json",
+            workbench.source_service.receipts(),
+            exclusive=True,
+        )
         atomic_json(workbench.state / "run-result.json", result, exclusive=True)
         return result
     finally:
@@ -641,7 +693,9 @@ def main(argv: list[str] | None = None) -> int:
     response = commands.add_parser("respond", allow_abbrev=False)
     response.add_argument("--mailbox", required=True)
     response.add_argument("--step", required=True, type=int)
-    response.add_argument("--action", required=True, help="Path to the actual model-produced action JSON")
+    response.add_argument(
+        "--action", required=True, help="Path to the actual model-produced action JSON"
+    )
     response.add_argument("--producer", default="host-supplied model participant")
 
     args = parser.parse_args(argv)
@@ -661,7 +715,10 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError, TypeError, KeyError) as exc:
         print(
             json.dumps(
-                {"status": "state_error", "error": {"type": type(exc).__name__, "message": str(exc)}},
+                {
+                    "status": "state_error",
+                    "error": {"type": type(exc).__name__, "message": str(exc)},
+                },
                 allow_nan=False,
             ),
             file=sys.stderr,

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Run the collective artifact store CLI."""
-from __future__ import annotations
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 if __name__ == "__main__" and not __package__:
     _pkg_dir = Path(__file__).resolve().parent

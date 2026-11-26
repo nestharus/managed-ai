@@ -1,13 +1,12 @@
 """Record a scoped interpretation and source selection in the existing G60 collective."""
-from __future__ import annotations
 
 import argparse
 import base64
 import hashlib
 import json
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
@@ -25,7 +24,9 @@ def observe(path: Path, start: int, end: int | None) -> tuple[int, str, bytes]:
         if end is None:
             data = stream.read(LIMIT + 1)
             if len(data) > LIMIT:
-                raise ValueError("Select the relevant byte interval [start,end] for this large source.")
+                raise ValueError(
+                    "Select the relevant byte interval [start,end] for this large source."
+                )
             if not data:
                 raise ValueError("Choose a nonempty source or selection.")
             return len(data), hashlib.sha256(data).hexdigest(), data
@@ -58,7 +59,7 @@ def _loads_strict(raw: bytes | bytearray | str) -> Any:
 
 
 def native(db: Path | str, *args: Any) -> Any:
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603
         [sys.executable, "-B", str(HERE / "__main__.py"), "--db", str(db), *map(str, args)],
         capture_output=True,
         text=True,
@@ -78,8 +79,16 @@ def selection(saved: dict[str, Any]) -> tuple[dict[str, Any], bytes]:
     if not isinstance(witness, dict) or not isinstance(witness.get("base64"), str):
         raise ValueError("The observation has no encoded selection.")
 
-    start, end, size = (witness.get(key) for key in ("start", "end", "source_bytes"))
-    if not all(type(n) is int for n in (start, end, size)) or not 0 <= start < end <= size or end - start > LIMIT:
+    start = witness.get("start")
+    end = witness.get("end")
+    size = witness.get("source_bytes")
+    if (
+        type(start) is not int
+        or type(end) is not int
+        or type(size) is not int
+        or not 0 <= start < end <= size
+        or end - start > LIMIT
+    ):
         raise ValueError("The retained selection has invalid bounds.")
 
     data = base64.b64decode(witness["base64"], validate=True)
@@ -102,26 +111,39 @@ def record(
 ) -> Any:
     text_fields = {"source_locator", "use", "observation"}
     optional = {"prediction", "limits", "reopen", "related", "selection"}
-    if not isinstance(spec, dict) or not text_fields <= set(spec) or set(spec) - text_fields - optional:
+    if (
+        not isinstance(spec, dict)
+        or not text_fields <= set(spec)
+        or set(spec) - text_fields - optional
+    ):
         raise ValueError(
             "Supply source_locator, use and observation. Optional fields are prediction, "
             "limits, reopen, related and selection.",
         )
 
-    if any(not isinstance(spec[k], str) or not spec[k].strip() for k in set(spec) - {"selection", "related"}):
+    if any(
+        not isinstance(spec[k], str) or not spec[k].strip()
+        for k in set(spec) - {"selection", "related"}
+    ):
         raise ValueError("Evidence accounts need nonempty text")
 
     if "related" in spec and (
         not isinstance(spec["related"], list)
         or not all(isinstance(r, str) and r.strip() for r in spec["related"])
     ):
-        raise ValueError("related must be a list of possible relationships in the writer’s own words")
+        raise ValueError(
+            "related must be a list of possible relationships in the writer's own words"
+        )
 
     bounds = spec.get("selection")
     if bounds is None:
         start, end = 0, None
     else:
-        if not isinstance(bounds, list) or len(bounds) != 2 or any(type(n) is not int for n in bounds):
+        if (
+            not isinstance(bounds, list)
+            or len(bounds) != 2
+            or any(type(n) is not int for n in bounds)
+        ):
             raise ValueError("selection must be a pair of byte offsets")
         start, end = bounds
         if not 0 <= start < end or end - start > LIMIT:

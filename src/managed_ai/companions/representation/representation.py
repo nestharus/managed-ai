@@ -6,18 +6,18 @@ It makes selected accepted JSON artifacts and source applications actual native
 inputs, retains a before/after witness, and delegates every adoption to native
 Exchange. Callers author the candidate and judge its semantic adequacy.
 """
-from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager, nullcontext
 import hashlib
 import importlib
 import importlib.util
 import json
-from pathlib import Path
 import shutil
 import stat
 import sys
+from collections.abc import Generator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
+from pathlib import Path
 from typing import Any
 
 if __package__ in (None, ""):
@@ -27,10 +27,15 @@ if __package__ in (None, ""):
 
 from managed_ai.platform import (
     atomic_bytes as _platform_atomic_bytes,
+)
+from managed_ai.platform import (
     check_unfollowed_ancestors as _check_unfollowed_ancestors,
+)
+from managed_ai.platform import (
     is_reparse_or_symlink as _is_reparse_or_symlink,
+)
+from managed_ai.platform import (
     strict_json_loads,
-    sync_dir as _sync_dir,
 )
 
 OPERATION = "g60-representation-operation/1"
@@ -66,7 +71,8 @@ def encoded(value: Any) -> bytes:
 
 
 def loads_strict(raw: bytes | bytearray | str) -> Any:
-    return strict_json_loads(raw, label="Representation JSON", require_object=False)
+    payload: bytes | str = bytes(raw) if isinstance(raw, bytearray) else raw
+    return strict_json_loads(payload, label="Representation JSON", require_object=False)
 
 
 def read_json(path: Path | str) -> Any:
@@ -104,7 +110,7 @@ def changed_paths(before: Any, after: Any, prefix: str = "") -> list[str]:
             return [prefix]
         return [
             path
-            for idx, (left, right) in enumerate(zip(before, after))
+            for idx, (left, right) in enumerate(zip(before, after, strict=True))
             for path in changed_paths(left, right, prefix + "/" + str(idx))
         ]
 
@@ -141,13 +147,13 @@ def _verify_loaded_from_engine(module: Any, resolved_engine: Path, expected_rel:
     expected = (resolved_engine / expected_rel).resolve()
     if not loaded_file or Path(loaded_file).resolve() != expected:
         raise ValueError(
-            f"Loaded module {getattr(module, '__name__', module)!r} did not come from selected engine: "
-            f"{resolved_engine}",
+            f"Loaded module {getattr(module, '__name__', module)!r} did not come from "
+            f"selected engine: {resolved_engine}",
         )
 
 
 @contextmanager
-def mount_engine(engine: Path | str):
+def mount_engine(engine: Path | str) -> Generator[tuple[Any, ...]]:
     """Mount a canonical src/managed_ai engine (local or external) cleanly in sys.modules."""
     resolved = _validate_engine_dir(engine)
     init_file = resolved / "__init__.py"
@@ -183,7 +189,10 @@ def mount_engine(engine: Path | str):
             return False
 
     try:
-        sys.path[:] = [str(resolved.parent), *(entry for entry in saved_path if not _is_colocated_src(entry))]
+        sys.path[:] = [
+            str(resolved.parent),
+            *(entry for entry in saved_path if not _is_colocated_src(entry)),
+        ]
         importlib.invalidate_caches()
         pkg_spec = importlib.util.spec_from_file_location(
             "managed_ai",
@@ -223,7 +232,9 @@ def mount_engine(engine: Path | str):
 
 
 def _load_engine_api(engine: Path) -> tuple[Any, Any, Any, Any, Any]:
-    """Import System, exclusive, NativeLayout, packet_id, and artifact_target from the engine root."""
+    """Import System, exclusive, NativeLayout, packet_id, and artifact_target from the engine
+    root.
+    """
     with mount_engine(engine) as api:
         return api
 
@@ -295,7 +306,9 @@ class RepresentationOperations:
                 "representation differs from its nominated accepted proposal: " + name,
             )
 
-            matching = [pub for pub in observed["publications"] if pub.get("record", {}).get("path") == name]
+            matching = [
+                pub for pub in observed["publications"] if pub.get("record", {}).get("path") == name
+            ]
             require(
                 len(matching) == 1 and not matching[0].get("observation_error"),
                 "representation acceptance is unavailable: " + name,
@@ -311,10 +324,16 @@ class RepresentationOperations:
         return name
 
     def validate_operation(self, spec: Any) -> tuple[list[str], list[str]]:
-        require(isinstance(spec, dict) and spec.get("format") == OPERATION, "unsupported operation format")
+        require(
+            isinstance(spec, dict) and spec.get("format") == OPERATION,
+            "unsupported operation format",
+        )
         text(spec.get("turn"), "turn")
         mode = spec.get("mode")
-        require(mode in ("develop", "transform", "realize"), "mode must be develop, transform or realize")
+        require(
+            mode in ("develop", "transform", "realize"),
+            "mode must be develop, transform or realize",
+        )
         text(spec.get("task"), "task")
         text(spec.get("consumer"), "consumer")
 
@@ -329,14 +348,19 @@ class RepresentationOperations:
 
         rep_paths = [self.check_pin(item, representation=True) for item in representations]
         source_paths = [self.check_pin(item) for item in sources]
-        require(len(rep_paths + source_paths) == len(set(rep_paths + source_paths)), "duplicate input paths")
+        require(
+            len(rep_paths + source_paths) == len(set(rep_paths + source_paths)),
+            "duplicate input paths",
+        )
 
         targets = strings(spec.get("targets"), "targets")
         require(bool(targets), "operation requires a target")
         artifact_target = _artifact_target_fn()
         for target in targets:
             artifact_target(target)
-            require(self.ex.path(target).parent.is_dir(), "target parent must already exist: " + target)
+            require(
+                self.ex.path(target).parent.is_dir(), "target parent must already exist: " + target
+            )
 
         applications = spec.get("applications")
         require(
@@ -348,14 +372,18 @@ class RepresentationOperations:
             require(isinstance(app, dict), "application must be an object")
             ids.append(text(app.get("id"), "application id"))
             used_sources = strings(app.get("sources"), "application sources")
-            used_representations = strings(app.get("representations"), "application representations")
+            used_representations = strings(
+                app.get("representations"), "application representations"
+            )
             require(set(used_sources) <= set(source_paths), "application source was not selected")
             require(
                 set(used_representations) <= set(rep_paths),
                 "application representation was not selected",
             )
             if mode != "develop":
-                require(bool(used_representations), "application must bind an accepted representation")
+                require(
+                    bool(used_representations), "application must bind an accepted representation"
+                )
             text(app.get("operation"), "authored application operation")
             text(app.get("prediction"), "authored application prediction")
 
@@ -369,7 +397,10 @@ class RepresentationOperations:
     def prepare(self, spec: dict[str, Any]) -> dict[str, Any]:
         reps, sources = self.validate_operation(spec)
         directory = self.location(spec["turn"])
-        require(not directory.exists(), "operation identity already exists; inspect it, do not overwrite")
+        require(
+            not directory.exists(),
+            "operation identity already exists; inspect it, do not overwrite",
+        )
 
         native = dict(spec.get("native", {}))
         require(
@@ -403,7 +434,9 @@ class RepresentationOperations:
             "sha256": digest(operation_bytes),
             "mode": spec["mode"],
             "adapter_sha256": digest(Path(__file__).read_bytes()),
-            "scope": "Exact selected artifact files; unknown interactions remain authored questions.",
+            "scope": (
+                "Exact selected artifact files; unknown interactions remain authored questions."
+            ),
         }
         return result
 
@@ -413,6 +446,8 @@ class RepresentationOperations:
         name = (self.location(turn) / "operation.json").relative_to(self.ex.workspace).as_posix()
         row = next((item for item in request["materials"] if item["path"] == name), None)
         require(row is not None, "native turn has no captured representation operation")
+        if row is None:
+            raise ValueError("native turn has no captured representation operation")
         raw = self.ex.get(row["sha256"])
         spec = loads_strict(raw)
         require(
@@ -484,7 +519,10 @@ class RepresentationOperations:
             "outputs": outputs,
             "authored_witness": witness,
             "actual_reply": Path(reply).read_text(encoding="utf-8"),
-            "scope": "The author supplies meaning. Exact bindings and structural changes do not establish semantic adequacy.",
+            "scope": (
+                "The author supplies meaning. Exact bindings and structural changes do not "
+                "establish semantic adequacy."
+            ),
         }
         reply_path = self.location(turn) / "bound-return.json"
         require(
@@ -501,7 +539,10 @@ class RepresentationOperations:
         witness: Any,
         output_paths: set[str],
     ) -> None:
-        require(isinstance(witness, dict) and witness.get("format") == WITNESS, "unsupported witness format")
+        require(
+            isinstance(witness, dict) and witness.get("format") == WITNESS,
+            "unsupported witness format",
+        )
         require(witness.get("operation_sha256") == key, "witness names a different operation basis")
         require(
             witness.get("representations") == spec["representations"],
@@ -515,7 +556,8 @@ class RepresentationOperations:
             "application witnesses must be a list of objects",
         )
         require(
-            len(applications) == len(expected_apps) and {app.get("id") for app in applications} == expected_apps,
+            len(applications) == len(expected_apps)
+            and {app.get("id") for app in applications} == expected_apps,
             "missing or duplicate source-application witness",
         )
 
@@ -535,7 +577,8 @@ class RepresentationOperations:
         if spec["mode"] == "realize":
             realization = witness.get("realization")
             require(
-                isinstance(realization, dict) and realization.get("representations") == spec["representations"],
+                isinstance(realization, dict)
+                and realization.get("representations") == spec["representations"],
                 "realization lacks the exact accepted representation binding",
             )
             text(realization.get("account"), "actual realization account")
@@ -552,7 +595,8 @@ class RepresentationOperations:
             "native return lacks the representation application/realization binding",
         )
         require(
-            bound.get("inputs") == {"representations": spec["representations"], "sources": spec["sources"]},
+            bound.get("inputs")
+            == {"representations": spec["representations"], "sources": spec["sources"]},
             "native return input bindings differ from the captured operation",
         )
 
@@ -574,11 +618,16 @@ class RepresentationOperations:
 
 
 def run_cli_action(args: argparse.Namespace, *, engine_loader: Any = None) -> dict[str, Any]:
-    """Execute one representation CLI action, constructing System only AFTER acquiring owner.lock."""
-    checked_engine = _check_unfollowed_ancestors(args.engine, "Engine directory", include_target=True)
+    """Execute one representation CLI action, constructing System only AFTER acquiring
+    owner.lock.
+    """
+    checked_engine = _check_unfollowed_ancestors(
+        args.engine, "Engine directory", include_target=True
+    )
     checked_root = _check_unfollowed_ancestors(args.root, "Native root", include_target=True)
     root = checked_root.expanduser().resolve()
 
+    engine_ctx: AbstractContextManager[Any]
     if engine_loader is None or engine_loader is _load_engine_api:
         engine_ctx = mount_engine(checked_engine)
     else:
@@ -620,7 +669,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--root", required=True, type=Path)
     actions = parser.add_subparsers(dest="action", required=True)
 
-    actions.add_parser("prepare", allow_abbrev=False).add_argument("--spec", required=True, type=Path)
+    actions.add_parser("prepare", allow_abbrev=False).add_argument(
+        "--spec", required=True, type=Path
+    )
 
     template = actions.add_parser("template", allow_abbrev=False)
     template.add_argument("turn")

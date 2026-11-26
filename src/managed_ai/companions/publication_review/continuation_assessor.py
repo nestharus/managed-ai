@@ -3,13 +3,12 @@
 A result nominates receiving work. It does not read source paths, infer
 semantic dependencies, establish truth, or release independent obligations.
 """
-from __future__ import annotations
 
 import argparse as _argparse
 import copy as _copy
 import json as _json
-from pathlib import Path as _Path
 import sys as _sys
+from pathlib import Path as _Path
 from typing import Any
 
 if __package__ in (None, ""):
@@ -73,7 +72,9 @@ def _check_inputs(previous: Any, current: Any) -> None:
         raise ValueError("each obligation must be an object")
 
 
-def _compare(kind: str, identity: str, expected: Any, observations: dict[str, Any]) -> dict[str, str] | None:
+def _compare(
+    kind: str, identity: str, expected: Any, observations: dict[str, Any]
+) -> dict[str, str] | None:
     if identity not in observations:
         suffix = "unobserved"
     elif observations[identity] is None:
@@ -92,14 +93,16 @@ def _selection_reasons(receipt: dict[str, Any], current: dict[str, Any]) -> list
 
     if receipt.get("scope", "fixed") == "discovery" and (
         not selections
-        or any(any(field not in basis for field in _SELECTION_FIELDS) for basis in selections.values())
+        or any(
+            any(field not in basis for field in _SELECTION_FIELDS) for basis in selections.values()
+        )
     ):
         reasons.append({"kind": "selection_basis_missing", "id": receipt["id"]})
 
     observations = current.get("selections", {})
     for selection_id, basis in selections.items():
         if selection_id in observations and observations[selection_id] is None:
-            observed_fields = {field: None for field in basis}
+            observed_fields = dict.fromkeys(basis)
         else:
             observed_fields = observations.get(selection_id, {})
 
@@ -125,7 +128,9 @@ def assess(previous: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
                 if reason is not None:
                     reasons.append(reason)
 
-        reason = _compare("artifact", receipt["id"], receipt["artifact_sha256"], current["artifacts"])
+        reason = _compare(
+            "artifact", receipt["id"], receipt["artifact_sha256"], current["artifacts"]
+        )
         if reason is not None:
             reasons.append(reason)
 

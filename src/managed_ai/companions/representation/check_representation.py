@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """Narrow integration checks at the real native receiving/adoption boundary."""
-from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
 import tempfile
-from typing import Any
 import unittest
+from pathlib import Path
+from typing import Any
 
 if __package__ in (None, ""):
     _src_root = str(Path(__file__).resolve().parents[3])
@@ -42,13 +41,16 @@ class NativeRepresentationChecks(unittest.TestCase):
         self.base = Path(self.temp.name)
         self.root = self.base / "runtime"
         system_cls = _system_cls()
-        system_cls.initialize(self.root, {"contribution": "Exercise selected representation binding."})
+        system_cls.initialize(
+            self.root, {"contribution": "Exercise selected representation binding."}
+        )
         self.system = system_cls(self.root)
         self.adapter = RepresentationOperations(self.system)
         self.work = self.system.work
         self.source = self.work / "sources/rule.txt"
         self.source.write_text(
-            "The nominated primary value can increase by one; the independent label is unaffected.\n",
+            "The nominated primary value can increase by one; the independent label is "
+            "unaffected.\n",
             encoding="utf-8",
         )
         self.seed("seed-a", "outputs/a.json", {"value": 1})
@@ -63,7 +65,9 @@ class NativeRepresentationChecks(unittest.TestCase):
         return path
 
     def seed(self, turn: str, target: str, value: Any) -> None:
-        self.system.context(turn, {"task": "Accept the exact supplied test state.", "targets": [target]})
+        self.system.context(
+            turn, {"task": "Accept the exact supplied test state.", "targets": [target]}
+        )
         reply = self.candidate(turn + ".reply", "Actual finite fixture acceptance.", False)
         candidate = self.candidate(turn + ".json", value)
         self.system.receive(
@@ -89,12 +93,15 @@ class NativeRepresentationChecks(unittest.TestCase):
                     "sources": ["sources/rule.txt"],
                     "representations": ["outputs/a.json"],
                     "operation": "Use the selected value as the starting operand.",
-                    "prediction": "The candidate value is two; the separately held label remains unchanged.",
+                    "prediction": (
+                        "The candidate value is two; the separately held label remains unchanged."
+                    ),
                 },
             ],
             "targets": ["outputs/result.txt" if mode == "realize" else "outputs/a.json"],
             "interactions": {
-                "account": "The finite fixture stipulates the separate label is not read or written.",
+                "account": "The finite fixture stipulates the separate "
+                "label is not read or written.",
                 "unknowns": ["No general semantic independence claim is made."],
             },
         }
@@ -107,10 +114,14 @@ class NativeRepresentationChecks(unittest.TestCase):
             outputs=[target],
         )
         if "realization" in witness:
-            witness["realization"]["account"] = "The output displays the accepted value without altering it."
+            witness["realization"]["account"] = (
+                "The output displays the accepted value without altering it."
+            )
         return witness
 
-    def receive(self, turn: str, witness: dict[str, Any] | None = None, realized: bool = False) -> dict[str, Any]:
+    def receive(
+        self, turn: str, witness: dict[str, Any] | None = None, realized: bool = False
+    ) -> dict[str, Any]:
         reply = self.candidate(turn + ".reply", "Actual candidate returned for the fixture.", False)
         target = "outputs/result.txt" if realized else "outputs/a.json"
         candidate = self.candidate(
@@ -157,7 +168,9 @@ class NativeRepresentationChecks(unittest.TestCase):
             "The actual independent label change leaves this selected basis current.",
         )
         self.assertEqual(loads_strict((self.work / "outputs/a.json").read_bytes()), {"value": 2})
-        self.assertEqual(loads_strict((self.work / "outputs/b.json").read_bytes()), {"label": "new"})
+        self.assertEqual(
+            loads_strict((self.work / "outputs/b.json").read_bytes()), {"label": "new"}
+        )
 
     def test_missing_application_or_inconsistent_basis_is_refused(self) -> None:
         bad = self.spec("bad-base")
@@ -191,7 +204,9 @@ class NativeRepresentationChecks(unittest.TestCase):
 
         self.receive("realize", realized=True)
         self.adapter.adopt("realize", "outputs/result.txt", "Accept the displayed accepted state.")
-        self.assertEqual((self.work / "outputs/result.txt").read_text(encoding="utf-8"), "Value: 1\n")
+        self.assertEqual(
+            (self.work / "outputs/result.txt").read_text(encoding="utf-8"), "Value: 1\n"
+        )
 
     def test_plain_native_return_cannot_claim_adapter_binding(self) -> None:
         self.adapter.prepare(self.spec("unbound"))

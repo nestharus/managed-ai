@@ -1,5 +1,4 @@
 """Manifest, selection, representation, materialization-state closures and orphan audit."""
-from __future__ import annotations
 
 import os
 from pathlib import Path
@@ -27,7 +26,7 @@ def _is_sha256_hex(value: Any) -> bool:
 def _read_store_bytes(store_root: Path, rel_path: str, label: str = "Store record") -> bytes:
     """Read an immutable record below store_root while guarding relative segments."""
     rel = safe_relative(rel_path)
-    target = check_unfollowed_descendant(store_root, rel, role=label)
+    target = check_unfollowed_descendant(store_root, rel.as_posix(), role=label)
     return target.read_bytes()
 
 
@@ -36,7 +35,9 @@ def read_manifest(store: Any, occurrence: str | None = None) -> tuple[str, dict[
     if occurrence:
         safe_relative(occurrence)
         pointer = loads_json(
-            _read_store_bytes(store.root, "occurrences/" + occurrence + ".json", "Occurrence pointer"),
+            _read_store_bytes(
+                store.root, "occurrences/" + occurrence + ".json", "Occurrence pointer"
+            ),
         )
         key = pointer["manifest"]
     else:
@@ -51,7 +52,9 @@ def read_manifest(store: Any, occurrence: str | None = None) -> tuple[str, dict[
     return key, loads_json(raw), raw
 
 
-def manifest_closure(store: Any, key: str) -> tuple[dict[str, tuple[dict[str, Any], bytes]], set[str]]:
+def manifest_closure(
+    store: Any, key: str
+) -> tuple[dict[str, tuple[dict[str, Any], bytes]], set[str]]:
     """Compute all historical manifests and content object hashes reachable from manifest key."""
     todo = [key]
     found: dict[str, tuple[dict[str, Any], bytes]] = {}
@@ -104,7 +107,9 @@ def representation_closure(
     store: Any,
     selections: dict[str, tuple[dict[str, Any], bytes]],
 ) -> tuple[dict[str, tuple[dict[str, Any], bytes]], set[str], dict[str, bytes]]:
-    """Collect verified representation transition records and their immutable metadata dependencies."""
+    """Collect verified representation transition records and their immutable metadata
+    dependencies.
+    """
     records: dict[str, tuple[dict[str, Any], bytes]] = {}
     roots: set[str] = set()
     files: dict[str, bytes] = {}
@@ -120,7 +125,9 @@ def representation_closure(
             continue
 
         require(_is_sha256_hex(key), "Invalid representation transition identity")
-        raw = _read_store_bytes(store.root, "transitions/" + key + ".json", "Representation transition")
+        raw = _read_store_bytes(
+            store.root, "transitions/" + key + ".json", "Representation transition"
+        )
         require(sha(raw) == key, "Representation transition differs")
         record = loads_json(raw)
         require(
@@ -140,7 +147,7 @@ def representation_closure(
             )
             path = check_unfollowed_descendant(
                 store.root,
-                relative,
+                relative.as_posix(),
                 role="Transition metadata dependency",
             )
             dependency = path.read_bytes()
@@ -183,7 +190,9 @@ def selection_closure(
         raw = (
             js(root)
             if ident == key and root is not None
-            else _read_store_bytes(store.root, "selections/" + ident + ".json", "Retained selection")
+            else _read_store_bytes(
+                store.root, "selections/" + ident + ".json", "Retained selection"
+            )
         )
         require(sha(raw) == ident, "Retained selection differs")
         selected = loads_json(raw)
@@ -264,7 +273,9 @@ def materialization_state(
     store: Any,
     selections: dict[str, tuple[dict[str, Any], bytes]],
 ) -> list[dict[str, Any]]:
-    """Derive current disposition across selection lineage without converting history to active work."""
+    """Derive current disposition across selection lineage without converting history to active
+    work.
+    """
     states: list[dict[str, Any]] = []
     seen_manifests: set[str] = set()
     ordered: list[dict[str, Any]] = []
@@ -328,7 +339,9 @@ def selected_for_manifest(
     manifest_key: str,
     manifest: dict[str, Any],
 ) -> tuple[str, dict[str, Any]]:
-    """Find the retained selection matching manifest_key or synthesize a historical selection view."""
+    """Find the retained selection matching manifest_key or synthesize a historical selection
+    view.
+    """
     current_key, _ = current_selection(store)
     selections = selection_closure(store, current_key)[0]
     for key, (candidate, _) in selections.items():
@@ -350,7 +363,9 @@ def selected_for_manifest(
 
 
 def _walk_ordinary_json_files(folder: Path, *, strict_entries: bool) -> list[Path]:
-    """Return sorted ordinary JSON files under folder without traversing symlinks or reparse points."""
+    """Return sorted ordinary JSON files under folder without traversing symlinks or reparse
+    points.
+    """
     if not folder.exists() and not is_reparse_or_symlink(folder):
         return []
     if is_reparse_or_symlink(folder):

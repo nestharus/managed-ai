@@ -3,16 +3,15 @@
 The capable model is caller-supplied. Recorded callback returns are replayed by
 durable_agent without repeating their effects; unobserved outcomes stay pending.
 """
-from __future__ import annotations
 
 import argparse
 import inspect
 import json
-from pathlib import Path
 import sys
 import time
-from typing import Any
 import uuid
+from pathlib import Path
+from typing import Any
 
 if __package__ in (None, ""):
     _src_root = str(Path(__file__).resolve().parents[3])
@@ -22,17 +21,24 @@ if __package__ in (None, ""):
 from managed_ai.companions.workbench.config import (
     CORE_MODULES,
     build_model_transport,
-    command_code as _command_code,
-    normalize_config as _config,
-    pin_files as _pins,
     validate_resolution_payload,
+)
+from managed_ai.companions.workbench.config import (
+    command_code as _command_code,
+)
+from managed_ai.companions.workbench.config import (
+    normalize_config as _config,
+)
+from managed_ai.companions.workbench.config import (
+    pin_files as _pins,
 )
 from managed_ai.companions.workbench.durable_agent import (
     inspect_durable_state,
     resolve_durable_operation,
     run_durable_agent,
 )
-from managed_ai.companions.workbench.io_utils import atomic_json, loads_strict, pin_file as pin
+from managed_ai.companions.workbench.io_utils import atomic_json, loads_strict
+from managed_ai.companions.workbench.io_utils import pin_file as pin
 from managed_ai.companions.workbench.model_bridges import write_mailbox_response
 from managed_ai.companions.workbench.source_tools import SearchImplementation
 from managed_ai.companions.workbench.workbench_agent import Workbench, WorkbenchBasisMismatch
@@ -40,7 +46,9 @@ from managed_ai.companions.workbench.workbench_agent import Workbench, Workbench
 VERSION = "g60-resumable-workbench/1"
 
 
-def _binding(config: dict[str, Any], injected_model: Any, search: SearchImplementation) -> dict[str, Any]:
+def _binding(
+    config: dict[str, Any], injected_model: Any, search: SearchImplementation
+) -> dict[str, Any]:
     base = Path(__file__).parent
     adapter_files = [base / name for name in CORE_MODULES if name != "durable_agent.py"]
     code = _pins(adapter_files)
@@ -55,7 +63,9 @@ def _binding(config: dict[str, Any], injected_model: Any, search: SearchImplemen
             or not isinstance(model.get("identity"), str)
             or not model["identity"]
         ):
-            raise ValueError("Injected model use requires model.kind='injected' and a nonempty identity")
+            raise ValueError(
+                "Injected model use requires model.kind='injected' and a nonempty identity"
+            )
         target = (
             injected_model
             if inspect.isfunction(injected_model) or inspect.ismethod(injected_model)
@@ -65,11 +75,15 @@ def _binding(config: dict[str, Any], injected_model: Any, search: SearchImplemen
         if path is not None and Path(path).is_file():
             model_code = _pins([path])
         if not model_inputs and not model_code:
-            raise ValueError("Bind injected model code through model.inputs or an inspectable source file")
+            raise ValueError(
+                "Bind injected model code through model.inputs or an inspectable source file"
+            )
     elif model.get("kind") == "command":
         model_code = _command_code(model["argv"], model.get("cwd"))
     elif model.get("kind") != "mailbox":
-        raise ValueError("Use a mailbox/command model, or supply an explicitly identified injected callable")
+        raise ValueError(
+            "Use a mailbox/command model, or supply an explicitly identified injected callable"
+        )
 
     receiver_inputs: dict[str, Any] = {}
     receiver_code: dict[str, Any] = {}
@@ -99,7 +113,11 @@ def inspect_workbench(state_dir: Path | str) -> dict[str, Any]:
         "schema": VERSION,
         "state_dir": str(state),
         "entry_basis": loads_strict(entry.read_bytes()) if entry.is_file() else None,
-        "scope": "Retained observations and accepted history; inspection is not fresh source observation or receiving.",
+        "scope": (
+            "Retained observations and accepted history; inspection is not fresh source "
+            "observation "
+            "or receiving."
+        ),
     }
     return result
 
@@ -154,7 +172,10 @@ def _prepare_workbench_callbacks(
 
     def restore(value: Any) -> None:
         nonlocal transport_ordinal
-        if not isinstance(value, dict) or value.get("schema") != "g60-resumable-workbench-checkpoint/1":
+        if (
+            not isinstance(value, dict)
+            or value.get("schema") != "g60-resumable-workbench-checkpoint/1"
+        ):
             raise ValueError("Unknown workbench continuation checkpoint")
         ordinal = value.get("model_transport_ordinal")
         if type(ordinal) is not int or ordinal < 0:
@@ -259,7 +280,9 @@ def run_workbench(
             workbench.source_service.close()
 
 
-def resolve_workbench_operation(state_dir: Path | str, resolution_payload: dict[str, Any]) -> dict[str, Any]:
+def resolve_workbench_operation(
+    state_dir: Path | str, resolution_payload: dict[str, Any]
+) -> dict[str, Any]:
     """Validate an owner resolution payload strictly before recording it."""
     validated = validate_resolution_payload(resolution_payload)
     return resolve_durable_operation(
@@ -319,7 +342,14 @@ def main(argv: list[str] | None = None) -> int:
             )
             result = {
                 key: full.get(key)
-                for key in ("status", "error", "model_calls", "tool_calls", "durable", "result_path")
+                for key in (
+                    "status",
+                    "error",
+                    "model_calls",
+                    "tool_calls",
+                    "durable",
+                    "result_path",
+                )
             }
     except (OSError, ValueError, TypeError, KeyError) as exc:
         result = _failure("state_error", str(exc))

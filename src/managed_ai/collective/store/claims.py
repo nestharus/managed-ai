@@ -1,8 +1,7 @@
 """Optional owner leases. Issuance, expiration, generation fencing, and release."""
-from __future__ import annotations
 
-from typing import Any
 import uuid
+from typing import Any
 
 from .contract import fields, integer, name, owned, require
 

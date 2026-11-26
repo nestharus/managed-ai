@@ -1,14 +1,13 @@
 """Content-addressed object store, exact ZIP recipe ingestion, and verified reconstruction."""
-from __future__ import annotations
 
 import collections
 import io
 import os
-from pathlib import Path, PurePosixPath
 import struct
-from typing import Any
 import zipfile
 import zlib
+from pathlib import Path, PurePosixPath
+from typing import Any
 
 from .config import DEFAULT_LIMITS, FORMAT, IMMUTABLE_RECORD_DIRS, RAW_BODY_KINDS, RetentionLimits
 from .store_io import (
@@ -39,7 +38,7 @@ _HEX_CHARS = frozenset("0123456789abcdef")
 def _read_store_relative(root: Path, rel_path: str, label: str = "Store object") -> bytes:
     """Read an immutable object below a validated store root without quadratic ancestor lstats."""
     rel = safe_relative(rel_path)
-    target = check_unfollowed_descendant(root, rel, role=label)
+    target = check_unfollowed_descendant(root, rel.as_posix(), role=label)
     return target.read_bytes()
 
 
@@ -70,7 +69,9 @@ class Store:
         self.reload(create=create)
 
     def reload(self, create: bool | None = None) -> None:
-        """Reload index.json and source lookup tables without eagerly scanning historical JSON trees."""
+        """Reload index.json and source lookup tables without eagerly scanning historical JSON
+        trees.
+        """
         if create is None:
             create = self._create
 
@@ -145,7 +146,9 @@ class Store:
                 self.record_sources.setdefault(ident, path.relative_to(self.root).as_posix())
 
     def _find_record_source(self, key: str, raw: bytes) -> str | None:
-        """Look up an existing immutable metadata record matching key without eager directory walks."""
+        """Look up an existing immutable metadata record matching key without eager directory
+        walks.
+        """
         record_path = self.record_sources.get(key)
         if record_path is not None:
             return record_path
@@ -258,14 +261,19 @@ class Store:
         if recipe_source is not None and recipe_source not in self.building:
             logical = self.recipe_raw(recipe_source)
             require(
-                _read_store_relative(self.root, self.objects[recipe_source]["path"], "Persisted recipe")
+                _read_store_relative(
+                    self.root, self.objects[recipe_source]["path"], "Persisted recipe"
+                )
                 == raw,
                 "Persisted recipe encoding differs",
             )
             source = self.blob(logical)
             entry = self.objects[source]
             if entry["kind"] in RAW_BODY_KINDS and entry.get("encoded_sha256") == key:
-                require(source != key and self.encoded_blob(source) == raw, "Recipe encoding view differs")
+                require(
+                    source != key and self.encoded_blob(source) == raw,
+                    "Recipe encoding view differs",
+                )
                 self.objects[key] = {
                     "kind": "encoded-view",
                     "bytes": len(raw),
@@ -353,7 +361,10 @@ class Store:
                 except zlib.error:
                     decoded = None
                 if decoded is not None and sha(decoded) == expected:
-                    require(len(decoded) <= self.limits.max_member_bytes, "Managed encoded body size limit")
+                    require(
+                        len(decoded) <= self.limits.max_member_bytes,
+                        "Managed encoded body size limit",
+                    )
                     self.blob(decoded)
                     return self.blob(raw)
 
@@ -387,7 +398,11 @@ class Store:
             frame_chunks.append(raw[previous_end:start])
             previous_end = end
 
-        tails = [raw[: len(raw) // 2], raw[len(raw) // 2 :]] if previous_end == 0 else [raw[previous_end:]]
+        tails = (
+            [raw[: len(raw) // 2], raw[len(raw) // 2 :]]
+            if previous_end == 0
+            else [raw[previous_end:]]
+        )
         frame_chunks.extend(tails)
 
         domain = b"managed-material-zip-framing/1\x00"
@@ -415,7 +430,9 @@ class Store:
         part: dict[str, Any] | None = None
         if content is not None and info.compress_type == zipfile.ZIP_STORED and body == compressed:
             part = {"kind": "stored", "content": content}
-        elif content is not None and body is not None and info.compress_type == zipfile.ZIP_DEFLATED:
+        elif (
+            content is not None and body is not None and info.compress_type == zipfile.ZIP_DEFLATED
+        ):
             entry = self.objects[content]
             if entry["kind"] in RAW_BODY_KINDS and entry["encoded_sha256"] == compressed_sha:
                 part = {"kind": "blob-encoding", "content": content}
@@ -619,7 +636,8 @@ class Store:
         raw = _read_store_relative(self.root, info["path"], "ZIP recipe")
         if info.get("recipe_encoding") == "raw-deflate":
             require(
-                len(raw) == info["recipe_encoded_bytes"] and sha(raw) == info["recipe_encoded_sha256"],
+                len(raw) == info["recipe_encoded_bytes"]
+                and sha(raw) == info["recipe_encoded_sha256"],
                 "Encoded ZIP recipe differs: " + key,
             )
             raw = zlib.decompress(raw, -15)

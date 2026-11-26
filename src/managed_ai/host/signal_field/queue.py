@@ -5,10 +5,9 @@ One local SQLite owner. The capable host supplies use definitions, source observ
 worker invocation and semantic acceptance. Public symbols are re-exported here so direct
 CLI execution, importlib loading, and external domain planner exec() stay compatible.
 """
-from __future__ import annotations
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 if not __package__:
     _src_root = str(Path(__file__).resolve().parents[3])
@@ -31,32 +30,44 @@ from managed_ai.host.signal_field.config import (
     require,
 )
 from managed_ai.host.signal_field.models import (
-    StreamCapture as _StreamCapture,
-    WorkerRunResult as _WorkerRunResult,
-    stream_details as _stream_details,
-    worker_outcome as _worker_outcome,
+    StreamCapture as _StreamCapture,  # noqa: F401
+)
+from managed_ai.host.signal_field.models import (
+    WorkerRunResult as _WorkerRunResult,  # noqa: F401
+)
+from managed_ai.host.signal_field.models import (
+    stream_details as _stream_details,  # noqa: F401
+)
+from managed_ai.host.signal_field.models import (
+    worker_outcome as _worker_outcome,  # noqa: F401
 )
 from managed_ai.host.signal_field.operations import Field
 from managed_ai.host.signal_field.storage import (
     inside_product,
     no_journal,
     planning_snapshot,
-    product_root as _product_root,
-    require_ordinary_non_symlink as _require_ordinary_non_symlink,
     validate_db_path,
 )
-from managed_ai.host.signal_field.worker import run_worker_bounded as _run_worker_bounded
-from managed_ai.platform import is_reparse_or_symlink as _is_reparse_or_symlink
+from managed_ai.host.signal_field.storage import (
+    product_root as _product_root,  # noqa: F401
+)
+from managed_ai.host.signal_field.storage import (
+    require_ordinary_non_symlink as _require_ordinary_non_symlink,  # noqa: F401
+)
+from managed_ai.host.signal_field.worker import (
+    run_worker_bounded as _run_worker_bounded,  # noqa: F401
+)
+from managed_ai.platform import is_reparse_or_symlink as _is_reparse_or_symlink  # noqa: F401
 
 __all__ = [
     "DEFAULT_CONFIG",
     "FORMAT",
-    "Field",
     "MAX_WORKER_DRAIN_BYTES",
     "MAX_WORKER_STDOUT_BYTES",
     "MAX_WORKER_STREAM_BYTES",
     "MODES",
     "OPERATIONS",
+    "Field",
     "SignalFieldConfig",
     "SignalFieldService",
     "digest",

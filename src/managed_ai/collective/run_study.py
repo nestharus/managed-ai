@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Retain a bounded 12-process mechanical study; no model interpretation is simulated."""
-from __future__ import annotations
 
 import argparse
 import json
 import multiprocessing
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
 
 if __package__ in (None, ""):
@@ -15,7 +14,7 @@ if __package__ in (None, ""):
     if _src_root not in sys.path:
         sys.path.insert(0, _src_root)
 
-from managed_ai.collective import Collective, PRODUCT
+from managed_ai.collective import PRODUCT, Collective
 from managed_ai.platform import check_unfollowed_ancestors, is_reparse_or_symlink
 
 COUNT = 12
@@ -120,7 +119,9 @@ def _run_participants(
     database: Path,
     store: Collective,
     source: dict[str, Any],
-) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[
+    list[dict[str, Any]], dict[str, Any], dict[str, Any], dict[str, Any], list[dict[str, Any]]
+]:
     """Spawn twelve concurrent participants and inject an impact offer before release."""
     mp_ctx = multiprocessing.get_context("spawn")
     ready = mp_ctx.Queue()
@@ -146,7 +147,9 @@ def _run_participants(
             "offer",
             target=target,
             basis=[source],
-            account="Scripted mechanical fixture: a newly addressed interpretation reaches one use.",
+            account=(
+                "Scripted mechanical fixture: a newly addressed interpretation reaches one use."
+            ),
             body={
                 "kind": "scripted-fixture",
                 "semantic_discovery_claimed": False,
@@ -196,7 +199,10 @@ def _verify_first_publications(
         raise RuntimeError("Expected only the affected participant to be refused")
     if refused[0]["result"]["code"] != "reconsideration-required":
         raise RuntimeError("Expected reconsideration-required refusal code")
-    if acknowledgment["state"] != "pending" or store.notice(impact["notice"])["receipt"] is not None:
+    if (
+        acknowledgment["state"] != "pending"
+        or store.notice(impact["notice"])["receipt"] is not None
+    ):
         raise RuntimeError("Delivery acknowledgment unexpectedly settled the required notice")
     if source != {key: store.show("shared-source")[key] for key in source}:
         raise RuntimeError("Shared source changed unexpectedly during study")
@@ -207,8 +213,12 @@ def _run_receiving_phase(
     database: Path,
     store: Collective,
     impact: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
-    """Capture, re-propose, publish, and replay exact receiving publication for the affected edge."""
+) -> tuple[
+    dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]
+]:
+    """Capture, re-propose, publish, and replay exact receiving publication for the affected
+    edge.
+    """
     target = f"edge-{AFFECTED:02}"
     owner = f"peer-{AFFECTED:02}"
     original = store.retained("proposal", f"proposal-{AFFECTED:02}-original")
@@ -247,14 +257,22 @@ def _run_receiving_phase(
             {
                 "notice": impact["notice"],
                 "disposition": "retained-adequate",
-                "account": "Fixture receiving account keeps this body; actual semantic interpretation is a separate study.",
+                "account": (
+                    "Fixture receiving account keeps this body; actual semantic interpretation is "
+                    "a "
+                    "separate study."
+                ),
             },
         ],
         account="Mechanical fixture checks revision and notice reception only.",
     )
     reception = checked(store.call(publication))
     recovered = Collective(database).call(publication)
-    if recovered != reception or store.show(target)["revision"] != 2 or current["sha256"] != original["sha256"]:
+    if (
+        recovered != reception
+        or store.show(target)["revision"] != 2
+        or current["sha256"] != original["sha256"]
+    ):
         raise RuntimeError("Receiving publication verification failed")
     return original, current_context, current, publication, reception, recovered
 

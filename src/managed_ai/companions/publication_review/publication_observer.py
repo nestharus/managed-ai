@@ -4,15 +4,14 @@ Logical IDs bind to byte identities; filesystem locations are observation origin
 Recorded selections remain recorded observations. No discovery or source execution
 is performed. See docs/OBSERVATION-CONTRACT.md for the declaration and assurance limits.
 """
-from __future__ import annotations
 
 import argparse
 import copy
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath, PureWindowsPath
 import sys
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 if __package__ in (None, ""):
@@ -22,8 +21,10 @@ if __package__ in (None, ""):
 
 from managed_ai.platform import (
     check_unfollowed_ancestors,
-    is_reparse_or_symlink as _is_reparse_or_symlink,
     strict_json_loads,
+)
+from managed_ai.platform import (
+    is_reparse_or_symlink as _is_reparse_or_symlink,
 )
 
 DECLARATION_SCHEMA = "publication-declaration/1"
@@ -140,7 +141,8 @@ class _Reader:
             current = current / part
             if _is_reparse_or_symlink(current):
                 raise ValueError(
-                    "file binding traverses a symlink or reparse point under configured root: " + raw_path,
+                    "file binding traverses a symlink or reparse point under configured root: "
+                    + raw_path,
                 )
 
         path = current.resolve()
@@ -154,14 +156,14 @@ class _Reader:
         key = str(path)
         if key not in self.cache:
             record: dict[str, Any] = {"read_id": f"read-{len(self.reads) + 1:04d}", "path": key}
+            data: bytes | None = None
             try:
-                data: bytes | None = path.read_bytes()
-                record.update(status="observed", bytes=len(data), sha256=sha256(data))
+                raw_bytes = path.read_bytes()
+                data = raw_bytes
+                record.update(status="observed", bytes=len(raw_bytes), sha256=sha256(raw_bytes))
             except FileNotFoundError:
-                data = None
                 record.update(status="absent", reason="named path was checked and is absent")
             except OSError as exc:
-                data = None
                 record.update(
                     status="unavailable",
                     reason="named path could not be read",
@@ -200,7 +202,9 @@ class _Reader:
         if data is None:
             return None, origin
         if expected is not None and (not isinstance(expected, str) or sha256(data) != expected):
-            raise ValueError("recorded receipt bytes differ from the explicitly pinned receipt_sha256")
+            raise ValueError(
+                "recorded receipt bytes differ from the explicitly pinned receipt_sha256"
+            )
         value = _object(_json(data, "recorded receipt"), "recorded receipt")
         return value, origin
 
@@ -226,7 +230,9 @@ def _acceptance(reader: _Reader, assertion: dict[str, Any], data: bytes) -> dict
     expected = _object(after.get(assertion["artifact_path"]), "accepted artifact entry")
     if expected.get("sha256") != sha256(data):
         raise ValueError("named artifact bytes differ from the supplied accepted occurrence")
-    if "bytes" in expected and (type(expected["bytes"]) is not int or expected["bytes"] != len(data)):
+    if "bytes" in expected and (
+        type(expected["bytes"]) is not int or expected["bytes"] != len(data)
+    ):
         raise ValueError("accepted artifact byte count is contradictory")
 
     return {
@@ -235,13 +241,22 @@ def _acceptance(reader: _Reader, assertion: dict[str, Any], data: bytes) -> dict
         "artifact_path": assertion["artifact_path"],
         "sha256": sha256(data),
         "bytes": len(data),
-        "claim": "matches this supplied accepted=true record; receiving authority is supplied, not authenticated",
+        "claim": (
+            "matches this supplied accepted=true record; receiving authority is supplied, not "
+            "authenticated"
+        ),
     }
 
 
-def _selection(reader: _Reader, spec: dict[str, Any]) -> tuple[dict[str, str] | None, dict[str, Any]]:
+def _selection(
+    reader: _Reader, spec: dict[str, Any]
+) -> tuple[dict[str, str] | None, dict[str, Any]]:
     _keys(spec, ("ledger", "receipt_id", "receipt_sha256", "observe"), "selection specification")
-    if "ledger" not in spec or not isinstance(spec.get("receipt_id"), str) or not spec["receipt_id"]:
+    if (
+        "ledger" not in spec
+        or not isinstance(spec.get("receipt_id"), str)
+        or not spec["receipt_id"]
+    ):
         raise ValueError("selection requires a ledger binding and explicit receipt_id")
 
     ledger, ledger_origin = reader.record(spec["ledger"], spec.get("receipt_sha256"))
@@ -283,7 +298,9 @@ def _selection(reader: _Reader, spec: dict[str, Any]) -> tuple[dict[str, str] | 
     if any(key not in selection for key in ("query", "query_interpretation", "limit")):
         raise ValueError("selected receipt is missing its complete recorded query basis")
 
-    query = {key: copy.deepcopy(selection[key]) for key in ("query", "query_interpretation", "limit")}
+    query = {
+        key: copy.deepcopy(selection[key]) for key in ("query", "query_interpretation", "limit")
+    }
     basis = {
         "query_sha256": sha256(canonical_bytes(query)),
         "catalogue_sha256": inventory_id,
@@ -298,7 +315,9 @@ def _selection(reader: _Reader, spec: dict[str, Any]) -> tuple[dict[str, str] | 
         "query": query,
         "selector": copy.deepcopy(inventory["selector"]),
         "basis": copy.deepcopy(basis),
-        "claim": "validated explicitly selected recorded basis; no new discovery or catalogue refresh",
+        "claim": (
+            "validated explicitly selected recorded basis; no new discovery or catalogue refresh"
+        ),
     }
     for key in ("corpus_root", "claim", "eligible_count", "eligible_bytes"):
         if key in inventory:
@@ -396,7 +415,7 @@ def _observe_file_entry(
         allowed.add("acceptance")
     _keys(spec, allowed, category + " file specification")
 
-    binding = {key: spec[key] for key in ("root", "path") if key in spec}
+    binding: dict[str, Any] = {key: spec[key] for key in ("root", "path") if key in spec}
     data, origin = reader.read(binding)
     if origin["status"] == "absent":
         return None, origin, True
@@ -415,7 +434,9 @@ def _observe_file_entry(
     return None, origin, False
 
 
-def observe(declaration: dict[str, Any], roots: Any = None, *, base_dir: Path | str | None = None) -> dict[str, Any]:
+def observe(
+    declaration: dict[str, Any], roots: Any = None, *, base_dir: Path | str | None = None
+) -> dict[str, Any]:
     """Return current assessor maps plus origins without mutating the declaration."""
     _keys(
         declaration,
@@ -433,14 +454,18 @@ def observe(declaration: dict[str, Any], roots: Any = None, *, base_dir: Path | 
     origins: dict[str, Any] = {name: {} for name in current}
 
     for category in ("requirements", "sources", "artifacts"):
-        for identity, spec in _object(declaration.get(category, {}), "declaration." + category).items():
+        for identity, spec in _object(
+            declaration.get(category, {}), "declaration." + category
+        ).items():
             skipped = _skipped(spec)
             if skipped is not None:
                 origins[category][identity] = skipped
                 continue
 
             if category == "requirements":
-                req_digest, req_origin, handled = _observe_inline_or_recorded_requirement(reader, spec)
+                req_digest, req_origin, handled = _observe_inline_or_recorded_requirement(
+                    reader, spec
+                )
                 if handled:
                     origins[category][identity] = req_origin
                     if req_digest is not None:
@@ -452,7 +477,9 @@ def observe(declaration: dict[str, Any], roots: Any = None, *, base_dir: Path | 
             if has_current:
                 current[category][identity] = observed_value
 
-    for identity, spec in _object(declaration.get("selections", {}), "declaration.selections").items():
+    for identity, spec in _object(
+        declaration.get("selections", {}), "declaration.selections"
+    ).items():
         skipped = _skipped(spec)
         if skipped is not None:
             origins["selections"][identity] = skipped
@@ -467,12 +494,18 @@ def observe(declaration: dict[str, Any], roots: Any = None, *, base_dir: Path | 
         "file_read_attempts": len(reader.reads),
         "files_read": sum(row["status"] == "observed" for row in reader.reads),
         "file_bytes_read": sum(row.get("bytes", 0) for row in reader.reads),
-        "count_scope": "file payload reads in this invocation; root checks and caller-supplied content excluded",
+        "count_scope": (
+            "file payload reads in this invocation; root checks and caller-supplied content "
+            "excluded"
+        ),
     }
     origins["scope"] = (
-        "Declared named-file byte observations and explicitly selected recorded receipt bases only. "
-        "No semantic dependency discovery, inventory refresh, source execution, acceptance authentication, "
-        "publication decision or obligation discharge. Each resolved file is read at most once per invocation; "
+        "Declared named-file byte observations and explicitly selected recorded receipt bases "
+        "only. "
+        "No semantic dependency discovery, inventory refresh, source execution, acceptance "
+        "authentication, "
+        "publication decision or obligation discharge. Each resolved file is read at most once per "
+        "invocation; "
         "the collection is not an atomic filesystem snapshot."
     )
     return {"schema": OBSERVATION_SCHEMA, "current": current, "origins": origins}

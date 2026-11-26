@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """Anti-spam container image build-gate, immutable tag planner, and registry GC planner."""
-from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import sys
+from datetime import UTC, datetime
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 for _entry in (str(REPO_ROOT / "src"), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai.platform import (
+from managed_ai.platform import (  # noqa: E402
     check_ordinary_ancestors,
     is_ordinary_dir_stat,
     is_ordinary_file_stat,
@@ -75,10 +74,12 @@ def _parse_iso_utc(raw: object, label: str) -> datetime:
         raise ValueError(f"invalid ISO-8601 timestamp for {label}: {raw}") from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError(f"{label} must include an explicit timezone offset")
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
-def _walk_ordinary_files(root: Path, base_dir: Path, *, suffixes: frozenset[str] | None = None) -> list[tuple[str, Path]]:
+def _walk_ordinary_files(
+    root: Path, base_dir: Path, *, suffixes: frozenset[str] | None = None
+) -> list[tuple[str, Path]]:
     collected: list[tuple[str, Path]] = []
     stack = [base_dir]
     while stack:
@@ -109,29 +110,39 @@ def _walk_ordinary_files(root: Path, base_dir: Path, *, suffixes: frozenset[str]
 def compute_context_hash(root: Path) -> dict:
     """Compute a deterministic cross-OS SHA-256 over container build inputs only."""
     repo_root = check_ordinary_ancestors(
-        root, expect_dir=True, error_prefix="ordinary repository root required",
+        root,
+        expect_dir=True,
+        error_prefix="ordinary repository root required",
     ).resolve(strict=True)
 
     candidates: list[tuple[str, Path]] = []
     pyproject = check_ordinary_ancestors(
-        repo_root / "pyproject.toml", expect_dir=False, error_prefix="ordinary pyproject.toml required",
+        repo_root / "pyproject.toml",
+        expect_dir=False,
+        error_prefix="ordinary pyproject.toml required",
     )
     candidates.append(("pyproject.toml", pyproject))
 
     containers_dir = repo_root / "containers"
     if os.path.lexists(containers_dir):
         safe_containers = check_ordinary_ancestors(
-            containers_dir, expect_dir=True, error_prefix="ordinary containers directory required",
+            containers_dir,
+            expect_dir=True,
+            error_prefix="ordinary containers directory required",
         )
         containerfile = safe_containers / "Containerfile"
         if os.path.lexists(containerfile):
             safe_cf = check_ordinary_ancestors(
-                containerfile, expect_dir=False, error_prefix="ordinary Containerfile required",
+                containerfile,
+                expect_dir=False,
+                error_prefix="ordinary Containerfile required",
             )
             candidates.append(("containers/Containerfile", safe_cf))
 
     pkg_dir = check_ordinary_ancestors(
-        repo_root / "src/managed_ai", expect_dir=True, error_prefix="ordinary src/managed_ai directory required",
+        repo_root / "src/managed_ai",
+        expect_dir=True,
+        error_prefix="ordinary src/managed_ai directory required",
     )
     candidates.extend(_walk_ordinary_files(repo_root, pkg_dir))
     candidates.sort(key=lambda item: item[0])
@@ -140,7 +151,7 @@ def compute_context_hash(root: Path) -> dict:
     files: list[dict] = []
     for rel, path in candidates:
         size, digest = _sha256_file(path)
-        outer.update(f"{rel}\0{size}\0{digest}\n".encode("utf-8"))
+        outer.update(f"{rel}\0{size}\0{digest}\n".encode())
         files.append({"path": rel, "bytes": size, "sha256": digest})
 
     return {
@@ -168,7 +179,9 @@ def build_tag_plan(
         raise ValueError(f"unsupported channel: {channel}")
     if not isinstance(git_sha, str) or not _SHA_HEX_RE.fullmatch(git_sha):
         raise ValueError("git_sha must be 12 to 40 hexadecimal characters")
-    if context_sha is not None and (not isinstance(context_sha, str) or not _CONTEXT_SHA_HEX_RE.fullmatch(context_sha)):
+    if context_sha is not None and (
+        not isinstance(context_sha, str) or not _CONTEXT_SHA_HEX_RE.fullmatch(context_sha)
+    ):
         raise ValueError("context_sha must be 12 to 64 hexadecimal characters")
     if not isinstance(registry, str) or not _REGISTRY_RE.fullmatch(registry) or ".." in registry:
         raise ValueError(f"invalid registry: {registry}")
@@ -247,7 +260,9 @@ def _collect_gitops_pins(gitops_dir: Path | None) -> dict[str, list[str]]:
     if gitops_dir is None:
         return {}
     safe_dir = check_ordinary_ancestors(
-        gitops_dir, expect_dir=True, error_prefix="ordinary gitops directory required",
+        gitops_dir,
+        expect_dir=True,
+        error_prefix="ordinary gitops directory required",
     ).resolve(strict=True)
     pins: dict[str, set[str]] = {}
     for rel, path in _walk_ordinary_files(safe_dir, safe_dir, suffixes=_GITOPS_SCAN_SUFFIXES):
@@ -259,7 +274,9 @@ def _collect_gitops_pins(gitops_dir: Path | None) -> dict[str, list[str]]:
 
 def _load_validated_catalog(catalog_path: Path) -> tuple[str, list[dict]]:
     safe_catalog = check_ordinary_ancestors(
-        catalog_path, expect_dir=False, error_prefix="ordinary catalog file required",
+        catalog_path,
+        expect_dir=False,
+        error_prefix="ordinary catalog file required",
     )
     doc = strict_json_loads(safe_catalog.read_bytes(), safe_catalog, require_object=True)
     if doc.get("format") != CATALOG_FORMAT:
@@ -288,12 +305,14 @@ def _load_validated_catalog(catalog_path: Path) -> tuple[str, list[dict]]:
             raise ValueError(f"manifest {digest} tags must be a list of non-empty strings")
         if len(set(tags)) != len(tags):
             raise ValueError(f"manifest {digest} contains duplicate tags")
-        manifests.append({
-            "digest": digest,
-            "created_at": item["created_at"],
-            "created_dt": created_dt,
-            "tags": sorted(tags),
-        })
+        manifests.append(
+            {
+                "digest": digest,
+                "created_at": item["created_at"],
+                "created_dt": created_dt,
+                "tags": sorted(tags),
+            }
+        )
     return repository, manifests
 
 
@@ -386,7 +405,8 @@ def _evaluate_manifest_gc(
 
     prune_reasons = (
         [f"tag:{tag}:{reason}" for tag, reason in expired_tags]
-        if expired_tags else ["unreferenced-dangling-manifest"]
+        if expired_tags
+        else ["unreferenced-dangling-manifest"]
     )
     pruned = {
         "digest": digest,
@@ -418,7 +438,7 @@ def plan_registry_gc(
             raise ValueError(f"invalid --protected-digest: {digest!r}")
         explicit_pins.add(digest)
 
-    now_dt = datetime.now(timezone.utc) if now is None else _parse_iso_utc(now, "--now")
+    now_dt = datetime.now(UTC) if now is None else _parse_iso_utc(now, "--now")
     repository, manifests = _load_validated_catalog(catalog_path)
     gitops_pins = _collect_gitops_pins(gitops_dir)
 
@@ -476,24 +496,45 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    ctx = sub.add_parser("context-hash", allow_abbrev=False, help="Hash container build inputs deterministically")
+    ctx = sub.add_parser(
+        "context-hash", allow_abbrev=False, help="Hash container build inputs deterministically"
+    )
     ctx.add_argument("--root", type=Path, default=REPO_ROOT, help="Repository root directory")
 
-    tag = sub.add_parser("tag-plan", allow_abbrev=False, help="Compute immutable image tags and push policy")
+    tag = sub.add_parser(
+        "tag-plan", allow_abbrev=False, help="Compute immutable image tags and push policy"
+    )
     tag.add_argument("--channel", required=True, choices=("local", "pr", "main", "release"))
     tag.add_argument("--git-sha", required=True, help="Git commit SHA (12-40 hex chars)")
-    tag.add_argument("--context-sha", default=None, help="Optional build context SHA-256 for ctx-<12> cache tag")
-    tag.add_argument("--pr-number", type=int, default=None, help="Pull request number (for pr channel)")
-    tag.add_argument("--version", default=None, help="SemVer version without leading v (for release channel)")
+    tag.add_argument(
+        "--context-sha", default=None, help="Optional build context SHA-256 for ctx-<12> cache tag"
+    )
+    tag.add_argument(
+        "--pr-number", type=int, default=None, help="Pull request number (for pr channel)"
+    )
+    tag.add_argument(
+        "--version", default=None, help="SemVer version without leading v (for release channel)"
+    )
     tag.add_argument("--registry", default="ghcr.io/nestharus", help="Container registry prefix")
     tag.add_argument("--image", default="managed-ai", help="Container image name")
-    tag.add_argument("--allow-pr-push", action="store_true", help="Allow isolated TTL-bounded PR push")
+    tag.add_argument(
+        "--allow-pr-push", action="store_true", help="Allow isolated TTL-bounded PR push"
+    )
     tag.add_argument("--pr-ttl-days", type=int, default=7, help="TTL days for PR tags (1..90)")
 
-    gc = sub.add_parser("plan-gc", allow_abbrev=False, help="Plan safe dry-run registry garbage collection")
+    gc = sub.add_parser(
+        "plan-gc", allow_abbrev=False, help="Plan safe dry-run registry garbage collection"
+    )
     gc.add_argument("--catalog", required=True, type=Path, help="Registry catalog JSON path")
-    gc.add_argument("--gitops-dir", type=Path, default=None, help="GitOps directory to scan for @sha256 pins")
-    gc.add_argument("--protected-digest", action="append", default=[], help="Additional sha256:... digest to protect")
+    gc.add_argument(
+        "--gitops-dir", type=Path, default=None, help="GitOps directory to scan for @sha256 pins"
+    )
+    gc.add_argument(
+        "--protected-digest",
+        action="append",
+        default=[],
+        help="Additional sha256:... digest to protect",
+    )
     gc.add_argument("--keep-main", type=int, default=5, help="Newest main sha-* tags to keep")
     gc.add_argument("--pr-ttl-days", type=int, default=7, help="Maximum age in days for pr-* tags")
     gc.add_argument("--now", default=None, help="Override UTC reference timestamp (ISO-8601)")

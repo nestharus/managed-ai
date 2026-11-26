@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
 """Package the one current source tree, without inherited release directories."""
-from __future__ import annotations
 
 import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import stat
 import sys
 import tempfile
 import zipfile
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 for _entry in (str(REPO_ROOT / "src"), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai.platform import check_unfollowed_ancestors
-from scripts.release._manifest import (
+from managed_ai.platform import check_unfollowed_ancestors  # noqa: E402
+from scripts.release._manifest import (  # noqa: E402
     manifest_name,
     members,
     refresh_manifests,
@@ -27,7 +26,7 @@ from scripts.release._manifest import (
     verify_bundle,
     verify_sources,
 )
-from scripts.release._verify import (
+from scripts.release._verify import (  # noqa: E402
     CATALOGUE,
     LEGACY_COMPRESSED_BASIS_PREFIXES,
     MARKER,
@@ -47,14 +46,18 @@ from scripts.release._verify import (
     read_catalogue,
     read_json,
     received_compressed_text,
-    store_compressed_prefixes as _store_compressed_prefixes,
     verify_core_selection,
     verify_deployment_bindings,
     verify_source_list,
     verify_store_schemas,
     verify_workbench_components,
-    with_engine as _with_engine,
     write_json,
+)
+from scripts.release._verify import (  # noqa: E402
+    store_compressed_prefixes as _store_compressed_prefixes,
+)
+from scripts.release._verify import (  # noqa: E402
+    with_engine as _with_engine,
 )
 
 ROOT = REPO_ROOT
@@ -66,7 +69,9 @@ def _validate_output_path(root: Path, output_arg: Path, *, replace: bool) -> Pat
     if existing is not None:
         ordinary(output, existing, stat.S_ISREG)
         if not replace:
-            raise ValueError("Output already exists; use --replace to update that current transport")
+            raise ValueError(
+                "Output already exists; use --replace to update that current transport"
+            )
 
     if output == root or root in output.parents:
         raise ValueError("Put transport output outside the source tree")
@@ -86,7 +91,9 @@ def _build_archive(root: Path, core: Path | None, source: dict[str, dict], outpu
     fd, temporary = tempfile.mkstemp(prefix=".g60-package-", suffix=".partial", dir=output.parent)
     os.close(fd)
     try:
-        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        with zipfile.ZipFile(
+            temporary, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+        ) as archive:
             for relative, expected in source.items():
                 path = root / relative
                 if identity(path) != expected:
@@ -103,7 +110,10 @@ def _build_archive(root: Path, core: Path | None, source: dict[str, dict], outpu
                 raise ValueError("Archive CRC verification failed")
             for relative, expected in source.items():
                 raw = archive.read(root.name + "/" + relative)
-                if len(raw) != expected["bytes"] or hashlib.sha256(raw).hexdigest() != expected["sha256"]:
+                if (
+                    len(raw) != expected["bytes"]
+                    or hashlib.sha256(raw).hexdigest() != expected["sha256"]
+                ):
                     raise ValueError("Archive content differs: " + relative)
 
         if members(root, core) != source:
@@ -128,9 +138,13 @@ def _build_archive(root: Path, core: Path | None, source: dict[str, dict], outpu
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("--root", type=Path, default=ROOT, help="One current source tree to package")
+    parser.add_argument(
+        "--root", type=Path, default=ROOT, help="One current source tree to package"
+    )
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--replace", action="store_true", help="Atomically replace the named current transport")
+    parser.add_argument(
+        "--replace", action="store_true", help="Atomically replace the named current transport"
+    )
     parser.add_argument("--refresh-only", action="store_true")
     args = parser.parse_args()
 
@@ -138,13 +152,20 @@ def main() -> int:
     if not args.refresh_only and args.output is None:
         parser.error("--output is required unless --refresh-only is selected")
 
-    output = _validate_output_path(root, args.output, replace=args.replace) if args.output is not None else None
+    output = (
+        _validate_output_path(root, args.output, replace=args.replace)
+        if args.output is not None
+        else None
+    )
     core = inventory_engine(root)
     refresh_manifests(root, core)
     source = members(root, core)
     if args.refresh_only:
         print(json.dumps({"status": "verified", "files": len(source)}))
         return 0
+
+    if output is None:
+        parser.error("--output is required unless --refresh-only is selected")
 
     summary = _build_archive(root, core, source, output)
     print(json.dumps(summary))

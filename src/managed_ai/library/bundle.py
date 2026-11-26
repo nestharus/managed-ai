@@ -3,16 +3,16 @@
 Uses managed_ai.platform exclusively for cooperative file locking, exclusive
 no-clobber publishing, and directory fsync (zero inline OS branches).
 """
-from __future__ import annotations
 
 import io
 import os
-from pathlib import Path
 import shutil
 import stat
 import tempfile
-from typing import Any, Callable
 import zipfile
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
 from managed_ai.platform import (
     is_reparse_or_symlink,
@@ -56,7 +56,8 @@ def resolve(
     integer(effective_limit, "selection body bytes", 1, limits.max_package_bytes)
 
     need(
-        isinstance(selection, dict) and set(selection) == {"format", "purpose", "bodies", "modules"},
+        isinstance(selection, dict)
+        and set(selection) == {"format", "purpose", "bodies", "modules"},
         "invalid selection fields",
     )
     need(selection["format"] == config.selection_format, "unsupported selection format")
@@ -73,7 +74,10 @@ def resolve(
             "invalid selected " + key,
         )
         for pin in selection[key]:
-            need(isinstance(pin, dict) and set(pin) == {"library_sha256", "id", "sha256"}, "invalid source pin")
+            need(
+                isinstance(pin, dict) and set(pin) == {"library_sha256", "id", "sha256"},
+                "invalid source pin",
+            )
             h = sha(pin["library_sha256"])
             sha(pin["sha256"])
             relative(pin["id"])
@@ -105,11 +109,11 @@ def resolve(
 
     total = 0
     data: dict[tuple[str, str], bytes] = {}
-    for key, (lib, row) in chosen.items():
+    for body_key, (lib, row) in chosen.items():
         need(row["bytes"] <= effective_limit - total, "selected complete bodies exceed byte bound")
         body = lib.body(row["id"])
         total += len(body)
-        data[key] = body
+        data[body_key] = body
 
     return chosen, chosen_modules, data, total
 
@@ -136,7 +140,10 @@ def context(
             {"pin": lib.pin(row), "entry": row, "text": data[key].decode("utf-8")}
             for key, (lib, row) in rows.items()
         ],
-        "scope": "Complete selected source exposure. No inferred applicability, model invocation, publication or effect authority.",
+        "scope": (
+            "Complete selected source exposure. No inferred applicability, model invocation, "
+            "publication or effect authority."
+        ),
     }
 
     need(
@@ -223,7 +230,9 @@ def export(
     temp = target.with_name("." + target.name + "." + os.urandom(16).hex() + ".partial")
     try:
         with temp.open("xb") as stream:
-            with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+            with zipfile.ZipFile(
+                stream, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+            ) as archive:
                 for name, data in sorted({"catalogue.json": raw, **objects}.items()):
                     info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
                     info.compress_type = zipfile.ZIP_DEFLATED
@@ -232,7 +241,9 @@ def export(
             stream.flush()
             os.fsync(stream.fileno())
 
-        publish_exclusive(temp, target, error_message="output exists; inspect it rather than overwrite")
+        publish_exclusive(
+            temp, target, error_message="output exists; inspect it rather than overwrite"
+        )
         sync_dir(target.parent)
     finally:
         temp.unlink(missing_ok=True)
@@ -262,7 +273,11 @@ def bundle_bytes(
             need(not info.is_dir() and not info.flag_bits & 1, "unsupported bundle member")
             mode = info.external_attr >> 16
             need(stat.S_IFMT(mode) in {0, stat.S_IFREG}, "bundle member is not an ordinary file")
-            bound = limits.max_manifest_bytes if info.filename == "catalogue.json" else limits.max_body_bytes
+            bound = (
+                limits.max_manifest_bytes
+                if info.filename == "catalogue.json"
+                else limits.max_body_bytes
+            )
             need(info.file_size <= bound, "bundle member exceeds byte bound")
 
         need(
@@ -317,7 +332,7 @@ def inspect_bundle(
     }
 
 
-def _open_import_lock(lock_path: Path):
+def _open_import_lock(lock_path: Path) -> Any:
     flags = (
         os.O_CREAT
         | os.O_RDWR

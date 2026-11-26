@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Refresh source identities from canonical maintained files, without body copies."""
-from __future__ import annotations
 
 import argparse
-from contextlib import ExitStack
 import hashlib
 import json
 import os
+import sys
+from collections.abc import Callable
+from contextlib import ExitStack
 from pathlib import Path
 from stat import S_IMODE, S_ISDIR, S_ISREG
-import sys
 from tempfile import TemporaryDirectory
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -17,7 +17,7 @@ for _entry in (str(REPO_ROOT / "src"), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai.platform import (
+from managed_ai.platform import (  # noqa: E402
     check_ordinary_ancestors,
     is_reparse_or_symlink_stat,
     strict_json_loads,
@@ -39,13 +39,10 @@ def anchor(ident: str) -> str:
 
 
 def source_identity_line(row: dict) -> str:
-    return (
-        f"[{row['source']}]({row['source']}) — {row['bytes']} bytes; "
-        f"SHA-256 `{row['sha256']}`."
-    )
+    return f"[{row['source']}]({row['source']}) — {row['bytes']} bytes; SHA-256 `{row['sha256']}`."
 
 
-def _ordinary_entry(path: Path, kind, label: str):
+def _ordinary_entry(path: Path, kind: Callable[[int], bool], label: str) -> os.stat_result:
     try:
         info = path.lstat()
     except OSError:
@@ -57,7 +54,7 @@ def _ordinary_entry(path: Path, kind, label: str):
     return info
 
 
-def _ordinary_path(path: Path, kind, label: str) -> Path:
+def _ordinary_path(path: Path, kind: Callable[[int], bool], label: str) -> Path:
     """Validate every ancestor and the entry itself before resolving."""
     validated = check_ordinary_ancestors(
         path,
@@ -67,7 +64,7 @@ def _ordinary_path(path: Path, kind, label: str) -> Path:
     return validated.resolve(strict=True)
 
 
-def _ordinary_within(path: Path, boundary: Path, kind, label: str) -> Path:
+def _ordinary_within(path: Path, boundary: Path, kind: Callable[[int], bool], label: str) -> Path:
     """Verify every segment from boundary down to path is ordinary."""
     resolved_boundary = _ordinary_path(boundary, S_ISDIR, label)
     normalized = Path(os.path.abspath(path))
@@ -107,7 +104,8 @@ def render_sources_markdown(selected: dict, nav: dict) -> bytes:
     lines = [
         "# Current source owners",
         "",
-        "The native catalogue verifies the same canonical files linked here. Domain sources are selected by each store. "
+        "The native catalogue verifies the same canonical files linked here. Domain sources are "
+        "selected by each store. "
         "No second library of source copies or predecessor runtime is required.",
         "",
     ]
@@ -141,7 +139,9 @@ def render_sources_markdown(selected: dict, nav: dict) -> bytes:
             "## " + ident,
             "",
             "The former source is not installed at this logical path. "
-            "Select a maintained account or explicitly acquire the exact original when its identity matters.",
+            "Select a maintained account or explicitly acquire the exact original when its "
+            "identity "
+            "matters.",
             "",
         ]
 
@@ -183,7 +183,9 @@ def _resolve_source_entry(root: Path, bundle_root: Path, min_depth: int, row: di
 
 
 def _locate_release_assets(resolved_root: Path, bundle_root: Path) -> tuple[Path, Path, Path]:
-    """Locate current_sources.json and navigation.json (scripts/release/ first, legacy core/release/ fallback)."""
+    """Locate current_sources.json and navigation.json (scripts/release/ first, legacy core/release/
+    fallback).
+    """
     if bundle_root != resolved_root:
         scripts_selection = bundle_root / "scripts/release/current_sources.json"
         try:
@@ -205,7 +207,9 @@ def render(root: Path, *, include_sources_md: bool = False) -> tuple[dict[str, b
     resolved_root = _ordinary_path(root, S_ISDIR, "ordinary engine directory required")
     _, bundle_root, source_root_rel, min_depth = _engine_layout(resolved_root)
 
-    selection_path, nav_path, selection_boundary = _locate_release_assets(resolved_root, bundle_root)
+    selection_path, nav_path, selection_boundary = _locate_release_assets(
+        resolved_root, bundle_root
+    )
     catalogue_name = "store/catalogue.json"
     selected = _read_strict_object(selection_path, selection_boundary)
     catalogue = _read_strict_object(resolved_root / catalogue_name, resolved_root)
@@ -217,11 +221,16 @@ def render(root: Path, *, include_sources_md: bool = False) -> tuple[dict[str, b
         raw = resolved.read_bytes()
         text = raw.decode("utf-8")
         row.update(sha256=digest(raw), bytes=len(raw), presentation=row["source"])
-        title = next((line.lstrip("#").strip() for line in text.splitlines() if line.startswith("# ")), row["id"])
+        title = next(
+            (line.lstrip("#").strip() for line in text.splitlines() if line.startswith("# ")),
+            row["id"],
+        )
         entry = dict(prior[row["id"]])
         body_path = resolved.relative_to(bundle_root).as_posix()
         if "\\" in body_path:
-            raise ValueError("current source reference has an unsupported filename: " + row["source"])
+            raise ValueError(
+                "current source reference has an unsupported filename: " + row["source"]
+            )
 
         entry.update(
             title=title,
@@ -238,14 +247,18 @@ def render(root: Path, *, include_sources_md: bool = False) -> tuple[dict[str, b
         entries.append(entry)
 
     selected_ids = {row["id"] for row in selected["bodies"]}
-    catalogue["entries"] = entries + [entry for entry in catalogue["entries"] if entry["id"] not in selected_ids]
+    catalogue["entries"] = entries + [
+        entry for entry in catalogue["entries"] if entry["id"] not in selected_ids
+    ]
     catalogue["source_root"] = selected["edition"]
     selection = json_bytes(selected)
     selection_sha = digest(selection)
     catalogue["snapshot"] = {
         "edition": selected["edition"],
         "selection_sha256": selection_sha,
-        "relationship": "References to one canonical source body; domain sources are selected per store.",
+        "relationship": (
+            "References to one canonical source body; domain sources are selected per store."
+        ),
     }
     nav = _read_strict_object(nav_path, selection_boundary)
     marker = {
@@ -256,12 +269,21 @@ def render(root: Path, *, include_sources_md: bool = False) -> tuple[dict[str, b
         "store_schema": "managed-ai-store/1",
         "selection_sha256": selection_sha,
         "source_count": len(entries),
-        "source_ownership": "Canonical maintained source files; reference catalogues do not duplicate their bodies.",
-        "scope": "Same executable engine for independent schema-governed stores; domains and selected knowledge are data.",
+        "source_ownership": "Canonical maintained source files; reference "
+        "catalogues do not duplicate their "
+        "bodies.",
+        "scope": (
+            "Same executable engine for independent schema-governed stores; domains and selected "
+            "knowledge are data."
+        ),
     }
 
     selection_key = selection_path.relative_to(bundle_root).as_posix()
-    core_prefix = "" if resolved_root == bundle_root else resolved_root.relative_to(bundle_root).as_posix() + "/"
+    core_prefix = (
+        ""
+        if resolved_root == bundle_root
+        else resolved_root.relative_to(bundle_root).as_posix() + "/"
+    )
     projections: dict[str, bytes] = {
         selection_key: selection,
         core_prefix + catalogue_name: json_bytes(catalogue),
@@ -270,7 +292,11 @@ def render(root: Path, *, include_sources_md: bool = False) -> tuple[dict[str, b
         projections[core_prefix + "SOURCES.md"] = render_sources_markdown(selected, nav)
 
     projections[core_prefix + "CURRENT-RELEASE.json"] = json_bytes(marker)
-    summary = {"status": "refreshed", "canonical_sources": len(entries), "selection_sha256": selection_sha}
+    summary = {
+        "status": "refreshed",
+        "canonical_sources": len(entries),
+        "selection_sha256": selection_sha,
+    }
     return projections, summary
 
 
@@ -301,7 +327,9 @@ def refresh(root: Path, *, include_sources_md: bool = False) -> dict:
                     raise ValueError("ordinary projection target required: " + str(target))
                 mode = S_IMODE(info.st_mode)
 
-            scratch = cleanup.enter_context(TemporaryDirectory(dir=target.parent, prefix=f".{target.name}."))
+            scratch = cleanup.enter_context(
+                TemporaryDirectory(dir=target.parent, prefix=f".{target.name}.")
+            )
             staged = Path(scratch) / target.name
             with staged.open("xb") as stream:
                 if stream.write(raw) != len(raw):

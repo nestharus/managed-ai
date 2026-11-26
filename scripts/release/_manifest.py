@@ -1,23 +1,24 @@
 """Tree scanning, manifest stamping, and bundle verification for release packaging."""
-from __future__ import annotations
 
-from contextlib import ExitStack
 import os
-from pathlib import Path
 import re
 import stat
 import sys
+from collections.abc import Iterator, Sequence
+from contextlib import ExitStack
+from pathlib import Path
+from types import EllipsisType
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 for _entry in (str(REPO_ROOT / "src"), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai.platform import is_reparse_or_symlink_stat
-from scripts.release._verify import (
+from managed_ai.platform import is_reparse_or_symlink_stat  # noqa: E402
+from scripts.release._verify import (  # noqa: E402
     CATALOGUE,
     SCRIPTS_SELECTION,
-    SELECTION,
     STAGED_PROJECTIONS,
     catalogue_path,
     check_compressed_text,
@@ -41,10 +42,10 @@ from scripts.release._verify import (
     write_bytes_atomic,
     write_json,
 )
-from scripts.release.refresh_guidance import render_sources_markdown
+from scripts.release.refresh_guidance import render_sources_markdown  # noqa: E402
 
 
-def reserved_stage(path: Path, info, prefixes) -> bool:
+def reserved_stage(path: Path, info: os.stat_result, prefixes: Sequence[str]) -> bool:
     for prefix in prefixes:
         name = path.name
         if len(name) <= len(prefix) or not name.startswith(".") or name[len(prefix) - 1] != ".":
@@ -59,20 +60,22 @@ def reserved_stage(path: Path, info, prefixes) -> bool:
     return False
 
 
-def source_paths(root: Path, engine: Path | None):
+def source_paths(root: Path, engine: Path | None) -> Iterator[Path]:
     ordinary(root, root.lstat(), stat.S_ISDIR)
     staging: dict[str, list[str]] = {}
     if engine is not None:
         for target in STAGED_PROJECTIONS:
             resolved_target = catalogue_path(engine) if target == CATALOGUE else target
-            parent = engine
+            parent: Path | None = engine
             if resolved_target.parent.parts:
                 parent = observed_path(engine, resolved_target.parent, stat.S_ISDIR)
             if parent is not None:
                 key = parent.resolve(strict=True).as_posix()
                 staging.setdefault(key, []).append(f".{resolved_target.name}.")
 
-        scripts_release = observed_path(root, SCRIPTS_SELECTION.parent, stat.S_ISDIR, scope_probe=True)
+        scripts_release = observed_path(
+            root, SCRIPTS_SELECTION.parent, stat.S_ISDIR, scope_probe=True
+        )
         if scripts_release is not None:
             key = scripts_release.resolve(strict=True).as_posix()
             staging.setdefault(key, []).append(f".{SCRIPTS_SELECTION.name}.")
@@ -98,16 +101,19 @@ def source_paths(root: Path, engine: Path | None):
                 yield path
 
 
-def members(root: Path, engine=...) -> dict[str, dict]:
-    if engine is ...:
-        engine = inventory_engine(root)
+def members(root: Path, engine: Path | EllipsisType | None = ...) -> dict[str, dict[str, Any]]:
+    resolved_engine: Path | None = (
+        inventory_engine(root) if isinstance(engine, EllipsisType) else engine
+    )
 
-    result: dict[str, dict] = {}
-    stores = {}
-    native_api = None
+    result: dict[str, dict[str, Any]] = {}
+    stores: dict[str, tuple[Any, set[tuple[str, str, int]], tuple[str, ...]]] = {}
+    native_api: dict[str, Any] | None = None
 
     with ExitStack() as stack:
-        for path in sorted(source_paths(root, engine), key=lambda item: (item, item.as_posix())):
+        for path in sorted(
+            source_paths(root, resolved_engine), key=lambda item: (item, item.as_posix())
+        ):
             relative = path.relative_to(root).as_posix()
             if "\\" in relative or ".." in Path(relative).parts:
                 raise ValueError("Unsafe archive member path: " + relative)
@@ -120,30 +126,41 @@ def members(root: Path, engine=...) -> dict[str, dict]:
                 if (
                     not match
                     or match[3] != match[4][:2]
-                    or engine is None
-                    or engine == root
+                    or resolved_engine is None
+                    or resolved_engine == root
                     or not (root / "stores" / match[1] / "system.json").is_file()
                 ):
-                    raise ValueError("Select extracted useful source instead of nested transport: " + str(path))
+                    raise ValueError(
+                        "Select extracted useful source instead of nested transport: " + str(path)
+                    )
 
                 store_name, work_rel, _, expected_sha = match.groups()
                 if store_name not in stores:
                     if native_api is None:
-                        native_api = stack.enter_context(with_engine(engine, "store/system.py"))
+                        native_api = stack.enter_context(
+                            with_engine(resolved_engine, "store/system.py")
+                        )
                     store = native_api["System"](root / "stores" / store_name)
                     stores[store_name] = (
                         store,
-                        received_compressed_text(store, engine=engine),
+                        received_compressed_text(store, engine=resolved_engine),
                         store_compressed_prefixes(store),
                     )
 
                 store, allowed, allowed_prefixes = stores[store_name]
                 if not any(work_rel.startswith(prefix) for prefix in allowed_prefixes):
-                    raise ValueError("Select extracted useful source instead of nested transport: " + str(path))
+                    raise ValueError(
+                        "Select extracted useful source instead of nested transport: " + str(path)
+                    )
 
                 current = identity(path)
-                if current["sha256"] != expected_sha or (work_rel, expected_sha, current["bytes"]) not in allowed:
-                    raise ValueError("Missing accepted research evidence for compressed source: " + relative)
+                if (
+                    current["sha256"] != expected_sha
+                    or (work_rel, expected_sha, current["bytes"]) not in allowed
+                ):
+                    raise ValueError(
+                        "Missing accepted research evidence for compressed source: " + relative
+                    )
 
                 store.ex.objects.read(expected_sha, expected_bytes=current["bytes"])
                 check_compressed_text(path)
@@ -184,7 +201,9 @@ verify_sources = verify_bundle
 def manifest_name(root: Path) -> str:
     name = Path("MANIFEST.json")
     path = observed_path(root, name, stat.S_ISREG)
-    return name.as_posix() if path is None else path.resolve(strict=True).relative_to(root).as_posix()
+    return (
+        name.as_posix() if path is None else path.resolve(strict=True).relative_to(root).as_posix()
+    )
 
 
 def refresh_manifests(root: Path, core: Path | None) -> None:
@@ -205,7 +224,11 @@ def refresh_manifests(root: Path, core: Path | None) -> None:
         verify_bundle(root, core, native, tree=tree)
         stamped_manifest = verify_workbench_components(root, stamp=True)
         if stamped_manifest is not None:
-            stamped_rel = stamped_manifest.resolve(strict=True).relative_to(root.resolve(strict=True)).as_posix()
+            stamped_rel = (
+                stamped_manifest.resolve(strict=True)
+                .relative_to(root.resolve(strict=True))
+                .as_posix()
+            )
             stamped_id = identity(stamped_manifest)
             tree[stamped_rel] = stamped_id
             if stamped_rel.startswith(prefix):

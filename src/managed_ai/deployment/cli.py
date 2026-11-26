@@ -1,10 +1,9 @@
 """CLI parser and command dispatcher for shared deployment selection."""
-from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
 
 from managed_ai.core.storage import exclusive, is_reparse_or_symlink, shared
@@ -29,7 +28,9 @@ def parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
     )
     p.add_argument("--deployment", type=Path, required=True)
-    p.add_argument("--expected-descriptor", help="Deployment edition verified by the forwarding entrance")
+    p.add_argument(
+        "--expected-descriptor", help="Deployment edition verified by the forwarding entrance"
+    )
     p.add_argument("--require-domain", help=argparse.SUPPRESS)
     p.add_argument("--admission-deadline", type=float, help=argparse.SUPPRESS)
     sub = p.add_subparsers(dest="action", required=True)
@@ -65,7 +66,10 @@ def parser() -> argparse.ArgumentParser:
 def _run_explain_context(args: argparse.Namespace) -> None:
     root = _ordinary_dir(args.deployment)
     selected = Deployment(root)
-    if args.expected_descriptor is not None and selected.descriptor_sha256 != args.expected_descriptor:
+    if (
+        args.expected_descriptor is not None
+        and selected.descriptor_sha256 != args.expected_descriptor
+    ):
         raise ValueError("deployment descriptor differs")
     if args.require_domain is not None:
         _check_required_domain(selected.runtime, args.require_domain)
@@ -78,7 +82,10 @@ def _run_system_command(args: argparse.Namespace) -> None:
     root = _ordinary_dir(args.deployment)
     descriptor = read_descriptor_bytes(root / "deployment.json")
     selection = DeploymentSelection(root, descriptor=descriptor)
-    if args.expected_descriptor is not None and selection.descriptor_sha256 != args.expected_descriptor:
+    if (
+        args.expected_descriptor is not None
+        and selection.descriptor_sha256 != args.expected_descriptor
+    ):
         raise ValueError("deployment descriptor differs")
 
     engine_cfg, store_cfg = validate_deployment_sections(selection.config)
@@ -117,7 +124,9 @@ def _run_deployment_action(args: argparse.Namespace) -> dict[str, Any]:
         for existing in (raw_root, *raw_root.parents):
             try:
                 if is_reparse_or_symlink(existing.lstat()):
-                    raise ValueError(f"ordinary deployment, engine and store directories required: {existing}")
+                    raise ValueError(
+                        f"ordinary deployment, engine and store directories required: {existing}"
+                    )
             except FileNotFoundError:
                 continue
         raw_root.mkdir(parents=True, exist_ok=True)
@@ -128,15 +137,22 @@ def _run_deployment_action(args: argparse.Namespace) -> dict[str, Any]:
     admission = observation_guard(guard, lock, deadline=args.admission_deadline)
 
     with report_admission(args.action), admission:
-        if args.expected_descriptor is not None and DeploymentSelection(root).descriptor_sha256 != args.expected_descriptor:
+        if (
+            args.expected_descriptor is not None
+            and DeploymentSelection(root).descriptor_sha256 != args.expected_descriptor
+        ):
             raise ValueError("deployment descriptor differs")
 
         if args.action == "init":
             return Deployment.initialize(root, args.runtime, args.engine)
         if args.action == "stage":
-            return DeploymentSelection(root).stage(args.edition, args.engine, from_head=args.from_head)
+            return DeploymentSelection(root).stage(
+                args.edition, args.engine, from_head=args.from_head
+            )
         if args.action == "activate":
-            return DeploymentSelection(root).activate(args.edition, args.expected, args.manifest_sha256, args.reason)
+            return DeploymentSelection(root).activate(
+                args.edition, args.expected, args.manifest_sha256, args.reason
+            )
 
         selected = Deployment(root)
         if args.require_domain is not None:
@@ -164,7 +180,11 @@ def main() -> None:
         result = _run_deployment_action(args)
         print(json.dumps(result, indent=2))
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
-        failure: dict[str, Any] = {"status": "unresolved", "operation": args.action, "error": str(exc)}
+        failure: dict[str, Any] = {
+            "status": "unresolved",
+            "operation": args.action,
+            "error": str(exc),
+        }
         if isinstance(exc, ActivationIncomplete):
             failure.update(
                 status="committed_incomplete",
@@ -175,4 +195,4 @@ def main() -> None:
             failure["publication_basis"] = exc.basis
 
         print(json.dumps(failure), file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(2) from None

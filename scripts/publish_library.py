@@ -4,15 +4,14 @@
 This authoring operation constructs a fresh library. It does not activate it,
 change accepted sources, select an engine, or install executable knowledge.
 """
-from __future__ import annotations
 
 import argparse
 import os
-from pathlib import Path, PurePosixPath
 import posixpath
 import re
 import shutil
 import sys
+from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlsplit
 
 sys.dont_write_bytecode = True
@@ -22,8 +21,8 @@ for _entry in (str(REPO_ROOT / "src"), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai.library.catalogue import Library
-from managed_ai.library.format import (
+from managed_ai.library.catalogue import Library  # noqa: E402
+from managed_ai.library.format import (  # noqa: E402
     FORMAT,
     MAX_BODY,
     MAX_MANIFEST,
@@ -36,9 +35,11 @@ from managed_ai.library.format import (
     ordinary,
     read_bytes,
     relative,
+)
+from managed_ai.library.format import (  # noqa: E402
     text as check_text,
 )
-from managed_ai.platform import sync_dir
+from managed_ai.platform import sync_dir  # noqa: E402
 
 DEFAULT_SOURCE_MAP = REPO_ROOT / "src/managed_ai/library/source-map.json"
 DEFAULT_LIBRARY = REPO_ROOT / "src/managed_ai/library/library"
@@ -95,7 +96,8 @@ def references(body: bytes, link_base: str) -> list[dict[str, str]]:
 def source_map(path: Path) -> dict:
     spec = decoded(read_bytes(path, MAX_MANIFEST))
     need(
-        isinstance(spec, dict) and set(spec) == {"format", "families", "additional", "overrides", "modules"},
+        isinstance(spec, dict)
+        and set(spec) == {"format", "families", "additional", "overrides", "modules"},
         "invalid source-map fields",
     )
     need(spec["format"] == "knowledge-source-map/1", "unsupported source map")
@@ -136,7 +138,9 @@ def _collect_family_ids(root: Path, overlay: Path | None, families: list[str]) -
     return ids
 
 
-def construct(root: Path, overlay: Path | None, spec: dict, edition: str) -> tuple[bytes, dict[str, bytes]]:
+def construct(
+    root: Path, overlay: Path | None, spec: dict, edition: str
+) -> tuple[bytes, dict[str, bytes]]:
     ordinary_root = ordinary(root)
     need(ordinary_root.is_dir(), "source root required")
 
@@ -144,8 +148,10 @@ def construct(root: Path, overlay: Path | None, spec: dict, edition: str) -> tup
     if ordinary_overlay is not None:
         need(ordinary_overlay.is_dir(), "overlay directory required")
 
-    ids = set(spec["additional"]) | set(spec["overrides"]) | _collect_family_ids(
-        ordinary_root, ordinary_overlay, spec["families"]
+    ids = (
+        set(spec["additional"])
+        | set(spec["overrides"])
+        | _collect_family_ids(ordinary_root, ordinary_overlay, spec["families"])
     )
     rows = []
     objects: dict[str, bytes] = {}
@@ -207,7 +213,9 @@ def publish(root: Path, overlay: Path | None, spec: dict, edition: str, output: 
     if target.exists():
         existing = Library(target)
         existing.verify()
-        need(existing.raw == raw, "output contains a different publication; choose a fresh directory")
+        need(
+            existing.raw == raw, "output contains a different publication; choose a fresh directory"
+        )
         expected = {"catalogue.json"} | set(objects)
         actual = {
             item.relative_to(target).as_posix()
@@ -241,14 +249,16 @@ def publish(root: Path, overlay: Path | None, spec: dict, edition: str, output: 
     return result
 
 
-def audit(root: Path, overlay: Path | None, library, spec: dict | None = None) -> dict:
+def audit(root: Path, overlay: Path | None, library: Library, spec: dict | None = None) -> dict:
     ordinary_root = ordinary(root)
     ordinary_overlay = ordinary(overlay) if overlay is not None else None
     results = []
 
     for row in library.bodies.values():
         try:
-            body = read_bytes(owner(ordinary_root, ordinary_overlay, row["source"]["path"]), MAX_BODY)
+            body = read_bytes(
+                owner(ordinary_root, ordinary_overlay, row["source"]["path"]), MAX_BODY
+            )
             observed = digest(body)
             status = "same" if observed == row["sha256"] else "changed"
             results.append(
@@ -276,14 +286,18 @@ def audit(root: Path, overlay: Path | None, library, spec: dict | None = None) -
     )
     inventory = None
     if spec is not None:
-        expected_raw, _ = construct(ordinary_root, ordinary_overlay, spec, library.catalogue["edition"])
+        expected_raw, _ = construct(
+            ordinary_root, ordinary_overlay, spec, library.catalogue["edition"]
+        )
         expected = decoded(expected_raw)
         before = {row["id"]: row for row in library.catalogue["bodies"]}
         after = {row["id"]: row for row in expected["bodies"]}
         inventory = {
             "missing_current_bodies": sorted(set(after) - set(before)),
             "no_longer_selected_bodies": sorted(set(before) - set(after)),
-            "changed_entries": sorted(ident for ident in set(before) & set(after) if before[ident] != after[ident]),
+            "changed_entries": sorted(
+                ident for ident in set(before) & set(after) if before[ident] != after[ident]
+            ),
             "modules_same": expected["modules"] == library.catalogue["modules"],
         }
 
@@ -295,7 +309,9 @@ def audit(root: Path, overlay: Path | None, library, spec: dict | None = None) -
     )
     overall = (
         "same"
-        if all(item["status"] == "same" for item in results) and map_same is not False and inventory_same
+        if all(item["status"] == "same" for item in results)
+        and map_same is not False
+        and inventory_same
         else "different"
     )
     return {
@@ -340,7 +356,7 @@ def main() -> int:
             raise SystemExit(1)
     except (OSError, ValueError, KeyError, UnicodeError) as error:
         sys.stderr.buffer.write(encoded({"status": "refused", "error": str(error)}))
-        raise SystemExit(2)
+        raise SystemExit(2) from None
 
     return 0
 

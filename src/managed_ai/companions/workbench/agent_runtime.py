@@ -4,7 +4,6 @@ The budget counts attempted model calls, including a call that raises. It does
 not bound callback duration, resource consumption, or callback side effects.
 Evidence snapshots are implemented by the companion ``evidence_support`` module.
 """
-from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
@@ -33,7 +32,9 @@ def _validated_inputs(
         raise TypeError("sources must map string IDs to string bodies")
 
     source_bodies = dict(sources.items())
-    if any(not isinstance(key, str) or not isinstance(body, str) for key, body in source_bodies.items()):
+    if any(
+        not isinstance(key, str) or not isinstance(body, str) for key, body in source_bodies.items()
+    ):
         raise TypeError("sources must map string IDs to string bodies")
     if not callable(model):
         raise TypeError("model must be callable")
@@ -41,7 +42,10 @@ def _validated_inputs(
         raise TypeError("tools must map string names to callables")
 
     registered_tools = dict(tools.items())
-    if any(not isinstance(name, str) or not callable(callback) for name, callback in registered_tools.items()):
+    if any(
+        not isinstance(name, str) or not callable(callback)
+        for name, callback in registered_tools.items()
+    ):
         raise TypeError("tools must map string names to callables")
     if isinstance(max_steps, bool) or not isinstance(max_steps, int):
         raise TypeError("max_steps must be a nonnegative integer")
@@ -99,7 +103,9 @@ def run_agent(
     def record(event: dict[str, Any]) -> None:
         trace["events"].append(event)
 
-    def result(status: str, *, answer: str | None = None, error: dict[str, Any] | None = None) -> dict[str, Any]:
+    def result(
+        status: str, *, answer: str | None = None, error: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         return {
             "status": status,
             "answer": answer,
@@ -166,7 +172,14 @@ def run_agent(
             )
 
         arguments = detached_json(action["arguments"])
-        record({"kind": "tool_call", "step": step, "name": tool_name, "arguments": detached_json(arguments)})
+        record(
+            {
+                "kind": "tool_call",
+                "step": step,
+                "name": tool_name,
+                "arguments": detached_json(arguments),
+            }
+        )
         tool_calls += 1
 
         try:

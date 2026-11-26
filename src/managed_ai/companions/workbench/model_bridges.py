@@ -1,20 +1,21 @@
 """Caller-mediated model transports; neither transport implements model inference."""
-from __future__ import annotations
 
 import math
 import os
-from pathlib import Path
 import subprocess
 import time
+from pathlib import Path
 from typing import Any
 
 from .io_utils import (
     atomic_bytes,
     atomic_json,
-    canonical_bytes as encode,
     loads_strict,
     sha256_bytes,
     sync_dir,
+)
+from .io_utils import (
+    canonical_bytes as encode,
 )
 
 
@@ -53,7 +54,9 @@ class MailboxModel:
         request_path = self.directory / (stem + ".request.json")
         response_path = self.directory / (stem + ".response.json")
         if response_path.exists():
-            raise FileExistsError("Preexisting response cannot answer a new request: " + str(response_path))
+            raise FileExistsError(
+                "Preexisting response cannot answer a new request: " + str(response_path)
+            )
 
         envelope = {
             "schema": "g60-model-mailbox-request/1",
@@ -139,7 +142,7 @@ class CommandModel:
 
         try:
             with stdout_path.open("xb") as stdout, stderr_path.open("xb") as stderr:
-                run = subprocess.run(
+                run = subprocess.run(  # noqa: S603
                     self.argv,
                     input=request_bytes,
                     stdout=stdout,
@@ -156,7 +159,9 @@ class CommandModel:
             sync_dir(self.directory)
             status["returncode"] = run.returncode
             if run.returncode:
-                raise RuntimeError("Configured model command failed with exit " + str(run.returncode))
+                raise RuntimeError(
+                    "Configured model command failed with exit " + str(run.returncode)
+                )
             return loads_strict(stdout_path.read_bytes())
         except Exception as exc:
             status["error"] = {"type": type(exc).__name__, "message": str(exc)}

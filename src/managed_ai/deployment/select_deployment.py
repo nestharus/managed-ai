@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Enter a prepared deployment, or install its stable entrance from this product."""
-from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
+from pathlib import Path
 
 
 def _ensure_package(engine: Path) -> None:
@@ -15,9 +14,9 @@ def _ensure_package(engine: Path) -> None:
         return
 
     loaded = sys.modules.get("managed_ai")
-    if loaded is not None and getattr(loaded, "__file__", None):
-        if Path(loaded.__file__).resolve().parent == engine:
-            return
+    loaded_file = getattr(loaded, "__file__", None) if loaded is not None else None
+    if isinstance(loaded_file, str) and Path(loaded_file).resolve().parent == engine:
+        return
 
     spec = importlib.util.spec_from_file_location(
         "managed_ai",

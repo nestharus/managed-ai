@@ -7,7 +7,6 @@ Fixes P7-1:
   observations hit the retained Library in O(1) without reparsing the manifest.
 - Provides context-manager (__enter__/__exit__) and __del__ cleanup.
 """
-from __future__ import annotations
 
 from collections import OrderedDict
 from copy import deepcopy
@@ -18,6 +17,8 @@ from . import catalogue as _catalogue
 from .config import DEFAULT_LIBRARY_CONFIG, LibraryConfig
 from .format import digest, need, relative, sha
 from .lexical import SQLITE_ERRORS
+
+_PRODUCER_ERRORS: tuple[type[BaseException], ...] = (ValueError, OSError, *SQLITE_ERRORS)
 
 
 class Producer:
@@ -31,7 +32,11 @@ class Producer:
         max_retained_catalogues: int | None = None,
     ) -> None:
         self.config = config
-        cap = config.search.max_retained_catalogues if max_retained_catalogues is None else max_retained_catalogues
+        cap = (
+            config.search.max_retained_catalogues
+            if max_retained_catalogues is None
+            else max_retained_catalogues
+        )
         need(type(cap) is int and cap >= 1, "max_retained_catalogues must be a positive integer")
 
         self._max_retained = cap
@@ -39,7 +44,9 @@ class Producer:
 
         library = _catalogue.Library(library_directory, config=config)
         self.directory = library.directory
-        self._libraries: OrderedDict[str, _catalogue.Library] = OrderedDict([(library.sha256, library)])
+        self._libraries: OrderedDict[str, _catalogue.Library] = OrderedDict(
+            [(library.sha256, library)]
+        )
 
     def _retain(self, library: _catalogue.Library) -> _catalogue.Library:
         self._libraries[library.sha256] = library
@@ -74,7 +81,10 @@ class Producer:
     def _select(self, request: dict[str, Any]) -> _catalogue.Library:
         pin = sha(request["library_sha256"])
         use = request["use"]
-        need(isinstance(use, str) and use in {"current", "historical"}, "use must be current or historical")
+        need(
+            isinstance(use, str) and use in {"current", "historical"},
+            "use must be current or historical",
+        )
 
         if use == "current":
             library = self._observe_current()
@@ -93,13 +103,15 @@ class Producer:
 
         for library in self._libraries.values():
             scope = library.prepared_scope
-            catalogues.append({
-                "library_sha256": library.sha256,
-                "catalogue_bytes": len(library.raw),
-                "search_prepared": scope is not None,
-                "prepared_body_ids": list(scope.body_ids) if scope is not None else [],
-                "prepared_module_count": len(library.modules) if scope is not None else 0,
-            })
+            catalogues.append(
+                {
+                    "library_sha256": library.sha256,
+                    "catalogue_bytes": len(library.raw),
+                    "search_prepared": scope is not None,
+                    "prepared_body_ids": list(scope.body_ids) if scope is not None else [],
+                    "prepared_module_count": len(library.modules) if scope is not None else 0,
+                }
+            )
 
         return {
             "lifetime": "This Producer instance, ending at close().",
@@ -136,16 +148,21 @@ class Producer:
                     },
                     "query_semantics": (
                         "Native knowledge FTS5 parser, including English stopwords, "
-                        "quoted token phrases and exact logical identities. Blank queries are refused."
+                        "quoted token phrases and exact logical identities. Blank queries are "
+                        "refused."
                     ),
                 },
                 "show": {"required": ["operation", "id", "library_sha256", "use"]},
             },
             "use": {
-                "current": "Read and validate catalogue.json on this request and require the supplied SHA-256 to agree.",
+                "current": (
+                    "Read and validate catalogue.json on this request and require the supplied "
+                    "SHA-256 to agree."
+                ),
                 "historical": (
                     "Select an exact catalogue retained by this instance. "
-                    "Fresh acquisition uses canonical object paths within the supplied library directory."
+                    "Fresh acquisition uses canonical object paths within the supplied library "
+                    "directory."
                 ),
             },
             "source_observation": {
@@ -157,18 +174,25 @@ class Producer:
             "preparation": self._retention(),
             "source_guarantees": {
                 "discovery": (
-                    "First use of a searchable scope reads and validates its canonical bodies through native "
-                    "Library.discover. Subsequent use of that exact retained corpus queries the same in-memory FTS5 indexes."
+                    "First use of a searchable scope reads and validates its canonical bodies "
+                    "through native "
+                    "Library.discover. Subsequent use of that exact retained corpus queries the "
+                    "same in-memory FTS5 indexes."
                 ),
                 "scope": (
-                    "A cache binds catalogue SHA-256, native search policy, FTS5 backend and ordered selected body "
-                    "identities. Actual request bounds and omissions accompany every discovery result."
+                    "A cache binds catalogue SHA-256, native search policy, FTS5 backend and "
+                    "ordered selected body "
+                    "identities. Actual request bounds and omissions accompany every discovery "
+                    "result."
                 ),
                 "acquisition": (
                     "Every successful show freshly reads, length-checks, SHA-256-checks "
                     "and UTF-8-decodes the selected canonical object."
                 ),
-                "currentness": "Currentness is the catalogue observation within this request. Later changes require another observation.",
+                "currentness": (
+                    "Currentness is the catalogue observation within this request. Later changes "
+                    "require another observation."
+                ),
                 "availability": (
                     "New discovery scopes and every show require their canonical objects. "
                     "Previously returned nominations retain their original source basis."
@@ -213,7 +237,11 @@ class Producer:
                 body_count = 1
                 body_bytes = library.bodies[ident]["bytes"]
             else:
-                bounds = {key: request[key] for key in ("limit", "scan_limit", "max_bytes") if key in request}
+                bounds = {
+                    key: request[key]
+                    for key in ("limit", "scan_limit", "max_bytes")
+                    if key in request
+                }
                 result = library.discover_retained_scope(request["query"], **bounds)
                 body_count = result["coverage"]["verified_bodies"]
                 body_bytes = result["coverage"]["examined_body_bytes"]
@@ -228,7 +256,9 @@ class Producer:
                 "source_observation": {
                     "catalogue_observed_on_this_request": current,
                     "catalogue_read_bytes": len(library.raw) if current else 0,
-                    "catalogue_basis": "fresh current observation" if current else "retained exact catalogue",
+                    "catalogue_basis": "fresh current observation"
+                    if current
+                    else "retained exact catalogue",
                     "canonical_bodies_read": body_count,
                     "canonical_body_read_bytes": body_bytes,
                 },
@@ -237,7 +267,7 @@ class Producer:
                     "and one native index scope per catalogue until close()."
                 ),
             }
-        except (ValueError, OSError, *SQLITE_ERRORS) as exc:
+        except _PRODUCER_ERRORS as exc:
             return {"status": "refused", "error": str(exc)}
 
     def close(self) -> None:

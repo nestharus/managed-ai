@@ -1,11 +1,10 @@
 """Allowlisted JSON operation dispatcher and CLI entrypoint for signal_field."""
-from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sqlite3
 import sys
+from pathlib import Path
 from typing import Any
 
 from .config import loads_strict, require
@@ -133,7 +132,9 @@ def main(argv: list[str] | None = None) -> int:
         allow_abbrev=False,
     )
     parser.add_argument("--db", required=True, type=Path)
-    parser.add_argument("--request", type=Path, help="JSON operation; omit to read one operation from stdin")
+    parser.add_argument(
+        "--request", type=Path, help="JSON operation; omit to read one operation from stdin"
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -149,5 +150,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
         return 0
     except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
-        print(json.dumps({"status": "unresolved", "reason": str(exc)}, allow_nan=False), file=sys.stderr)
+        print(
+            json.dumps({"status": "unresolved", "reason": str(exc)}, allow_nan=False),
+            file=sys.stderr,
+        )
         return 2

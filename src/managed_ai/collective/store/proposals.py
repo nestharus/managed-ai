@@ -1,5 +1,4 @@
 """Immutable source captures and their proposed editions before target publication."""
-from __future__ import annotations
 
 from typing import Any
 
@@ -107,7 +106,9 @@ class Proposals:
             captured["basis"].append(source_pin)
 
         require(len(encoded(captured).encode()) <= CONTEXT_LIMIT, "context-bound", CONTEXT_DETAIL)
-        self.db.execute("INSERT INTO contexts VALUES (?,?,?)", (ident, r["actor"], encoded(captured)))
+        self.db.execute(
+            "INSERT INTO contexts VALUES (?,?,?)", (ident, r["actor"], encoded(captured))
+        )
         return {"context": captured, "sha256": digest(captured)}
 
     def propose(self, r: dict[str, Any]) -> dict[str, Any]:
@@ -120,7 +121,9 @@ class Proposals:
         require(row is not None, "missing-context", "Context is unavailable")
 
         context = loads_strict(row[0])
-        require(context["actor"] == r["actor"], "wrong-owner", "Context belongs to another participant")
+        require(
+            context["actor"] == r["actor"], "wrong-owner", "Context belongs to another participant"
+        )
         require(
             self.db.execute("SELECT 1 FROM proposals WHERE id=?", (ident,)).fetchone() is None,
             "already-exists",
@@ -136,15 +139,20 @@ class Proposals:
             "sha256": digest(content),
             "received_at": self.clock(),
         }
-        self.db.execute("INSERT INTO proposals VALUES (?,?,?)", (ident, r["actor"], encoded(proposal)))
+        self.db.execute(
+            "INSERT INTO proposals VALUES (?,?,?)", (ident, r["actor"], encoded(proposal))
+        )
         return {
             "proposal": proposal,
-            "scope": "The actual supplied body is retained even if its captured basis is no longer current.",
+            "scope": (
+                "The actual supplied body is retained even if its captured basis is no longer "
+                "current."
+            ),
         }
 
     def current(
         self,
-        ident: str,
+        ident: Any,
         actor: str | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         row = self.db.execute("SELECT record FROM proposals WHERE id=?", (name(ident),)).fetchone()
@@ -152,7 +160,9 @@ class Proposals:
 
         proposal = loads_strict(row[0])
         if actor is not None:
-            require(proposal["actor"] == actor, "wrong-owner", "Proposal belongs to another participant")
+            require(
+                proposal["actor"] == actor, "wrong-owner", "Proposal belongs to another participant"
+            )
 
         ctx_row = self.db.execute(
             "SELECT record FROM contexts WHERE id=?",
@@ -169,12 +179,14 @@ class Proposals:
         return proposal, context, target
 
     def retained(self, kind: str, ident: str) -> Any:
-        if kind not in {"context", "proposal"}:
+        queries = {
+            "context": "SELECT record FROM contexts WHERE id=?",
+            "proposal": "SELECT record FROM proposals WHERE id=?",
+        }
+        query = queries.get(kind)
+        if query is None:
             raise ValueError("Unknown retained kind")
-        row = self.db.execute(
-            "SELECT record FROM " + kind + "s WHERE id=?",
-            (name(ident),),
-        ).fetchone()
+        row = self.db.execute(query, (name(ident),)).fetchone()
         if not row:
             raise ValueError("Retained body is unavailable")
         return loads_strict(row[0])

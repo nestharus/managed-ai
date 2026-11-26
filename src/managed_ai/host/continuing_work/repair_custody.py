@@ -1,5 +1,4 @@
 """Retain a failure, qualify its generation inputs, and accept its received repair."""
-from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
@@ -18,7 +17,9 @@ class RepairCustody:
         repair_ids: list[str],
         sources: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Verify repair generation selects a changed producing means and original failure inputs."""
+        """Verify repair generation selects a changed producing means and original failure
+        inputs.
+        """
         producer = [row for row in sources if row["role"] == "producer"]
         repairs: list[dict[str, Any]] = []
 
@@ -55,7 +56,9 @@ class RepairCustody:
         return repairs
 
     def repair_open(self, spec: dict[str, Any]) -> dict[str, Any]:
-        """Retain an immutable failure occurrence with pinned inputs, failures, and producing means."""
+        """Retain an immutable failure occurrence with pinned inputs, failures, and producing
+        means.
+        """
         rid = ident(spec["id"])
         path = self._host.root / "repairs" / f"{rid}.json"
         if path.exists():
@@ -94,12 +97,16 @@ class RepairCustody:
 
         self._host.current(self._host.config["commission"], "Current commission")
         if self._host.goal()["sha256"] != rec["parent_goal"]["sha256"]:
-            raise ValueError("Parent duty changed after receiving; requalify this repair under current work")
+            raise ValueError(
+                "Parent duty changed after receiving; requalify this repair under current work"
+            )
 
         self._host.received_outputs(gen)
         receiving_outputs = self._host.received_outputs(rec)
         if gen["result"]["producer"] == rec["result"]["producer"]:
-            raise ValueError("This acceptance route requires a separately attributed actual receiver")
+            raise ValueError(
+                "This acceptance route requires a separately attributed actual receiver"
+            )
         if rid not in [row["id"] for row in gen["repairs"]]:
             raise ValueError("Generation did not select this changed producer")
         if rec["prepared_at_utc"] <= gen["result"]["at_utc"]:
@@ -118,7 +125,9 @@ class RepairCustody:
         changed = next(row for row in gen["repairs"] if row["id"] == rid)["changed_producers"]
         causal_sources.update(pin["sha256"] for pin in changed)
         if not causal_sources.issubset(seen):
-            raise ValueError("Receiver must encounter original inputs and actual old/new producing means")
+            raise ValueError(
+                "Receiver must encounter original inputs and actual old/new producing means"
+            )
 
         return receiving_outputs, generated
 
@@ -157,12 +166,16 @@ class RepairCustody:
             raise ValueError("Assessment names different output bytes")
 
     def repair_accept(self, spec: dict[str, Any]) -> dict[str, Any]:
-        """Verify lineage and separately attributed receiver assessment before accepting a repair."""
+        """Verify lineage and separately attributed receiver assessment before accepting a
+        repair.
+        """
         rid = ident(spec["id"])
         repair_path = self._host.root / "repairs" / f"{rid}.json"
         repair = read(repair_path)
         if "acceptance" in repair:
-            raise ValueError("Repair acceptance already recorded; new evidence requires a new occurrence")
+            raise ValueError(
+                "Repair acceptance already recorded; new evidence requires a new occurrence"
+            )
 
         gen = read(self._host.root / "scopes" / f"{ident(spec['generation'])}.json")
         rec = read(self._host.root / "scopes" / f"{ident(spec['receiving'])}.json")
@@ -173,7 +186,9 @@ class RepairCustody:
             raise ValueError("Assessment must be an actual returned receiving target")
 
         expected_path = str((self._host.work / assessment_target).resolve())
-        received_pin = next((pin for pin in receiving_outputs if pin["path"] == expected_path), None)
+        received_pin = next(
+            (pin for pin in receiving_outputs if pin["path"] == expected_path), None
+        )
         if received_pin is None:
             raise ValueError("Assessment is not one of the received output occurrences")
 
@@ -186,9 +201,14 @@ class RepairCustody:
             "receiving": rec["id"],
             "assessment": received_pin,
             "account": assessment,
-            "scope": "Mechanical lineage plus attributed semantic receiving; not proof of universal efficacy.",
+            "scope": (
+                "Mechanical lineage plus attributed semantic receiving; not proof of universal "
+                "efficacy."
+            ),
         }
         repair["acceptance"] = acceptance
         write(repair_path, repair)
-        self._host.event("repair-accepted", {"id": rid, "generation": gen["id"], "receiving": rec["id"]})
+        self._host.event(
+            "repair-accepted", {"id": rid, "generation": gen["id"], "receiving": rec["id"]}
+        )
         return acceptance

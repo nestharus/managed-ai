@@ -1,12 +1,18 @@
 """Deployment selection lifecycle, admission locks, and verified store dispatch."""
-from __future__ import annotations
 
-from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import io
 import json
 import os
-from pathlib import Path
 import sys
+from collections.abc import Callable, Generator
+from contextlib import (
+    AbstractContextManager,
+    ExitStack,
+    contextmanager,
+    redirect_stderr,
+    redirect_stdout,
+)
+from pathlib import Path
 from typing import Any
 
 from managed_ai.core.ownership import NativeLayout, external_root, packet_id
@@ -63,14 +69,24 @@ def _resolve_code_identity(engine: Path) -> str:
 
 
 def validate_deployment_sections(config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Validate that deployment.json engine and store sections are dicts with string paths (QA7-5)."""
+    """Validate that deployment.json engine and store sections are dicts with string paths
+    (QA7-5).
+    """
     engine_cfg = config.get("engine")
     store_cfg = config.get("store")
 
-    if not isinstance(engine_cfg, dict) or not isinstance(engine_cfg.get("path"), str) or not engine_cfg["path"]:
+    if (
+        not isinstance(engine_cfg, dict)
+        or not isinstance(engine_cfg.get("path"), str)
+        or not engine_cfg["path"]
+    ):
         raise ValueError("invalid deployment descriptor: engine object with path string required")
 
-    if not isinstance(store_cfg, dict) or not isinstance(store_cfg.get("path"), str) or not store_cfg["path"]:
+    if (
+        not isinstance(store_cfg, dict)
+        or not isinstance(store_cfg.get("path"), str)
+        or not store_cfg["path"]
+    ):
         raise ValueError("invalid deployment descriptor: store object with path string required")
 
     if not isinstance(store_cfg.get("instance_id"), str) or not store_cfg["instance_id"]:
@@ -92,7 +108,12 @@ class DeploymentAdoptBasisChanged(ValueError):
         self.basis = basis
 
 
-def observation_guard(guard, path: Path, *, deadline: float | None = None):
+def observation_guard(
+    guard: Callable[[Path], AbstractContextManager[Any]],
+    path: Path,
+    *,
+    deadline: float | None = None,
+) -> AbstractContextManager[Any]:
     return owner_admission(
         lambda guards: guards.enter_context(guard(path)),
         deadline=admission_deadline(deadline),
@@ -100,13 +121,13 @@ def observation_guard(guard, path: Path, *, deadline: float | None = None):
 
 
 @contextmanager
-def report_admission(operation: str):
+def report_admission(operation: str) -> Generator[None]:
     """Emit the CLI disposition only for an exhausted pre-operation admission."""
     try:
         yield
     except AdmissionContended as exc:
         print(json.dumps(exc.result(operation)), file=sys.stderr)
-        raise SystemExit(75)
+        raise SystemExit(75) from None
 
 
 def _check_required_domain(runtime: Path, required_domain: str) -> None:
@@ -168,12 +189,17 @@ def _extra_proof_stores(runtime: Path, parsed: Any) -> tuple[Path, ...]:
     return (resolved,)
 
 
-def _precheck_local_system_args(engine: Path, runtime: Path, arguments: list[str]) -> tuple[bool, tuple[Path, ...]]:
-    """Parse arguments with THIS trusted controller's parser before locks (zero unverified execution)."""
+def _precheck_local_system_args(
+    engine: Path, runtime: Path, arguments: list[str]
+) -> tuple[bool, tuple[Path, ...]]:
+    """Parse arguments with THIS trusted controller's parser before locks (zero unverified
+    execution).
+    """
     if not arguments or any(v == "--root" or v.startswith("--root=") for v in arguments):
         raise ValueError("supply a native command; deployment owns its selected store")
 
-    from managed_ai.store.cli.command_parser import is_readonly_action, parser as native_parser
+    from managed_ai.store.cli.command_parser import is_readonly_action
+    from managed_ai.store.cli.command_parser import parser as native_parser
 
     if engine != ENGINE_ROOT:
         try:
@@ -182,7 +208,9 @@ def _precheck_local_system_args(engine: Path, runtime: Path, arguments: list[str
         except SystemExit:
             return False, ()
         if parsed.action == "init":
-            raise ValueError("initialize a store through the central system entrance before deployment")
+            raise ValueError(
+                "initialize a store through the central system entrance before deployment"
+            )
         return is_readonly_action(parsed), _extra_proof_stores(runtime, parsed)
 
     parsed = native_parser().parse_args(["--root", str(runtime), *arguments])
@@ -202,14 +230,18 @@ class DeploymentSelection:
         raw = _descriptor_bytes(path) if descriptor is None else descriptor
         self.config = _descriptor_object(path, raw)
         if self.config.get("format") != FORMAT:
-            raise ValueError("copied-engine deployment is not supported; create a shared reference deployment")
+            raise ValueError(
+                "copied-engine deployment is not supported; create a shared reference deployment"
+            )
         self.descriptor_sha256 = sha(raw)
 
     def _require_current(self) -> None:
         if sha(_descriptor_bytes(self.root / "deployment.json")) != self.descriptor_sha256:
             raise ValueError("deployment selection revision conflict; reopen the deployment")
 
-    def stage(self, edition: str | None, engine: Path | str, *, from_head: bool = False) -> dict[str, Any]:
+    def stage(
+        self, edition: str | None, engine: Path | str, *, from_head: bool = False
+    ) -> dict[str, Any]:
         self._require_current()
         engine_dir = _engine_directory(engine)
 
@@ -231,19 +263,26 @@ class DeploymentSelection:
             store = dict(store, path=store["path"].replace("\\", "/"))
 
         code_sha = _resolve_code_identity(engine_dir)
-        value = dict(self.config, edition=edition, engine=_engine_record(engine_dir, self.root, code_sha))
+        engine_rec = _engine_record(engine_dir, self.root, code_sha)
+        value: dict[str, Any] = dict(self.config, edition=edition, engine=engine_rec)
         if store is not None:
             value["store"] = store
 
         encoded = encode(value)
         atomic_bytes(self.root / "candidate.json", encoded)
-        result: dict[str, Any] = {"edition": edition, "candidate_sha256": sha(encoded), "engine": str(engine_dir)}
-        if "git_commit" in value["engine"]:
-            result["engine_git_commit"] = value["engine"]["git_commit"]
-            result["engine_git_clean"] = value["engine"]["git_clean"]
+        result: dict[str, Any] = {
+            "edition": edition,
+            "candidate_sha256": sha(encoded),
+            "engine": str(engine_dir),
+        }
+        if "git_commit" in engine_rec:
+            result["engine_git_commit"] = engine_rec["git_commit"]
+            result["engine_git_clean"] = engine_rec["git_clean"]
         return result
 
-    def activate(self, edition: str, expected: str, manifest_sha: str, reason: str) -> dict[str, Any]:
+    def activate(
+        self, edition: str, expected: str, manifest_sha: str, reason: str
+    ) -> dict[str, Any]:
         if sha(_descriptor_bytes(self.root / "deployment.json")) != expected:
             raise ValueError("deployment selection revision conflict")
 
@@ -298,7 +337,9 @@ class Deployment(DeploymentSelection):
         self._verify_binding()
 
     @classmethod
-    def initialize(cls, root: Path | str, runtime: Path | str, engine: Path | str | None = None) -> dict[str, Any]:
+    def initialize(
+        cls, root: Path | str, runtime: Path | str, engine: Path | str | None = None
+    ) -> dict[str, Any]:
         raw_root = Path(root)
         for existing in (raw_root, *raw_root.parents):
             try:
@@ -306,22 +347,25 @@ class Deployment(DeploymentSelection):
             except FileNotFoundError:
                 continue
             if is_reparse_or_symlink(info):
-                raise ValueError(f"ordinary deployment, engine and store directories required: {existing}")
+                raise ValueError(
+                    f"ordinary deployment, engine and store directories required: {existing}"
+                )
 
         runtime_dir = _ordinary_dir(runtime)
         engine_dir = _engine_directory(engine or ENGINE_ROOT)
         resolved_root = Path(os.path.abspath(raw_root))
 
         if (
-            resolved_root == runtime_dir
+            resolved_root in (runtime_dir, engine_dir)
             or resolved_root.is_relative_to(runtime_dir)
-            or resolved_root == engine_dir
             or resolved_root.is_relative_to(engine_dir)
         ):
             raise ValueError("deployment metadata must be separate from store and engine")
 
         if (resolved_root / "deployment.json").exists():
-            raise ValueError("deployment already exists; stage and activate an explicit new selection")
+            raise ValueError(
+                "deployment already exists; stage and activate an explicit new selection"
+            )
 
         binding = runtime_binding(runtime_dir)
         raw_root.mkdir(parents=True, exist_ok=True)
@@ -344,7 +388,9 @@ class Deployment(DeploymentSelection):
         if engine_cfg.get("engine_api") != ENGINE_API:
             raise ValueError("incompatible engine API")
         if _resolve_code_identity(self.engine) != engine_cfg.get("code_sha256"):
-            raise ValueError("shared engine code changed; qualify and activate its current identity")
+            raise ValueError(
+                "shared engine code changed; qualify and activate its current identity"
+            )
 
     def _verify_binding(self) -> dict[str, str]:
         _, store_cfg = validate_deployment_sections(self.config)
@@ -373,8 +419,10 @@ class Deployment(DeploymentSelection):
         extra_read_only: bool = False,
         require_domain: str | None = None,
         deadline: float | None = None,
-    ):
-        """Enter a pinned domain operation under shared deployment.lock, then sorted store owner.locks."""
+    ) -> Generator[Deployment]:
+        """Enter a pinned domain operation under shared deployment.lock, then sorted store
+        owner.locks.
+        """
         root_dir = _ordinary_dir(root)
         expected_engine = None if engine is None else _engine_directory(engine)
         extra_resolved = tuple(_ordinary_dir(p) for p in extra_stores)
@@ -382,7 +430,7 @@ class Deployment(DeploymentSelection):
         exclusive_guard = _controller_attr("exclusive", exclusive)
         store_guard = shared_guard if read_only else exclusive_guard
 
-        def acquire(guards):
+        def acquire(guards: ExitStack) -> tuple[bytes, Path]:
             guards.enter_context(shared_guard(root_dir / "deployment.lock"))
             descriptor = read_descriptor_bytes(root_dir / "deployment.json")
             selection = DeploymentSelection(root_dir, descriptor=descriptor)
@@ -400,15 +448,26 @@ class Deployment(DeploymentSelection):
             all_stores = sorted({runtime, *extra_resolved}, key=lambda p: str(p))
             for store_root in all_stores:
                 if store_root == runtime or not extra_read_only:
-                    guards.enter_context(store_guard(NativeLayout(store_root).exchange / "owner.lock"))
+                    guards.enter_context(
+                        store_guard(NativeLayout(store_root).exchange / "owner.lock")
+                    )
                 else:
                     guards.enter_context(
-                        shared_guard(NativeLayout(store_root).exchange / "owner.lock", allow_readonly_open=True)
+                        shared_guard(
+                            NativeLayout(store_root).exchange / "owner.lock",
+                            allow_readonly_open=True,
+                        )
                     )
             return descriptor, runtime
 
-        with owner_admission(acquire, deadline=admission_deadline(deadline)) as (descriptor, runtime):
-            if store_sha is not None and sha(read_descriptor_bytes(runtime / "system.json")) != store_sha:
+        with owner_admission(acquire, deadline=admission_deadline(deadline)) as (
+            descriptor,
+            runtime,
+        ):
+            if (
+                store_sha is not None
+                and sha(read_descriptor_bytes(runtime / "system.json")) != store_sha
+            ):
                 raise ValueError("store descriptor differs")
 
             selected = cls(root_dir, descriptor=descriptor)
@@ -438,7 +497,7 @@ class Deployment(DeploymentSelection):
         return Deployment.current_status(self.root)
 
     @classmethod
-    def dispatch_current(cls, root: Path | str, arguments: list[str]):
+    def dispatch_current(cls, root: Path | str, arguments: list[str]) -> tuple[Any, Any, Any]:
         root_dir = _ordinary_dir(root)
         if arguments[:1] == ["explain-context"]:
             selected = cls(root_dir)
@@ -461,9 +520,11 @@ class Deployment(DeploymentSelection):
             extra_stores=extra_stores,
             extra_read_only=bool(extra_stores),
         ) as bound:
-            return bound._dispatch(arguments, already_admitted=True, proof_store_locked=bool(extra_stores))
+            return bound._dispatch(
+                arguments, already_admitted=True, proof_store_locked=bool(extra_stores)
+            )
 
-    def system(self, arguments: list[str]):
+    def system(self, arguments: list[str]) -> tuple[Any, Any, Any]:
         self._require_current()
         if arguments[:1] == ["explain-context"]:
             self.verify()
@@ -479,7 +540,9 @@ class Deployment(DeploymentSelection):
             extra_stores=extra_stores,
             extra_read_only=bool(extra_stores),
         ) as bound:
-            return bound._dispatch(arguments, already_admitted=True, proof_store_locked=bool(extra_stores))
+            return bound._dispatch(
+                arguments, already_admitted=True, proof_store_locked=bool(extra_stores)
+            )
 
     def _dispatch(
         self,
@@ -488,7 +551,7 @@ class Deployment(DeploymentSelection):
         deadline: float | None = None,
         already_admitted: bool = False,
         proof_store_locked: bool = False,
-    ):
+    ) -> tuple[Any, Any, Any]:
         if not arguments or any(v == "--root" or v.startswith("--root=") for v in arguments):
             raise ValueError("supply a native command; deployment owns its selected store")
 
@@ -516,7 +579,7 @@ class Deployment(DeploymentSelection):
         *,
         already_admitted: bool = False,
         proof_store_locked: bool = False,
-    ):
+    ) -> tuple[Any, Any, Any]:
         with _isolated_engine(self.engine):
             return self._system_action(
                 arguments,
@@ -532,7 +595,7 @@ class Deployment(DeploymentSelection):
         *,
         already_admitted: bool = False,
         proof_store_locked: bool = False,
-    ):
+    ) -> tuple[Any, Any, Any]:
         ep = _load_entrypoint(self.engine)
         if ep.deployment_api != FORMAT or ep.engine_api != ENGINE_API:
             raise ValueError("selected engine does not implement the declared deployment API")
@@ -541,10 +604,14 @@ class Deployment(DeploymentSelection):
         if args.action in ("show", "catalogue") and arguments[0] != args.action:
             raise ValueError("supply the native store observation as the command")
         if args.action == "init":
-            raise ValueError("initialize a store through the central system entrance before deployment")
+            raise ValueError(
+                "initialize a store through the central system entrance before deployment"
+            )
 
         try:
-            with self._guarded_system(ep, args, deadline, already_admitted=already_admitted) as system:
+            with self._guarded_system(
+                ep, args, deadline, already_admitted=already_admitted
+            ) as system:
                 if proof_store_locked:
                     return ep.act(system, args, proof_store_locked=True), args, ep
                 return ep.act(system, args), args, ep
@@ -564,12 +631,19 @@ class Deployment(DeploymentSelection):
                 if type(basis) is dict:
                     json.dumps(basis, allow_nan=False)
                     return basis
-            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            except OSError, ValueError, KeyError, TypeError, RuntimeError:
                 pass
         return None
 
     @contextmanager
-    def _guarded_system(self, ep: Any, args: Any, deadline: float | None = None, *, already_admitted: bool = False):
+    def _guarded_system(
+        self,
+        ep: Any,
+        args: Any,
+        deadline: float | None = None,
+        *,
+        already_admitted: bool = False,
+    ) -> Generator[Any]:
         if already_admitted:
             yield self._open_selected_store(ep, args)
             return
@@ -594,13 +668,21 @@ class Deployment(DeploymentSelection):
 
         layout = ep.native_layout(ep.external(self.runtime))
         exchange_root = external_root(layout.exchange)
-        guard = _controller_attr("shared", shared) if read_only else _controller_attr("exclusive", exclusive)
+        guard = (
+            _controller_attr("shared", shared)
+            if read_only
+            else _controller_attr("exclusive", exclusive)
+        )
         with observation_guard(guard, exchange_root / "owner.lock", deadline=deadline):
             self.verify()
             yield self._open_selected_store(ep, args)
 
     def _open_selected_store(self, ep: Any, args: Any) -> Any:
-        override = ep.configuration_descriptor(self.runtime, read(args.spec)) if args.action == "configure" else None
+        override = (
+            ep.configuration_descriptor(self.runtime, read(args.spec))
+            if args.action == "configure"
+            else None
+        )
         system = ep.system_cls(self.runtime, _selection_override=override)
         _attach_deployment_metadata(system, self.engine, self.root, self.config)
         return system
