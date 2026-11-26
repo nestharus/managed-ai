@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -52,6 +53,7 @@ class Wave4CoreTests(unittest.TestCase):
         )
         return proc
 
+    @unittest.skipUnless(shutil.which("git"), "git binary not installed")
     def test_w4_cb1_change_notice_cross_platform_git_reader(self):
         """W4-CB1: composition_change_notice.notice() works natively on Windows and POSIX without
         selectors pipe failure."""

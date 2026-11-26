@@ -378,6 +378,64 @@ class RecordStore:
 
         content["obligations"] = list(merged.values())
 
+    def _validate_record_relations(self, relations: Any) -> list[dict[str, Any]]:
+        if not isinstance(relations, list):
+            raise ValueError("relations must be a list of objects")
+        for relation in relations:
+            if not isinstance(relation, dict):
+                raise ValueError("relation must be an object")
+            text(relation.get("relation"), "relation label")
+            text(relation.get("target"), "relation target")
+        return relations
+
+    def _resolve_record_basis(
+        self,
+        record: dict,
+        previous: dict | None,
+        *,
+        prior_owed: bool,
+        owed: bool,
+        retain_basis: bool,
+        preserve_basis: list | None,
+        verify_preserved_objects: bool,
+    ) -> list[dict]:
+        if preserve_basis is not None:
+            if verify_preserved_objects:
+                with self.objects.pack_session():
+                    require(
+                        all(
+                            row["sha256"] is None or self.objects.has(row["sha256"])
+                            for row in preserve_basis
+                        ),
+                        "preserved basis object is unavailable",
+                    )
+            return preserve_basis
+        if previous is not None and prior_owed and owed and "basis" not in record:
+            return previous["basis"]
+        return [
+            self._capture_basis_item(item, retain_basis=retain_basis)
+            for item in strings(record.get("basis", []), "record basis")
+        ]
+
+    def _check_obligation_basis_change(
+        self, content: Any, basis: list[dict], previous: dict
+    ) -> None:
+        current = {r["path"]: r["sha256"] for r in basis}
+        if not any(
+            r["path"] not in current or current[r["path"]] != r["sha256"] for r in previous["basis"]
+        ):
+            return
+        change = content.get("basis_change") if isinstance(content, dict) else None
+        if (
+            not isinstance(change, dict)
+            or type(change.get("from_revision")) is not int
+            or change["from_revision"] != previous["revision"]
+        ):
+            raise ValueError(
+                "changed obligation basis requires an account for the previous revision"
+            )
+        text(change.get("account"), "account for changed obligation basis")
+
     def _normalize_record(
         self,
         record: dict,
@@ -400,15 +458,7 @@ class RecordStore:
         if type(active) is not bool:
             raise ValueError("active must be Boolean navigation metadata")
 
-        relations = record.get("relations", [])
-        if not isinstance(relations, list):
-            raise ValueError("relations must be a list of objects")
-        for relation in relations:
-            if not isinstance(relation, dict):
-                raise ValueError("relation must be an object")
-            text(relation.get("relation"), "relation label")
-            text(relation.get("target"), "relation target")
-
+        relations = self._validate_record_relations(record.get("relations", []))
         content = record["content"]
         if (
             kind == "obligation"
@@ -417,7 +467,7 @@ class RecordStore:
         ):
             text(content.get("account"), "closed obligation account")
 
-        prior_owed = (
+        prior_owed = bool(
             previous
             and previous["kind"] == "obligation"
             and not accounted_closure(previous["content"])
@@ -433,41 +483,17 @@ class RecordStore:
             content = dict(content)
             self._obligations(content, previous)
 
-        if preserve_basis is not None:
-            if verify_preserved_objects:
-                with self.objects.pack_session():
-                    require(
-                        all(
-                            row["sha256"] is None or self.objects.has(row["sha256"])
-                            for row in preserve_basis
-                        ),
-                        "preserved basis object is unavailable",
-                    )
-            basis = preserve_basis
-        elif previous is not None and prior_owed and owed and "basis" not in record:
-            basis = previous["basis"]
-        else:
-            basis = [
-                self._capture_basis_item(item, retain_basis=retain_basis)
-                for item in strings(record.get("basis", []), "record basis")
-            ]
-
+        basis = self._resolve_record_basis(
+            record,
+            previous,
+            prior_owed=prior_owed,
+            owed=owed,
+            retain_basis=retain_basis,
+            preserve_basis=preserve_basis,
+            verify_preserved_objects=verify_preserved_objects,
+        )
         if previous is not None and prior_owed and owed:
-            current = {r["path"]: r["sha256"] for r in basis}
-            if any(
-                r["path"] not in current or current[r["path"]] != r["sha256"]
-                for r in previous["basis"]
-            ):
-                change = content.get("basis_change") if isinstance(content, dict) else None
-                if (
-                    not isinstance(change, dict)
-                    or type(change.get("from_revision")) is not int
-                    or change["from_revision"] != previous["revision"]
-                ):
-                    raise ValueError(
-                        "changed obligation basis requires an account for the previous revision"
-                    )
-                text(change.get("account"), "account for changed obligation basis")
+            self._check_obligation_basis_change(content, basis, previous)
 
         return {
             "id": ident,
@@ -745,6 +771,29 @@ class RecordStore:
             )
         return body, raw
 
+    def _verify_content_addressed_basis_item(
+        self,
+        item: dict,
+        verified_objects: set[tuple[str, int]] | None,
+    ) -> str | None:
+        if not is_content_addressed_basis(
+            item, prefixes=self.content_addressed_basis_prefixes
+        ) or not self.objects.has(item["sha256"]):
+            return None
+
+        obj_key = (item["sha256"], item["bytes"])
+        if verified_objects is not None and obj_key in verified_objects:
+            return str(item["sha256"])
+
+        try:
+            self.objects.read(item["sha256"], retained=True, expected_bytes=item["bytes"])
+        except FileNotFoundError:
+            return None
+
+        if verified_objects is not None:
+            verified_objects.add(obj_key)
+        return str(item["sha256"])
+
     def basis_changes(
         self,
         record: dict,
@@ -769,28 +818,8 @@ class RecordStore:
             for item in basis:
                 path = item["path"]
                 current = None if path.startswith("object:") else hashes.get(path)
-                if (
-                    current is None
-                    and is_content_addressed_basis(
-                        item, prefixes=self.content_addressed_basis_prefixes
-                    )
-                    and self.objects.has(item["sha256"])
-                ):
-                    obj_key = (item["sha256"], item["bytes"])
-                    if verified_objects is not None and obj_key in verified_objects:
-                        current = item["sha256"]
-                    else:
-                        try:
-                            self.objects.read(
-                                item["sha256"], retained=True, expected_bytes=item["bytes"]
-                            )
-                        except FileNotFoundError:
-                            current = None
-                        else:
-                            current = item["sha256"]
-                            if verified_objects is not None:
-                                verified_objects.add(obj_key)
-
+                if current is None:
+                    current = self._verify_content_addressed_basis_item(item, verified_objects)
                 if current != item["sha256"]:
                     changes.append({"path": path, "captured": item["sha256"], "current": current})
         return changes

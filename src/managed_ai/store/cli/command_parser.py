@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from managed_ai import __version__
 from managed_ai.core.formats import REVIEWED_CONFIGURE_FORMAT as REVIEWED_CONFIGURE
 
 READONLY_ACTIONS = frozenset(
@@ -59,6 +60,7 @@ def _file_argument(value: str) -> str:
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("--root", required=True, type=Path)
     p.add_argument("--admission-deadline", type=float, help=argparse.SUPPRESS)
     sub = p.add_subparsers(dest="action", required=True)

@@ -17,6 +17,7 @@ if __name__ == "__main__":
     if _src_root not in sys.path:
         sys.path.insert(0, _src_root)
 
+from managed_ai import __version__
 from managed_ai.library.config import DEFAULT_LIBRARY_CONFIG
 
 _SUBCOMMANDS = frozenset(
@@ -92,6 +93,7 @@ def _build_library_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Browse, verify and acquire published source libraries.", allow_abbrev=False
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--library", action="append", type=Path)
     sub = parser.add_subparsers(dest="action", required=True)
 
@@ -335,6 +337,7 @@ def _execute_catalogue_action(catalogue: Any, args: argparse.Namespace) -> Any:
 
 def _build_store_catalogue_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--store", type=Path)
     sub = parser.add_subparsers(dest="action", required=True)
 

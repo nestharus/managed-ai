@@ -16,6 +16,7 @@ if __name__ == "__main__":
     if _src_root not in sys.path:
         sys.path.insert(0, _src_root)
 
+from managed_ai import __version__
 from managed_ai.core.exchange.api import Exchange
 from managed_ai.core.ownership import external_root
 from managed_ai.core.storage import (
@@ -31,6 +32,7 @@ _READONLY_ACTIONS = frozenset({"list", "inspect", "context", "recover_transport"
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("--root", required=True, type=Path)
     p.add_argument("--admission-deadline", type=float, help=argparse.SUPPRESS)
     sub = p.add_subparsers(dest="action", required=True)
