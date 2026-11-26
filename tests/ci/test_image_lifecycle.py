@@ -263,6 +263,84 @@ class ImageLifecycleTests(unittest.TestCase):
         proc_link = self._run_cli("plan-gc", "--catalog", str(catalog), "--gitops-dir", str(linked_gitops), expected_rc=2)
         self.assertNotIn("Traceback", proc_link.stderr)
 
+    def test_plan_gc_protects_kustomize_digest_pins_and_live_repo_gitops(self) -> None:
+        gitops = self.root / "kustomize-gitops"
+        (gitops / "base").mkdir(parents=True)
+        (gitops / "channels/dev").mkdir(parents=True)
+        (gitops / "channels/local").mkdir(parents=True)
+
+        d_base = "sha256:" + "a" * 64
+        d_dev = "sha256:" + "b" * 64
+        d_local = "sha256:" + "c" * 64
+        d_unpinned = "sha256:" + "d" * 64
+
+        (gitops / "base/deployment.yaml").write_text(
+            f"image: ghcr.io/nestharus/managed-ai@{d_base}\n",
+            encoding="utf-8",
+        )
+        (gitops / "channels/dev/kustomization.yaml").write_text(
+            "\n".join([
+                "apiVersion: kustomize.config.k8s.io/v1beta1",
+                "kind: Kustomization",
+                "images:",
+                "  - name: ghcr.io/nestharus/managed-ai",
+                f"    digest: {d_dev}",
+                "",
+            ]),
+            encoding="utf-8",
+        )
+        (gitops / "channels/local/kustomization.yaml").write_text(
+            "\n".join([
+                "apiVersion: kustomize.config.k8s.io/v1beta1",
+                "kind: Kustomization",
+                "images:",
+                "  - name: ghcr.io/nestharus/managed-ai",
+                f'    digest: "{d_local}"',
+                "",
+            ]),
+            encoding="utf-8",
+        )
+
+        catalog = self.root / "kustomize-catalog.json"
+        _write_json(catalog, {
+            "format": image_lifecycle.CATALOG_FORMAT,
+            "repository": "ghcr.io/nestharus/managed-ai",
+            "manifests": [
+                {"digest": d_base, "created_at": "2026-01-01T00:00:00Z", "tags": ["sha-00000000000a"]},
+                {"digest": d_dev, "created_at": "2026-01-02T00:00:00Z", "tags": ["sha-00000000000b"]},
+                {"digest": d_local, "created_at": "2026-01-03T00:00:00Z", "tags": ["sha-00000000000c"]},
+                {"digest": d_unpinned, "created_at": "2026-01-04T00:00:00Z", "tags": ["sha-00000000000d"]},
+                {"digest": "sha256:" + "e" * 64, "created_at": "2026-11-25T00:00:00Z", "tags": ["sha-00000000000e"]},
+            ],
+        })
+
+        plan = json.loads(self._run_cli(
+            "plan-gc",
+            "--catalog", str(catalog),
+            "--gitops-dir", str(gitops),
+            "--keep-main", "1",
+            "--now", "2026-11-26T00:00:00Z",
+        ).stdout)
+
+        self.assertEqual(plan["protected_gitops_digests"], {
+            d_base: ["base/deployment.yaml"],
+            d_dev: ["channels/dev/kustomization.yaml"],
+            d_local: ["channels/local/kustomization.yaml"],
+        })
+        kept = {row["digest"] for row in plan["keep_manifests"]}
+        pruned = {row["digest"] for row in plan["prune_manifests"]}
+        self.assertTrue({d_base, d_dev, d_local}.issubset(kept))
+        self.assertEqual(pruned, {d_unpinned})
+
+        # Verify against the live repository gitops/ directory: all 3 manifests are collected.
+        live_pins = image_lifecycle._collect_gitops_pins(REPO / "gitops")
+        live_sources = sorted({src for sources in live_pins.values() for src in sources})
+        self.assertEqual(live_sources, [
+            "base/deployment.yaml",
+            "channels/dev/kustomization.yaml",
+            "channels/local/kustomization.yaml",
+        ])
+
     def test_buildkite_pipelines_structure_gates_and_hygiene(self) -> None:
         for path in (PIPELINE, NIGHTLY):
             raw = path.read_bytes()

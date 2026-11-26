@@ -31,7 +31,7 @@ CATALOG_FORMAT = "managed-ai-registry-catalog/1"
 _SHA_HEX_RE = re.compile(r"^[0-9a-fA-F]{12,40}$")
 _CONTEXT_SHA_HEX_RE = re.compile(r"^[0-9a-fA-F]{12,64}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-_GITOPS_PIN_RE = re.compile(r"@(sha256:[0-9a-f]{64})\b")
+_GITOPS_PIN_RE = re.compile(r"(?:@|\bdigest['\"]?\s*:\s*['\"]?)(sha256:[0-9a-f]{64})\b")
 _SEMVER_RE = re.compile(
     r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
