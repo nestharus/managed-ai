@@ -266,6 +266,66 @@ def _working_set_closure(
     return len(visited), sum(token_map[m] for m in visited)
 
 
+def _build_profile_report(
+    checked_root: Path,
+    package_rel: str,
+    modules: list[dict[str, Any]],
+    top_n: int,
+) -> dict[str, Any]:
+    modules.sort(key=lambda item: item["path"])
+    top_hotspots = sorted(
+        modules,
+        key=lambda m: (-m["working_set_tokens"], -m["max_cc"], -m["lines"], m["path"]),
+    )[:top_n]
+    coupling_hubs = sorted(
+        modules,
+        key=lambda m: (-(m["fan_in"] + m["fan_out"]), -m["fan_in"], m["path"]),
+    )[:top_n]
+
+    summary = {
+        "module_count": len(modules),
+        "total_lines": sum(m["lines"] for m in modules),
+        "total_tokens": sum(m["tokens"] for m in modules),
+        "max_file_lines": max(m["lines"] for m in modules),
+        "max_cc": max(m["max_cc"] for m in modules),
+        "max_depth": max(m["max_depth"] for m in modules),
+        "max_working_set_tokens": max(m["working_set_tokens"] for m in modules),
+    }
+
+    return {
+        "format": PROFILE_FORMAT,
+        "root": checked_root.as_posix(),
+        "package_dir": package_rel,
+        "summary": summary,
+        "top_hotspots": [
+            {
+                "path": m["path"],
+                "lines": m["lines"],
+                "tokens": m["tokens"],
+                "working_set_tokens": m["working_set_tokens"],
+                "working_set_modules": m["working_set_modules"],
+                "max_cc": m["max_cc"],
+                "max_cc_function": m["max_cc_function"],
+                "max_depth": m["max_depth"],
+                "fan_in": m["fan_in"],
+                "fan_out": m["fan_out"],
+            }
+            for m in top_hotspots
+        ],
+        "coupling_hubs": [
+            {
+                "path": m["path"],
+                "fan_in": m["fan_in"],
+                "fan_out": m["fan_out"],
+                "lines": m["lines"],
+                "working_set_tokens": m["working_set_tokens"],
+            }
+            for m in coupling_hubs
+        ],
+        "modules": modules,
+    }
+
+
 def profile_repository(
     root: Path,
     *,
@@ -350,58 +410,7 @@ def profile_repository(
             }
         )
 
-    modules.sort(key=lambda item: item["path"])
-    top_hotspots = sorted(
-        modules,
-        key=lambda m: (-m["working_set_tokens"], -m["max_cc"], -m["lines"], m["path"]),
-    )[:top_n]
-    coupling_hubs = sorted(
-        modules,
-        key=lambda m: (-(m["fan_in"] + m["fan_out"]), -m["fan_in"], m["path"]),
-    )[:top_n]
-
-    summary = {
-        "module_count": len(modules),
-        "total_lines": sum(m["lines"] for m in modules),
-        "total_tokens": sum(m["tokens"] for m in modules),
-        "max_file_lines": max(m["lines"] for m in modules),
-        "max_cc": max(m["max_cc"] for m in modules),
-        "max_depth": max(m["max_depth"] for m in modules),
-        "max_working_set_tokens": max(m["working_set_tokens"] for m in modules),
-    }
-
-    return {
-        "format": PROFILE_FORMAT,
-        "root": checked_root.as_posix(),
-        "package_dir": package_rel,
-        "summary": summary,
-        "top_hotspots": [
-            {
-                "path": m["path"],
-                "lines": m["lines"],
-                "tokens": m["tokens"],
-                "working_set_tokens": m["working_set_tokens"],
-                "working_set_modules": m["working_set_modules"],
-                "max_cc": m["max_cc"],
-                "max_cc_function": m["max_cc_function"],
-                "max_depth": m["max_depth"],
-                "fan_in": m["fan_in"],
-                "fan_out": m["fan_out"],
-            }
-            for m in top_hotspots
-        ],
-        "coupling_hubs": [
-            {
-                "path": m["path"],
-                "fan_in": m["fan_in"],
-                "fan_out": m["fan_out"],
-                "lines": m["lines"],
-                "working_set_tokens": m["working_set_tokens"],
-            }
-            for m in coupling_hubs
-        ],
-        "modules": modules,
-    }
+    return _build_profile_report(checked_root, package_rel, modules, top_n)
 
 
 def _validate_positive_int(value: object, label: str) -> int:
@@ -605,6 +614,25 @@ def _dump_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False)
 
 
+def _resolve_ordinary_baseline_dest(raw_dest: Path) -> Path:
+    """Validate un-resolved parent ancestors and leaf lstat before writing a baseline file."""
+    if not raw_dest.name or raw_dest.name in (".", ".."):
+        raise ValueError(f"ordinary non-symlink baseline destination required: {raw_dest}")
+    checked_parent = check_ordinary_ancestors(
+        raw_dest.parent,
+        expect_dir=True,
+        error_prefix="ordinary non-symlink baseline directory required",
+    )
+    candidate = checked_parent / raw_dest.name
+    try:
+        info = candidate.lstat()
+    except FileNotFoundError:
+        return checked_parent.resolve(strict=True) / raw_dest.name
+    if not is_ordinary_file_stat(info):
+        raise ValueError(f"ordinary non-symlink baseline destination required: {candidate}")
+    return checked_parent.resolve(strict=True) / raw_dest.name
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -637,16 +665,7 @@ def main(argv: list[str] | None = None) -> int:
                 "max_working_set_tokens": args.budget_working_set_tokens,
             }
             baseline_doc = build_baseline(profile, budgets=budgets)
-            dest = args.write_baseline.resolve()
-            check_ordinary_ancestors(
-                dest.parent,
-                expect_dir=True,
-                error_prefix="ordinary non-symlink baseline directory required",
-            )
-            if dest.exists() or dest.is_symlink():
-                info = dest.lstat()
-                if not is_ordinary_file_stat(info):
-                    raise ValueError(f"ordinary non-symlink baseline destination required: {dest}")
+            dest = _resolve_ordinary_baseline_dest(args.write_baseline)
             encoded = (_dump_json(baseline_doc) + "\n").encode("utf-8")
             atomic_bytes(dest, encoded)
             print(

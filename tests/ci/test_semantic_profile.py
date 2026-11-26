@@ -294,6 +294,72 @@ class SemanticProfileTests(unittest.TestCase):
         self.assertEqual(p4.returncode, 2)
         self.assertEqual(json.loads(p4.stderr)["status"], "error")
 
+    def test_write_baseline_rejects_symlink_or_junction_parent_and_leaf(self) -> None:
+        repo = _write_pkg(self.tmp / "write-guard-repo", {"src/pkg/__init__.py": ""})
+        real_out_dir = self.tmp / "real-out"
+        real_out_dir.mkdir()
+        link_out_dir = self.tmp / "link-out"
+        if os.name == "nt":
+            mk = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link_out_dir), str(real_out_dir)],
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(mk.returncode, 0)
+            self.addCleanup(
+                lambda: subprocess.run(
+                    ["cmd", "/c", "rmdir", str(link_out_dir)], capture_output=True
+                )
+            )
+        else:
+            link_out_dir.symlink_to(real_out_dir)
+
+        # 1. Symlink/junction parent directory must be refused BEFORE resolving!
+        through_link = link_out_dir / "baseline.json"
+        p_parent = _run_cli(
+            "--root",
+            str(repo),
+            "--package-dir",
+            "src/pkg",
+            "--write-baseline",
+            str(through_link),
+        )
+        self.assertEqual(p_parent.returncode, 2)
+        self.assertEqual(json.loads(p_parent.stderr)["status"], "error")
+        self.assertFalse((real_out_dir / "baseline.json").exists())
+
+        # 2. Non-ordinary leaf (junction/symlink/directory) must be refused BEFORE resolving!
+        p_leaf_dir = _run_cli(
+            "--root",
+            str(repo),
+            "--package-dir",
+            "src/pkg",
+            "--write-baseline",
+            str(link_out_dir),
+        )
+        self.assertEqual(p_leaf_dir.returncode, 2)
+        self.assertEqual(json.loads(p_leaf_dir.stderr)["status"], "error")
+
+        # 3. File symlink leaf (when OS/privileges permit creating file symlinks)
+        real_file = real_out_dir / "real-baseline.json"
+        real_file.write_text('{"sentinel": true}\n', encoding="utf-8")
+        link_file = real_out_dir / "link-baseline.json"
+        try:
+            link_file.symlink_to(real_file)
+        except OSError:
+            return
+        p_leaf_file = _run_cli(
+            "--root",
+            str(repo),
+            "--package-dir",
+            "src/pkg",
+            "--write-baseline",
+            str(link_file),
+        )
+        self.assertEqual(p_leaf_file.returncode, 2)
+        self.assertEqual(json.loads(p_leaf_file.stderr)["status"], "error")
+        self.assertEqual(real_file.read_text(encoding="utf-8"), '{"sentinel": true}\n')
+
 
 if __name__ == "__main__":
     unittest.main()
