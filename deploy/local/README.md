@@ -18,7 +18,7 @@ Verify the loopback control surface:
 curl -fsS http://127.0.0.1:8480/healthz
 ```
 
-> **Note on `/control/`:** `gateway.conf` reserves the `/control/` upstream proxy route (`http://managed-ai-information:8081/`) for future HTTP control-plane listeners. In the default CLI-exec local mode (`compose.yaml` keeps the worker idle via `signal.pause()` with no HTTP server listening on port `8081`), `GET /healthz` returns `200`, all other root paths return `404`, and `/control/` returns `502` until an explicit control service is attached.
+> **Note on `/control/`:** `gateway.conf` reserves the loopback-only `/control/` upstream proxy routes (`http://managed-ai-information:8081/`), including explicit routes for `GET /control/route-status` (`MultiRouteBackend.route_status()`) and `GET /control/route-parity` (`MultiRouteBackend.parity_summary()`). In the default CLI-exec local mode (`compose.yaml` keeps the worker idle via `signal.pause()` with no HTTP server listening on port `8081`), `GET /healthz` returns `200`, all other root paths return `404`, and `/control/*` returns `502` until an explicit control service is attached.
 
 Run Managed AI Information commands inside the isolated worker container:
 
