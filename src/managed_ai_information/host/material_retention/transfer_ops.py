@@ -123,6 +123,27 @@ def _collect_export_entries(
     return files
 
 
+def _stream_file_to_zip(
+    archive: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+    name: str,
+    source: Path,
+    chunk_size: int,
+) -> dict[str, Any]:
+    require(
+        not is_reparse_or_symlink(source),
+        "Export source must not be a symlink or reparse point: " + str(source),
+    )
+    hasher = hashlib.sha256()
+    total_bytes = 0
+    with source.open("rb") as src, archive.open(info, "w") as dst:
+        while chunk := src.read(chunk_size):
+            hasher.update(chunk)
+            dst.write(chunk)
+            total_bytes += len(chunk)
+    return {"path": name, "sha256": hasher.hexdigest(), "bytes": total_bytes}
+
+
 def _write_export_zip(
     output: Path,
     key: str,
@@ -142,22 +163,8 @@ def _write_export_zip(
             )
 
             if isinstance(source, Path):
-                require(
-                    not is_reparse_or_symlink(source),
-                    "Export source must not be a symlink or reparse point: " + str(source),
-                )
-                hasher = hashlib.sha256()
-                total_bytes = 0
-                with source.open("rb") as src, archive.open(info, "w") as dst:
-                    while True:
-                        chunk = src.read(chunk_size)
-                        if not chunk:
-                            break
-                        hasher.update(chunk)
-                        dst.write(chunk)
-                        total_bytes += len(chunk)
                 manifest_entries.append(
-                    {"path": name, "sha256": hasher.hexdigest(), "bytes": total_bytes},
+                    _stream_file_to_zip(archive, info, name, source, chunk_size)
                 )
             else:
                 archive.writestr(info, source)
@@ -252,6 +259,54 @@ def export(
     return result
 
 
+def _ensure_within(path: Path, output_resolved: Path) -> None:
+    require(
+        path.resolve().is_relative_to(output_resolved), "Restore target escapes output directory"
+    )
+
+
+def _restore_manifest_row(
+    store: Any,
+    checked_output: Path,
+    output_resolved: Path,
+    row: dict[str, Any],
+    *,
+    use_fast_immutable: bool,
+    immutable_fn: Any,
+    directories: list[tuple[Path, dict[str, Any]]],
+) -> tuple[int, int]:
+    rel = safe_relative(row["path"])
+    target = check_unfollowed_descendant(
+        checked_output, rel.as_posix(), allow_missing_leaf=True, role="Restore target"
+    )
+    row_type = row["type"]
+    if row_type == "directory":
+        target.mkdir(parents=True, exist_ok=True)
+        _ensure_within(target, output_resolved)
+        directories.append((target, row))
+        return 0, 0
+    if row_type not in ("symlink", "file"):
+        raise ValueError("Unknown occurrence type")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_within(target.parent, output_resolved)
+    raw = store.materialize(row["object"])
+    if row_type == "symlink":
+        os.symlink(os.fsdecode(raw), target)
+        return 1, 0
+    if use_fast_immutable:
+        immutable_below(checked_output, rel, raw)
+    else:
+        immutable_fn(target, raw)
+    _ensure_within(target, output_resolved)
+    os.chmod(target, row["mode"])
+    os.utime(target, ns=(row["mtime_ns"], row["mtime_ns"]))
+    require(
+        sha256_file_checked(target, label="Restored file") == row["object"],
+        "Restored file readback differs",
+    )
+    return 1, len(raw)
+
+
 def restore(
     store: Any,
     output: Path | str,
@@ -284,56 +339,17 @@ def restore(
         for row in manifest["files"]:
             if prefix and not (row["path"] == prefix or row["path"].startswith(prefix_slash or "")):
                 continue
-
-            rel = safe_relative(row["path"])
-            target = check_unfollowed_descendant(
+            added, added_bytes = _restore_manifest_row(
+                store,
                 checked_output,
-                rel.as_posix(),
-                allow_missing_leaf=True,
-                role="Restore target",
+                output_resolved,
+                row,
+                use_fast_immutable=use_fast_immutable,
+                immutable_fn=immutable_fn,
+                directories=directories,
             )
-            row_type = row["type"]
-
-            if row_type == "directory":
-                target.mkdir(parents=True, exist_ok=True)
-                require(
-                    target.resolve().is_relative_to(output_resolved),
-                    "Restore target escapes output directory",
-                )
-                directories.append((target, row))
-            elif row_type == "symlink":
-                target.parent.mkdir(parents=True, exist_ok=True)
-                require(
-                    target.parent.resolve().is_relative_to(output_resolved),
-                    "Restore target escapes output directory",
-                )
-                os.symlink(os.fsdecode(store.materialize(row["object"])), target)
-                count += 1
-            elif row_type == "file":
-                target.parent.mkdir(parents=True, exist_ok=True)
-                require(
-                    target.parent.resolve().is_relative_to(output_resolved),
-                    "Restore target escapes output directory",
-                )
-                raw = store.materialize(row["object"])
-                if use_fast_immutable:
-                    immutable_below(checked_output, rel, raw)
-                else:
-                    immutable_fn(target, raw)
-                require(
-                    target.resolve().is_relative_to(output_resolved),
-                    "Restore target escapes output directory",
-                )
-                os.chmod(target, row["mode"])
-                os.utime(target, ns=(row["mtime_ns"], row["mtime_ns"]))
-                require(
-                    sha256_file_checked(target, label="Restored file") == row["object"],
-                    "Restored file readback differs",
-                )
-                count += 1
-                byte_count += len(raw)
-            else:
-                raise ValueError("Unknown occurrence type")
+            count += added
+            byte_count += added_bytes
 
         for target, row in reversed(directories):
             require(
@@ -403,6 +419,11 @@ def _copy_immutable_records(
     return copied_records
 
 
+def _emit_rebuild_progress(phase: str, completed: int, total: int) -> None:
+    payload = {"phase": phase, "completed": completed, "total": total}
+    print(json.dumps(payload, allow_nan=False), file=sys.stderr, flush=True)
+
+
 def _regenerate_objects(source: Store, target: Store) -> None:
     """Regenerate all transports and content bodies from source into target."""
     archive_order: list[tuple[bool, int, str]] = []
@@ -416,28 +437,14 @@ def _regenerate_objects(source: Store, target: Store) -> None:
     for number, (_, _, key) in enumerate(sorted(archive_order), 1):
         raw = source.materialize(key)
         require(target.ingest(raw, "retained.zip") == key, "Regenerated transport identity differs")
-        print(
-            json.dumps(
-                {"phase": "rebuild-transports", "completed": number, "total": len(archive_order)},
-                allow_nan=False,
-            ),
-            file=sys.stderr,
-            flush=True,
-        )
+        _emit_rebuild_progress("rebuild-transports", number, len(archive_order))
 
     for number, key in enumerate(sorted(source.objects), 1):
         if key not in target.objects:
             raw = source.materialize(key)
             require(target.ingest(raw) == key, "Regenerated retained body differs")
         if number % 20000 == 0:
-            print(
-                json.dumps(
-                    {"phase": "rebuild-content", "completed": number, "total": len(source.objects)},
-                    allow_nan=False,
-                ),
-                file=sys.stderr,
-                flush=True,
-            )
+            _emit_rebuild_progress("rebuild-content", number, len(source.objects))
 
 
 def _verify_rebuilt_objects(source: Store, target: Store) -> None:
@@ -451,18 +458,7 @@ def _verify_rebuilt_objects(source: Store, target: Store) -> None:
                 "Rebuilt original byte count differs",
             )
             if number % 20000 == 0:
-                print(
-                    json.dumps(
-                        {
-                            "phase": "rebuild-readback",
-                            "completed": number,
-                            "total": len(source.objects),
-                        },
-                        allow_nan=False,
-                    ),
-                    file=sys.stderr,
-                    flush=True,
-                )
+                _emit_rebuild_progress("rebuild-readback", number, len(source.objects))
     finally:
         target.clear_cache()
 

@@ -566,6 +566,15 @@ class SchemaMigrationController:
                 f"cannot commit cutover at seq {cutover_seq}: "
                 f"verified_through is only {cur.verified_through}"
             )
+        if self._router is not None:
+            dropped = int(
+                self._router.parity_summary(recent_limit=0)["counts"]["dropped_shadow_ops"]
+            )
+            if dropped != 0:
+                raise ValueError(
+                    f"cannot commit cutover with dropped_shadow_ops={dropped}: "
+                    "re-verify complete shadow parity before cutover"
+                )
         if self._catalog is not None and hasattr(self._catalog, "commit_migration"):
             self._catalog.commit_migration(
                 cur.namespace,

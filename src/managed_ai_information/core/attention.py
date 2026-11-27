@@ -34,9 +34,7 @@ from managed_ai_information.core.storage import (
     shared,
     write_json,
 )
-from managed_ai_information.core.storage import (
-    atomic_bytes as _atomic_bytes,
-)
+from managed_ai_information.core.storage import atomic_bytes as _atomic_bytes
 from managed_ai_information.platform import strict_json_loads
 
 BOUNDARY = (
@@ -175,6 +173,24 @@ class Attention:
         return strict_json_loads(self.ex.get(key), f"attention object {key}", require_object=False)
 
     @staticmethod
+    def _valid_latest_entries(latest: dict[str, Any], count: int) -> bool:
+        for ident, bases in latest.items():
+            if _id(ident) != ident or not isinstance(bases, dict) or not bases:
+                return False
+            for basis, ref in bases.items():
+                if (
+                    len(basis) != 64
+                    or any(c not in "0123456789abcdef" for c in basis)
+                    or not isinstance(ref, list)
+                    or len(ref) != 2
+                    or type(ref[0]) is not int
+                    or type(ref[1]) is not int
+                    or not (0 <= ref[0] < count and 0 <= ref[1] < MAX_ITEMS)
+                ):
+                    return False
+        return True
+
+    @staticmethod
     def _valid_current(view: Any, receipts_sha256: str, count: int) -> bool:
         """Check a disposable projection, not authenticate a cooperating owner."""
         if not isinstance(view, dict) or not isinstance(view.get("body"), dict):
@@ -199,25 +215,9 @@ class Attention:
                 for ident, pos in ids.items()
             ) or set(ids.values()) != set(range(count)):
                 return False
-
-            for ident, bases in latest.items():
-                if _id(ident) != ident or not isinstance(bases, dict) or not bases:
-                    return False
-                for basis, ref in bases.items():
-                    if (
-                        len(basis) != 64
-                        or any(c not in "0123456789abcdef" for c in basis)
-                        or not isinstance(ref, list)
-                        or len(ref) != 2
-                        or any(type(pos) is not int for pos in ref)
-                        or not 0 <= ref[0] < count
-                        or not 0 <= ref[1] < MAX_ITEMS
-                    ):
-                        return False
+            return Attention._valid_latest_entries(latest, count)
         except TypeError, ValueError:
             return False
-
-        return True
 
     @staticmethod
     def _index_receipt(current: dict[str, Any], position: int, record: dict[str, Any]) -> None:

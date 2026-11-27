@@ -74,21 +74,26 @@ def _is_reparse_or_symlink(path: Path) -> bool:
     )
 
 
+def _check_logical_pwd_ancestors(role: str) -> None:
+    pwd = os.environ.get("PWD")
+    if not pwd or not os.path.isabs(pwd):
+        return
+    try:
+        same = os.path.samefile(pwd, os.getcwd())
+    except OSError:
+        return
+    if not same:
+        return
+    logical = Path(pwd)
+    for anc in (*reversed(logical.parents), logical):
+        if _is_reparse_or_symlink(anc):
+            raise ValueError(f"{role} must not traverse a symlink or reparse point: {anc}")
+
+
 def _check_unfollowed_ancestors(path: Path, role: str) -> Path:
     raw = Path(path).expanduser()
     if not raw.is_absolute():
-        pwd = os.environ.get("PWD")
-        if pwd and os.path.isabs(pwd):
-            try:
-                if os.path.samefile(pwd, os.getcwd()):
-                    logical = Path(pwd)
-                    for anc in (*reversed(logical.parents), logical):
-                        if _is_reparse_or_symlink(anc):
-                            raise ValueError(
-                                f"{role} must not traverse a symlink or reparse point: {anc}"
-                            )
-            except OSError:
-                pass
+        _check_logical_pwd_ancestors(role)
     abs_path = Path(os.path.abspath(raw))
     for anc in (*reversed(abs_path.parents), abs_path):
         if _is_reparse_or_symlink(anc):
@@ -117,23 +122,24 @@ def inside_product(path: Path | str, product: Path | str) -> bool:
         resolved == product_root.parent or resolved.is_relative_to(product_root.parent)
     ):
         return True
+    if product_root.name != "collective":
+        return False
     # Guard enclosing package root when hosted under src/managed_ai_information/collective.
-    if product_root.name == "collective":
-        candidates: tuple[Path, ...] = (
-            (product_root.parent, product_root.parents[1])
-            if product_root.parent.name == "optional"
-            else (product_root.parent,)
-        )
-        for pkg_root in candidates:
-            if (pkg_root / "CURRENT-RELEASE.json").is_file() and (
-                resolved == pkg_root or resolved.is_relative_to(pkg_root)
-            ):
-                return True
-            engine_dir = pkg_root / "engine"
-            if (engine_dir / "CURRENT-RELEASE.json").is_file() and (
-                resolved == engine_dir or resolved.is_relative_to(engine_dir)
-            ):
-                return True
+    candidates: tuple[Path, ...] = (
+        (product_root.parent, product_root.parents[1])
+        if product_root.parent.name == "optional"
+        else (product_root.parent,)
+    )
+    for pkg_root in candidates:
+        if (pkg_root / "CURRENT-RELEASE.json").is_file() and (
+            resolved == pkg_root or resolved.is_relative_to(pkg_root)
+        ):
+            return True
+        engine_dir = pkg_root / "engine"
+        if (engine_dir / "CURRENT-RELEASE.json").is_file() and (
+            resolved == engine_dir or resolved.is_relative_to(engine_dir)
+        ):
+            return True
     return False
 
 

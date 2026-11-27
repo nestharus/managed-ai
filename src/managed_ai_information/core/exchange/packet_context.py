@@ -7,7 +7,7 @@ import shutil
 import stat
 import uuid
 from collections.abc import Callable, Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -51,6 +51,174 @@ from ..storage import (
 from .transport.packet_transport import PacketTransport
 
 MAX_PACKET_BYTES = 8 * 1024 * 1024
+
+
+def _resolve_workspace_parent(
+    parent_rel: str,
+    work_root_str: str,
+    validated_dirs: dict[str, str | None],
+) -> str | None:
+    if parent_rel in validated_dirs:
+        return validated_dirs[parent_rel]
+    cur_rel, cur_str = "", work_root_str
+    for part in parent_rel.split("/"):
+        nxt_rel = f"{cur_rel}/{part}" if cur_rel else part
+        if nxt_rel in validated_dirs:
+            cached = validated_dirs[nxt_rel]
+            if cached is None:
+                validated_dirs[parent_rel] = None
+                return None
+            cur_rel, cur_str = nxt_rel, cached
+            continue
+        nxt_str = cur_str + os.sep + part
+        try:
+            info = os.lstat(nxt_str)
+        except FileNotFoundError, NotADirectoryError:
+            validated_dirs[nxt_rel] = validated_dirs[parent_rel] = None
+            return None
+        if is_reparse_or_symlink(info):
+            raise ValueError("workspace symlinks are not supported")
+        if not is_ordinary_dir_stat(info):
+            validated_dirs[nxt_rel] = validated_dirs[parent_rel] = None
+            return None
+        validated_dirs[nxt_rel] = nxt_str
+        cur_rel, cur_str = nxt_rel, nxt_str
+    return cur_str
+
+
+def _hash_workspace_chunk(chunk: list[tuple[str, str]]) -> list[tuple[str, str | None]]:
+    out: list[tuple[str, str | None]] = []
+    for rel, full_str in chunk:
+        try:
+            info = os.lstat(full_str)
+        except FileNotFoundError, NotADirectoryError:
+            out.append((rel, None))
+            continue
+        if is_reparse_or_symlink(info):
+            raise ValueError("workspace symlinks are not supported")
+        if not is_ordinary_file_stat(info):
+            out.append((rel, None))
+            continue
+        with open(full_str, "rb") as stream:
+            out.append((rel, hashlib.file_digest(stream, "sha256").hexdigest()))
+    return out
+
+
+def _open_dirfd_parent(work_fd: int, parent: str, opened: list[int]) -> int | None:
+    cur = work_fd
+    if not parent:
+        return cur
+    for part in parent.split("/"):
+        try:
+            nxt = open_directory(part, dir_fd=cur)
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                raise ValueError("workspace symlinks are not supported") from None
+            if exc.errno in (errno.ENOENT, errno.ENOTDIR):
+                return None
+            raise
+        opened.append(nxt)
+        cur = nxt
+    return cur
+
+
+def _hash_dirfd_member(cur_fd: int, name: str) -> str | None:
+    try:
+        fd = os.open(name, OPEN_RO_NOFOLLOW, dir_fd=cur_fd)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise ValueError("workspace symlinks are not supported") from None
+        if exc.errno in (errno.ENOENT, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
+            return None
+        raise
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            fd = -1
+            return None
+        stream = os.fdopen(fd, "rb")
+        fd = -1
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
+        raise
+    with stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _hash_dirfd_group(
+    work_fd: int, item: tuple[str, list[tuple[str, str]]]
+) -> list[tuple[str, str | None]]:
+    parent, members = item
+    opened: list[int] = []
+    try:
+        cur = _open_dirfd_parent(work_fd, parent, opened)
+        if cur is None:
+            return [(rel, None) for rel, _ in members]
+        return [(rel, _hash_dirfd_member(cur, name)) for rel, name in members]
+    finally:
+        for fd in reversed(opened):
+            os.close(fd)
+
+
+def _memo_seen(verified: dict[str, int] | set[str] | None, guard: Any, key: str) -> bool:
+    if verified is None:
+        return False
+    with guard:
+        return key in verified
+
+
+def _memo_store(
+    verified: dict[str, int] | set[str] | None, guard: Any, key: str, size: int
+) -> None:
+    if verified is None:
+        return
+    with guard:
+        if isinstance(verified, dict):
+            verified[key] = size
+        else:
+            verified.add(key)
+
+
+def _render_origin_header(role: str, row: dict[str, Any]) -> list[str]:
+    origin = row["origin"]
+    transport_kind = (
+        origin["transport_kind"] if "transport_kind" in origin else origin["transport"]["kind"]
+    )
+    out = [
+        "Origin: consumer="
+        + origin["consumer"]
+        + "; producer="
+        + origin["producer"]
+        + "; request="
+        + origin["request_sha256"]
+        + "; transport="
+        + transport_kind
+        + ". This is a prior occurrence, not fulfillment of the current request.\n"
+    ]
+    if role == "artifacts":
+        out.append(
+            "Recorded proposal for: "
+            + origin["proposal_path"]
+            + ". Selected as material only; "
+            + "publication, acceptance and execution are not implied. "
+            "No original target authority is inherited.\n"
+        )
+        if origin.get("proposal_source") == "caller-nominated-file":
+            out.append(
+                "The caller nominated the proposal file. Carrier verification covers the reply.\n"
+            )
+    elif row.get("available_proposals"):
+        out.append(
+            "Other recorded proposal bodies (not included by --return; "
+            "select explicitly with --artifact PACKET:TARGET):\n"
+        )
+        for candidate in row["available_proposals"]:
+            out.append(
+                f"- {origin['packet']}:{candidate['path']} | "
+                f"object={candidate['sha256']} | bytes={candidate['bytes']}\n"
+            )
+    return out
 
 
 class PacketContext:
@@ -193,66 +361,17 @@ class PacketContext:
             by_dir.setdefault(parent, []).append((rel, name))
 
         results: dict[str, str | None] = {}
-        validated_dirs: dict[str, str | None] = {"": str(self.workspace)}
         work_root_str = str(self.workspace)
-
-        def resolve_parent_dir(parent_rel: str) -> str | None:
-            if parent_rel in validated_dirs:
-                return validated_dirs[parent_rel]
-            cur_rel = ""
-            cur_str = work_root_str
-            for part in parent_rel.split("/"):
-                nxt_rel = f"{cur_rel}/{part}" if cur_rel else part
-                if nxt_rel in validated_dirs:
-                    cached = validated_dirs[nxt_rel]
-                    if cached is None:
-                        validated_dirs[parent_rel] = None
-                        return None
-                    cur_rel, cur_str = nxt_rel, cached
-                    continue
-                nxt_str = cur_str + os.sep + part
-                try:
-                    info = os.lstat(nxt_str)
-                except FileNotFoundError, NotADirectoryError:
-                    validated_dirs[nxt_rel] = None
-                    validated_dirs[parent_rel] = None
-                    return None
-                if is_reparse_or_symlink(info):
-                    raise ValueError("workspace symlinks are not supported")
-                if not is_ordinary_dir_stat(info):
-                    validated_dirs[nxt_rel] = None
-                    validated_dirs[parent_rel] = None
-                    return None
-                validated_dirs[nxt_rel] = nxt_str
-                cur_rel, cur_str = nxt_rel, nxt_str
-            return cur_str
+        validated_dirs: dict[str, str | None] = {"": work_root_str}
 
         work_items: list[tuple[str, str]] = []
         for parent_rel, members in by_dir.items():
-            dir_str = resolve_parent_dir(parent_rel)
+            dir_str = _resolve_workspace_parent(parent_rel, work_root_str, validated_dirs)
             if dir_str is None:
                 for rel, _ in members:
                     results[rel] = None
             else:
-                for rel, name in members:
-                    work_items.append((rel, dir_str + os.sep + name))
-
-        def hash_chunk(chunk: list[tuple[str, str]]) -> list[tuple[str, str | None]]:
-            out: list[tuple[str, str | None]] = []
-            for rel, full_str in chunk:
-                try:
-                    info = os.lstat(full_str)
-                except FileNotFoundError, NotADirectoryError:
-                    out.append((rel, None))
-                    continue
-                if is_reparse_or_symlink(info):
-                    raise ValueError("workspace symlinks are not supported")
-                if not is_ordinary_file_stat(info):
-                    out.append((rel, None))
-                    continue
-                with open(full_str, "rb") as stream:
-                    out.append((rel, hashlib.file_digest(stream, "sha256").hexdigest()))
-            return out
+                work_items.extend((rel, dir_str + os.sep + name) for rel, name in members)
 
         if len(work_items) >= 16:
             from concurrent.futures import ThreadPoolExecutor
@@ -261,13 +380,10 @@ class PacketContext:
             step = (len(work_items) + workers - 1) // workers
             chunks = [work_items[i : i + step] for i in range(0, len(work_items), step)]
             with ThreadPoolExecutor(max_workers=len(chunks)) as pool:
-                for chunk_out in pool.map(hash_chunk, chunks):
-                    for rel, digest_hex in chunk_out:
-                        results[rel] = digest_hex
+                for chunk_out in pool.map(_hash_workspace_chunk, chunks):
+                    results.update(chunk_out)
         elif work_items:
-            for rel, digest_hex in hash_chunk(work_items):
-                results[rel] = digest_hex
-
+            results.update(_hash_workspace_chunk(work_items))
         return results
 
     def _hash_workspace_dirfd(
@@ -280,81 +396,17 @@ class PacketContext:
 
         results: dict[str, str | None] = {}
         with self.open_workspace_dir() as work_fd:
-
-            def hash_group(item: tuple[str, list[tuple[str, str]]]) -> list[tuple[str, str | None]]:
-                parent, members = item
-                opened: list[int] = []
-                cur = work_fd
-                group_out: list[tuple[str, str | None]] = []
-                try:
-                    if parent:
-                        for part in parent.split("/"):
-                            try:
-                                nxt = open_directory(part, dir_fd=cur)
-                            except OSError as exc:
-                                if exc.errno == errno.ELOOP:
-                                    raise ValueError(
-                                        "workspace symlinks are not supported"
-                                    ) from None
-                                if exc.errno in (errno.ENOENT, errno.ENOTDIR):
-                                    return [(rel, None) for rel, _ in members]
-                                raise
-                            opened.append(nxt)
-                            cur = nxt
-
-                    for rel, name in members:
-                        try:
-                            fd = os.open(name, OPEN_RO_NOFOLLOW, dir_fd=cur)
-                        except OSError as exc:
-                            if exc.errno == errno.ELOOP:
-                                raise ValueError("workspace symlinks are not supported") from None
-                            if exc.errno in (
-                                errno.ENOENT,
-                                errno.ENOTDIR,
-                                errno.EISDIR,
-                                errno.ENXIO,
-                            ):
-                                group_out.append((rel, None))
-                                continue
-                            raise
-
-                        try:
-                            if not stat.S_ISREG(os.fstat(fd).st_mode):
-                                os.close(fd)
-                                fd = -1
-                                group_out.append((rel, None))
-                                continue
-                            stream = os.fdopen(fd, "rb")
-                            fd = -1
-                        except BaseException:
-                            if fd >= 0:
-                                os.close(fd)
-                            raise
-
-                        with stream:
-                            group_out.append(
-                                (rel, hashlib.file_digest(stream, "sha256").hexdigest())
-                            )
-
-                    return group_out
-                finally:
-                    for fd in reversed(opened):
-                        os.close(fd)
-
             items = list(by_dir.items())
             if len(unique) >= 16 and len(items) > 1:
                 from concurrent.futures import ThreadPoolExecutor
 
                 workers = min(max_workers, len(items))
                 with ThreadPoolExecutor(max_workers=workers) as pool:
-                    for group_out in pool.map(hash_group, items):
-                        for rel, digest_hex in group_out:
-                            results[rel] = digest_hex
+                    for group_out in pool.map(lambda it: _hash_dirfd_group(work_fd, it), items):
+                        results.update(group_out)
             else:
                 for item in items:
-                    for rel, digest_hex in hash_group(item):
-                        results[rel] = digest_hex
-
+                    results.update(_hash_dirfd_group(work_fd, item))
         return results
 
     def hash_workspace_paths(
@@ -406,39 +458,19 @@ class PacketContext:
             *request["returns"],
             *request.get("artifacts", []),
         ]
+        guard = memo_lock if memo_lock is not None else nullcontext()
 
         with self.objects.pack_session():
             for entry in entries:
                 key = entry["sha256"]
-                if key is None:
+                if key is None or _memo_seen(verified_objects, guard, key):
                     continue
-
-                if verified_objects is not None:
-                    if memo_lock is not None:
-                        with memo_lock:
-                            seen = key in verified_objects
-                    else:
-                        seen = key in verified_objects
-                    if seen:
-                        continue
-
-                if direct_objects and objects_fd is not None:
-                    raw_obj = self.objects.read(key, dir_fd=objects_fd)
-                else:
-                    raw_obj = self.get(key)
-
-                if verified_objects is not None:
-                    if memo_lock is not None:
-                        with memo_lock:
-                            if isinstance(verified_objects, dict):
-                                verified_objects[key] = len(raw_obj)
-                            else:
-                                verified_objects.add(key)
-                    else:
-                        if isinstance(verified_objects, dict):
-                            verified_objects[key] = len(raw_obj)
-                        else:
-                            verified_objects.add(key)
+                raw_obj = (
+                    self.objects.read(key, dir_fd=objects_fd)
+                    if direct_objects and objects_fd is not None
+                    else self.get(key)
+                )
+                _memo_store(verified_objects, guard, key, len(raw_obj))
 
     def _load_validated_return(
         self,
@@ -450,11 +482,9 @@ class PacketContext:
         memo_lock: Any,
         request_shas: dict[str, str] | None,
     ) -> dict[str, Any]:
+        guard = memo_lock if memo_lock is not None else nullcontext()
         if validated_returns is not None:
-            if memo_lock is not None:
-                with memo_lock:
-                    cached = validated_returns.get(packet_name)
-            else:
+            with guard:
                 cached = validated_returns.get(packet_name)
             if cached is not None:
                 return cached
@@ -462,12 +492,8 @@ class PacketContext:
         prior_dir = self.directory(packet_name)
         prior = read_json(prior_dir / "return.json")
         prior_req_sha = None
-
         if request_shas is not None:
-            if memo_lock is not None:
-                with memo_lock:
-                    prior_req_sha = request_shas.get(packet_name)
-            else:
+            with guard:
                 prior_req_sha = request_shas.get(packet_name)
 
         self.validate_return(
@@ -480,12 +506,8 @@ class PacketContext:
         )
 
         if validated_returns is not None:
-            if memo_lock is not None:
-                with memo_lock:
-                    validated_returns[packet_name] = prior
-            else:
+            with guard:
                 validated_returns[packet_name] = prior
-
         return prior
 
     def _load_directory(
@@ -511,10 +533,7 @@ class PacketContext:
             raise ValueError("frozen request/context changed")
 
         if _request_shas is not None:
-            if _memo_lock is not None:
-                with _memo_lock:
-                    _request_shas[directory.name] = request_sha
-            else:
+            with _memo_lock if _memo_lock is not None else nullcontext():
                 _request_shas[directory.name] = request_sha
 
         self._verify_packet_objects(
@@ -669,53 +688,7 @@ class PacketContext:
             for role, row in entries:
                 chunks.append(f"\n## {role}: {row['path']}\n\nObject: {row['sha256']}\n")
                 if role in {"returns", "artifacts"}:
-                    origin = row["origin"]
-                    transport_kind = (
-                        origin["transport_kind"]
-                        if "transport_kind" in origin
-                        else origin["transport"]["kind"]
-                    )
-                    chunks.append(
-                        "Origin: consumer="
-                        + origin["consumer"]
-                        + "; producer="
-                        + origin["producer"]
-                        + "; request="
-                        + origin["request_sha256"]
-                        + "; transport="
-                        + transport_kind
-                        + ". This is a prior occurrence, not fulfillment of the current request.\n"
-                    )
-                    if role == "artifacts":
-                        chunks.append(
-                            "Recorded proposal for: "
-                            + origin["proposal_path"]
-                            + ". Selected as material only; "
-                            + "publication, acceptance and execution are not implied. "
-                            "No original target authority is inherited.\n"
-                        )
-                        if origin.get("proposal_source") == "caller-nominated-file":
-                            chunks.append(
-                                "The caller nominated the proposal file. "
-                                "Carrier verification covers the reply.\n"
-                            )
-                    elif row.get("available_proposals"):
-                        chunks.append(
-                            "Other recorded proposal bodies (not included by --return; "
-                            "select explicitly with --artifact PACKET:TARGET):\n"
-                        )
-                        for candidate in row["available_proposals"]:
-                            chunks.append(
-                                "- "
-                                + origin["packet"]
-                                + ":"
-                                + candidate["path"]
-                                + " | object="
-                                + candidate["sha256"]
-                                + " | bytes="
-                                + str(candidate["bytes"])
-                                + "\n"
-                            )
+                    chunks.extend(_render_origin_header(role, row))
 
                 if row["sha256"] is None:
                     chunks.append("(No prior file; creation is a permitted proposal.)\n")
