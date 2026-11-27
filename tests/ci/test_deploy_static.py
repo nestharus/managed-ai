@@ -5,13 +5,15 @@ import os
 import shutil
 import subprocess
 import sys
+import tomllib
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 _REPO = Path(__file__).resolve().parents[2]
-if str(_REPO) not in sys.path:
-    sys.path.insert(0, str(_REPO))
+for _entry in (str(_REPO / "src"), str(_REPO)):
+    if _entry not in sys.path:
+        sys.path.insert(0, _entry)
 
 from scripts.ci.validate_deploy import validate_repository  # noqa: E402
 
@@ -72,7 +74,12 @@ class DeployStaticValidationTests(unittest.TestCase):
 
     def test_cli_rejects_missing_root_with_exit_2_json_stderr(self) -> None:
         missing = self.tmp_root / "does-not-exist"
-        self.assertTrue(bool(PKG_VERSION))
+        pyproject = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(
+            pyproject["tool"]["setuptools"]["dynamic"]["version"]["attr"],
+            "managed_ai_information.__version__",
+        )
+        self.assertRegex(PKG_VERSION, r"^\d+\.\d+\.\d+")
         with self.assertRaises(ValueError):
             validate_repository(missing)
         proc = subprocess.run(

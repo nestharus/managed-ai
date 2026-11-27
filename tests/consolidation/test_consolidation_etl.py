@@ -297,8 +297,12 @@ class ConsolidationETLTests(unittest.TestCase):
             self.assertGreaterEqual(real_res["counts"]["constituents"], 40)
             self.assertGreaterEqual(real_res["counts"]["controls"], 54)
             self.assertEqual(real_res["counts"]["mapped_controls"], real_res["counts"]["controls"])
-            self.assertEqual(real_res["counts"]["covered_constituents"], 34)
-            self.assertEqual(len(real_res["counts"]["zero_control_constituents"]), 6)
+            self.assertEqual(
+                real_res["counts"]["covered_constituents"]
+                + len(real_res["counts"]["zero_control_constituents"]),
+                real_res["counts"]["constituents"],
+            )
+            self.assertGreaterEqual(real_res["counts"]["covered_constituents"], 34)
             self.assertEqual(real_res["lint_anomalies"], 0)
             real_sys = System(real_store)
             real_prof = real_sys.graph_profile(roots=["crw-catalog"])

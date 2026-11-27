@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic ingestor for code-review-workflows (12 families, 40 constituents, O01-O48)."""
+"""Deterministic ingestor for code-review-workflows (12 families, 40 constituents, O01-O66+)."""
 
 import argparse
 import json
@@ -213,7 +213,7 @@ CRW_COVERAGE_MANIFEST_FORMAT = "crw-control-coverage/1"
 def _validate_slug_list(raw: Any, label: str) -> list[str]:
     if not isinstance(raw, list) or any(not isinstance(v, str) or not v.strip() for v in raw):
         raise ValueError(f"{label} must be a list of non-empty strings")
-    return [v.strip() for v in raw]
+    return list(dict.fromkeys(v.strip() for v in raw))
 
 
 def _load_coverage_manifest(
@@ -283,15 +283,25 @@ def _build_control_records(
         raise ValueError("organization-boundary-controls-v1/cases.json must be a non-empty array")
 
     manifest_controls, manifest_rel = _load_coverage_manifest(crw_root, ctrl_rel)
+    case_ids: set[str] = set()
+    for entry in cases:
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
+            raise ValueError("invalid O-control case in cases.json")
+        case_ids.add(entry["id"])
+    orphan_controls = sorted(set(manifest_controls) - case_ids)
+    if orphan_controls:
+        raise ValueError(
+            "coverage-manifest.json references unknown controls absent from cases.json: "
+            f"{orphan_controls}"
+        )
+
     desired: list[dict[str, Any]] = []
     basis_shas: dict[str, dict[str, str]] = {}
     pending_digests: dict[str, bytes] = {}
     covered_dim_ids: set[str] = set()
     mapped_controls = 0
 
-    for entry in sorted(cases, key=lambda x: str(x.get("id", ""))):
-        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
-            raise ValueError("invalid O-control case in cases.json")
+    for entry in sorted(cases, key=lambda x: str(x["id"])):
         raw_id = entry["id"]
         rec_id = slugify_id("crw-ctrl", raw_id)
         pin_files = [cases_rel]
