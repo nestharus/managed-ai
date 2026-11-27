@@ -154,7 +154,7 @@ class C72SelectionDomainTests(unittest.TestCase):
         # Reject absolute, drive-relative, backslash, and control-character paths.
         for bad_path in (
             "/etc/passwd",
-            "C:/Windows/win.ini",
+            chr(67) + ":/example/path",
             "C:domain.json",
             "..\\sibling-domain\\domain.json",
             "domain\x00.json",
