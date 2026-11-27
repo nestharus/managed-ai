@@ -356,17 +356,19 @@ class Store:
         if len(parts) >= 3 and parts[-3] == "objects" and parts[-1].endswith(".deflate"):
             expected = parts[-2] + parts[-1][:-8]
             if len(expected) == 64 and all(ch in _HEX_CHARS for ch in expected):
+                decomp = zlib.decompressobj(-15)
                 try:
-                    decoded = zlib.decompress(raw, -15)
+                    decoded: bytes | None = decomp.decompress(raw, self.limits.max_member_bytes + 1)
                 except zlib.error:
                     decoded = None
-                if decoded is not None and sha(decoded) == expected:
+                if decoded is not None:
                     require(
-                        len(decoded) <= self.limits.max_member_bytes,
+                        len(decoded) <= self.limits.max_member_bytes and not decomp.unconsumed_tail,
                         "Managed encoded body size limit",
                     )
-                    self.blob(decoded)
-                    return self.blob(raw)
+                    if decomp.eof and sha(decoded) == expected:
+                        self.blob(decoded)
+                        return self.blob(raw)
 
         maybe_zip = hint.lower().endswith(".zip") or raw.startswith((b"PK\x03\x04", b"PK\x05\x06"))
         if maybe_zip and zipfile.is_zipfile(io.BytesIO(raw)):
@@ -501,7 +503,9 @@ class Store:
         body: bytes | None = None
         problem: str | None = None
         try:
-            body = archive.read(info)
+            with archive.open(info) as zf:
+                body = zf.read(self.limits.max_member_bytes + 1)
+            require(len(body) <= self.limits.max_member_bytes, "ZIP member size limit")
             require(len(body) == info.file_size, "ZIP decoded size differs")
             content = self.ingest(body, info.filename, depth + 1)
             dependencies.add(content)
@@ -509,13 +513,7 @@ class Store:
             problem = type(exc).__name__ + ": " + str(exc)
 
         part = self._encode_member_part(
-            info,
-            content,
-            body,
-            compressed,
-            compressed_sha,
-            problem,
-            dependencies,
+            info, content, body, compressed, compressed_sha, problem, dependencies
         )
         methods[part["kind"]] += 1
         part_index = len(parts)

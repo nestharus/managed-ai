@@ -65,6 +65,13 @@ def record_partial_publication(
         host.event("partial-publication", event_payload)
 
 
+def _ordinary_file(path: Path | str, label: str) -> Path:
+    checked = check_unfollowed_ancestors(path, label, include_target=True)
+    if not checked.exists() or not stat.S_ISREG(checked.lstat().st_mode):
+        raise ValueError(f"{label} must be an existing ordinary file")
+    return checked.resolve()
+
+
 def _validate_receive_inputs(
     host: Any,
     sid: str,
@@ -102,25 +109,13 @@ def _validate_receive_inputs(
 
     account = nonempty(spec["account"], "receiving account")
     producer = nonempty(spec["producer"], "producer")
-    reply_checked = check_unfollowed_ancestors(spec["reply"], "Receive reply", include_target=True)
-    if not reply_checked.exists() or not stat.S_ISREG(reply_checked.lstat().st_mode):
-        raise ValueError("Receive reply must be an existing ordinary file")
-
-    args = ["receive", sid, "--reply", str(reply_checked.resolve()), "--producer", producer]
+    reply_path = _ordinary_file(spec["reply"], "Receive reply")
+    args = ["receive", sid, "--reply", str(reply_path), "--producer", producer]
     for name, source in proposals.items():
-        prop_checked = check_unfollowed_ancestors(source, f"Proposal {name}", include_target=True)
-        if not prop_checked.exists() or not stat.S_ISREG(prop_checked.lstat().st_mode):
-            raise ValueError(f"Proposal {name} must be an existing ordinary file")
-        args += ["--proposal", expected[name] + "=" + str(prop_checked.resolve())]
-
+        prop_path = _ordinary_file(source, f"Proposal {name}")
+        args += ["--proposal", expected[name] + "=" + str(prop_path)]
     if spec.get("assessment"):
-        assess_checked = check_unfollowed_ancestors(
-            spec["assessment"],
-            "Assessment file",
-            include_target=True,
-        )
-        args += ["--assessment", str(assess_checked.resolve())]
-
+        args += ["--assessment", str(_ordinary_file(spec["assessment"], "Assessment file"))]
     return account, producer, args
 
 
@@ -373,7 +368,10 @@ def _adopt_remaining_targets(
     }
 
     for idx, target in enumerate(remaining_targets):
-        (host.work / target).parent.mkdir(parents=True, exist_ok=True)
+        target_parent = check_unfollowed_ancestors(
+            (host.work / target).parent, "Target directory", include_target=True
+        )
+        target_parent.mkdir(parents=True, exist_ok=True)
         try:
             pub = host.call("adopt", sid, "--target", target, "--reason", account)["publication"]
         except Exception as exc:

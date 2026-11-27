@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
-"""Bind authored representation operations to the existing native turn owner.
-
-This opt-in application adapter does not interpret domain shapes or edit core.
-It makes selected accepted JSON artifacts and source applications actual native
-inputs, retains a before/after witness, and delegates every adoption to native
-Exchange. Callers author the candidate and judge its semantic adequacy.
-"""
+"""Bind authored representation operations to the native turn owner and Exchange."""
 
 import argparse
 import hashlib
 import importlib
 import importlib.util
 import json
+import os
 import shutil
 import stat
 import sys
@@ -25,6 +20,9 @@ if __package__ in (None, ""):
     if _src_root not in sys.path:
         sys.path.insert(0, _src_root)
 
+from managed_ai_information.platform import (
+    OPEN_RO_NOFOLLOW as _OPEN_RO_NOFOLLOW,
+)
 from managed_ai_information.platform import (
     atomic_bytes as _platform_atomic_bytes,
 )
@@ -41,6 +39,7 @@ from managed_ai_information.platform import (
 OPERATION = "g60-representation-operation/1"
 WITNESS = "g60-representation-return/1"
 BOUND_RETURN = "g60-representation-bound-return/1"
+_MAX_INPUT_BYTES = 16 * 1024 * 1024
 
 
 def require(condition: Any, message: str) -> None:
@@ -75,9 +74,22 @@ def loads_strict(raw: bytes | bytearray | str) -> Any:
     return strict_json_loads(payload, label="Representation JSON", require_object=False)
 
 
+def _read_ordinary_bytes(path: Path | str, label: str, limit: int | None = None) -> bytes:
+    cap = _MAX_INPUT_BYTES if limit is None else limit
+    checked = _check_unfollowed_ancestors(path, label, include_target=True)
+    require(
+        checked.exists() and stat.S_ISREG(checked.lstat().st_mode),
+        label + " must be an existing ordinary file",
+    )
+    fd = os.open(str(checked), _OPEN_RO_NOFOLLOW)
+    with os.fdopen(fd, "rb") as fh:
+        data = fh.read(cap + 1)
+    require(len(data) <= cap, f"{label} exceeds {cap} bytes")
+    return data
+
+
 def read_json(path: Path | str) -> Any:
-    checked = _check_unfollowed_ancestors(path, "JSON input", include_target=True)
-    return loads_strict(checked.read_bytes())
+    return loads_strict(_read_ordinary_bytes(path, "JSON input"))
 
 
 def _atomic_bytes(path: Path, data: bytes) -> None:
@@ -142,7 +154,6 @@ def _validate_engine_dir(engine: Path | str) -> Path:
 
 
 def _verify_loaded_from_engine(module: Any, resolved_engine: Path, expected_rel: str) -> None:
-    """Verify a loaded engine module originated from the selected engine tree."""
     loaded_file = getattr(module, "__file__", None)
     expected = (resolved_engine / expected_rel).resolve()
     if not loaded_file or Path(loaded_file).resolve() != expected:
@@ -152,26 +163,33 @@ def _verify_loaded_from_engine(module: Any, resolved_engine: Path, expected_rel:
         )
 
 
+def _import_engine_api(resolved: Path, *, verify_all: bool) -> tuple[Any, ...]:
+    sys_m: Any = importlib.import_module("managed_ai_information.store.system")
+    sto_m: Any = importlib.import_module("managed_ai_information.core.storage")
+    own_m: Any = importlib.import_module("managed_ai_information.core.ownership")
+    inp_m: Any = importlib.import_module("managed_ai_information.store.protocol.inputs")
+    pairs = (
+        (sys_m, "store/system.py"),
+        (sto_m, "core/storage.py"),
+        (own_m, "core/ownership.py"),
+        (inp_m, "store/protocol/inputs.py"),
+    )
+    for mod, rel in pairs if verify_all else pairs[:1]:
+        _verify_loaded_from_engine(mod, resolved, rel)
+    return (
+        sys_m.System,
+        sto_m.exclusive,
+        own_m.NativeLayout,
+        own_m.packet_id,
+        inp_m.artifact_target,
+    )
+
+
 @contextmanager
 def mount_engine(engine: Path | str) -> Generator[tuple[Any, ...]]:
-    """Mount a canonical src/managed_ai_information engine cleanly in sys.modules."""
     resolved = _validate_engine_dir(engine)
-    init_file = resolved / "__init__.py"
-    is_external = resolved != _COLOCATED_ENGINE_ROOT.resolve()
-
-    if not is_external:
-        system_mod = importlib.import_module("managed_ai_information.store.system")
-        storage_mod = importlib.import_module("managed_ai_information.core.storage")
-        ownership_mod = importlib.import_module("managed_ai_information.core.ownership")
-        inputs_mod = importlib.import_module("managed_ai_information.store.protocol.inputs")
-        _verify_loaded_from_engine(system_mod, resolved, "store/system.py")
-        yield (
-            system_mod.System,
-            storage_mod.exclusive,
-            ownership_mod.NativeLayout,
-            ownership_mod.packet_id,
-            inputs_mod.artifact_target,
-        )
+    if resolved == _COLOCATED_ENGINE_ROOT.resolve():
+        yield _import_engine_api(resolved, verify_all=False)
         return
 
     saved_path = list(sys.path)
@@ -196,7 +214,7 @@ def mount_engine(engine: Path | str) -> Generator[tuple[Any, ...]]:
         importlib.invalidate_caches()
         pkg_spec = importlib.util.spec_from_file_location(
             "managed_ai_information",
-            init_file,
+            resolved / "__init__.py",
             submodule_search_locations=[str(resolved)],
         )
         if pkg_spec is None or pkg_spec.loader is None:
@@ -205,23 +223,7 @@ def mount_engine(engine: Path | str) -> Generator[tuple[Any, ...]]:
         pkg_mod = importlib.util.module_from_spec(pkg_spec)
         sys.modules["managed_ai_information"] = pkg_mod
         pkg_spec.loader.exec_module(pkg_mod)
-
-        system_mod = importlib.import_module("managed_ai_information.store.system")
-        storage_mod = importlib.import_module("managed_ai_information.core.storage")
-        ownership_mod = importlib.import_module("managed_ai_information.core.ownership")
-        inputs_mod = importlib.import_module("managed_ai_information.store.protocol.inputs")
-        _verify_loaded_from_engine(system_mod, resolved, "store/system.py")
-        _verify_loaded_from_engine(storage_mod, resolved, "core/storage.py")
-        _verify_loaded_from_engine(ownership_mod, resolved, "core/ownership.py")
-        _verify_loaded_from_engine(inputs_mod, resolved, "store/protocol/inputs.py")
-
-        yield (
-            system_mod.System,
-            storage_mod.exclusive,
-            ownership_mod.NativeLayout,
-            ownership_mod.packet_id,
-            inputs_mod.artifact_target,
-        )
+        yield _import_engine_api(resolved, verify_all=True)
     finally:
         sys.path[:] = saved_path
         for name in list(sys.modules):
@@ -232,9 +234,6 @@ def mount_engine(engine: Path | str) -> Generator[tuple[Any, ...]]:
 
 
 def _load_engine_api(engine: Path) -> tuple[Any, Any, Any, Any, Any]:
-    """Import System, exclusive, NativeLayout, packet_id, and artifact_target from the engine
-    root.
-    """
     with mount_engine(engine) as api:
         return api
 
@@ -445,7 +444,6 @@ class RepresentationOperations:
         _, request = self.ex.load(turn)
         name = (self.location(turn) / "operation.json").relative_to(self.ex.workspace).as_posix()
         row = next((item for item in request["materials"] if item["path"] == name), None)
-        require(row is not None, "native turn has no captured representation operation")
         if row is None:
             raise ValueError("native turn has no captured representation operation")
         raw = self.ex.get(row["sha256"])
@@ -489,7 +487,7 @@ class RepresentationOperations:
                 sep and target in targets and target not in {out["path"] for out in outputs},
                 "proposal must name one unique captured target",
             )
-            raw = Path(source).read_bytes()
+            raw = _read_ordinary_bytes(source, "Proposal input")
             after = loads_strict(raw) if spec["mode"] != "realize" else None
             before_digest = targets[target]["sha256"]
             delta = None
@@ -511,14 +509,14 @@ class RepresentationOperations:
             "every selected target needs an actual candidate; use a narrower turn otherwise",
         )
         self.validate_witness(spec, key, witness, output_paths)
-
+        reply_text = _read_ordinary_bytes(reply, "Reply input").decode("utf-8")
         body = {
             "format": BOUND_RETURN,
             "operation_sha256": key,
             "inputs": {"representations": spec["representations"], "sources": spec["sources"]},
             "outputs": outputs,
             "authored_witness": witness,
-            "actual_reply": Path(reply).read_text(encoding="utf-8"),
+            "actual_reply": reply_text,
             "scope": (
                 "The author supplies meaning. Exact bindings and structural changes do not "
                 "establish semantic adequacy."
@@ -526,18 +524,26 @@ class RepresentationOperations:
         }
         reply_path = self.location(turn) / "bound-return.json"
         require(
-            not reply_path.exists(),
+            not reply_path.exists() and not _is_reparse_or_symlink(reply_path),
             "bound return already exists; inspect native return before recovery",
         )
         _atomic_bytes(reply_path, encoded(body))
-        return self.system.receive(turn, reply_path, producer, proposals)
+        try:
+            return self.system.receive(turn, reply_path, producer, proposals)
+        except BaseException:
+            dir_fn = getattr(self.ex, "directory", None)
+            if callable(dir_fn):
+                native_ret: Path | None = Path(dir_fn(turn)) / "return.json"
+            else:
+                ex_root = getattr(self.ex, "root", None)
+                native_ret = Path(ex_root) / "packets" / turn / "return.json" if ex_root else None
+            if native_ret is None or not native_ret.exists():
+                reply_path.unlink(missing_ok=True)
+            raise
 
     @staticmethod
     def validate_witness(
-        spec: dict[str, Any],
-        key: str,
-        witness: Any,
-        output_paths: set[str],
+        spec: dict[str, Any], key: str, witness: Any, output_paths: set[str]
     ) -> None:
         require(
             isinstance(witness, dict) and witness.get("format") == WITNESS,
@@ -618,9 +624,7 @@ class RepresentationOperations:
 
 
 def run_cli_action(args: argparse.Namespace, *, engine_loader: Any = None) -> dict[str, Any]:
-    """Execute one representation CLI action, constructing System only AFTER acquiring
-    owner.lock.
-    """
+    """Execute one CLI action, constructing System only after acquiring owner.lock."""
     checked_engine = _check_unfollowed_ancestors(
         args.engine, "Engine directory", include_target=True
     )
@@ -701,13 +705,8 @@ def main(argv: list[str] | None = None) -> None:
         result = run_cli_action(args)
         print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
-        print(
-            json.dumps(
-                {"status": "unresolved", "operation": args.action, "error": str(exc)},
-                allow_nan=False,
-            ),
-            file=sys.stderr,
-        )
+        err = {"status": "unresolved", "operation": args.action, "error": str(exc)}
+        print(json.dumps(err, allow_nan=False), file=sys.stderr)
         raise SystemExit(2) from None
 
 
