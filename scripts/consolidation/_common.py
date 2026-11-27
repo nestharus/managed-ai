@@ -15,7 +15,7 @@ for _entry in (str(SRC_ROOT), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai_information.core.ownership import packet_id  # noqa: E402
+from managed_ai_information.core.ownership import packet_id, relative_path  # noqa: E402
 from managed_ai_information.core.storage import exclusive  # noqa: E402
 from managed_ai_information.platform import (  # noqa: E402
     atomic_bytes,
@@ -71,17 +71,95 @@ def git_head_sha(repo_root: Path) -> str:
 
 
 def file_digest_entry(root: Path, rel_path: str) -> dict[str, Any]:
-    """Stream-hash one ordinary source file relative to root."""
+    """Stream-hash one ordinary source file strictly contained within root."""
+    safe_rel = relative_path(rel_path)
+    checked_root = check_ordinary_ancestors(
+        root,
+        expect_dir=True,
+        error_prefix="ordinary source root required",
+    ).resolve(strict=True)
     target = check_ordinary_ancestors(
-        root / rel_path,
+        checked_root / safe_rel,
         expect_dir=False,
-        error_prefix=f"ordinary source file required ({rel_path})",
+        error_prefix=f"ordinary source file required ({safe_rel})",
     )
     info = target.lstat()
     if not is_ordinary_file_stat(info):
-        raise ValueError(f"ordinary source file required ({rel_path}): {target}")
-    digest = sha256_file(target)
-    return {"path": rel_path, "bytes": info.st_size, "sha256": digest}
+        raise ValueError(f"ordinary source file required ({safe_rel}): {target}")
+    resolved_target = target.resolve(strict=True)
+    if not resolved_target.is_relative_to(checked_root):
+        raise ValueError(f"source path escapes repository root: {safe_rel}")
+    digest = sha256_file(resolved_target)
+    return {"path": safe_rel, "bytes": info.st_size, "sha256": digest}
+
+
+def compute_digest_basis(
+    record_id: str,
+    *,
+    source_repo: str,
+    files: list[dict[str, Any]],
+) -> tuple[str, bytes, str]:
+    """Build deterministic digest-pin JSON bytes and SHA-256 purely in memory (zero disk writes)."""
+    safe_id = packet_id(record_id)
+    rel_path = f"{DIGEST_REL_DIR}/{safe_id}.json"
+    payload = {
+        "format": "managed-ai-source-digest-pin/1",
+        "record_id": safe_id,
+        "source_repo": source_repo,
+        "files": sorted(files, key=lambda item: str(item["path"])),
+    }
+    encoded = canonical_bytes(payload)
+    digest = hashlib.sha256(encoded).hexdigest()
+    return rel_path, encoded, digest
+
+
+def write_digest_basis_bytes(
+    system: System,
+    record_id: str,
+    encoded: bytes,
+) -> tuple[str, bool, str]:
+    """Safely write work/sources/repo-digests/<record_id>.json with symlink/ancestor guards."""
+    safe_id = packet_id(record_id)
+    rel_path = f"{DIGEST_REL_DIR}/{safe_id}.json"
+    checked_work = check_ordinary_ancestors(
+        system.work,
+        expect_dir=True,
+        error_prefix="ordinary workspace directory required",
+    ).resolve(strict=True)
+
+    cur = checked_work
+    for segment in DIGEST_REL_DIR.split("/"):
+        cur = cur / segment
+        if not cur.exists() and not cur.is_symlink():
+            cur.mkdir()
+        check_ordinary_ancestors(
+            cur,
+            expect_dir=True,
+            error_prefix="ordinary digest directory required",
+        )
+
+    checked_dir = check_ordinary_ancestors(
+        checked_work / DIGEST_REL_DIR,
+        expect_dir=True,
+        error_prefix="ordinary digest directory required",
+    )
+    dest = checked_dir / f"{safe_id}.json"
+    new_sha = hashlib.sha256(encoded).hexdigest()
+    try:
+        info = dest.lstat()
+    except FileNotFoundError:
+        info = None
+    if info is not None:
+        if not is_ordinary_file_stat(info):
+            raise ValueError(f"ordinary non-symlink digest pin file required: {dest}")
+        if dest.read_bytes() == encoded:
+            return rel_path, False, new_sha
+
+    resolved_dest = checked_dir.resolve(strict=True) / f"{safe_id}.json"
+    if not resolved_dest.is_relative_to(checked_work):
+        raise ValueError(f"digest pin destination escapes workspace: {resolved_dest}")
+    atomic_bytes(resolved_dest, encoded)
+    return rel_path, True, new_sha
 
 
 def write_digest_basis(
@@ -91,27 +169,9 @@ def write_digest_basis(
     source_repo: str,
     files: list[dict[str, Any]],
 ) -> tuple[str, bool, str]:
-    """Write work/sources/repo-digests/<record_id>.json only if content changed.
-
-    Returns (workspace_rel_path, changed, file_sha256).
-    """
-    rel_path = f"{DIGEST_REL_DIR}/{record_id}.json"
-    dest = system.work / rel_path
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "format": "managed-ai-source-digest-pin/1",
-        "record_id": record_id,
-        "source_repo": source_repo,
-        "files": sorted(files, key=lambda item: item["path"]),
-    }
-    encoded = canonical_bytes(payload)
-    new_sha = hashlib.sha256(encoded).hexdigest()
-    if dest.is_file():
-        old_bytes = dest.read_bytes()
-        if old_bytes == encoded:
-            return rel_path, False, new_sha
-    atomic_bytes(dest, encoded)
-    return rel_path, True, new_sha
+    """Compute and safely persist work/sources/repo-digests/<record_id>.json if changed."""
+    _, encoded, _ = compute_digest_basis(record_id, source_repo=source_repo, files=files)
+    return write_digest_basis_bytes(system, record_id, encoded)
 
 
 def normalize_relations(relations: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -162,46 +222,55 @@ def apply_desired_records(
     basis_shas_by_id: dict[str, dict[str, str]],
     *,
     batch_prefix: str,
+    pending_digests: dict[str, bytes] | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Idempotently apply only added/changed records via guarded put_batch + reindex + lint."""
-    existing = load_existing_records(system)
-    operations: list[dict[str, Any]] = []
-    added_ids: list[str] = []
-    updated_ids: list[str] = []
-    unchanged_ids: list[str] = []
+    """Idempotently apply only added/changed records under exclusive owner.lock."""
 
-    for rec in sorted(desired_records, key=lambda item: item["id"]):
-        rec_id = rec["id"]
-        prev = existing.get(rec_id)
-        if record_matches_desired(prev, rec, basis_shas_by_id.get(rec_id, {})):
-            unchanged_ids.append(rec_id)
-            continue
-        expected_rev = 0 if prev is None else int(prev["revision"])
-        if prev is None:
-            added_ids.append(rec_id)
-        else:
-            updated_ids.append(rec_id)
-        op: dict[str, Any] = {
-            "id": rec_id,
-            "expected_revision": expected_rev,
-            "mode": "replace",
-            "record": {
-                "kind": rec["kind"],
-                "content": rec["content"],
-                "relations": normalize_relations(rec.get("relations", [])),
-                "basis": list(rec.get("basis", [])),
-                "active": bool(rec.get("active", True)),
-            },
-        }
-        if prev is not None:
-            op["expected_sha256"] = str(prev["sha256"])
-        operations.append(op)
+    def _plan_ops(
+        existing: dict[str, dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[str], list[str], list[str], set[str]]:
+        ops: list[dict[str, Any]] = []
+        added: list[str] = []
+        updated: list[str] = []
+        unchanged: list[str] = []
+        touched_basis_paths: set[str] = set()
+        for rec in sorted(desired_records, key=lambda item: item["id"]):
+            rec_id = rec["id"]
+            prev = existing.get(rec_id)
+            if record_matches_desired(prev, rec, basis_shas_by_id.get(rec_id, {})):
+                unchanged.append(rec_id)
+                continue
+            expected_rev = 0 if prev is None else int(prev["revision"])
+            if prev is None:
+                added.append(rec_id)
+            else:
+                updated.append(rec_id)
+            basis_list = list(rec.get("basis", []))
+            touched_basis_paths.update(basis_list)
+            op: dict[str, Any] = {
+                "id": rec_id,
+                "expected_revision": expected_rev,
+                "mode": "replace",
+                "record": {
+                    "kind": rec["kind"],
+                    "content": rec["content"],
+                    "relations": normalize_relations(rec.get("relations", [])),
+                    "basis": basis_list,
+                    "active": bool(rec.get("active", True)),
+                },
+            }
+            if prev is not None:
+                op["expected_sha256"] = str(prev["sha256"])
+            ops.append(op)
+        return ops, added, updated, unchanged, touched_basis_paths
 
-    if dry_run or not operations:
+    if dry_run:
+        existing = load_existing_records(system)
+        _, added_ids, updated_ids, unchanged_ids, _ = _plan_ops(existing)
         return {
             "applied": False,
-            "dry_run": dry_run,
+            "dry_run": True,
             "added": added_ids,
             "updated": updated_ids,
             "unchanged_count": len(unchanged_ids),
@@ -210,14 +279,34 @@ def apply_desired_records(
             "lint_anomalies": None,
         }
 
-    batch_hash = hashlib.sha256(canonical_bytes(operations)).hexdigest()[:12]
-    batch_id = slugify_id(batch_prefix, batch_hash)
-    spec = {
-        "format": "managed-ai-batch-update/1",
-        "id": batch_id,
-        "operations": operations,
-    }
     with exclusive(system.ex.root / "owner.lock"):
+        existing = load_existing_records(system)
+        operations, added_ids, updated_ids, unchanged_ids, touched_basis = _plan_ops(existing)
+        if not operations:
+            return {
+                "applied": False,
+                "dry_run": False,
+                "added": added_ids,
+                "updated": updated_ids,
+                "unchanged_count": len(unchanged_ids),
+                "written_count": 0,
+                "batch_id": None,
+                "lint_anomalies": None,
+            }
+
+        if pending_digests:
+            for digest_id, encoded in sorted(pending_digests.items()):
+                rel_path = f"{DIGEST_REL_DIR}/{packet_id(digest_id)}.json"
+                if rel_path in touched_basis:
+                    write_digest_basis_bytes(system, digest_id, encoded)
+
+        batch_hash = hashlib.sha256(canonical_bytes(operations)).hexdigest()[:12]
+        batch_id = slugify_id(batch_prefix, batch_hash)
+        spec = {
+            "format": "managed-ai-batch-update/1",
+            "id": batch_id,
+            "operations": operations,
+        }
         put_batch(system, spec)
         system.reindex()
         lint_report = graph_query.lint(system)

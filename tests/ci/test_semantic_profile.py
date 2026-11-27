@@ -366,6 +366,7 @@ class SemanticProfileTests(unittest.TestCase):
             {
                 "src/pkg/__init__.py": "",
                 "src/pkg/alpha/__init__.py": "",
+                "src/pkg/alpha/_internal.py": "HIDDEN = 7\n",
                 "src/pkg/alpha/core.py": "\n".join(
                     [
                         "from pkg.beta.worker import run_worker",
@@ -381,11 +382,13 @@ class SemanticProfileTests(unittest.TestCase):
                 "src/pkg/beta/__init__.py": "",
                 "src/pkg/beta/worker.py": "\n".join(
                     [
+                        "from pkg.alpha import _internal",
                         "from pkg.alpha.core import _secret, run_core",
                         "from pkg.gamma.leaf import helper",
                         "",
                         "def run_worker() -> int:",
-                        "    return helper() + _secret() + (0 if run_core else 0)",
+                        "    val = helper() + _secret() + _internal.HIDDEN",
+                        "    return val + (0 if run_core else 1)",
                         "",
                     ]
                 ),
@@ -422,18 +425,19 @@ class SemanticProfileTests(unittest.TestCase):
             ["pkg.alpha.core", "pkg.beta.worker"],
         )
 
-        # 2. Cross-package _private import: beta.worker -> alpha.core._secret
-        self.assertEqual(rel_sum["cross_package_private_imports"], 1)
-        self.assertEqual(rel["private_imports"][0]["symbol"], "_secret")
-        self.assertEqual(rel["private_imports"][0]["scope"], "cross_package")
+        # 2. Cross-package _private imports: both symbol (_secret) and submodule (_internal)
+        self.assertEqual(rel_sum["cross_package_private_imports"], 2)
+        priv_syms = {row["symbol"] for row in rel["private_imports"]}
+        self.assertEqual(priv_syms, {"_secret", "_internal"})
+        self.assertTrue(all(row["scope"] == "cross_package" for row in rel["private_imports"]))
 
         # 3. Shortcut triangle: top -> beta.worker -> gamma.leaf AND top -> gamma.leaf
         self.assertGreaterEqual(rel_sum["shortcut_pair_count"], 1)
         self.assertGreaterEqual(rel_sum["cross_subpackage_shortcut_count"], 1)
 
-        # 4. Spaghetti nexus & blast radius on beta.worker (fan_in=2, fan_out=2 -> nexus=4)
+        # 4. Spaghetti nexus & blast radius on beta.worker (fan_in=2, fan_out=3 -> nexus=6)
         by_mod = {m["module"]: m for m in profile["modules"]}
-        self.assertEqual(by_mod["pkg.beta.worker"]["nexus_score"], 4)
+        self.assertEqual(by_mod["pkg.beta.worker"]["nexus_score"], 6)
         self.assertGreater(by_mod["pkg.beta.worker"]["blast_radius"], 0)
 
         # 5. Relationship budget breach fails check_budget and reports tightenable after fix

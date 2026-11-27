@@ -260,6 +260,9 @@ def _extract_imports_and_privates(
                 matched = _match_known_module(alias.name, known_modules)
                 if matched is not None and matched != module_name:
                     targets.add(matched)
+                    leaf = alias.name.rsplit(".", 1)[-1]
+                    if _is_private_symbol(leaf):
+                        privates.add((matched, leaf))
         elif isinstance(node, ast.ImportFrom):
             if node.level > 0:
                 base = _resolve_relative_base(module_name, is_package, node.level)
@@ -279,6 +282,8 @@ def _extract_imports_and_privates(
                 if sub_cand in known_modules and sub_cand != module_name:
                     targets.add(sub_cand)
                     matched_any = True
+                    if _is_private_symbol(alias.name):
+                        privates.add((sub_cand, alias.name))
                 elif _is_private_symbol(alias.name):
                     owner = _match_known_module(mod_base, known_modules)
                     if owner is not None and owner != module_name:
@@ -287,6 +292,9 @@ def _extract_imports_and_privates(
                 matched = _match_known_module(mod_base, known_modules)
                 if matched is not None and matched != module_name:
                     targets.add(matched)
+                    base_leaf = mod_base.rsplit(".", 1)[-1]
+                    if _is_private_symbol(base_leaf):
+                        privates.add((matched, base_leaf))
     return sorted(targets), sorted(privates)
 
 

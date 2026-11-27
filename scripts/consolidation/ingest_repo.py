@@ -23,12 +23,12 @@ from scripts.ci.semantic_profile import (  # noqa: E402
 )
 from scripts.consolidation._common import (  # noqa: E402
     apply_desired_records,
+    compute_digest_basis,
     dump_json,
     file_digest_entry,
     git_head_sha,
     load_existing_records,
     slugify_id,
-    write_digest_basis,
 )
 
 INGEST_REPO_FORMAT = "managed-ai-repo-ingest/1"
@@ -167,16 +167,13 @@ def _build_hotspot_record(
 
 def _build_one_module_bundle(
     checked_repo: Path,
-    system: System,
     mod: dict[str, Any],
     mod_ids_by_name: dict[str, str],
     existing_ids: set[str],
     scc_members: set[str],
     cross_pkg_priv_callers: set[str],
     commit: str,
-    *,
-    sync_digests: bool,
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes]]:
     mod_name: str = mod["module"]
     rel_path: str = mod["path"]
     mod_id = mod_ids_by_name[mod_name]
@@ -184,19 +181,14 @@ def _build_one_module_bundle(
     is_facade = rel_path.endswith("/__init__.py") or mod_name.endswith(".domain_api")
 
     digest_entry = file_digest_entry(checked_repo, rel_path)
-    if sync_digests:
-        basis_rel, _, basis_sha = write_digest_basis(
-            system,
-            mod_id,
-            source_repo=checked_repo.name,
-            files=[digest_entry],
-        )
-        basis_list = [basis_rel]
-        mod_basis_map = {basis_rel: basis_sha}
-    else:
-        basis_rel = f"sources/repo-digests/{mod_id}.json"
-        basis_list = [basis_rel] if (system.work / basis_rel).is_file() else []
-        mod_basis_map = {}
+    basis_rel, basis_bytes, basis_sha = compute_digest_basis(
+        mod_id,
+        source_repo=checked_repo.name,
+        files=[digest_entry],
+    )
+    basis_list = [basis_rel]
+    mod_basis_map = {basis_rel: basis_sha}
+    pending_digests = {mod_id: basis_bytes}
 
     records: list[dict[str, Any]] = []
     basis_shas: dict[str, dict[str, str]] = {mod_id: mod_basis_map}
@@ -272,7 +264,7 @@ def _build_one_module_bundle(
         records.append(hs_rec)
         basis_shas[hs_rec["id"]] = dict(mod_basis_map)
 
-    return records, basis_shas
+    return records, basis_shas, pending_digests
 
 
 def build_repo_records(
@@ -280,9 +272,8 @@ def build_repo_records(
     system: System,
     *,
     package_rel: str = "src/managed_ai_information",
-    sync_digests: bool = True,
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, Any]]:
-    """Build deterministic code-module, code-facade, semantic-hotspot, and profile-head records."""
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes], dict[str, Any]]:
+    """Purely compute desired repo records and in-memory digest pins (zero disk writes)."""
     checked_repo = check_ordinary_ancestors(
         repo_root, expect_dir=True, error_prefix="ordinary repository root required"
     ).resolve(strict=True)
@@ -321,23 +312,23 @@ def build_repo_records(
         }
     ]
     basis_shas: dict[str, dict[str, str]] = {"profile-head": {}}
+    pending_digests: dict[str, bytes] = {}
 
     for mod in profile["modules"]:
-        bundle_records, bundle_basis = _build_one_module_bundle(
+        bundle_records, bundle_basis, bundle_digests = _build_one_module_bundle(
             checked_repo,
-            system,
             mod,
             mod_ids_by_name,
             existing_ids,
             scc_members,
             cross_pkg_priv_callers,
             commit,
-            sync_digests=sync_digests,
         )
         desired.extend(bundle_records)
         basis_shas.update(bundle_basis)
+        pending_digests.update(bundle_digests)
 
-    return desired, basis_shas, profile
+    return desired, basis_shas, pending_digests, profile
 
 
 def ingest_repository(
@@ -352,17 +343,17 @@ def ingest_repository(
         store_root, expect_dir=True, error_prefix="ordinary store root required"
     ).resolve(strict=True)
     system = System(checked_store)
-    desired, basis_shas, profile = build_repo_records(
+    desired, basis_shas, pending_digests, profile = build_repo_records(
         repo_root,
         system,
         package_rel=package_rel,
-        sync_digests=not dry_run,
     )
     receipt = apply_desired_records(
         system,
         desired,
         basis_shas,
         batch_prefix="ingest-repo",
+        pending_digests=pending_digests,
         dry_run=dry_run,
     )
     return {

@@ -16,6 +16,7 @@ for _entry in (str(SRC_ROOT), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
+from managed_ai_information.core.ownership import packet_id, relative_path  # noqa: E402
 from managed_ai_information.core.storage import exclusive  # noqa: E402
 from managed_ai_information.platform import (  # noqa: E402
     check_ordinary_ancestors,
@@ -25,6 +26,7 @@ from managed_ai_information.platform import (  # noqa: E402
 from managed_ai_information.store.records.record_batch import put_batch  # noqa: E402
 from managed_ai_information.store.system import System  # noqa: E402
 from scripts.ci.semantic_profile import (  # noqa: E402
+    DEFAULT_RELATIONSHIP_BUDGETS,
     build_baseline,
     check_budget,
     load_baseline,
@@ -34,6 +36,7 @@ from scripts.consolidation._common import (  # noqa: E402
     DIGEST_REL_DIR,
     apply_desired_records,
     canonical_bytes,
+    compute_digest_basis,
     dump_json,
     file_digest_entry,
     git_head_sha,
@@ -41,6 +44,7 @@ from scripts.consolidation._common import (  # noqa: E402
     record_matches_desired,
     slugify_id,
     write_digest_basis,
+    write_digest_basis_bytes,
 )
 from scripts.consolidation.ingest_crw import build_crw_records  # noqa: E402
 from scripts.consolidation.ingest_repo import build_repo_records  # noqa: E402
@@ -75,51 +79,57 @@ def _open_store(store_root: Path) -> System:
 
 
 def sync_digests(store_root: Path, repo_root: Path) -> dict[str, Any]:
-    """Re-hash tracked source files referenced by work/sources/repo-digests/*.json."""
+    """Re-hash tracked source files referenced by work/sources/repo-digests/*.json under lock."""
     system = _open_store(store_root)
     checked_repo = check_ordinary_ancestors(
         repo_root, expect_dir=True, error_prefix="ordinary repository root required"
     ).resolve(strict=True)
     digest_dir = system.work / DIGEST_REL_DIR
-    if not digest_dir.is_dir():
+    if not digest_dir.exists() and not digest_dir.is_symlink():
         return {"checked": 0, "updated": [], "missing": [], "unchanged": 0}
+    checked_digest_dir = check_ordinary_ancestors(
+        digest_dir, expect_dir=True, error_prefix="ordinary digest directory required"
+    )
 
     checked = 0
     updated: list[str] = []
     missing: list[str] = []
     unchanged = 0
 
-    for pin_file in sorted(digest_dir.glob("*.json")):
-        info = pin_file.lstat()
-        if not is_ordinary_file_stat(info):
-            raise ValueError(f"ordinary digest pin file required: {pin_file}")
-        pin = strict_json_loads(pin_file.read_text(encoding="utf-8"), label=pin_file.name)
-        if not isinstance(pin, dict) or pin.get("format") != "managed-ai-source-digest-pin/1":
-            continue
-        checked += 1
-        rec_id = str(pin["record_id"])
-        source_repo = str(pin.get("source_repo", checked_repo.name))
-        refreshed: list[dict[str, Any]] = []
-        any_missing = False
-        for item in pin.get("files", []):
-            rel = str(item["path"])
-            if not (checked_repo / rel).exists():
-                any_missing = True
-                missing.append(f"{rec_id}:{rel}")
+    with exclusive(system.ex.root / "owner.lock"):
+        for pin_file in sorted(checked_digest_dir.glob("*.json")):
+            info = pin_file.lstat()
+            if not is_ordinary_file_stat(info):
+                raise ValueError(f"ordinary digest pin file required: {pin_file}")
+            pin = strict_json_loads(pin_file.read_text(encoding="utf-8"), label=pin_file.name)
+            if not isinstance(pin, dict) or pin.get("format") != "managed-ai-source-digest-pin/1":
                 continue
-            refreshed.append(file_digest_entry(checked_repo, rel))
-        if any_missing and not refreshed:
-            continue
-        _, changed, _ = write_digest_basis(
-            system,
-            rec_id,
-            source_repo=source_repo,
-            files=refreshed,
-        )
-        if changed:
-            updated.append(rec_id)
-        else:
-            unchanged += 1
+            checked += 1
+            rec_id = packet_id(str(pin.get("record_id", "")))
+            if pin_file.name != f"{rec_id}.json":
+                raise ValueError(f"digest pin filename mismatch: {pin_file.name} vs {rec_id}.json")
+            source_repo = str(pin.get("source_repo", checked_repo.name))
+            refreshed: list[dict[str, Any]] = []
+            for item in pin.get("files", []):
+                if not isinstance(item, dict):
+                    raise ValueError(f"invalid digest file entry in {pin_file.name}")
+                rel = relative_path(str(item.get("path", "")))
+                candidate = checked_repo / rel
+                if not candidate.exists() and not candidate.is_symlink():
+                    missing.append(f"{rec_id}:{rel}")
+                    refreshed.append({"path": rel, "bytes": 0, "sha256": None, "missing": True})
+                    continue
+                refreshed.append(file_digest_entry(checked_repo, rel))
+            _, changed, _ = write_digest_basis(
+                system,
+                rec_id,
+                source_repo=source_repo,
+                files=refreshed,
+            )
+            if changed:
+                updated.append(rec_id)
+            else:
+                unchanged += 1
 
     return {
         "checked": checked,
@@ -143,16 +153,15 @@ def _build_mode_records(
     system: System,
     *,
     package_rel: str,
-    sync_files: bool,
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes]]:
     if mode == "repo":
-        desired, basis_shas, _ = build_repo_records(
-            repo_root, system, package_rel=package_rel, sync_digests=sync_files
+        desired, basis_shas, pending_digests, _ = build_repo_records(
+            repo_root, system, package_rel=package_rel
         )
-        return desired, basis_shas
+        return desired, basis_shas, pending_digests
     if mode == "crw":
-        desired, basis_shas, _ = build_crw_records(repo_root, system, sync_digests=sync_files)
-        return desired, basis_shas
+        desired, basis_shas, pending_digests, _ = build_crw_records(repo_root)
+        return desired, basis_shas, pending_digests
     raise ValueError(f"unsupported consolidation mode: {mode}")
 
 
@@ -167,9 +176,7 @@ def plan_consolidation(
     system = _open_store(store_root)
     existing = load_existing_records(system)
     stale_basis = _stale_record_ids(system, existing)
-    desired, basis_shas = _build_mode_records(
-        mode, repo_root, system, package_rel=package_rel, sync_files=False
-    )
+    desired, basis_shas, _ = _build_mode_records(mode, repo_root, system, package_rel=package_rel)
 
     desired_by_id = {rec["id"]: rec for rec in desired}
     added: list[str] = []
@@ -180,10 +187,7 @@ def plan_consolidation(
         if prev is None:
             added.append(rec_id)
         elif rec_id in stale_basis or not record_matches_desired(
-            prev,
-            rec,
-            basis_shas.get(rec_id)
-            or {str(item["path"]): str(item.get("sha256") or "") for item in prev.get("basis", [])},
+            prev, rec, basis_shas.get(rec_id, {})
         ):
             changed.append(rec_id)
         else:
@@ -221,8 +225,8 @@ def apply_consolidation(
     """Sync digests, apply changed/added records, soft-retire deleted ones, reindex + lint."""
     system = _open_store(store_root)
     existing = load_existing_records(system)
-    desired, basis_shas = _build_mode_records(
-        mode, repo_root, system, package_rel=package_rel, sync_files=True
+    desired, basis_shas, pending_digests = _build_mode_records(
+        mode, repo_root, system, package_rel=package_rel
     )
     desired_ids = {rec["id"] for rec in desired}
     managed_kinds = _MANAGED_KINDS_BY_MODE[mode]
@@ -254,6 +258,7 @@ def apply_consolidation(
         desired,
         basis_shas,
         batch_prefix=f"consolidate-{mode}",
+        pending_digests=pending_digests,
         dry_run=False,
     )
     return {
@@ -284,11 +289,13 @@ def plan_obligations(
         profile = profile_repository(checked_repo, package_rel=package_rel)
         baseline = build_baseline(profile)
         baseline["allowances"] = {}
+        baseline["relationship_budgets"] = dict(DEFAULT_RELATIONSHIP_BUDGETS)
 
     check = check_budget(profile, baseline)
     existing = load_existing_records(system)
     desired: list[dict[str, Any]] = []
     basis_shas: dict[str, dict[str, str]] = {}
+    pending_digests: dict[str, bytes] = {}
 
     for viol in check["violations"]:
         v_path = str(viol["path"])
@@ -305,12 +312,12 @@ def plan_obligations(
         b_map: dict[str, str] = {}
         if v_path != "<relationships>" and (checked_repo / v_path).is_file():
             digest_entry = file_digest_entry(checked_repo, v_path)
-            if apply:
-                b_rel, _, b_sha = write_digest_basis(
-                    system, obl_id, source_repo=checked_repo.name, files=[digest_entry]
-                )
-                b_list = [b_rel]
-                b_map = {b_rel: b_sha}
+            b_rel, b_bytes, b_sha = compute_digest_basis(
+                obl_id, source_repo=checked_repo.name, files=[digest_entry]
+            )
+            b_list = [b_rel]
+            b_map = {b_rel: b_sha}
+            pending_digests[obl_id] = b_bytes
 
         desired.append(
             {
@@ -336,6 +343,7 @@ def plan_obligations(
         desired,
         basis_shas,
         batch_prefix="plan-obligations",
+        pending_digests=pending_digests,
         dry_run=not apply,
     )
     return {
@@ -358,29 +366,28 @@ def _measure_scope_metric(
     for mod in profile["modules"]:
         if mod["path"] == target_path:
             return int(mod[metric]) if metric in mod else None
-    return 0
+    return None
 
 
-def reconcile_obligations(
-    store_root: Path,
-    repo_root: Path,
-    *,
-    package_rel: str = "src/managed_ai_information",
-    apply: bool = False,
-) -> dict[str, Any]:
-    """Machine-verify open semantic obligations against current AST metrics + basis_changes."""
-    system = _open_store(store_root)
-    checked_repo = check_ordinary_ancestors(
-        repo_root, expect_dir=True, error_prefix="ordinary repository root required"
-    ).resolve(strict=True)
-    profile = profile_repository(checked_repo, package_rel=package_rel)
-    commit = git_head_sha(checked_repo)
-    existing = load_existing_records(system)
-
+def _evaluate_obligations(
+    existing: dict[str, dict[str, Any]],
+    profile: dict[str, Any],
+    checked_repo: Path,
+    commit: str,
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, bytes],
+]:
     fulfilled: list[dict[str, Any]] = []
     still_open: list[dict[str, Any]] = []
     regressed: list[dict[str, Any]] = []
+    missing_targets: list[dict[str, Any]] = []
     operations: list[dict[str, Any]] = []
+    pending_digests: dict[str, bytes] = {}
 
     for rec_id, rec in sorted(existing.items()):
         if rec.get("kind") != "obligation" or not rec_id.startswith("obl-sem-"):
@@ -388,16 +395,24 @@ def reconcile_obligations(
         content = rec.get("content")
         if not isinstance(content, dict):
             continue
-        scope = str(content.get("source_scope", ""))
-        match = _SCOPE_RE.match(scope)
+        match = _SCOPE_RE.match(str(content.get("source_scope", "")))
         if not match:
             continue
         target_path, metric, ceiling_str = match.groups()
         ceiling = int(ceiling_str)
+        disposition = str(content.get("disposition", "open"))
         actual = _measure_scope_metric(profile, target_path, metric)
         if actual is None:
+            missing_targets.append(
+                {
+                    "id": rec_id,
+                    "path": target_path,
+                    "metric": metric,
+                    "disposition": disposition,
+                    "reason": "target module missing from profile",
+                }
+            )
             continue
-        disposition = str(content.get("disposition", "open"))
 
         if disposition == "open":
             if actual <= ceiling:
@@ -412,18 +427,14 @@ def reconcile_obligations(
                 new_content["disposition"] = "fulfilled"
                 new_content["account"] = account
                 basis_paths = [str(item["path"]) for item in rec.get("basis", [])]
-                if (
-                    apply
-                    and target_path != "<relationships>"
-                    and (checked_repo / target_path).is_file()
-                ):
-                    b_rel, _, _ = write_digest_basis(
-                        system,
+                if target_path != "<relationships>" and (checked_repo / target_path).is_file():
+                    b_rel, b_bytes, _ = compute_digest_basis(
                         rec_id,
                         source_repo=checked_repo.name,
                         files=[file_digest_entry(checked_repo, target_path)],
                     )
                     basis_paths = [b_rel]
+                    pending_digests[rec_id] = b_bytes
                 operations.append(
                     {
                         "id": rec_id,
@@ -460,18 +471,57 @@ def reconcile_obligations(
                 }
             )
 
-    applied = False
-    if apply and operations:
-        batch_hash = hashlib.sha256(canonical_bytes(operations)).hexdigest()[:12]
-        spec = {
-            "format": "managed-ai-batch-update/1",
-            "id": slugify_id("reconcile-obl", batch_hash),
-            "operations": operations,
+    return fulfilled, still_open, regressed, missing_targets, operations, pending_digests
+
+
+def reconcile_obligations(
+    store_root: Path,
+    repo_root: Path,
+    *,
+    package_rel: str = "src/managed_ai_information",
+    apply: bool = False,
+) -> dict[str, Any]:
+    """Machine-verify open semantic obligations against current AST metrics under owner.lock."""
+    system = _open_store(store_root)
+    checked_repo = check_ordinary_ancestors(
+        repo_root, expect_dir=True, error_prefix="ordinary repository root required"
+    ).resolve(strict=True)
+    profile = profile_repository(checked_repo, package_rel=package_rel)
+    commit = git_head_sha(checked_repo)
+
+    if not apply:
+        existing = load_existing_records(system)
+        fulfilled, still_open, regressed, missing_targets, _, _ = _evaluate_obligations(
+            existing, profile, checked_repo, commit
+        )
+        return {
+            "format": OBLIGATION_RECONCILE_FORMAT,
+            "action": "reconcile-obligations",
+            "applied": False,
+            "fulfilled": fulfilled,
+            "still_open": still_open,
+            "regressed": regressed,
+            "missing_targets": missing_targets,
         }
-        with exclusive(system.ex.root / "owner.lock"):
+
+    with exclusive(system.ex.root / "owner.lock"):
+        existing = load_existing_records(system)
+        fulfilled, still_open, regressed, missing_targets, operations, pending_digests = (
+            _evaluate_obligations(existing, profile, checked_repo, commit)
+        )
+        applied = False
+        if operations:
+            for digest_id, encoded in sorted(pending_digests.items()):
+                write_digest_basis_bytes(system, digest_id, encoded)
+            batch_hash = hashlib.sha256(canonical_bytes(operations)).hexdigest()[:12]
+            spec = {
+                "format": "managed-ai-batch-update/1",
+                "id": slugify_id("reconcile-obl", batch_hash),
+                "operations": operations,
+            }
             put_batch(system, spec)
             system.reindex()
-        applied = True
+            applied = True
 
     return {
         "format": OBLIGATION_RECONCILE_FORMAT,
@@ -480,6 +530,7 @@ def reconcile_obligations(
         "fulfilled": fulfilled,
         "still_open": still_open,
         "regressed": regressed,
+        "missing_targets": missing_targets,
     }
 
 

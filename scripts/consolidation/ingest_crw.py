@@ -22,11 +22,11 @@ from managed_ai_information.platform import (  # noqa: E402
 from managed_ai_information.store.system import System  # noqa: E402
 from scripts.consolidation._common import (  # noqa: E402
     apply_desired_records,
+    compute_digest_basis,
     dump_json,
     file_digest_entry,
     git_head_sha,
     slugify_id,
-    write_digest_basis,
 )
 
 INGEST_CRW_FORMAT = "managed-ai-crw-ingest/1"
@@ -73,33 +73,29 @@ def _extract_prompt_cross_links(
 
 
 def _pin_basis(
-    system: System,
     crw_root: Path,
     record_id: str,
     rel_paths: list[str],
-    *,
-    sync_digests: bool,
-) -> tuple[list[str], dict[str, str]]:
+) -> tuple[list[str], dict[str, str], bytes]:
     files = [file_digest_entry(crw_root, rel) for rel in sorted(set(rel_paths))]
-    if sync_digests:
-        basis_rel, _, basis_sha = write_digest_basis(
-            system,
-            record_id,
-            source_repo=crw_root.name,
-            files=files,
-        )
-        return [basis_rel], {basis_rel: basis_sha}
-    basis_rel = f"sources/repo-digests/{record_id}.json"
-    return ([basis_rel] if (system.work / basis_rel).is_file() else []), {}
+    basis_rel, encoded, basis_sha = compute_digest_basis(
+        record_id,
+        source_repo=crw_root.name,
+        files=files,
+    )
+    return [basis_rel], {basis_rel: basis_sha}, encoded
 
 
 def _build_family_and_constituent_records(
     crw_root: Path,
-    system: System,
     commit: str,
-    *,
-    sync_digests: bool,
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], list[str], dict[str, str]]:
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, dict[str, str]],
+    dict[str, bytes],
+    list[str],
+    dict[str, str],
+]:
     obs_raw = _read_text(crw_root, "risk-axis-reviewers/observer-dimensions.json")
     constituents = strict_json_loads(
         obs_raw, label="observer-dimensions.json", require_object=False
@@ -118,6 +114,7 @@ def _build_family_and_constituent_records(
 
     desired: list[dict[str, Any]] = []
     basis_shas: dict[str, dict[str, str]] = {}
+    pending_digests: dict[str, bytes] = {}
     family_ids: list[str] = []
     fam_id_by_slug: dict[str, str] = {}
     dim_id_by_rel: dict[str, str] = {}
@@ -136,8 +133,9 @@ def _build_family_and_constituent_records(
         family_ids.append(fam_id)
         fam_id_by_slug[fam_slug] = fam_id
         text = _read_text(crw_root, rel)
-        b_list, b_map = _pin_basis(system, crw_root, fam_id, [rel], sync_digests=sync_digests)
+        b_list, b_map, b_bytes = _pin_basis(crw_root, fam_id, [rel])
         basis_shas[fam_id] = b_map
+        pending_digests[fam_id] = b_bytes
         desired.append(
             {
                 "id": fam_id,
@@ -175,14 +173,13 @@ def _build_family_and_constituent_records(
             if target_id != dim_id:
                 rels.append({"relation": "bears-on", "target": target_id})
 
-        b_list, b_map = _pin_basis(
-            system,
+        b_list, b_map, b_bytes = _pin_basis(
             crw_root,
             dim_id,
             [rel, "risk-axis-reviewers/observer-dimensions.json"],
-            sync_digests=sync_digests,
         )
         basis_shas[dim_id] = b_map
+        pending_digests[dim_id] = b_bytes
         desired.append(
             {
                 "id": dim_id,
@@ -203,16 +200,13 @@ def _build_family_and_constituent_records(
             }
         )
 
-    return desired, basis_shas, family_ids, fam_id_by_slug
+    return desired, basis_shas, pending_digests, family_ids, fam_id_by_slug
 
 
 def _build_control_records(
     crw_root: Path,
-    system: System,
     commit: str,
-    *,
-    sync_digests: bool,
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes]]:
     ctrl_rel = "risk-axis-reviewers/evals/organization-boundary-controls-v1"
     cases_rel = f"{ctrl_rel}/cases.json"
     cases = strict_json_loads(
@@ -223,6 +217,7 @@ def _build_control_records(
 
     desired: list[dict[str, Any]] = []
     basis_shas: dict[str, dict[str, str]] = {}
+    pending_digests: dict[str, bytes] = {}
     for entry in sorted(cases, key=lambda x: str(x.get("id", ""))):
         if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
             raise ValueError("invalid O-control case in cases.json")
@@ -233,8 +228,9 @@ def _build_control_records(
             cand = f"{ctrl_rel}/{raw_id}/{leaf}"
             if (crw_root / cand).is_file():
                 pin_files.append(cand)
-        b_list, b_map = _pin_basis(system, crw_root, rec_id, pin_files, sync_digests=sync_digests)
+        b_list, b_map, b_bytes = _pin_basis(crw_root, rec_id, pin_files)
         basis_shas[rec_id] = b_map
+        pending_digests[rec_id] = b_bytes
         desired.append(
             {
                 "id": rec_id,
@@ -255,19 +251,16 @@ def _build_control_records(
                 "active": True,
             }
         )
-    return desired, basis_shas
+    return desired, basis_shas, pending_digests
 
 
 def _build_catalog_record(
     checked_crw: Path,
-    system: System,
     commit: str,
     family_ids: list[str],
     constituent_count: int,
     control_count: int,
-    *,
-    sync_digests: bool,
-) -> tuple[dict[str, Any], dict[str, str]]:
+) -> tuple[dict[str, Any], dict[str, str], bytes]:
     catalog_rels = [{"relation": "maps-to", "target": fid} for fid in sorted(family_ids)]
     catalog_rels.extend(
         [
@@ -277,15 +270,13 @@ def _build_catalog_record(
             {"relation": "maps-to", "target": "crw-tool-semantic-profiler"},
         ]
     )
-    cat_basis, cat_map = _pin_basis(
-        system,
+    cat_basis, cat_map, cat_bytes = _pin_basis(
         checked_crw,
         "crw-catalog",
         [
             "risk-axis-reviewers/review-dimensions.md",
             "risk-axis-reviewers/observer-dimensions.json",
         ],
-        sync_digests=sync_digests,
     )
     record = {
         "id": "crw-catalog",
@@ -314,28 +305,24 @@ def _build_catalog_record(
         "basis": cat_basis,
         "active": True,
     }
-    return record, cat_map
+    return record, cat_map, cat_bytes
 
 
 def build_crw_records(
     crw_root: Path,
-    system: System,
-    *,
-    sync_digests: bool = True,
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, int]]:
-    """Build deterministic CRW records covering families, constituents, O-controls, rules, tools."""
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes], dict[str, int]]:
+    """Purely compute deterministic CRW records and in-memory digest pins (zero disk writes)."""
     checked_crw = check_ordinary_ancestors(
         crw_root, expect_dir=True, error_prefix="ordinary CRW repository root required"
     ).resolve(strict=True)
     commit = git_head_sha(checked_crw)
 
-    fam_dim_records, basis_shas, family_ids, fam_by_slug = _build_family_and_constituent_records(
-        checked_crw, system, commit, sync_digests=sync_digests
+    fam_dim_records, basis_shas, pending_digests, family_ids, fam_by_slug = (
+        _build_family_and_constituent_records(checked_crw, commit)
     )
-    ctrl_records, ctrl_basis = _build_control_records(
-        checked_crw, system, commit, sync_digests=sync_digests
-    )
+    ctrl_records, ctrl_basis, ctrl_digests = _build_control_records(checked_crw, commit)
     basis_shas.update(ctrl_basis)
+    pending_digests.update(ctrl_digests)
 
     desired: list[dict[str, Any]] = []
     static_docs: list[tuple[str, str, str, list[dict[str, str]]]] = [
@@ -375,8 +362,9 @@ def build_crw_records(
 
     for rec_id, kind, rel, rels in static_docs:
         text = _read_text(checked_crw, rel)
-        b_list, b_map = _pin_basis(system, checked_crw, rec_id, [rel], sync_digests=sync_digests)
+        b_list, b_map, b_bytes = _pin_basis(checked_crw, rec_id, [rel])
         basis_shas[rec_id] = b_map
+        pending_digests[rec_id] = b_bytes
         desired.append(
             {
                 "id": rec_id,
@@ -394,16 +382,15 @@ def build_crw_records(
         )
 
     constituent_count = sum(1 for r in fam_dim_records if r["kind"] == "crw-constituent")
-    cat_rec, cat_map = _build_catalog_record(
+    cat_rec, cat_map, cat_bytes = _build_catalog_record(
         checked_crw,
-        system,
         commit,
         family_ids,
         constituent_count,
         len(ctrl_records),
-        sync_digests=sync_digests,
     )
     basis_shas["crw-catalog"] = cat_map
+    pending_digests["crw-catalog"] = cat_bytes
     desired.append(cat_rec)
 
     desired.extend(fam_dim_records)
@@ -414,7 +401,7 @@ def build_crw_records(
         "controls": len(ctrl_records),
         "total_records": len(desired),
     }
-    return desired, basis_shas, counts
+    return desired, basis_shas, pending_digests, counts
 
 
 def ingest_crw(crw_root: Path, store_root: Path, *, dry_run: bool = False) -> dict[str, Any]:
@@ -423,16 +410,13 @@ def ingest_crw(crw_root: Path, store_root: Path, *, dry_run: bool = False) -> di
         store_root, expect_dir=True, error_prefix="ordinary store root required"
     ).resolve(strict=True)
     system = System(checked_store)
-    desired, basis_shas, counts = build_crw_records(
-        crw_root,
-        system,
-        sync_digests=not dry_run,
-    )
+    desired, basis_shas, pending_digests, counts = build_crw_records(crw_root)
     receipt = apply_desired_records(
         system,
         desired,
         basis_shas,
         batch_prefix="ingest-crw",
+        pending_digests=pending_digests,
         dry_run=dry_run,
     )
     return {
