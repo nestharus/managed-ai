@@ -5,9 +5,7 @@ premises and interactions. It neither discovers semantic truth nor turns open
 record kinds or arbitrary relation labels into a universal task graph.
 """
 
-import hashlib
-import json
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator
 from contextlib import nullcontext
 from typing import Any
 
@@ -15,12 +13,27 @@ from managed_ai_information.core.formats import COMPOSITION_FORMAT as PROFILE
 from managed_ai_information.core.formats import COMPOSITION_VIEW_FORMAT as FORMAT
 from managed_ai_information.core.formats import INTERACTION_MAP_FORMAT
 
+from .composition_eval import (
+    COLLECTIONS,
+    ViewBudget,
+    bounded_int,
+    bounded_profile_bytes,
+    collect_interaction_pairs,
+    exact_allowed_fields,
+    observe_basis_row,
+    select_focused_collections,
+    string_list,
+    text_field,
+    validate_collection_row,
+)
+
+_integer, _strings, _text = bounded_int, string_list, text_field
+
 MAX_ROWS = 2000
 MAX_REFERENCES = 20000
 MAX_PROFILE_BYTES = 2 * 1024 * 1024
 MAX_BASIS_BYTES = 32 * 1024 * 1024
 MAX_VIEW_BYTES = 1024 * 1024
-COLLECTIONS = ("elements", "relations", "premises", "opportunities")
 PREFIXES = dict(zip(COLLECTIONS, ("element", "relation", "premise", "opportunity"), strict=True))
 SCOPE = (
     "Caller-authored meanings and availability claims on nominated sources. "
@@ -28,197 +41,6 @@ SCOPE = (
     "guarantee of actual parallel independence. Input/output resources are "
     "compared by exact declared identity; undeclared interactions remain unknown."
 )
-
-
-def _text(value: Any, label: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(label + " must be nonempty text")
-    return value
-
-
-def _strings(value: Any, label: str) -> list[str]:
-    if not isinstance(value, list) or any(not isinstance(v, str) or not v.strip() for v in value):
-        raise ValueError(label + " must be a list of nonempty strings")
-    if len(value) != len(set(value)):
-        raise ValueError(label + " contains duplicate references")
-    return value
-
-
-def _fields(value: Any, allowed: Iterable[str], label: str) -> None:
-    if not isinstance(value, dict):
-        raise ValueError(label + " must be an object")
-    extra = set(value) - set(allowed)
-    if extra:
-        raise ValueError("unknown " + label + " fields: " + ", ".join(sorted(extra)))
-
-
-def _integer(value: Any, name: str, maximum: int, minimum: int = 1) -> int:
-    if type(value) is not int or not minimum <= value <= maximum:
-        raise ValueError(f"{name} must be an integer from {minimum} to {maximum}")
-    return value
-
-
-_VIEW_ENCODER = json.JSONEncoder(ensure_ascii=False, indent=2, allow_nan=False)
-_PROFILE_ENCODER = json.JSONEncoder(ensure_ascii=False, allow_nan=False)
-
-
-class _ViewBudget:
-    """Measure UTF-8 encoded JSON bytes with C-accelerated json.JSONEncoder.encode()."""
-
-    def __init__(self) -> None:
-        self.used = 1024
-
-    def include(self, value: Any) -> bool:
-        size = len(_VIEW_ENCODER.encode(value).encode("utf-8"))
-        if self.used + size > MAX_VIEW_BYTES:
-            return False
-        self.used += size
-        return True
-
-
-def _bounded_profile_bytes(body: dict[str, Any]) -> int:
-    """Measure profile UTF-8 JSON bytes via C-accelerated encoding with early ceiling check."""
-    # Check each top-level collection item boundedly before full encode to prevent huge allocations.
-    total = 2
-    for key, val in body.items():
-        if key in COLLECTIONS and isinstance(val, list):
-            total += len(key.encode("utf-8")) + 6
-            for row in val:
-                total += len(_PROFILE_ENCODER.encode(row).encode("utf-8")) + 2
-                if total > MAX_PROFILE_BYTES + 4096:
-                    raise ValueError("composition profile exceeds the 2 MiB view input bound")
-        else:
-            total += (
-                len(key.encode("utf-8")) + len(_PROFILE_ENCODER.encode(val).encode("utf-8")) + 4
-            )
-            if total > MAX_PROFILE_BYTES + 4096:
-                raise ValueError("composition profile exceeds the 2 MiB view input bound")
-    exact = len(_PROFILE_ENCODER.encode(body).encode("utf-8"))
-    if exact > MAX_PROFILE_BYTES:
-        raise ValueError("composition profile exceeds the 2 MiB view input bound")
-    return exact
-
-
-def _validate_collection_row(collection: str, ident: str, row: dict[str, Any]) -> int:
-    if "account" in row:
-        _text(row["account"], collection + " account")
-    if collection == "elements":
-        _text(row.get("account"), "element account")
-        return 0
-    if collection == "relations":
-        refs = sum(len(_strings(row.get(k, []), "relation " + k)) for k in ("from", "to", "basis"))
-        _text(row.get("prediction"), "relation prediction")
-        observation = row.get("observation", "unassessed")
-        if observation not in ("unassessed", "supported", "contradicted"):
-            raise ValueError(
-                f"relation {ident!r} field 'observation' must be unassessed, "
-                "supported or contradicted; "
-                "put the explanatory observation in this relation's 'account' field"
-            )
-        if observation != "unassessed":
-            _text(
-                row.get("account"),
-                f"relation {ident!r} field 'account' for an asserted observation",
-            )
-        return refs
-    if collection == "premises":
-        _text(row.get("account"), "premise account")
-        if row.get("disposition", "unassessed") not in ("available", "unavailable", "unassessed"):
-            raise ValueError("premise disposition must be available, unavailable or unassessed")
-        return len(_strings(row.get("basis", []), "premise basis"))
-
-    _text(row.get("contribution"), "opportunity contribution")
-    refs = sum(
-        len(_strings(row.get(k, []), "opportunity " + k))
-        for k in ("at", "reads", "writes", "conflicts")
-    )
-    if row.get("disposition", "open") not in ("open", "held", "complete"):
-        raise ValueError("opportunity disposition must be open, held or complete")
-    if row.get("footprint", "unknown") not in ("declared", "unknown"):
-        raise ValueError("opportunity footprint must be declared or unknown")
-    _text(row.get("phase", "unknown"), "opportunity phase")
-    alternatives = row.get("requires", [])
-    if not isinstance(alternatives, list):
-        raise ValueError("opportunity requires must be a list of alternative premise lists")
-    return refs + sum(len(_strings(g, "opportunity premise alternative")) for g in alternatives)
-
-
-def _finish_basis_observation(
-    raw: bytes, row: dict[str, Any], used: int, observed: dict[str, Any]
-) -> int:
-    observed["current_sha256"] = hashlib.sha256(raw).hexdigest()
-    observed["current_bytes"] = len(raw)
-    observed["status"] = "current" if row.get("sha256") == observed["current_sha256"] else "changed"
-    return used + len(raw)
-
-
-def _observe_exchange_basis(
-    objects: Any,
-    row: dict[str, Any],
-    prefixes: tuple[str, ...],
-    used: int,
-    observed: dict[str, Any],
-) -> int:
-    from managed_ai_information.store.protocol.basis_pins import is_content_addressed_basis
-
-    if not (
-        objects is not None
-        and is_content_addressed_basis(row, prefixes=prefixes)
-        and objects.has(row["sha256"])
-    ):
-        observed["status"] = "missing"
-        return used
-    size = row["bytes"]
-    if size > MAX_PROFILE_BYTES or used + size > MAX_BASIS_BYTES:
-        observed["status"] = (
-            "per-source-byte-bound" if size > MAX_PROFILE_BYTES else "total-source-byte-bound"
-        )
-        return used
-    raw = objects.read(row["sha256"], retained=True, expected_bytes=size)
-    observed["custody"] = "exchange-object"
-    return _finish_basis_observation(raw, row, used, observed)
-
-
-def _observe_file_basis(
-    path: Any, info: Any, row: dict[str, Any], used: int, observed: dict[str, Any]
-) -> int:
-    if info.st_size > MAX_PROFILE_BYTES or used + info.st_size > MAX_BASIS_BYTES:
-        observed["status"] = (
-            "per-source-byte-bound"
-            if info.st_size > MAX_PROFILE_BYTES
-            else "total-source-byte-bound"
-        )
-        return used
-    with path.open("rb") as source:
-        raw = source.read(MAX_PROFILE_BYTES + 1)
-    if len(raw) > MAX_PROFILE_BYTES or used + len(raw) > MAX_BASIS_BYTES:
-        observed["status"] = "source-byte-bound"
-        return used
-    return _finish_basis_observation(raw, row, used, observed)
-
-
-def _pair_interaction_reasons(
-    l_id: str,
-    l_reads: frozenset[str],
-    l_writes: frozenset[str],
-    l_conflicts: frozenset[str],
-    r_id: str,
-    r_reads: frozenset[str],
-    r_writes: frozenset[str],
-    r_conflicts: frozenset[str],
-) -> list[dict[str, Any]]:
-    reasons: list[dict[str, Any]] = []
-    if r_id in l_conflicts or l_id in r_conflicts:
-        reasons.append({"kind": "explicit-conflict"})
-    for kind, left_set, right_set in (
-        ("write-write", l_writes, r_writes),
-        ("left-write-right-read", l_writes, r_reads),
-        ("left-read-right-write", l_reads, r_writes),
-    ):
-        common = left_set & right_set if left_set and right_set else None
-        if common:
-            reasons.append({"kind": kind, "resources": sorted(common)})
-    return reasons
 
 
 class Composition:
@@ -236,14 +58,14 @@ class Composition:
                 + PROFILE
                 + "; information envelopes are not implicitly unwrapped"
             )
-        _fields(
+        exact_allowed_fields(
             body,
             {"format", "purpose", *COLLECTIONS, "unknowns", "coverage", "content"},
             "composition",
         )
-        _text(body.get("purpose"), "composition purpose")
-        input_bytes = _bounded_profile_bytes(body)
-        _strings(body.get("unknowns", []), "composition unknowns")
+        text_field(body.get("purpose"), "composition purpose")
+        input_bytes = bounded_profile_bytes(body, MAX_PROFILE_BYTES)
+        string_list(body.get("unknowns", []), "composition unknowns")
 
         if "coverage" in body and not isinstance(body["coverage"], (str, dict, list)):
             raise ValueError("composition coverage must be text, an object or a list")
@@ -286,47 +108,18 @@ class Composition:
 
             rows[collection] = {}
             for row in source:
-                _fields(row, allowed[collection], collection + " row")
-                ident = _text(row.get("id"), collection + " id")
+                exact_allowed_fields(row, allowed[collection], collection + " row")
+                ident = text_field(row.get("id"), collection + " id")
                 if ident in rows[collection]:
                     raise ValueError("duplicate " + collection + " id: " + ident)
                 rows[collection][ident] = row
-                references += _validate_collection_row(collection, ident, row)
+                references += validate_collection_row(collection, ident, row)
 
         if sum(len(table) for table in rows.values()) > MAX_ROWS:
             raise ValueError("composition exceeds the 2000 total declared-row bound")
         if references > MAX_REFERENCES:
             raise ValueError("composition exceeds the 20000 declared-reference bound")
         return body, rows, input_bytes, references
-
-    def _observe_basis_row(
-        self, row: dict[str, Any], objects: Any, prefixes: tuple[str, ...], used: int
-    ) -> tuple[dict[str, Any], int]:
-        from managed_ai_information.core.storage import is_ordinary_file_stat
-
-        name = row["path"]
-        observed: dict[str, Any] = {
-            "path": name,
-            "captured_sha256": row.get("sha256"),
-            "current_sha256": None,
-            "status": "unavailable",
-        }
-        try:
-            path = None if name.startswith("object:") else self.system.ex.path(name)
-            info = None
-            if path is not None:
-                try:
-                    st = path.lstat()
-                    info = st if is_ordinary_file_stat(st) else None
-                except OSError:
-                    info = None
-            if info is None or path is None:
-                used = _observe_exchange_basis(objects, row, prefixes, used, observed)
-            else:
-                used = _observe_file_basis(path, info, row, used, observed)
-        except (OSError, ValueError) as exc:
-            observed["error"] = str(exc)
-        return observed, used
 
     def _basis(self, record: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], int]:
         captured: dict[str, dict[str, Any]] = {}
@@ -352,7 +145,9 @@ class Composition:
                 name = row["path"]
                 if name in captured:
                     raise ValueError("duplicate captured record basis path: " + name)
-                captured[name], used = self._observe_basis_row(row, objects, prefixes, used)
+                captured[name], used = observe_basis_row(
+                    self.system.ex, row, objects, prefixes, used, MAX_PROFILE_BYTES, MAX_BASIS_BYTES
+                )
 
         return captured, used
 
@@ -373,7 +168,7 @@ class Composition:
 
     def interaction_map(self, record_id: str, limit: int = 20) -> dict[str, Any]:
         """Factor declared positive interactions by resource or explicit conflict."""
-        _integer(limit, "interaction group limit", 200)
+        bounded_int(limit, "interaction group limit", 200)
         record = self.system.show(record_id)
         _, rows, _, references = self.profile(record)
         opportunities = rows["opportunities"]
@@ -427,7 +222,7 @@ class Composition:
                 "Recover omitted groups and original opportunities with show."
             ),
         }
-        budget = _ViewBudget()
+        budget = ViewBudget(MAX_VIEW_BYTES)
         if not budget.include(result):
             raise ValueError("interaction map header exceeds the view bound")
 
@@ -569,139 +364,6 @@ class Composition:
 
         return opportunities
 
-    @staticmethod
-    def _collect_pairs(
-        all_opportunities: list[dict[str, Any]],
-        pair_limit: int,
-        budget: _ViewBudget,
-    ) -> tuple[list[dict[str, Any]], bool]:
-        pairs: list[dict[str, Any]] = []
-        reads_sets = [frozenset(o.get("reads", ())) for o in all_opportunities]
-        writes_sets = [frozenset(o.get("writes", ())) for o in all_opportunities]
-        conflicts_sets = [frozenset(o.get("conflicts", ())) for o in all_opportunities]
-        byte_saturated = False
-
-        for index, left in enumerate(all_opportunities):
-            if len(pairs) >= pair_limit or byte_saturated:
-                break
-
-            l_id = left["id"]
-            l_ref = left["ref"]
-            l_reads, l_writes, l_conflicts = (
-                reads_sets[index],
-                writes_sets[index],
-                conflicts_sets[index],
-            )
-            l_unknown = left["footprint"] == "unknown"
-
-            for j in range(index + 1, len(all_opportunities)):
-                if len(pairs) >= pair_limit:
-                    break
-
-                right = all_opportunities[j]
-                reasons = _pair_interaction_reasons(
-                    l_id,
-                    l_reads,
-                    l_writes,
-                    l_conflicts,
-                    right["id"],
-                    reads_sets[j],
-                    writes_sets[j],
-                    conflicts_sets[j],
-                )
-
-                unknown = l_unknown or right["footprint"] == "unknown"
-                pair = {
-                    "left": l_ref,
-                    "right": right["ref"],
-                    "phase_refs": [
-                        {"opportunity": l_ref, "field": "phase"},
-                        {"opportunity": right["ref"], "field": "phase"},
-                    ],
-                    "interactions": reasons,
-                    "status": (
-                        "declared-interaction"
-                        if reasons
-                        else "unknown-footprint"
-                        if unknown
-                        else "no-declared-interaction"
-                    ),
-                    "unknown_footprint": unknown,
-                    "scope": (
-                        "No declared interaction is not actual independence; "
-                        "context and effect contracts still apply."
-                    ),
-                }
-
-                if not budget.include({"interactions": [pair]}):
-                    byte_saturated = True
-                    break
-                pairs.append(pair)
-
-        return pairs, byte_saturated
-
-    @staticmethod
-    def _select_focused_collections(
-        rows: dict[str, dict[str, dict[str, Any]]],
-        relations: dict[str, dict[str, Any]],
-        premises: dict[str, dict[str, Any]],
-        opportunities: dict[str, dict[str, Any]],
-        focus: str | None,
-        limit: int,
-    ) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
-        focus_refs = {focus} if focus is not None else set()
-        if focus is not None and focus.startswith("element:"):
-            element = focus.partition(":")[2]
-            focus_refs.update(
-                "relation:" + ident
-                for ident, relation in rows["relations"].items()
-                if element in relation.get("from", []) or element in relation.get("to", [])
-            )
-        all_opportunities = sorted(
-            opportunities.values(),
-            key=lambda row: (
-                row["ref"] != focus,
-                not (row["ref"] in focus_refs or bool(set(row.get("at", [])) & focus_refs)),
-            ),
-        )
-        displayed_opportunities = all_opportunities[:limit]
-        related_refs = set(focus_refs)
-        for row in displayed_opportunities:
-            related_refs.update(row.get("at", []))
-            related_refs.update(
-                "premise:" + name for group in row.get("requires", []) for name in group
-            )
-        for relation in relations.values():
-            if relation["ref"] in related_refs:
-                related_refs.update(
-                    "element:" + value for key in ("from", "to") for value in relation.get(key, [])
-                )
-
-        collections: dict[str, list[dict[str, Any]]] = {"opportunities": displayed_opportunities}
-        complete = {
-            "elements": [
-                dict(row, ref="element:" + ident) for ident, row in rows["elements"].items()
-            ],
-            "relations": list(relations.values()),
-            "premises": list(premises.values()),
-            "opportunities": all_opportunities,
-        }
-        coverage: dict[str, dict[str, Any]] = {}
-        for collection, items in complete.items():
-            if collection != "opportunities":
-                # An explicitly requested row precedes related rows at the same
-                # detail bound. Related rows alone must not crowd out that focus.
-                collections[collection] = sorted(
-                    items, key=lambda row: (row["ref"] != focus, row["ref"] not in related_refs)
-                )[:limit]
-            shown = {row["ref"] for row in collections[collection]}
-            coverage[collection] = {
-                "total": len(items),
-                "shown": len(shown),
-                "omitted_refs": [row["ref"] for row in items if row["ref"] not in shown],
-            }
-        return all_opportunities, collections, coverage
-
     def inspect(
         self,
         record_id: str,
@@ -709,10 +371,10 @@ class Composition:
         limit: int = 20,
         pair_limit: int = 200,
     ) -> dict[str, Any]:
-        _integer(limit, "composition limit", 200)
-        _integer(pair_limit, "composition pair_limit", 20000, minimum=0)
+        bounded_int(limit, "composition limit", 200)
+        bounded_int(pair_limit, "composition pair_limit", 20000, minimum=0)
         if focus is not None:
-            _text(focus, "composition focus")
+            text_field(focus, "composition focus")
         record = self.system.show(record_id)
         body, rows, input_bytes, reference_count = self.profile(record)
         basis, basis_bytes = self._basis(record)
@@ -737,7 +399,7 @@ class Composition:
         premises = self._evaluate_premises(rows, basis)
         relations = self._evaluate_relations(rows, basis, known, missing)
         opportunities = self._evaluate_opportunities(rows, premises, known, missing)
-        all_opportunities, collections, coverage = self._select_focused_collections(
+        all_opportunities, collections, coverage = select_focused_collections(
             rows, relations, premises, opportunities, focus, limit
         )
 
@@ -795,13 +457,13 @@ class Composition:
             },
             "scope": SCOPE,
         }
-        budget = _ViewBudget()
+        budget = ViewBudget(MAX_VIEW_BYTES)
         if not budget.include(result):
             raise ValueError(
                 "composition base view exceeds the 1 MiB returned-view byte bound; "
                 "reduce limit, narrow the nominated composition, or read its exact body with show"
             )
-        collected, byte_saturated = self._collect_pairs(all_opportunities, pair_limit, budget)
+        collected, byte_saturated = collect_interaction_pairs(all_opportunities, pair_limit, budget)
         pairs.extend(collected)
         pair_coverage.update(examined=len(pairs), omitted=count - len(pairs))
         if byte_saturated:
