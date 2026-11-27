@@ -14,8 +14,17 @@ for _entry in (str(_REPO), str(_REPO / "src")):
         sys.path.insert(0, _entry)
 
 from scripts.consolidation.ingest_crw import ingest_crw  # noqa: E402
-from scripts.consolidation.ingest_repo import ingest_repository  # noqa: E402
+from scripts.consolidation.ingest_repo import (  # noqa: E402
+    ingest_repository,
+    load_external_graph_edges,
+)
 
+from managed_ai_information.store.cli.command_parser import (  # noqa: E402
+    is_readonly_action,
+)
+from managed_ai_information.store.cli.command_parser import (  # noqa: E402
+    parser as store_cli_parser,
+)
 from managed_ai_information.store.query.impact_analysis import (  # noqa: E402
     IMPACT_REPORT_FORMAT,
     analyze_impact,
@@ -25,6 +34,7 @@ from managed_ai_information.store.query.impact_analysis import (  # noqa: E402
 from managed_ai_information.store.system import System  # noqa: E402
 
 IMPACT_CLI = _REPO / "scripts/consolidation/impact.py"
+MANAGE_STORE_CLI = _REPO / "src/managed_ai_information/store/manage_store.py"
 
 
 def _write_files(root: Path, files: dict[str, str]) -> Path:
@@ -252,6 +262,101 @@ class ImpactAnalysisTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "invalid --git-diff"):
             resolve_git_diff_targets(repo, "--exec=bad")
+
+    def test_managed_ai_information_impact_subcommand_deleted_target_and_edge_hardening(
+        self,
+    ) -> None:
+        repo = _make_sample_repo(self.tmp / "sub-repo")
+        sw_store = self._init_store("sub-sw")
+        crw_repo = _make_sample_crw(self.tmp / "sub-crw-repo")
+        crw_store = self._init_store("sub-crw")
+        ingest_repository(repo, sw_store, package_rel="src/demo", include_tests=True, dry_run=False)
+        ingest_crw(crw_repo, crw_store, dry_run=False)
+
+        # impact action is read-only in manage_store CLI parser
+        parsed = store_cli_parser().parse_args(
+            [
+                "--root",
+                str(sw_store),
+                "impact",
+                "--repo",
+                str(repo),
+                "--targets",
+                "src/demo/revision.py",
+            ]
+        )
+        self.assertTrue(is_readonly_action(parsed))
+
+        # managed-ai-information --root <store> impact --repo <repo> --targets ... --crw-store ...
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        cli_res = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(MANAGE_STORE_CLI),
+                "--root",
+                str(sw_store),
+                "impact",
+                "--repo",
+                str(repo),
+                "--package-dir",
+                "src/demo",
+                "--targets",
+                "src/demo/revision.py",
+                "--crw-store",
+                str(crw_store),
+            ],
+            cwd=_REPO,
+            env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(cli_res.returncode, 0, cli_res.stderr)
+        cli_doc = json.loads(cli_res.stdout)
+        self.assertEqual(cli_doc["format"], IMPACT_REPORT_FORMAT)
+        self.assertIn("mod-service", {r["id"] for r in cli_doc["blast_radius"]["hop_1_dependents"]})
+        self.assertIn("crw-ctrl-o01", {r["id"] for r in cli_doc["crw_risks"]["controls"]})
+
+        # C75B-O1: deleted target records deleted=True and still traces store blast radius
+        (repo / "src/demo/revision.py").unlink()
+        with System(sw_store) as sys_obj:
+            del_rep = analyze_impact(
+                repo, sys_obj, ["src/demo/revision.py"], package_rel="src/demo"
+            )
+        self.assertTrue(del_rep["per_target"][0]["deleted"])
+        self.assertIn("mod-service", {r["id"] for r in del_rep["blast_radius"]["hop_1_dependents"]})
+
+        # C75B-O3: bool schema_version rejected; bool weight normalized; duplicate signals deduped
+        bad_edges = self.tmp / "bool-schema.json"
+        bad_edges.write_text(json.dumps({"schema_version": True, "edges": []}), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            load_external_graph_edges(bad_edges, {"a.py": "mod-a", "b.py": "mod-b"})
+
+        dup_edges = self.tmp / "dup-signals.json"
+        dup_edges.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "edges": [
+                        {
+                            "from": "a.py",
+                            "to": "b.py",
+                            "kind": "bypass",
+                            "weight": True,
+                            "label": "x",
+                        },
+                        {"from": "a.py", "to": "b.py", "kind": "bypass", "weight": 1, "label": "x"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        _, sigs, _ = load_external_graph_edges(dup_edges, {"a.py": "mod-a", "b.py": "mod-b"})
+        self.assertEqual(len(sigs["mod-a"]), 1)
+        self.assertEqual(sigs["mod-a"][0]["weight"], 1)
 
     def test_live_workspaces_catches_max_view_bytes_caller_if_present(self) -> None:
         sw_store = next(

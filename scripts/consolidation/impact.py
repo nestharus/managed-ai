@@ -2,6 +2,7 @@
 """CLI for component & symbol-level blast-radius impact analysis (managed-ai-impact-report/1)."""
 
 import argparse
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -52,25 +53,25 @@ def main(argv: list[str] | None = None) -> int:
         checked_store = check_ordinary_ancestors(
             args.store, expect_dir=True, error_prefix="ordinary store root required"
         ).resolve(strict=True)
-        system = System(checked_store)
+        with contextlib.ExitStack() as stack:
+            system = stack.enter_context(System(checked_store))
+            crw_system = None
+            if args.crw_store is not None:
+                checked_crw = check_ordinary_ancestors(
+                    args.crw_store, expect_dir=True, error_prefix="ordinary CRW store root required"
+                ).resolve(strict=True)
+                crw_system = stack.enter_context(System(checked_crw))
 
-        crw_system = None
-        if args.crw_store is not None:
-            checked_crw = check_ordinary_ancestors(
-                args.crw_store, expect_dir=True, error_prefix="ordinary CRW store root required"
-            ).resolve(strict=True)
-            crw_system = System(checked_crw)
-
-        report = analyze_impact(
-            args.repo,
-            system,
-            targets,
-            package_rel=args.package_dir,
-            scan_roots=tuple(args.scan_roots),
-            crw_system=crw_system,
-            max_crw_constituents=args.max_crw_constituents,
-            max_crw_controls=args.max_crw_controls,
-        )
+            report = analyze_impact(
+                args.repo,
+                system,
+                targets,
+                package_rel=args.package_dir,
+                scan_roots=tuple(args.scan_roots),
+                crw_system=crw_system,
+                max_crw_constituents=args.max_crw_constituents,
+                max_crw_controls=args.max_crw_controls,
+            )
         print(dump_json(report))
         return 0
     except (OSError, ValueError) as exc:

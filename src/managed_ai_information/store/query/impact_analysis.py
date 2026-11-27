@@ -120,7 +120,7 @@ def resolve_git_diff_targets(repo_root: Path, git_diff_rev: str) -> list[str]:
     git_bin = shutil.which("git")
     if not git_bin:
         raise ValueError("git executable not found in PATH")
-    cmd = [git_bin, "-C", str(checked_repo), "diff", "--name-only", rev]
+    cmd = [git_bin, "-C", str(checked_repo), "diff", "--name-only", rev, "--"]
     proc = subprocess.run(  # noqa: S603
         cmd, capture_output=True, text=True, encoding="utf-8", check=False, timeout=30
     )
@@ -530,11 +530,26 @@ def _resolve_target_entry(
     mod_by_path: dict[str, str],
     facade_by_path: dict[str, str],
 ) -> tuple[dict[str, Any], list[str], tuple[str, set[str]] | None]:
-    file_path = check_ordinary_ancestors(
-        checked_repo / rel, expect_dir=False, error_prefix=f"ordinary target required ({rel})"
-    ).resolve(strict=True)
-    if not file_path.is_relative_to(checked_repo) or not is_ordinary_file_stat(file_path.lstat()):
-        raise ValueError(f"ordinary repository target file required: {rel}")
+    raw_target = checked_repo / rel
+    deleted = not raw_target.exists() and not raw_target.is_symlink()
+    file_path: Path | None = None
+    if deleted:
+        anc = raw_target.parent
+        while anc != checked_repo and not anc.exists() and not anc.is_symlink():
+            anc = anc.parent
+        checked_anc = check_ordinary_ancestors(
+            anc, expect_dir=True, error_prefix=f"ordinary target parent required ({rel})"
+        ).resolve(strict=True)
+        if not checked_anc.is_relative_to(checked_repo):
+            raise ValueError(f"ordinary repository target file required: {rel}")
+    else:
+        file_path = check_ordinary_ancestors(
+            raw_target, expect_dir=False, error_prefix=f"ordinary target required ({rel})"
+        ).resolve(strict=True)
+        if not file_path.is_relative_to(checked_repo) or not is_ordinary_file_stat(
+            file_path.lstat()
+        ):
+            raise ValueError(f"ordinary repository target file required: {rel}")
     mod_name = _path_to_module_name(rel, package_rel)
     mod_id = mod_by_path.get(rel) or (_record_id_for("mod", mod_name) if mod_name else None)
     facade_id = facade_by_path.get(rel)
@@ -546,13 +561,13 @@ def _resolve_target_entry(
         cand = _record_id_for("facade", mod_name)
         facade_id = cand if cand in records else None
     found_ids = [rid for rid in (mod_id, facade_id) if rid and rid in records]
-    pub_syms = extract_public_symbols(file_path, rel) if rel.endswith(".py") else []
+    pub_syms = extract_public_symbols(file_path, rel) if file_path and rel.endswith(".py") else []
     sym_entry = (mod_name, {r["name"] for r in pub_syms}) if (mod_name and pub_syms) else None
-    valid_mod = mod_id if (mod_id and mod_id in records) else None
     entry = {
         "path": rel,
+        "deleted": deleted,
         "module": mod_name,
-        "module_id": valid_mod,
+        "module_id": mod_id if (mod_id and mod_id in records) else None,
         "facade_id": facade_id,
         "public_symbols": pub_syms,
     }
@@ -603,8 +618,6 @@ def analyze_impact(
             max_constituents=max_crw_constituents,
             max_controls=max_crw_controls,
         )
-    crw_dims: list[Any] = crw_risks["constituents"]
-    crw_ctrls: list[Any] = crw_risks["controls"]
     summary = {
         "target_count": len(norm_targets),
         "public_symbol_count": sum(len(t["public_symbols"]) for t in per_target),
@@ -615,8 +628,8 @@ def analyze_impact(
         "exercising_test_suite_count": len(blast["exercising_test_suites"]),
         "verification_unknown_count": len(blast["verification_unknowns"]),
         "semantic_hotspot_count": len(blast["semantic_hotspots"]),
-        "crw_constituent_count": len(crw_dims),
-        "crw_control_count": len(crw_ctrls),
+        "crw_constituent_count": len(crw_risks["constituents"]),
+        "crw_control_count": len(crw_risks["controls"]),
     }
     return {
         "format": IMPACT_REPORT_FORMAT,

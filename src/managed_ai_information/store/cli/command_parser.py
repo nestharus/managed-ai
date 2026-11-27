@@ -22,6 +22,7 @@ READONLY_ACTIONS = frozenset(
         "recover-transport",
         "audit-objects",
         "graph",
+        "impact",
     }
 )
 
@@ -605,6 +606,16 @@ def _source_and_composition_commands(sub: Any) -> None:
     decision.add_argument("--accept", metavar="REVIEW_SHA256")
     decision.add_argument("--retain", metavar="REVIEW_SHA256")
     revision.add_argument("--reason")
+
+    imp = sub.add_parser("impact", allow_abbrev=False, help="Component & symbol impact analysis")
+    imp.add_argument("--repo", type=Path, required=True)
+    imp.add_argument("--targets", nargs="+", default=[])
+    imp.add_argument("--git-diff", default=None)
+    imp.add_argument("--crw-store", type=Path, default=None)
+    imp.add_argument("--package-dir", default="src/managed_ai_information")
+    imp.add_argument("--scan-roots", nargs="+", default=["src", "scripts", "tests"])
+    imp.add_argument("--max-crw-constituents", type=int, default=8)
+    imp.add_argument("--max-crw-controls", type=int, default=12)
 
 
 def _inquiry_feedback_information_commands(sub: Any) -> None:

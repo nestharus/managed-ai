@@ -442,6 +442,37 @@ def _act_retire_turns(system: Any, args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _act_impact(system: Any, args: argparse.Namespace) -> dict[str, Any]:
+    from contextlib import ExitStack
+
+    from managed_ai_information.store.query.impact_analysis import (
+        analyze_impact,
+        resolve_git_diff_targets,
+    )
+
+    targets = list(args.targets)
+    if args.git_diff is not None:
+        targets.extend(resolve_git_diff_targets(args.repo, args.git_diff))
+    if not targets:
+        raise ValueError("provide --targets <path ...> or --git-diff <rev>")
+    with ExitStack() as stack:
+        crw_system = (
+            stack.enter_context(type(system)(args.crw_store))
+            if args.crw_store is not None
+            else None
+        )
+        return analyze_impact(
+            args.repo,
+            system,
+            targets,
+            package_rel=args.package_dir,
+            scan_roots=tuple(args.scan_roots),
+            crw_system=crw_system,
+            max_crw_constituents=args.max_crw_constituents,
+            max_crw_controls=args.max_crw_controls,
+        )
+
+
 _ACTION_HANDLERS: dict[str, Callable[[Any, argparse.Namespace], dict[str, Any]]] = {
     "import": _act_import,
     "put-batch": _act_put_batch,
@@ -471,6 +502,7 @@ _ACTION_HANDLERS: dict[str, Callable[[Any, argparse.Namespace], dict[str, Any]]]
     "pack-objects": _act_pack_objects,
     "backend": _act_backend,
     "graph": _act_graph,
+    "impact": _act_impact,
     "status": _act_status,
     "abandon-context": lambda system, args: system.abandon_context(args.turn, args.account),
     "recover": lambda system, args: system.recover(args.turn),

@@ -328,7 +328,7 @@ class StoreBackendBridge:
             return
         for row in rows:
             if isinstance(row, Mapping) and isinstance(row.get("id"), str):
-                self.mirror_record(self._system.show(row["id"]))
+                self.mirror_record(row)
 
     def flush(self, timeout: float = 5.0) -> bool:
         return True if self._router is None else self._router.flush_shadow(timeout=timeout)

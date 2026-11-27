@@ -62,7 +62,8 @@ def load_external_graph_edges(
     if not is_ordinary_file_stat(checked.lstat()):
         raise ValueError(f"ordinary external graph edges file required: {checked}")
     doc = strict_json_loads(read_bytes(checked, MAX_BYTES), label=checked.name)
-    if not isinstance(doc, dict) or doc.get("schema_version") != 1:
+    schema_ver = doc.get("schema_version") if isinstance(doc, dict) else None
+    if not isinstance(doc, dict) or type(schema_ver) is not int or schema_ver != 1:
         raise ValueError("external graph edges must be a schema_version=1 JSON object")
     edges = doc.get("edges")
     if not isinstance(edges, list):
@@ -71,6 +72,7 @@ def load_external_graph_edges(
     extra_rels: dict[str, list[dict[str, str]]] = {}
     seen_rels: dict[str, set[tuple[str, str]]] = {}
     signals_by_mod: dict[str, list[dict[str, Any]]] = {}
+    seen_signals: dict[str, set[tuple[str, str, int, Any]]] = {}
     by_kind: dict[str, int] = {}
     mapped_count = 0
     unmapped_count = 0
@@ -98,15 +100,22 @@ def load_external_graph_edges(
             extra_rels.setdefault(src_id, []).append({"relation": relation, "target": dst_id})
         if kind in _EXTERNAL_SIGNAL_EDGE_KINDS:
             weight = row.get("weight", 1)
-            signals_by_mod.setdefault(src_id, []).append(
-                {
-                    "kind": "bypasses" if kind == "bypass" else kind,
-                    "target": dst_id,
-                    "target_path": dst_path,
-                    "weight": int(weight) if isinstance(weight, int) else 1,
-                    "label": row.get("label"),
-                }
-            )
+            norm_kind = "bypasses" if kind == "bypass" else kind
+            norm_weight = weight if type(weight) is int else 1
+            label = row.get("label")
+            sig_key = (norm_kind, dst_id, norm_weight, label)
+            sig_seen = seen_signals.setdefault(src_id, set())
+            if sig_key not in sig_seen:
+                sig_seen.add(sig_key)
+                signals_by_mod.setdefault(src_id, []).append(
+                    {
+                        "kind": norm_kind,
+                        "target": dst_id,
+                        "target_path": dst_path,
+                        "weight": norm_weight,
+                        "label": label,
+                    }
+                )
 
     for rels in extra_rels.values():
         rels.sort(key=lambda r: (r["relation"], r["target"]))
