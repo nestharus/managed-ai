@@ -164,6 +164,7 @@ def _build_mode_records(
     include_tests: bool = False,
     tests_rel: str = "tests",
     existing_ids: set[str] | None = None,
+    external_graph_edges: Path | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes]]:
     if mode == "repo":
         desired, basis_shas, pending_digests, _ = build_repo_records(
@@ -173,11 +174,14 @@ def _build_mode_records(
             include_tests=include_tests,
             tests_rel=tests_rel,
             existing_ids=existing_ids,
+            external_graph_edges=external_graph_edges,
         )
         return desired, basis_shas, pending_digests
     if mode == "crw":
         if include_tests:
             raise ValueError("--include-tests is only supported with --mode repo")
+        if external_graph_edges is not None:
+            raise ValueError("--external-graph-edges is only supported with --mode repo")
         desired, basis_shas, pending_digests, _ = build_crw_records(repo_root)
         return desired, basis_shas, pending_digests
     raise ValueError(f"unsupported consolidation mode: {mode}")
@@ -191,6 +195,7 @@ def plan_consolidation(
     package_rel: str = "src/managed_ai_information",
     include_tests: bool = False,
     tests_rel: str = "tests",
+    external_graph_edges: Path | None = None,
 ) -> dict[str, Any]:
     """Read-only Code -> Store reconciliation plan using native basis_changes() + desired state."""
     system = _open_store(store_root)
@@ -204,6 +209,7 @@ def plan_consolidation(
         include_tests=include_tests,
         tests_rel=tests_rel,
         existing_ids=set(existing),
+        external_graph_edges=external_graph_edges,
     )
 
     desired_by_id = {rec["id"]: rec for rec in desired}
@@ -252,6 +258,7 @@ def apply_consolidation(
     package_rel: str = "src/managed_ai_information",
     include_tests: bool = False,
     tests_rel: str = "tests",
+    external_graph_edges: Path | None = None,
 ) -> dict[str, Any]:
     """Sync digests, apply changed/added records, soft-retire deleted ones, reindex + lint."""
     system = _open_store(store_root)
@@ -264,6 +271,7 @@ def apply_consolidation(
         include_tests=include_tests,
         tests_rel=tests_rel,
         existing_ids=set(existing),
+        external_graph_edges=external_graph_edges,
     )
     desired_ids = {rec["id"] for rec in desired}
     managed_kinds = _managed_kinds(mode, include_tests=include_tests)
@@ -621,6 +629,7 @@ def _build_parser() -> argparse.ArgumentParser:
         p_cmd.add_argument("--package-dir", default="src/managed_ai_information")
         p_cmd.add_argument("--include-tests", action="store_true")
         p_cmd.add_argument("--tests-dir", default="tests")
+        p_cmd.add_argument("--external-graph-edges", type=Path, default=None)
 
     p_po = sub.add_parser("plan-obligations", allow_abbrev=False)
     p_po.add_argument("--store", type=Path, required=True)
@@ -654,6 +663,7 @@ def main(argv: list[str] | None = None) -> int:
                 package_rel=args.package_dir,
                 include_tests=args.include_tests,
                 tests_rel=args.tests_dir,
+                external_graph_edges=args.external_graph_edges,
             )
         elif args.command == "apply":
             report = apply_consolidation(
@@ -663,6 +673,7 @@ def main(argv: list[str] | None = None) -> int:
                 package_rel=args.package_dir,
                 include_tests=args.include_tests,
                 tests_rel=args.tests_dir,
+                external_graph_edges=args.external_graph_edges,
             )
         elif args.command == "plan-obligations":
             report = plan_obligations(

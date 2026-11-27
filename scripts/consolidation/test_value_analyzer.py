@@ -62,6 +62,7 @@ _REAL_BOUNDARY_NAMES: frozenset[str] = frozenset(
 _REAL_BOUNDARY_METHODS: frozenset[str] = frozenset(
     {"initialize", "write_text", "write_bytes", "mkdir", "run", "Popen"}
 )
+_LIVE_DAEMON_NAMES: frozenset[str] = frozenset({"EphemeralMembusDaemon", "Popen"})
 _ASSERT_RAISES_METHODS: frozenset[str] = frozenset(
     {"assertRaises", "assertRaisesRegex", "assertWarns", "assertWarnsRegex", "raises"}
 )
@@ -394,6 +395,7 @@ class _FnStats:
     mock_targets: set[str] = field(default_factory=set)
     mock_sites: int = 0
     real_signals: int = 0
+    live_daemon_signals: int = 0
     uses_server_call: bool = False
 
 
@@ -423,6 +425,8 @@ def _record_call_in_bucket(
         bucket.mock_sites += 1
     if tail in _REAL_BOUNDARY_NAMES or tail in _REAL_BOUNDARY_METHODS:
         bucket.real_signals += 1
+    if tail in _LIVE_DAEMON_NAMES:
+        bucket.live_daemon_signals += 1
     if class_has_mock_server and "server" in callee.lower():
         bucket.uses_server_call = True
 
@@ -433,10 +437,18 @@ def _classify_suite_boundary(
     method_count: int,
     real_signals: int,
     uses_mock_server: bool,
+    *,
+    unmocked_real_methods: int = 0,
+    unmocked_live_daemon_methods: int = 0,
 ) -> str:
     if mock_sites == 0 and not uses_mock_server:
         return "real-boundary"
-    if (mocked_methods / max(method_count, 1)) >= 0.5:
+    if unmocked_live_daemon_methods >= 1:
+        return "mixed"
+    ratio = mocked_methods / max(method_count, 1)
+    if unmocked_real_methods >= 1 and real_signals >= 1 and ratio < 0.75:
+        return "mixed"
+    if ratio >= 0.5:
         return "mock-heavy"
     if (mock_sites >= 3 or uses_mock_server) and real_signals == 0:
         return "mock-heavy"
@@ -620,6 +632,8 @@ def _analyze_test_module(
     suite_mock_sites = 1 if uses_mock_server else 0
     real_signals = module_real_signals
     mocked_methods = 0
+    unmocked_real_methods = 0
+    unmocked_live_daemon_methods = 0
     methods: list[dict[str, Any]] = []
 
     for st in setup_buckets:
@@ -641,6 +655,11 @@ def _analyze_test_module(
         real_signals += st.real_signals
         if st.mock_sites > 0:
             mocked_methods += 1
+        else:
+            if st.live_daemon_signals > 0:
+                unmocked_live_daemon_methods += 1
+            if st.real_signals > 0 or st.live_daemon_signals > 0:
+                unmocked_real_methods += 1
         methods.append(
             {
                 "name": st.qual_name,
@@ -653,7 +672,13 @@ def _analyze_test_module(
 
     method_count = len(methods)
     boundary_class = _classify_suite_boundary(
-        suite_mock_sites, mocked_methods, method_count, real_signals, uses_mock_server
+        suite_mock_sites,
+        mocked_methods,
+        method_count,
+        real_signals,
+        uses_mock_server,
+        unmocked_real_methods=unmocked_real_methods,
+        unmocked_live_daemon_methods=unmocked_live_daemon_methods,
     )
     return {
         "suite_id": _suite_record_id(rel_path),
