@@ -261,15 +261,13 @@ def _build_catalog_record(
     constituent_count: int,
     control_count: int,
 ) -> tuple[dict[str, Any], dict[str, str], bytes]:
-    catalog_rels = [{"relation": "maps-to", "target": fid} for fid in sorted(family_ids)]
-    catalog_rels.extend(
-        [
-            {"relation": "maps-to", "target": "crw-contract-shared"},
-            {"relation": "maps-to", "target": "crw-esc-protocol"},
-            {"relation": "maps-to", "target": "crw-cal-routing"},
-            {"relation": "maps-to", "target": "crw-tool-semantic-profiler"},
-        ]
-    )
+    # Families and crw-contract-shared point one-directionally (`maps-to -> crw-catalog`)
+    # so the taxonomy stays acyclic (`structural_scc_count == 0`).
+    catalog_rels = [
+        {"relation": "maps-to", "target": "crw-esc-protocol"},
+        {"relation": "maps-to", "target": "crw-cal-routing"},
+        {"relation": "maps-to", "target": "crw-tool-semantic-profiler"},
+    ]
     cat_basis, cat_map, cat_bytes = _pin_basis(
         checked_crw,
         "crw-catalog",

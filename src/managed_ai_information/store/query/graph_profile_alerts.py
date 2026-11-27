@@ -1,6 +1,7 @@
 """Baselines, localized alerting, and phantom co-revision coupling for graph profiles."""
 
 import json
+import math
 import os
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -15,8 +16,41 @@ from managed_ai_information.core.storage import (
     strict_json_loads,
 )
 from managed_ai_information.store.protocol.identities import require
+from managed_ai_information.store.protocol.inputs import strings
+from managed_ai_information.store.query.graph_profile_metrics import (
+    DEFAULT_CALIBRATION,
+    GraphProfileCalibration,
+)
 
 GRAPH_PROFILE_BASELINE_FORMAT = "managed-ai-graph-profile-baseline/1"
+GRAPH_PROFILE_CONFIG_FORMAT = "managed-ai-graph-profile-config/1"
+_CONFIG_ALLOWED_KEYS = frozenset(
+    {
+        "format",
+        "roots",
+        "root_kinds",
+        "claim_kinds",
+        "navigational_kinds",
+        "structural_predicates",
+        "qualifying_predicates",
+        "contradict_resolution_predicates",
+        "bypass_exempt_predicates",
+        "desert_min_fan_in",
+        "desert_min_qual_ratio",
+    }
+)
+_CONFIG_LIST_KEYS = frozenset(
+    {
+        "roots",
+        "root_kinds",
+        "claim_kinds",
+        "navigational_kinds",
+        "structural_predicates",
+        "qualifying_predicates",
+        "contradict_resolution_predicates",
+        "bypass_exempt_predicates",
+    }
+)
 _MAX_SAMPLE_ITEMS = 25
 _MAX_RECEIPT_BYTES = 8 * 1024 * 1024
 
@@ -139,6 +173,8 @@ def _baseline_snapshot(report: dict[str, Any]) -> dict[str, Any]:
             "structural_scc_count": bot["structural_scc_count"],
             "structural_scc_locked_bytes": bot["structural_scc_locked_bytes"],
             "superseded_head_bypass_count": bot["superseded_head_bypass_count"],
+            "actionable_bypass_count": bot["actionable_bypass_count"],
+            "historical_inactive_ref_count": bot["historical_inactive_ref_count"],
             "phantom_pair_count": bot["phantom_cochange"]["phantom_pair_count"],
         },
     }
@@ -162,6 +198,128 @@ def _validate_baseline_path(target: Path, *, for_write: bool) -> Path:
     if not is_ordinary_file_stat(info):
         raise ValueError(f"graph profile baseline must be an ordinary file: {path}")
     return path
+
+
+def load_graph_profile_config(path: Path) -> dict[str, Any]:
+    """Load and strictly validate a graph profile calibration JSON file (O_NOFOLLOW)."""
+    checked = _validate_baseline_path(path, for_write=False)
+    doc = strict_json_loads(
+        read_bytes(checked, limit=_MAX_RECEIPT_BYTES), checked, require_object=True
+    )
+    require(
+        doc.get("format") == GRAPH_PROFILE_CONFIG_FORMAT,
+        "unsupported graph profile config format",
+    )
+    extra = set(doc) - _CONFIG_ALLOWED_KEYS
+    require(not extra, "unknown graph profile config fields: " + ", ".join(sorted(extra)))
+    for key in _CONFIG_LIST_KEYS:
+        if key not in doc:
+            continue
+        vals = doc[key]
+        require(
+            isinstance(vals, list) and all(isinstance(v, str) and bool(v.strip()) for v in vals),
+            f"graph profile config {key} must be a list of nonempty strings",
+        )
+    if "desert_min_fan_in" in doc:
+        fi = doc["desert_min_fan_in"]
+        require(type(fi) is int and fi >= 1, "desert_min_fan_in must be a positive integer")
+    if "desert_min_qual_ratio" in doc:
+        ratio = doc["desert_min_qual_ratio"]
+        require(
+            isinstance(ratio, (int, float))
+            and not isinstance(ratio, bool)
+            and math.isfinite(ratio)
+            and 0.0 <= float(ratio) <= 1.0,
+            "desert_min_qual_ratio must be a finite number in [0.0, 1.0]",
+        )
+    return doc
+
+
+def resolve_calibration(
+    *,
+    profile_config_path: Path | None = None,
+    claim_kinds: list[str] | tuple[str, ...] = (),
+    navigational_kinds: list[str] | tuple[str, ...] = (),
+    qualifying_predicates: list[str] | tuple[str, ...] = (),
+    structural_predicates: list[str] | tuple[str, ...] = (),
+    bypass_exempt_predicates: list[str] | tuple[str, ...] = (),
+) -> GraphProfileCalibration:
+    """Resolve effective graph profile calibration from defaults, optional JSON config, and CLI."""
+    base = DEFAULT_CALIBRATION
+    root_kinds = base.root_kinds
+    claims = base.claim_kinds
+    navs = base.navigational_kinds
+    struct = base.structural_predicates
+    qual = base.qualifying_predicates
+    contra_res = base.contradict_resolution_predicates
+    bypass_ex = base.bypass_exempt_predicates
+    default_roots = base.default_roots
+    min_fi = base.desert_min_fan_in
+    min_ratio = base.desert_min_qual_ratio
+    sources: list[str] = ["defaults"]
+
+    if profile_config_path is not None:
+        cfg = load_graph_profile_config(profile_config_path)
+        sources.append(f"config:{profile_config_path}")
+        if "root_kinds" in cfg:
+            root_kinds = frozenset(cfg["root_kinds"])
+        if "claim_kinds" in cfg:
+            claims = frozenset(cfg["claim_kinds"])
+        if "navigational_kinds" in cfg:
+            navs = frozenset(cfg["navigational_kinds"])
+        if "structural_predicates" in cfg:
+            struct = frozenset(cfg["structural_predicates"])
+        if "qualifying_predicates" in cfg:
+            qual = frozenset(cfg["qualifying_predicates"])
+        if "contradict_resolution_predicates" in cfg:
+            contra_res = frozenset(cfg["contradict_resolution_predicates"])
+        if "bypass_exempt_predicates" in cfg:
+            bypass_ex = frozenset(cfg["bypass_exempt_predicates"])
+        if "roots" in cfg:
+            default_roots = tuple(cfg["roots"])
+        if "desert_min_fan_in" in cfg:
+            min_fi = int(cfg["desert_min_fan_in"])
+        if "desert_min_qual_ratio" in cfg:
+            min_ratio = float(cfg["desert_min_qual_ratio"])
+
+    cli_used = False
+    if claim_kinds:
+        claims = frozenset(strings(list(claim_kinds), "claim_kinds"))
+        cli_used = True
+    if navigational_kinds:
+        navs = frozenset(strings(list(navigational_kinds), "navigational_kinds"))
+        cli_used = True
+    if qualifying_predicates:
+        qual = frozenset(strings(list(qualifying_predicates), "qualifying_predicates"))
+        cli_used = True
+    if structural_predicates:
+        struct = frozenset(strings(list(structural_predicates), "structural_predicates"))
+        cli_used = True
+    if bypass_exempt_predicates:
+        bypass_ex = frozenset(strings(list(bypass_exempt_predicates), "bypass_exempt_predicates"))
+        cli_used = True
+    if cli_used:
+        sources.append("cli")
+
+    overlap = sorted(struct & qual)
+    if overlap:
+        raise ValueError(
+            "structural_predicates and qualifying_predicates must be disjoint: "
+            + ", ".join(overlap)
+        )
+    return GraphProfileCalibration(
+        root_kinds=root_kinds,
+        claim_kinds=claims,
+        navigational_kinds=navs,
+        structural_predicates=struct,
+        qualifying_predicates=qual,
+        contradict_resolution_predicates=contra_res,
+        bypass_exempt_predicates=bypass_ex,
+        default_roots=default_roots,
+        desert_min_fan_in=min_fi,
+        desert_min_qual_ratio=min_ratio,
+        sources=tuple(sources),
+    )
 
 
 def load_graph_baseline(path: Path) -> dict[str, Any]:
@@ -225,8 +383,8 @@ def _default_alerts(
         (
             "error",
             "superseded_head_bypass_detected",
-            "superseded_head_bypass_count",
-            bot["superseded_head_bypass_count"],
+            "actionable_bypass_count",
+            bot["actionable_bypass_count"],
             ids_map["bypass"],
         ),
         (
@@ -303,8 +461,8 @@ def _baseline_alerts(
         (
             "error",
             "superseded_head_bypass_increase",
-            "superseded_head_bypass_count",
-            bot["superseded_head_bypass_count"],
+            "actionable_bypass_count",
+            bot["actionable_bypass_count"],
             "bypass",
         ),
         (
@@ -323,7 +481,15 @@ def _baseline_alerts(
         ),
     )
     for sev, rule, metric, current, key in monotonic_rules:
-        prior = int(base.get(metric, 0))
+        if metric == "actionable_bypass_count":
+            prior = int(
+                base.get(
+                    "actionable_bypass_count",
+                    base.get("superseded_head_bypass_count", 0),
+                )
+            )
+        else:
+            prior = int(base.get(metric, 0))
         if int(current) > prior:
             alerts.append(_alert(sev, rule, metric, prior, int(current), ids_map[key]))
 
@@ -351,7 +517,7 @@ def evaluate_graph_alerts(
     bot = report["bottlenecks"]
     ids_map = {
         "scc": sorted({nid for row in bot["structural_sccs"] for nid in row["node_ids"]}),
-        "bypass": sorted({row["from"] for row in bot["superseded_head_bypasses"]}),
+        "bypass": sorted({row["from"] for row in bot["actionable_bypasses"]}),
         "desert": [row["id"] for row in dens["qualification_deserts"]],
         "contradict": sorted(
             {

@@ -41,6 +41,7 @@ _PACKAGE_TO_COMPONENT_ID: dict[str, str] = {
     "library": "pkg-engine-library",
     "host": "pkg-engine-host",
     "collective": "pkg-collective",
+    "companions": "pkg-companions",
     "companions.peer": "pkg-companions-peer",
     "companions.publication_review": "pkg-companions-publication-review",
     "companions.representation": "pkg-companions-representation",
@@ -313,13 +314,41 @@ def build_repo_records(
     ]
     basis_shas: dict[str, dict[str, str]] = {"profile-head": {}}
     pending_digests: dict[str, bytes] = {}
+    effective_existing = set(existing_ids)
+
+    has_companions = any(
+        len(mod["module"].split(".")) >= 2 and mod["module"].split(".")[1] == "companions"
+        for mod in profile["modules"]
+    )
+    if has_companions and "pkg-companions" not in effective_existing:
+        comp_rels = (
+            [{"relation": "maps-to", "target": "managed-ai-architecture"}]
+            if "managed-ai-architecture" in effective_existing
+            else []
+        )
+        desired.append(
+            {
+                "id": "pkg-companions",
+                "kind": "component",
+                "content": {
+                    "name": "companions",
+                    "description": "Top-level companion packages and shared companion contracts.",
+                    "commit": commit,
+                },
+                "relations": comp_rels,
+                "basis": [],
+                "active": True,
+            }
+        )
+        basis_shas["pkg-companions"] = {}
+        effective_existing.add("pkg-companions")
 
     for mod in profile["modules"]:
         bundle_records, bundle_basis, bundle_digests = _build_one_module_bundle(
             checked_repo,
             mod,
             mod_ids_by_name,
-            existing_ids,
+            effective_existing,
             scc_members,
             cross_pkg_priv_callers,
             commit,

@@ -213,6 +213,39 @@ class ConsolidationETLTests(unittest.TestCase):
         status = consolidation_status(store)
         self.assertEqual(status["stale_basis_records"], [])
 
+        # 7. Companions package auto-links to pkg-companions when present
+        comp_repo = _write_files(
+            self.tmp / "comp-repo",
+            {
+                "src/demo/__init__.py": "",
+                "src/demo/companions/__init__.py": "",
+                "src/demo/companions/contracts.py": "VALUE = 1\n",
+            },
+        )
+        comp_store = self._init_store("comp-store")
+        comp_sys = System(comp_store)
+        comp_sys.put(
+            {
+                "id": "managed-ai-architecture",
+                "kind": "note",
+                "active": True,
+                "content": {"text": "root"},
+                "relations": [],
+            },
+            0,
+        )
+        comp_res = ingest_repository(comp_repo, comp_store, package_rel="src/demo", dry_run=False)
+        self.assertEqual(comp_res["lint_anomalies"], 0)
+        comp_prof = System(comp_store).graph_profile(roots=["managed-ai-architecture"])
+        orphans = set(comp_prof["discoverability"]["orphan_sample_ids"])
+        self.assertNotIn("mod-companions", orphans)
+        self.assertNotIn("facade-companions", orphans)
+        self.assertNotIn("mod-companions-contracts", orphans)
+        self.assertEqual(
+            System(comp_store).show("pkg-companions")["relations"],
+            [{"relation": "maps-to", "target": "managed-ai-architecture"}],
+        )
+
     def test_crw_ingest_synthetic_and_live_if_present(self) -> None:
         crw = _make_sample_crw(self.tmp / "sample-crw")
         store = self._init_store("crw-store")
@@ -229,13 +262,15 @@ class ConsolidationETLTests(unittest.TestCase):
         self.assertFalse(second["applied"])
         self.assertEqual(second["written_count"], 0)
 
-        # Verify cross-prompt link edge was captured cleanly
+        # Verify cross-prompt link edge was captured cleanly and CRW graph has 0 structural SCCs
         sys_obj = System(store)
         install_rec = sys_obj.show("crw-dim-install-friction-risk")
         self.assertIn(
             {"relation": "bears-on", "target": "crw-dim-entity-identity-risk"},
             install_rec["relations"],
         )
+        crw_prof = sys_obj.graph_profile(roots=["crw-catalog"])
+        self.assertEqual(crw_prof["bottlenecks"]["structural_scc_count"], 0)
 
         # If sibling real CRW checkout exists locally, verify full 12/40/48 ingest!
         real_crw = _REPO.parent.parent / "code-review-workflows" / "trunk"
@@ -247,6 +282,8 @@ class ConsolidationETLTests(unittest.TestCase):
             self.assertGreaterEqual(real_res["counts"]["constituents"], 40)
             self.assertGreaterEqual(real_res["counts"]["controls"], 48)
             self.assertEqual(real_res["lint_anomalies"], 0)
+            real_prof = System(real_store).graph_profile(roots=["crw-catalog"])
+            self.assertEqual(real_prof["bottlenecks"]["structural_scc_count"], 0)
 
     def test_obligation_lifecycle_verified_closure_and_regression_detection(self) -> None:
         repo = _write_files(

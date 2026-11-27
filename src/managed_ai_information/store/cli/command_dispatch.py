@@ -242,17 +242,23 @@ def _act_graph(system: Any, args: argparse.Namespace) -> dict[str, Any]:
     if args.graph_action == "profile":
         from managed_ai_information.store.query import graph_profile
 
-        raw_roots = getattr(args, "roots", None) or []
-        parsed_roots = [
-            part.strip() for item in raw_roots for part in item.split(",") if part.strip()
-        ]
+        def _csv_list(attr: str) -> list[str]:
+            raw = getattr(args, attr, None) or []
+            return [part.strip() for item in raw for part in item.split(",") if part.strip()]
+
         return graph_profile.profile(
             system,
-            roots=parsed_roots,
+            roots=_csv_list("roots"),
             include_cochange=bool(getattr(args, "include_cochange", False)),
             baseline_path=getattr(args, "baseline", None),
             write_baseline_path=getattr(args, "write_baseline", None),
             check_alerts=bool(getattr(args, "check_alerts", False)),
+            profile_config_path=getattr(args, "profile_config", None),
+            claim_kinds=_csv_list("claim_kinds"),
+            navigational_kinds=_csv_list("navigational_kinds"),
+            qualifying_predicates=_csv_list("qualifying_predicates"),
+            structural_predicates=_csv_list("structural_predicates"),
+            bypass_exempt_predicates=_csv_list("bypass_exempt_predicates"),
         )
     return graph_query.lint(system)
 

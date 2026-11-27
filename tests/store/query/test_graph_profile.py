@@ -17,6 +17,7 @@ if not __package__:
 from managed_ai_information.core.formats import BATCH_FORMAT
 from managed_ai_information.store.query.graph_profile import (
     GRAPH_PROFILE_BASELINE_FORMAT,
+    GRAPH_PROFILE_CONFIG_FORMAT,
     GRAPH_PROFILE_FORMAT,
     write_graph_baseline,
 )
@@ -248,8 +249,12 @@ class GraphProfileTests(unittest.TestCase):
         self.assertGreater(bot["structural_scc_locked_bytes"], 0)
 
         self.assertEqual(bot["superseded_head_bypass_count"], 1)
+        self.assertEqual(bot["actionable_bypass_count"], 1)
+        self.assertEqual(bot["historical_inactive_ref_count"], 0)
         self.assertEqual(bot["superseded_head_bypasses"][0]["from"], "bypass-caller")
         self.assertEqual(bot["superseded_head_bypasses"][0]["to"], "old-head")
+        self.assertTrue(bot["superseded_head_bypasses"][0]["has_active_successor"])
+        self.assertEqual(bot["superseded_head_bypasses"][0]["active_successors"], ["new-head"])
 
         # Remove HeadIndex to verify exact parity with unindexed scan_records() fallback
         self.system.record_store.index.current_path.unlink(missing_ok=True)
@@ -445,6 +450,174 @@ class GraphProfileTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             write_graph_baseline(linked_dir / "bad.json", out_write)
+
+    def test_domain_calibration_flags_config_and_navigational_separation(self) -> None:
+        # Navigational index hub with high fan-in (3) and 0 qualifying edges must NOT
+        # be flagged as a substantive qualification desert.
+        _put(
+            self.system,
+            "topic-map-1",
+            "research-topic-map",
+            relations=[{"relation": "maps-to", "target": "goal"}],
+        )
+        _put(
+            self.system,
+            "rclaim-1",
+            "research-claim",
+            relations=[
+                {"relation": "maps-to", "target": "topic-map-1"},
+                {"relation": "grounds-claim", "target": "rclaim-2"},
+            ],
+        )
+        _put(
+            self.system,
+            "rclaim-2",
+            "research-claim",
+            relations=[{"relation": "maps-to", "target": "topic-map-1"}],
+        )
+        _put(
+            self.system,
+            "rclaim-3",
+            "research-claim",
+            relations=[{"relation": "maps-to", "target": "topic-map-1"}],
+        )
+        self.system.reindex()
+
+        default_rep = self.system.graph_profile()
+        dens_def = default_rep["density_and_qualification"]
+        self.assertEqual(dens_def["navigational_active_count"], 1)
+        self.assertEqual(dens_def["per_kind"]["research-topic-map"]["role"], "navigational")
+        self.assertNotIn("topic-map-1", [d["id"] for d in dens_def["qualification_deserts"]])
+        self.assertEqual(dens_def["per_predicate"]["grounds-claim"]["category"], "other")
+
+        # Domain-calibrated config file + CLI override
+        cfg_path = self.base / "research-profile-config.json"
+        cfg_path.write_text(
+            json.dumps(
+                {
+                    "format": GRAPH_PROFILE_CONFIG_FORMAT,
+                    "claim_kinds": ["research-claim"],
+                    "navigational_kinds": ["research-topic-map"],
+                    "qualifying_predicates": ["grounds-claim", "qualifies"],
+                    "structural_predicates": ["maps-to", "depends-on"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        cal_rep = self.system.graph_profile(profile_config_path=cfg_path)
+        dens_cal = cal_rep["density_and_qualification"]
+        self.assertEqual(dens_cal["per_kind"]["research-claim"]["role"], "claim")
+        self.assertEqual(dens_cal["per_predicate"]["grounds-claim"]["category"], "qualifying")
+        self.assertGreater(dens_cal["qualification_density"], 0.0)
+        self.assertEqual(dens_cal["qualification_target_count"], 3)
+        self.assertIn(f"config:{cfg_path}", cal_rep["calibration"]["sources"])
+
+        # CLI flags override config and reject overlapping structural/qualifying predicates
+        env = dict(os.environ)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["PYTHONPATH"] = str(SRC_DIR)
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-m",
+                "managed_ai_information.store.manage_store",
+                "--root",
+                str(self.store),
+                "graph",
+                "profile",
+                "--profile-config",
+                str(cfg_path),
+                "--claim-kinds",
+                "research-claim",
+                "--qualifying-predicates",
+                "grounds-claim",
+                "--structural-predicates",
+                "maps-to",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=env,
+            timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        cli_rep = json.loads(proc.stdout)
+        self.assertIn("cli", cli_rep["calibration"]["sources"])
+        self.assertEqual(
+            cli_rep["density_and_qualification"]["per_predicate"]["grounds-claim"]["category"],
+            "qualifying",
+        )
+
+        # Overlapping structural & qualifying predicates fail closed
+        with self.assertRaises(ValueError):
+            self.system.graph_profile(
+                structural_predicates=["maps-to"],
+                qualifying_predicates=["maps-to"],
+            )
+
+        # Unknown field in profile config fails closed
+        bad_cfg = self.base / "bad-config.json"
+        bad_cfg.write_text(
+            json.dumps({"format": GRAPH_PROFILE_CONFIG_FORMAT, "unknown_key": []}),
+            encoding="utf-8",
+        )
+        with self.assertRaises(ValueError):
+            self.system.graph_profile(profile_config_path=bad_cfg)
+
+        # Inverse qualified-by resolves contradicts cluster + historical vs actionable bypass split
+        _put(
+            self.system,
+            "inv-a",
+            "claim",
+            relations=[
+                {"relation": "maps-to", "target": "goal"},
+                {"relation": "contradicts", "target": "inv-b"},
+            ],
+        )
+        _put(self.system, "inv-b", "claim", relations=[{"relation": "maps-to", "target": "goal"}])
+        _put(
+            self.system,
+            "inv-med",
+            "synthesis",
+            relations=[
+                {"relation": "qualified-by", "target": "inv-a"},
+                {"relation": "qualified-by", "target": "inv-b"},
+            ],
+        )
+        _put(self.system, "hist-inactive", "note", active=False)
+        _put(
+            self.system,
+            "hist-citer",
+            "claim",
+            relations=[
+                {"relation": "maps-to", "target": "goal"},
+                {"relation": "depends-on", "target": "hist-inactive"},
+            ],
+        )
+        self.system.reindex()
+        inv_rep = self.system.graph_profile()
+        self.assertEqual(
+            inv_rep["density_and_qualification"]["contradicts"][
+                "unresolved_contradicts_cluster_count"
+            ],
+            0,
+        )
+        self.assertEqual(inv_rep["bottlenecks"]["superseded_head_bypass_count"], 1)
+        self.assertEqual(inv_rep["bottlenecks"]["actionable_bypass_count"], 0)
+        self.assertEqual(inv_rep["bottlenecks"]["historical_inactive_ref_count"], 1)
+        # Historical inactive refs with 0 active successors must NOT fire bypass alerts
+        alert_rules = {a["rule"] for a in inv_rep["alerts"]}
+        self.assertNotIn("superseded_head_bypass_detected", alert_rules)
+
+        # Verify shipped research calibration profile config loads & validates cleanly
+        shipped_cfg = (
+            Path(__file__).resolve().parents[3]
+            / "scripts/consolidation/profiles/research_graph_profile.json"
+        )
+        shipped_rep = self.system.graph_profile(profile_config_path=shipped_cfg)
+        self.assertIn("research-claim", shipped_rep["calibration"]["claim_kinds"])
+        self.assertIn("qualified-by", shipped_rep["calibration"]["qualifying_predicates"])
 
 
 if __name__ == "__main__":

@@ -12,29 +12,26 @@ from managed_ai_information.store.query.graph_profile_alerts import (
     GRAPH_PROFILE_BASELINE_FORMAT as GRAPH_PROFILE_BASELINE_FORMAT,
 )
 from managed_ai_information.store.query.graph_profile_alerts import (
+    GRAPH_PROFILE_CONFIG_FORMAT as GRAPH_PROFILE_CONFIG_FORMAT,
+)
+from managed_ai_information.store.query.graph_profile_alerts import (
     compute_phantom_cochange,
     evaluate_graph_alerts,
     load_graph_baseline,
+    resolve_calibration,
     write_graph_baseline,
 )
 from managed_ai_information.store.query.graph_profile_metrics import (
-    DEFAULT_ROOT_KINDS,
-    STRUCTURAL_PREDICATES,
+    BYPASS_EXEMPT_PREDICATES as BYPASS_EXEMPT_PREDICATES,
+)
+from managed_ai_information.store.query.graph_profile_metrics import (
+    DEFAULT_CALIBRATION,
+    GraphProfileCalibration,
     compute_density_and_qualification,
     percentile,
 )
 
 GRAPH_PROFILE_FORMAT = "managed-ai-graph-profile/1"
-BYPASS_EXEMPT_PREDICATES = frozenset(
-    {
-        "supersedes",
-        "consolidated-into",
-        "revises native navigation from",
-        "corresponds to dated origin",
-        "grounded in original edition",
-        "declared by original source",
-    }
-)
 _MAX_SAMPLE_ITEMS = 25
 _MAX_BYPASS_SAMPLES = 50
 
@@ -150,7 +147,10 @@ def _snapshot_from_nodes(
 
 
 def _select_roots(
-    snap: _GraphSnapshot, active_indices: list[int], explicit_roots: list[str]
+    snap: _GraphSnapshot,
+    active_indices: list[int],
+    explicit_roots: list[str],
+    root_kinds: frozenset[str],
 ) -> tuple[list[int], str]:
     if explicit_roots:
         root_idxs: list[int] = []
@@ -166,7 +166,7 @@ def _select_roots(
                 root_idxs.append(idx)
         return root_idxs, "explicit"
 
-    governing = [i for i in active_indices if snap.kinds[i] in DEFAULT_ROOT_KINDS]
+    governing = [i for i in active_indices if snap.kinds[i] in root_kinds]
     if governing:
         return governing, "governing_kinds"
     zero_in = [i for i in active_indices if not any(snap.active[s] for s, _ in snap.in_edges[i])]
@@ -211,8 +211,9 @@ def _compute_discoverability(
     active_indices: list[int],
     undirected: list[set[int]],
     explicit_roots: list[str],
+    root_kinds: frozenset[str],
 ) -> dict[str, Any]:
-    root_idxs, root_selection = _select_roots(snap, active_indices, explicit_roots)
+    root_idxs, root_selection = _select_roots(snap, active_indices, explicit_roots, root_kinds)
     dist = [-1] * snap.n
     queue: deque[int] = deque(root_idxs)
     for r in root_idxs:
@@ -312,6 +313,38 @@ def _iterative_tarjan_sccs(nodes: list[int], adj: dict[int, list[int]]) -> list[
     return sccs
 
 
+def _trace_active_successors(snap: _GraphSnapshot) -> dict[int, list[str]]:
+    """Map inactive node indices to sorted active replacement IDs via supersession chains."""
+    next_map: dict[int, set[int]] = {}
+    for u in range(snap.n):
+        for v, pred in snap.out_edges[u]:
+            if pred in ("consolidated-into", "superseded-by"):
+                next_map.setdefault(u, set()).add(v)
+            elif pred == "supersedes":
+                next_map.setdefault(v, set()).add(u)
+
+    cache: dict[int, list[str]] = {}
+    for start in range(snap.n):
+        if snap.active[start] or start not in next_map:
+            continue
+        found: set[str] = set()
+        visited = {start}
+        queue: deque[int] = deque([start])
+        while queue:
+            cur = queue.popleft()
+            for nxt in next_map.get(cur, ()):
+                if nxt in visited:
+                    continue
+                visited.add(nxt)
+                if snap.active[nxt]:
+                    found.add(snap.ids[nxt])
+                else:
+                    queue.append(nxt)
+        if found:
+            cache[start] = sorted(found)
+    return cache
+
+
 def _compute_bottlenecks(
     system: Any,
     snap: _GraphSnapshot,
@@ -319,25 +352,34 @@ def _compute_bottlenecks(
     undirected: list[set[int]],
     *,
     include_cochange: bool,
+    calibration: GraphProfileCalibration,
 ) -> dict[str, Any]:
+    struct_preds = calibration.structural_predicates
+    bypass_exempt = calibration.bypass_exempt_predicates
+    active_successors = _trace_active_successors(snap)
     struct_adj: dict[int, list[int]] = {}
     bypasses: list[dict[str, Any]] = []
+    actionable: list[dict[str, Any]] = []
     for u in active_indices:
         targets: list[int] = []
         for v, pred in snap.out_edges[u]:
             if snap.active[v]:
-                if pred in STRUCTURAL_PREDICATES:
+                if pred in struct_preds:
                     targets.append(v)
-            elif pred not in BYPASS_EXEMPT_PREDICATES:
-                bypasses.append(
-                    {
-                        "from": snap.ids[u],
-                        "from_kind": snap.kinds[u],
-                        "relation": pred,
-                        "to": snap.ids[v],
-                        "to_kind": snap.kinds[v],
-                    }
-                )
+            elif pred not in bypass_exempt:
+                succs = active_successors.get(v, [])
+                row = {
+                    "from": snap.ids[u],
+                    "from_kind": snap.kinds[u],
+                    "relation": pred,
+                    "to": snap.ids[v],
+                    "to_kind": snap.kinds[v],
+                    "has_active_successor": bool(succs),
+                    "active_successors": succs[:5],
+                }
+                bypasses.append(row)
+                if succs:
+                    actionable.append(row)
         if targets:
             struct_adj[u] = targets
 
@@ -353,7 +395,7 @@ def _compute_bottlenecks(
                 pred
                 for u in comp
                 for v, pred in snap.out_edges[u]
-                if v in comp_set and pred in STRUCTURAL_PREDICATES
+                if v in comp_set and pred in struct_preds
             }
         )
         node_ids = sorted(snap.ids[i] for i in comp)
@@ -365,6 +407,7 @@ def _compute_bottlenecks(
 
     scc_rows.sort(key=lambda r: (-r["locked_bytes"], -r["size"], r["node_ids"][0]))
     bypasses.sort(key=lambda r: (r["from"], r["relation"], r["to"]))
+    actionable.sort(key=lambda r: (r["from"], r["relation"], r["to"]))
     cochange = (
         compute_phantom_cochange(system, snap.ids, snap.id_to_idx, snap.active, undirected)
         if include_cochange
@@ -382,7 +425,10 @@ def _compute_bottlenecks(
         "structural_scc_locked_bytes": total_locked_bytes,
         "structural_sccs": scc_rows[:_MAX_SAMPLE_ITEMS],
         "superseded_head_bypass_count": len(bypasses),
+        "actionable_bypass_count": len(actionable),
+        "historical_inactive_ref_count": len(bypasses) - len(actionable),
         "superseded_head_bypasses": bypasses[:_MAX_BYPASS_SAMPLES],
+        "actionable_bypasses": actionable[:_MAX_BYPASS_SAMPLES],
         "phantom_cochange": cochange,
     }
 
@@ -396,8 +442,10 @@ def _profile_snapshot(
     baseline_path: Path | None = None,
     write_baseline_path: Path | None = None,
     check_alerts: bool = False,
+    calibration: GraphProfileCalibration = DEFAULT_CALIBRATION,
 ) -> dict[str, Any]:
-    explicit_roots = strings(list(roots), "roots") if roots else []
+    effective_roots = list(roots) if roots else list(calibration.default_roots)
+    explicit_roots = strings(effective_roots, "roots") if effective_roots else []
     active_indices = [i for i in range(snap.n) if snap.active[i]]
     undirected: list[set[int]] = [set() for _ in range(snap.n)]
     for u in active_indices:
@@ -406,15 +454,25 @@ def _profile_snapshot(
                 undirected[u].add(v)
                 undirected[v].add(u)
 
-    discoverability = _compute_discoverability(snap, active_indices, undirected, explicit_roots)
-    density = compute_density_and_qualification(snap, active_indices, undirected)
+    discoverability = _compute_discoverability(
+        snap, active_indices, undirected, explicit_roots, calibration.root_kinds
+    )
+    density = compute_density_and_qualification(
+        snap, active_indices, undirected, calibration=calibration
+    )
     bottlenecks = _compute_bottlenecks(
-        system, snap, active_indices, undirected, include_cochange=include_cochange
+        system,
+        snap,
+        active_indices,
+        undirected,
+        include_cochange=include_cochange,
+        calibration=calibration,
     )
     report: dict[str, Any] = {
         "format": GRAPH_PROFILE_FORMAT,
         "instance_id": system.instance_id,
         "indexed": snap.indexed,
+        "calibration": calibration.to_dict(),
         "summary": {
             "total_nodes": snap.n,
             "active_nodes": len(active_indices),
@@ -499,8 +557,22 @@ def profile(
     baseline_path: Path | None = None,
     write_baseline_path: Path | None = None,
     check_alerts: bool = False,
+    profile_config_path: Path | None = None,
+    claim_kinds: list[str] | tuple[str, ...] = (),
+    navigational_kinds: list[str] | tuple[str, ...] = (),
+    qualifying_predicates: list[str] | tuple[str, ...] = (),
+    structural_predicates: list[str] | tuple[str, ...] = (),
+    bypass_exempt_predicates: list[str] | tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Compute knowledge-graph health metrics over HeadIndex v3 mmap or scan_records fallback."""
+    cal = resolve_calibration(
+        profile_config_path=profile_config_path,
+        claim_kinds=claim_kinds,
+        navigational_kinds=navigational_kinds,
+        qualifying_predicates=qualifying_predicates,
+        structural_predicates=structural_predicates,
+        bypass_exempt_predicates=bypass_exempt_predicates,
+    )
     return _profile_snapshot(
         system,
         _load_snapshot(system),
@@ -509,4 +581,5 @@ def profile(
         baseline_path=baseline_path,
         write_baseline_path=write_baseline_path,
         check_alerts=check_alerts,
+        calibration=cal,
     )

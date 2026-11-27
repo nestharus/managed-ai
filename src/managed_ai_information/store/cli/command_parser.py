@@ -311,6 +311,12 @@ def _store_graph_commands(sub: Any) -> None:
 
     g_prof = graph.add_parser("profile", allow_abbrev=False, help="profile knowledge-graph health")
     g_prof.add_argument("--roots", nargs="+", action="extend", default=[])
+    g_prof.add_argument("--claim-kinds", nargs="+", action="extend", default=[])
+    g_prof.add_argument("--navigational-kinds", nargs="+", action="extend", default=[])
+    g_prof.add_argument("--qualifying-predicates", nargs="+", action="extend", default=[])
+    g_prof.add_argument("--structural-predicates", nargs="+", action="extend", default=[])
+    g_prof.add_argument("--bypass-exempt-predicates", nargs="+", action="extend", default=[])
+    g_prof.add_argument("--profile-config", type=Path, default=None)
     g_prof.add_argument("--include-cochange", action="store_true")
     g_prof.add_argument("--baseline", type=Path, default=None)
     g_prof.add_argument("--write-baseline", type=Path, default=None)
