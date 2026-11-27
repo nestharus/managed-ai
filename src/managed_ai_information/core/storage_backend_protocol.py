@@ -1,5 +1,6 @@
 """Shared protocol, dataclasses, typed errors, wire helpers, and validators for StorageBackend."""
 
+import base64
 import ipaddress
 import re
 import time
@@ -13,6 +14,7 @@ from managed_ai_information.core.storage import (
     MAX_BYTES,
     check_ordinary_ancestors,
     is_ordinary_file_stat,
+    sha,
     strict_json_loads,
 )
 
@@ -235,6 +237,55 @@ def encode_expected_version(expected_version: int | None) -> Any:
     return {"Version": expected_version}
 
 
+def build_search_op(
+    ns: str, key: str, value: bytes, vis: SearchVisibility, meta: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Build a Membus v2 SearchLogOp payload that never indexes Sealed or MetadataOnly bodies."""
+    if vis == "Sealed":
+        return {"Delete": {"namespace": ns, "doc_id": key}}
+    return {
+        "Index": {
+            "namespace": ns,
+            "doc_id": key,
+            "kind": str(meta.get("kind", "record")),
+            "title": str(meta.get("title", key)),
+            "tags": list(meta.get("tags", ())),
+            "body": value.decode("utf-8", errors="replace") if vis == "Public" else "",
+            "visibility": vis,
+        }
+    }
+
+
+def build_collection_registration(
+    namespace: str,
+    *,
+    schema_version: int = 1,
+    schema_bytes: bytes = b"{}",
+    store_profile: str = "Mixed",
+    expected_version: int | None = None,
+) -> dict[str, Any]:
+    """Build a Membus v2 POST /v2/catalog/collections registration payload."""
+    ns = validate_identifier(namespace, "namespace")
+    if isinstance(schema_version, bool) or schema_version < 1:
+        raise ValueError(f"schema_version must be >= 1, got {schema_version!r}")
+    digest_bytes = list(bytes.fromhex(sha(schema_bytes)))
+    return {
+        "expected_version": expected_version,
+        "descriptor": {
+            "namespace": ns,
+            "store_profile": store_profile,
+            "schema_version": schema_version,
+            "schema_sha256": digest_bytes,
+            "schema_bytes": base64.b64encode(schema_bytes).decode("ascii"),
+            "declared_indexes": [],
+            "retention_policy": {"max_age_secs": None, "max_entries": None},
+            "migration_state": "Active",
+            "compatible_versions": [schema_version],
+            "compatibility_mode": "Strict",
+        },
+    }
+
+
 def map_http_error(status: int, raw: bytes) -> StorageBackendError:
     """Map Membus v2 HTTP status + error code to typed StorageBackendError."""
     code, message = "http_error", raw.decode("utf-8", errors="replace")
@@ -279,7 +330,7 @@ def parse_sse_signals(stream: Any, *, max_line_bytes: int = MAX_BYTES) -> Iterat
                         str(p["namespace"]),
                         k,
                         int(p["version"]),
-                        str(p["kind"]),
+                        str(p["kind"]).lower(),
                         hint,
                     )
             event_name, data_lines = "message", []
@@ -287,6 +338,39 @@ def parse_sse_signals(stream: Any, *, max_line_bytes: int = MAX_BYTES) -> Iterat
             event_name = line[7:] if line.startswith("event: ") else line[6:]
         elif line.startswith("data:"):
             data_lines.append(line[6:] if line.startswith("data: ") else line[5:])
+
+
+def encode_local_record(
+    namespace: str,
+    key: str,
+    version: int,
+    visibility: SearchVisibility,
+    metadata: Mapping[str, Any],
+    value: bytes,
+) -> dict[str, Any]:
+    """Encode an EmbeddedFileBackend KV record payload for JSON persistence."""
+    return {
+        "namespace": namespace,
+        "key": key,
+        "version": version,
+        "visibility": visibility,
+        "metadata": dict(metadata),
+        "value_b64": base64.b64encode(value).decode("ascii"),
+    }
+
+
+def decode_local_record(doc: Mapping[str, Any]) -> BackendRecord:
+    """Decode a persisted EmbeddedFileBackend KV record JSON object."""
+    raw = base64.b64decode(str(doc["value_b64"]).encode("ascii"))
+    vis = validate_visibility(str(doc.get("visibility", "Public")))
+    return BackendRecord(
+        str(doc["namespace"]),
+        str(doc["key"]),
+        raw,
+        int(doc["version"]),
+        vis,
+        dict(doc.get("metadata", {})),
+    )
 
 
 def ensure_ordinary_dir(path: Path) -> Path:
