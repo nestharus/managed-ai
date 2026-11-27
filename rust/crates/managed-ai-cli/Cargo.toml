@@ -1,0 +1,23 @@
+[package]
+name = "managed-ai-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Native Rust CLI for Managed AI Information on Membus v2"
+
+[[bin]]
+name = "managed-ai-rs"
+path = "src/main.rs"
+
+[dependencies]
+managed-ai-fs = { path = "../managed-ai-fs" }
+managed-ai-protocol = { path = "../managed-ai-protocol" }
+managed-ai-store = { path = "../managed-ai-store" }
+membus.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

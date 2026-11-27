@@ -1,0 +1,16 @@
+[package]
+name = "managed-ai-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Byte-exact Python-parity canonical JSON, strict duplicate-key JSON parser, record envelope digest verification, and Canonical Query AST"
+
+[dependencies]
+managed-ai-fs = { path = "../managed-ai-fs" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

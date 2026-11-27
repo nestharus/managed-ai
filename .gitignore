@@ -12,6 +12,7 @@ venv/
 build/
 dist/
 *.egg-info/
+rust/target/
 
 # Package-time generated release manifests and source index
 /MANIFEST.json

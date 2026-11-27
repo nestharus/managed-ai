@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/managed-ai-fs",
+    "crates/managed-ai-protocol",
+    "crates/managed-ai-store",
+    "crates/managed-ai-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+
+[workspace.dependencies]
+membus = { git = "https://github.com/nestharus/membus.git", rev = "1aebddf9b2d87ebf96bf5098a0cc19e58c227968" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.10.9"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tempfile = "3.27.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"

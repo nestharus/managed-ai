@@ -1,0 +1,22 @@
+[package]
+name = "managed-ai-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Membus v2 backed Managed AI Information store client with atomic T_L transactions, Tantivy BM25 search, and byte-exact filesystem parity"
+
+[dependencies]
+managed-ai-fs = { path = "../managed-ai-fs" }
+managed-ai-protocol = { path = "../managed-ai-protocol" }
+membus.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
