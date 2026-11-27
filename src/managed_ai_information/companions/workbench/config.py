@@ -18,6 +18,7 @@ CORE_MODULES = (
     "io_utils.py",
     "config.py",
     "model_bridges.py",
+    "source_search.py",
     "source_tools.py",
     "durable_agent.py",
     "workbench_agent.py",

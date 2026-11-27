@@ -238,6 +238,7 @@ class SharedLayout(unittest.TestCase):
                 "io_utils",
                 "config",
                 "model_bridges",
+                "source_search",
                 "source_tools",
                 "evidence_support",
                 "agent_runtime",
@@ -248,7 +249,7 @@ class SharedLayout(unittest.TestCase):
             Path(modules["workbench_agent"].__file__).resolve(),
             (WORKBENCH_DIR / "workbench_agent.py").resolve(),
         )
-        self.assertEqual(len(manifest["files"]), 7)
+        self.assertEqual(len(manifest["files"]), 8)
         self.assertTrue(all(not key.startswith("..") for key in manifest["files"]))
         # Wave 5 (#213 Part B): Git-tracked COMPONENTS.json is declarative (no hardcoded identity),
         # while peer_workbench.components() measures live identities for every loaded component.
