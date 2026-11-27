@@ -57,9 +57,7 @@ if __name__ == "__main__":
 
 @lru_cache(maxsize=1)
 def load_portable_bundle() -> tuple[bytes, dict[str, bytes], bytes]:
-    """Lazily read package and vendored stdlib platform modules for manifest pins and recovery
-    ZIPs.
-    """
+    """Lazily read package and vendored platform modules for manifest pins and recovery ZIPs."""
     here = Path(__file__).resolve().parent
     platform_dir = Path(platform.__file__).resolve().parent
     producer_bytes = (here / "managed_material.py").read_bytes()
@@ -292,10 +290,7 @@ def _retain_snapshot(
     producer_object = store.blob(hooks["producer_bytes"])
     producer_deps = producer_dependencies(store, hooks)
     history, effective_policy, history_account, retained_selection, prior_states = (
-        _snapshot_history(
-            store,
-            spec,
-        )
+        _snapshot_history(store, spec)
     )
     exclusions, source_checks = _acquire_snapshot_roots(store, spec, rows)
 
@@ -398,7 +393,14 @@ def snapshot(
     resolved_hooks = resolve_hooks(hooks)
     replace_fn = resolved_hooks["replace_json"]
     spec_file = check_unfollowed_ancestors(spec_path, "Selection spec", include_target=True)
-    spec_raw = spec_file.read_bytes()
+    require(
+        spec_file.exists() and stat.S_ISREG(spec_file.lstat().st_mode),
+        "Selection spec must be an existing ordinary file: " + str(spec_file),
+    )
+    limit = store.limits.max_member_bytes
+    with os.fdopen(os.open(str(spec_file), platform.OPEN_RO_NOFOLLOW), "rb") as fh:
+        spec_raw = fh.read(limit + 1)
+    require(len(spec_raw) <= limit, "Selection spec exceeds byte limit")
     spec = _validate_snapshot_spec(loads_json(spec_raw))
 
     with store_lock(store.root):
@@ -617,17 +619,13 @@ def retain_artifact(
         store.commit_index()
         immutable_fn(store.root / "manifests" / (manifest_key + ".json"), manifest_raw)
         immutable_fn(store.root / "selections" / (selected_key + ".json"), selected_raw)
-        immutable_fn(
-            occurrence_path,
-            js(
-                {
-                    "format": "managed-material-occurrence-pointer/1",
-                    "id": occurrence,
-                    "manifest": manifest_key,
-                    "path": "manifests/" + manifest_key + ".json",
-                },
-            ),
-        )
+        ptr = {
+            "format": "managed-material-occurrence-pointer/1",
+            "id": occurrence,
+            "manifest": manifest_key,
+            "path": "manifests/" + manifest_key + ".json",
+        }
+        immutable_fn(occurrence_path, js(ptr))
         try:
             replace_fn(
                 store.root / "CURRENT.json",

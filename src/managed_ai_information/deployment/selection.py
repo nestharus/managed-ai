@@ -17,6 +17,7 @@ from typing import Any
 
 from managed_ai_information.core.ownership import NativeLayout, external_root, packet_id
 from managed_ai_information.core.storage import (
+    MAX_BYTES,
     AdmissionContended,
     admission_deadline,
     atomic_bytes,
@@ -26,6 +27,7 @@ from managed_ai_information.core.storage import (
     is_ordinary_file_stat,
     is_reparse_or_symlink,
     owner_admission,
+    read_bytes,
     safe_relpath,
     sha,
     shared,
@@ -53,7 +55,6 @@ from .isolation import _attach_deployment_metadata, _isolated_engine, _load_entr
 
 
 def _controller_attr(name: str, default: Any) -> Any:
-    """Resolve a facade attribute from deployment.controller when patched in tests."""
     controller = sys.modules.get("managed_ai_information.deployment.controller")
     if controller is not None:
         value = getattr(controller, name, None)
@@ -63,36 +64,19 @@ def _controller_attr(name: str, default: Any) -> Any:
 
 
 def _resolve_code_identity(engine: Path) -> str:
-    """Dispatch code_identity cleanly while honoring test patches on deployment.controller."""
-    fn = _controller_attr("code_identity", _identity.code_identity)
-    return fn(engine)
+    return _controller_attr("code_identity", _identity.code_identity)(engine)
 
 
 def validate_deployment_sections(config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Validate that deployment.json engine and store sections are dicts with string paths
-    (QA7-5).
-    """
-    engine_cfg = config.get("engine")
-    store_cfg = config.get("store")
-
-    if (
-        not isinstance(engine_cfg, dict)
-        or not isinstance(engine_cfg.get("path"), str)
-        or not engine_cfg["path"]
-    ):
+    """Validate deployment.json engine and store sections (QA7-5)."""
+    eng, st = config.get("engine"), config.get("store")
+    if not isinstance(eng, dict) or not isinstance(eng.get("path"), str) or not eng["path"]:
         raise ValueError("invalid deployment descriptor: engine object with path string required")
-
-    if (
-        not isinstance(store_cfg, dict)
-        or not isinstance(store_cfg.get("path"), str)
-        or not store_cfg["path"]
-    ):
+    if not isinstance(st, dict) or not isinstance(st.get("path"), str) or not st["path"]:
         raise ValueError("invalid deployment descriptor: store object with path string required")
-
-    if not isinstance(store_cfg.get("instance_id"), str) or not store_cfg["instance_id"]:
+    if not isinstance(st.get("instance_id"), str) or not st["instance_id"]:
         raise ValueError("invalid deployment descriptor: store instance_id string required")
-
-    return engine_cfg, store_cfg
+    return eng, st
 
 
 class ActivationIncomplete(RuntimeError):
@@ -145,20 +129,25 @@ def _check_required_domain(runtime: Path, required_domain: str) -> None:
             or not isinstance(binding.get("sha256"), str)
         ):
             raise ValueError("invalid domain binding in store descriptor")
-
+        raw_path = binding["path"]
+        bad = not raw_path.strip() or "\\" in raw_path or raw_path.startswith("/")
+        if (
+            bad
+            or Path(raw_path).is_absolute()
+            or (len(raw_path) >= 2 and raw_path[1] == ":")
+            or any(ord(c) < 32 or ord(c) == 127 for c in raw_path)
+        ):
+            raise ValueError("invalid domain binding path: " + raw_path)
         ordinary_path = check_ordinary_ancestors(
-            runtime / binding["path"],
-            expect_dir=False,
-            error_prefix="ordinary selected domain required",
+            runtime / raw_path, expect_dir=False, error_prefix="ordinary selected domain required"
         )
-        raw = ordinary_path.read_bytes()
+        if not is_ordinary_file_stat(ordinary_path.lstat()):
+            raise ValueError("ordinary selected domain required: " + str(ordinary_path))
+        raw = read_bytes(ordinary_path, MAX_BYTES)
         if sha(raw) != binding["sha256"]:
             raise ValueError("selected domain manifest changed: " + str(ordinary_path))
-
-        dom_doc = read_descriptor(ordinary_path, raw)
-        if dom_doc.get("id") == required_domain:
+        if read_descriptor(ordinary_path, raw).get("id") == required_domain:
             matched = True
-
     if not matched:
         raise ValueError(f"this entrance requires a {required_domain}-domain deployment")
 
@@ -192,9 +181,7 @@ def _extra_proof_stores(runtime: Path, parsed: Any) -> tuple[Path, ...]:
 def _precheck_local_system_args(
     engine: Path, runtime: Path, arguments: list[str]
 ) -> tuple[bool, tuple[Path, ...]]:
-    """Parse arguments with THIS trusted controller's parser before locks (zero unverified
-    execution).
-    """
+    """Parse arguments with this trusted controller's parser before locks."""
     if not arguments or any(v == "--root" or v.startswith("--root=") for v in arguments):
         raise ValueError("supply a native command; deployment owns its selected store")
 
@@ -420,9 +407,7 @@ class Deployment(DeploymentSelection):
         require_domain: str | None = None,
         deadline: float | None = None,
     ) -> Generator[Deployment]:
-        """Enter a pinned domain operation under shared deployment.lock, then sorted store
-        owner.locks.
-        """
+        """Enter a pinned domain operation under deployment.lock and sorted owner.locks."""
         root_dir = _ordinary_dir(root)
         expected_engine = None if engine is None else _engine_directory(engine)
         extra_resolved = tuple(_ordinary_dir(p) for p in extra_stores)
@@ -554,15 +539,8 @@ class Deployment(DeploymentSelection):
     ) -> tuple[Any, Any, Any]:
         if not arguments or any(v == "--root" or v.startswith("--root=") for v in arguments):
             raise ValueError("supply a native command; deployment owns its selected store")
-
-        if self.engine != ENGINE_ROOT:
-            return self._selected_system(
-                arguments,
-                deadline,
-                already_admitted=already_admitted,
-                proof_store_locked=proof_store_locked,
-            )
-        return self._system_action(
+        fn = self._selected_system if self.engine != ENGINE_ROOT else self._system_action
+        return fn(
             arguments,
             deadline,
             already_admitted=already_admitted,

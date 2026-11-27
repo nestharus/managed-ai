@@ -154,31 +154,34 @@ class RecordStore:
             raise ValueError(f"ordinary JSON file required: {path}")
         return info.st_size
 
+    def _check_no_hot_collision(self, ident: str, path: Path) -> None:
+        require(
+            not path.exists() and not path.is_symlink(),
+            f"case-only record identity collision on filesystem: {ident}",
+        )
+
+    def _has_exact_hot_record(self, ident: str, hot: Path) -> bool:
+        if not hot.exists() and not hot.is_symlink():
+            return False
+        if PLATFORM.is_case_insensitive_fs and hot.exists() and not hot.is_symlink():
+            return PLATFORM.verify_exact_filename(hot, f"{ident}.json")
+        return True
+
     def has_record(self, ident: str) -> bool:
         try:
             packet_id(ident)
         except ValueError:
             return False
-
         hot = self.path(ident)
-        if hot.is_file():
-            if PLATFORM.is_case_insensitive_fs and not PLATFORM.verify_exact_filename(
-                hot, f"{ident}.json"
-            ):
-                return self.cold_archive.has(ident)
+        if hot.is_file() and self._has_exact_hot_record(ident, hot):
             return True
-
         return self.cold_archive.has(ident)
 
     def show(self, ident: str) -> dict:
         return self.read(ident)[0]
 
     def read(
-        self,
-        ident: str,
-        *,
-        byte_limit: int | None = None,
-        dir_fd: int | None = None,
+        self, ident: str, *, byte_limit: int | None = None, dir_fd: int | None = None
     ) -> tuple[dict, bytes]:
         if dir_fd is not None:
             filename = packet_id(ident) + ".json"
@@ -190,13 +193,14 @@ class RecordStore:
             )
         else:
             hot = self.path(ident)
-            if not hot.exists() and not hot.is_symlink() and self.cold_archive.has(ident):
-                record, raw = self.cold_archive.read(ident)
-                if byte_limit is not None and len(raw) > byte_limit:
-                    raise ValueError(f"input exceeds {byte_limit} bytes: {ident}")
-                return record, raw
+            if not self._has_exact_hot_record(ident, hot):
+                if self.cold_archive.has(ident):
+                    record, raw = self.cold_archive.read(ident)
+                    if byte_limit is not None and len(raw) > byte_limit:
+                        raise ValueError(f"input exceeds {byte_limit} bytes: {ident}")
+                    return record, raw
+                raise FileNotFoundError(f"record not found: {ident}")
             record, raw = read_input(hot, byte_limit=byte_limit)
-
         self._verify_record(ident, record, raw)
         return record, raw
 
@@ -253,38 +257,31 @@ class RecordStore:
     def scoped_heads(
         self, needs_body: Callable[[str, str], bool], *, max_workers: int = 16
     ) -> Iterator[dict[str, Any]]:
-        """Yield verified scope/status fields and full records for nominated roles."""
         return record_scanner.scoped_heads(self, needs_body, max_workers=max_workers)
 
     def indexed_summaries_with_format(
         self, *, max_workers: int = 16
     ) -> tuple[dict[str, dict[str, Any]], str] | None:
-        """Return (verified_entries, index_format), or None if unindexed."""
         return record_scanner.indexed_summaries_with_format(self, max_workers=max_workers)
 
     def open_verified_index_view(
         self, *, max_workers: int = 16
     ) -> record_scanner.VerifiedIndexView | None:
-        """Open a zero-copy verified HeadIndexView over binary v3, or return None if unavailable."""
         return record_scanner.open_verified_index_view(self, max_workers=max_workers)
 
     def get_indexed_entry(self, ident: str) -> dict[str, Any] | None:
-        """Return one stat/HMAC-verified index entry via O(log N) mmap binary search, or None."""
         return record_scanner.get_verified_entry(self, ident)
 
     def indexed_summaries(self, *, max_workers: int = 16) -> dict[str, dict[str, Any]] | None:
-        """Return HMAC + (size, mtime_ns, ino) verified head summaries, or None if unindexed."""
         loaded = self.indexed_summaries_with_format(max_workers=max_workers)
         return None if loaded is None else loaded[0]
 
     def scan_records(
         self, idents: Iterable[str] | None = None, *, max_workers: int = 16
     ) -> list[dict[str, Any]]:
-        """Read and cryptographically verify nominated records (or all records) in parallel."""
         return record_scanner.scan_records(self, idents, max_workers=max_workers)
 
     def reindex(self, *, max_workers: int = 16) -> dict[str, Any]:
-        """Rebuild the HMAC-verified store-local head index under an exclusive owner lock."""
         return record_scanner.reindex(self, max_workers=max_workers)
 
     def refresh_index_entries(
@@ -293,7 +290,6 @@ class RecordStore:
         *,
         prebuilt: dict[str, dict[str, Any]] | None = None,
     ) -> bool:
-        """Batch-update existing HMAC head index entries for freshly committed records."""
         return record_scanner.refresh_index_entries(self, idents, prebuilt=prebuilt)
 
     def index_scope(self, ident: str) -> dict[str, Any]:
@@ -507,7 +503,8 @@ class RecordStore:
 
         ident = packet_id(record.get("id", ""))
         path = self.path(ident)
-        if not path.exists():
+        if not self._has_exact_hot_record(ident, path):
+            self._check_no_hot_collision(ident, path)
             require(
                 not self.cold_archive.has(ident),
                 "record exists in cold archive; restore explicitly before importing: " + ident,
@@ -565,12 +562,15 @@ class RecordStore:
 
         if _preloaded is not None:
             previous, previous_raw = _preloaded
-        else:
-            if not path.exists() and self.cold_archive.has(ident):
+        elif not self._has_exact_hot_record(ident, path):
+            self._check_no_hot_collision(ident, path)
+            if self.cold_archive.has(ident):
                 raise ValueError(
                     f"record {ident} is in cold archive; restore explicitly before modifying"
                 )
-            previous, previous_raw = self.read(ident) if path.exists() else (None, None)
+            previous, previous_raw = None, None
+        else:
+            previous, previous_raw = self.read(ident)
 
         revision = previous["revision"] if previous else 0
         if revision != expected:
