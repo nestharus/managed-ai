@@ -10,13 +10,10 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from managed_ai_information.host.continuing_work import occurrence_files  # noqa: E402
 from managed_ai_information.host.continuing_work.continuing_work import Host  # noqa: E402
 
-ENGINE = (
-    SRC_ROOT / "managed_ai_information/store/manage_store.py"
-    if (SRC_ROOT / "managed_ai_information/store/manage_store.py").is_file()
-    else REPO_ROOT / "engine/runtime/manage_store.py"
-)
+ENGINE = SRC_ROOT / "managed_ai_information/store/manage_store.py"
 
 
 class PrepareScope(unittest.TestCase):
@@ -78,7 +75,9 @@ class PrepareScope(unittest.TestCase):
         self.assertEqual(
             (self.host.work / "sources/resources/example.md").read_bytes(), self.source.read_bytes()
         )
-        self.assertTrue((self.host.root / "scopes/second.json").is_file())
+        scope_doc = occurrence_files.read(self.host.root / "scopes/second.json")
+        self.assertEqual(scope_doc["id"], "second")
+        self.assertEqual(scope_doc["targets"], ["outputs/second/answer.md"])
 
     def test_native_attention_refusal_retains_prepared_inputs_without_a_completed_scope(self):
         with self.assertRaisesRegex(ValueError, "unknown active item or group"):

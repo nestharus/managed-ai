@@ -17,11 +17,7 @@ from managed_ai_information.host.continuing_work.continuing_work import Host  # 
 
 
 def _default_engine():
-    primary = SRC_ROOT / "managed_ai_information/store/manage_store.py"
-    if primary.is_file():
-        return primary
-    legacy = REPO_ROOT / "engine/store/manage_store.py"
-    return legacy if legacy.is_file() else REPO_ROOT / "engine/runtime/manage_store.py"
+    return SRC_ROOT / "managed_ai_information/store/manage_store.py"
 
 
 class SelectedCapture(unittest.TestCase):

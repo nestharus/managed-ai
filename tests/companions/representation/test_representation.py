@@ -15,6 +15,8 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from managed_ai_information.companions.representation import representation  # noqa: E402
+from managed_ai_information.core.storage import exclusive  # noqa: E402
+from managed_ai_information.store.system import System  # noqa: E402
 
 
 class RepresentationWave4Tests(unittest.TestCase):
@@ -372,6 +374,174 @@ class RepresentationWave4Tests(unittest.TestCase):
             check_marker.is_file(), "check_representation.py failed to load external --engine"
         )
         self.assertIn("EXTERNAL_CHECK_LOADED", check_marker.read_text(encoding="utf-8"))
+
+
+class RepresentationRealBoundaryTests(unittest.TestCase):
+    """Real-boundary tests over native System + Exchange (zero Fake* or mock patches)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.store_root = self.base / "store"
+        System.initialize(self.store_root, {"contribution": "Real representation boundary test."})
+        self.system = System(self.store_root)
+        self.ops = representation.RepresentationOperations(self.system)
+        self.source = self.system.work / "sources/basis.txt"
+        self.source.write_text("Primary value starts at 1.\n", encoding="utf-8")
+
+    def _write_candidate(self, name: str, payload: object, *, as_json: bool = True) -> Path:
+        out = self.base / name
+        out.write_bytes(
+            representation.encoded(payload) if as_json else str(payload).encode("utf-8")
+        )
+        return out
+
+    def _seed_adopted_target(self, turn: str, target: str, value: dict[str, object]) -> None:
+        with exclusive(self.system.ex.root / "owner.lock"):
+            self.system.context(turn, {"task": "Seed accepted state.", "targets": [target]})
+            reply = self._write_candidate(f"{turn}.reply", "Seeded accepted reply.", as_json=False)
+            cand = self._write_candidate(f"{turn}.json", value, as_json=True)
+            self.system.receive(turn, reply, "seed-producer", [f"{target}={cand}"])
+            self.system.adopt(turn, target, "Accept seeded state for representation test.")
+
+    def test_real_system_develop_prepare_template_operation_and_receive_roundtrip(self) -> None:
+        src_pin = self.ops.pin("sources/basis.txt")
+        self.assertEqual(src_pin["path"], "sources/basis.txt")
+        spec = {
+            "format": representation.OPERATION,
+            "turn": "rep-dev-1",
+            "mode": "develop",
+            "task": "Develop initial structured representation from basis.",
+            "consumer": "representation-reviewer",
+            "representations": [],
+            "sources": [src_pin],
+            "targets": ["outputs/model.json"],
+            "applications": [
+                {
+                    "id": "app-dev",
+                    "sources": ["sources/basis.txt"],
+                    "representations": [],
+                    "operation": "Encode initial value.",
+                    "prediction": "Produces outputs/model.json with value=1.",
+                }
+            ],
+            "interactions": {"account": "Isolated real-store develop turn.", "unknowns": []},
+        }
+        with exclusive(self.system.ex.root / "owner.lock"):
+            prepared = self.ops.prepare(spec)
+            self.assertEqual(prepared["representation_operation"]["mode"], "develop")
+            loaded_spec, op_sha, _ = self.ops.operation("rep-dev-1")
+            self.assertEqual(loaded_spec["turn"], "rep-dev-1")
+            self.assertEqual(op_sha, prepared["representation_operation"]["sha256"])
+
+            witness = self.ops.template("rep-dev-1")
+            self.assertEqual(witness["format"], representation.WITNESS)
+            witness["applications"][0].update(
+                account="Encoded initial value from sources/basis.txt.",
+                outputs=["outputs/model.json"],
+            )
+            reply = self._write_candidate("dev.reply", "Developed candidate.", as_json=False)
+            cand = self._write_candidate("dev.json", {"value": 1, "note": "v1"})
+            received = self.ops.receive(
+                "rep-dev-1", reply, witness, "dev-producer", [f"outputs/model.json={cand}"]
+            )
+            self.assertEqual(received["packet"], "rep-dev-1")
+            bound_path = self.ops.location("rep-dev-1") / "bound-return.json"
+            bound = representation.read_json(bound_path)
+            self.assertEqual(bound["format"], representation.BOUND_RETURN)
+            self.assertEqual(bound["outputs"][0]["path"], "outputs/model.json")
+            self.assertEqual(bound["outputs"][0]["changed_json_pointers"], [""])
+
+    def test_real_system_transform_and_realize_require_completed_adoption_and_detect_tamper(
+        self,
+    ) -> None:
+        self._seed_adopted_target("seed-a", "outputs/state.json", {"value": 1, "tag": "a/b~c"})
+        rep_pin = self.ops.pin("outputs/state.json", accepted_in="seed-a")
+        src_pin = self.ops.pin("sources/basis.txt")
+        self.assertEqual(rep_pin["accepted_in"], "seed-a")
+
+        spec = {
+            "format": representation.OPERATION,
+            "turn": "rep-xform-1",
+            "mode": "transform",
+            "task": "Increment accepted value while preserving tag.",
+            "consumer": "representation-reviewer",
+            "representations": [rep_pin],
+            "sources": [src_pin],
+            "targets": ["outputs/state.json"],
+            "applications": [
+                {
+                    "id": "app-xform",
+                    "sources": ["sources/basis.txt"],
+                    "representations": ["outputs/state.json"],
+                    "operation": "Increment value to 2.",
+                    "prediction": "Only /value changes.",
+                }
+            ],
+            "interactions": {"account": "Isolated real-store transform turn.", "unknowns": []},
+        }
+        with exclusive(self.system.ex.root / "owner.lock"):
+            self.ops.prepare(spec)
+            witness = self.ops.template("rep-xform-1")
+            witness["applications"][0].update(
+                account="Incremented value to 2.", outputs=["outputs/state.json"]
+            )
+            reply = self._write_candidate("xf.reply", "Transformed state.", as_json=False)
+            cand = self._write_candidate("xf.json", {"value": 2, "tag": "a/b~c"})
+            self.ops.receive(
+                "rep-xform-1", reply, witness, "xf-producer", [f"outputs/state.json={cand}"]
+            )
+            bound = representation.read_json(self.ops.location("rep-xform-1") / "bound-return.json")
+            self.assertEqual(bound["outputs"][0]["changed_json_pointers"], ["/value"])
+
+        # Tampering with workspace bytes causes check_pin to fail closed.
+        (self.system.work / "outputs/state.json").write_text('{"value": 999}\n', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "input basis changed"):
+            self.ops.check_pin(rep_pin, representation=True)
+
+    def test_real_system_changed_paths_and_validation_refuse_invalid_specs(self) -> None:
+        self.assertEqual(
+            representation.changed_paths({"a/b": 1, "c~d": [1, 2]}, {"a/b": 2, "c~d": [1, 3]}),
+            ["/a~1b", "/c~0d/1"],
+        )
+        self.assertEqual(representation.changed_paths([1], [1, 2]), [""])
+        self.assertEqual(representation.changed_paths({"k": 1}, [1]), [""])
+
+        bad_spec = {
+            "format": representation.OPERATION,
+            "turn": "bad-turn",
+            "mode": "transform",
+            "task": "Missing representations.",
+            "consumer": "reviewer",
+            "representations": [],
+            "sources": [],
+            "targets": ["outputs/missing.json"],
+            "applications": [
+                {
+                    "id": "a1",
+                    "sources": [],
+                    "representations": [],
+                    "operation": "Op",
+                    "prediction": "Pred",
+                }
+            ],
+            "interactions": {"account": "Account.", "unknowns": []},
+        }
+        with self.assertRaisesRegex(ValueError, "requires an accepted representation binding"):
+            self.ops.validate_operation(bad_spec)
+
+    def test_real_system_run_cli_action_with_colocated_engine_end_to_end(self) -> None:
+        args = Namespace(
+            engine=SRC_ROOT / "managed_ai_information",
+            root=self.store_root,
+            action="pin",
+            path="sources/basis.txt",
+            accepted_in=None,
+        )
+        pinned = representation.run_cli_action(args)
+        self.assertEqual(pinned["path"], "sources/basis.txt")
+        self.assertEqual(pinned["sha256"], representation.digest(self.source.read_bytes()))
 
 
 if __name__ == "__main__":

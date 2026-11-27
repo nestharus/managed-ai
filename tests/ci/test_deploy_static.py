@@ -15,6 +15,8 @@ if str(_REPO) not in sys.path:
 
 from scripts.ci.validate_deploy import validate_repository  # noqa: E402
 
+from managed_ai_information import __version__ as PKG_VERSION  # noqa: E402
+
 DEPLOY_PATHS = (
     "pyproject.toml",
     ".dockerignore",
@@ -70,6 +72,9 @@ class DeployStaticValidationTests(unittest.TestCase):
 
     def test_cli_rejects_missing_root_with_exit_2_json_stderr(self) -> None:
         missing = self.tmp_root / "does-not-exist"
+        self.assertTrue(bool(PKG_VERSION))
+        with self.assertRaises(ValueError):
+            validate_repository(missing)
         proc = subprocess.run(
             [
                 sys.executable,

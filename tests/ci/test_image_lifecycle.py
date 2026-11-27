@@ -10,6 +10,7 @@ import tokenize
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any, cast
 
 if str(Path(__file__).resolve().parents[1]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -19,9 +20,9 @@ SCRIPT = REPO / "scripts/ci/image_lifecycle.py"
 PIPELINE = REPO / ".buildkite/pipeline.yml"
 NIGHTLY = REPO / ".buildkite/pipeline-nightly.yml"
 
-if str(REPO / "scripts/ci") not in sys.path:
-    sys.path.insert(0, str(REPO / "scripts/ci"))
-import image_lifecycle  # noqa: E402
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+from scripts.ci import image_lifecycle  # noqa: E402
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -234,19 +235,23 @@ class ImageLifecycleTests(unittest.TestCase):
             self.assertNotIn("latest", plan["tags"])
             self.assertFalse(any(ref.endswith(":latest") for ref in plan["references"]))
 
-        # Invalid inputs rejected with exit 2 and no traceback.
-        for bad_args in (
-            ("tag-plan", "--channel", "main", "--git-sha", "not-a-sha"),
-            ("tag-plan", "--channel", "main", "--git-sha", sha_full, "--context-sha", "bad-ctx"),
-            ("tag-plan", "--channel", "release", "--git-sha", sha_full, "--version", "latest"),
-            ("tag-plan", "--channel", "release", "--git-sha", sha_full, "--version", "v1.2.3"),
-            ("tag-plan", "--channel", "pr", "--git-sha", sha_full, "--allow-pr-push"),
-            ("tag-plan", "--channel", "local", "--git-sha", sha_full, "--version", "1.0.0"),
-            ("tag-plan", "--channel", "invalid", "--git-sha", sha_full),
+        # Direct ValueError validation on invalid tag-plan arguments (fast, zero subprocesses)
+        # plus one CLI exit-2 check confirming no raw traceback on stderr.
+        for bad_kwargs in (
+            {"channel": "main", "git_sha": "not-a-sha"},
+            {"channel": "main", "git_sha": sha_full, "context_sha": "bad-ctx"},
+            {"channel": "release", "git_sha": sha_full, "version": "latest"},
+            {"channel": "release", "git_sha": sha_full, "version": "v1.2.3"},
+            {"channel": "pr", "git_sha": sha_full, "allow_pr_push": True},
+            {"channel": "local", "git_sha": sha_full, "version": "1.0.0"},
+            {"channel": "invalid", "git_sha": sha_full},
         ):
-            with self.subTest(bad_args=bad_args):
-                proc = self._run_cli(*bad_args, expected_rc=2)
-                self.assertNotIn("Traceback", proc.stderr)
+            with self.subTest(bad_kwargs=bad_kwargs), self.assertRaises(ValueError):
+                image_lifecycle.build_tag_plan(**cast(dict[str, Any], bad_kwargs))
+        bad_cli = self._run_cli(
+            "tag-plan", "--channel", "invalid", "--git-sha", sha_full, expected_rc=2
+        )
+        self.assertNotIn("Traceback", bad_cli.stderr)
 
     def test_plan_gc_retention_gitops_pins_shared_digest_safety_and_strict_json(self) -> None:
         gitops = self.root / "gitops"
