@@ -372,7 +372,7 @@ def _act_backend(system: Any, args: argparse.Namespace) -> dict[str, Any]:
             namespace=args.namespace,
             mode=args.mode,
             token_env=args.token_env,
-            include_blobs=not args.no_blobs,
+            include_blobs=args.blobs,
             verify_blob_bytes=args.verify_blob_bytes,
         )
     if args.backend_action == "cutover":
@@ -381,7 +381,7 @@ def _act_backend(system: Any, args: argparse.Namespace) -> dict[str, Any]:
             namespace=args.namespace,
             mode=args.mode,
             token_env=args.token_env,
-            include_blobs=not args.no_blobs,
+            include_blobs=args.blobs,
             verify_blob_bytes=args.verify_blob_bytes,
         )
     return bridge.rollback(reason=args.reason)

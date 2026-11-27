@@ -380,34 +380,41 @@ class ObjectStore:
         return has_pack_pointer(self.packs_dir)
 
     @staticmethod
-    def _validate_key(key: str) -> None:
-        if (
-            not isinstance(key, str)
-            or len(key) != 64
-            or any(c not in "0123456789abcdef" for c in key)
-        ):
+    def _is_hex_key(key: Any) -> bool:
+        return isinstance(key, str) and len(key) == 64 and all(c in "0123456789abcdef" for c in key)
+
+    @classmethod
+    def _validate_key(cls, key: str) -> None:
+        if not cls._is_hex_key(key):
             raise ValueError("invalid object identity")
 
     def has(self, key: str) -> bool:
-        if (
-            not isinstance(key, str)
-            or len(key) != 64
-            or any(c not in "0123456789abcdef" for c in key)
-        ):
+        if not self._is_hex_key(key):
             return False
         active = self._active_pack_session
         if active is not None and active.has(key):
             return True
-        if has_ordinary_file(self.directory / key):
+        if has_ordinary_file(self.directory / key) or has_ordinary_file(
+            self.directory / (key + ".deflate")
+        ):
             return True
-        if has_ordinary_file(self.directory / (key + ".deflate")):
-            return True
-        if active is not None:
-            return False
-        if not self._has_pack_pointer():
+        if active is not None or not self._has_pack_pointer():
             return False
         with self._open_pack_session() as session:
             return session.has(key)
+
+    def occ_of(self, key: str) -> int | None:
+        """Return packed occupancy byte (e.g. OCC_SEALED) without reading slab bytes, or None."""
+        if not self._is_hex_key(key):
+            return None
+        if (active := self._active_pack_session) is not None:
+            located = active.locate(key)
+            return None if located is None else located[2]
+        if not self._has_pack_pointer():
+            return None
+        with self._open_pack_session() as session:
+            located = session.locate(key)
+            return None if located is None else located[2]
 
     def entries(self) -> list[tuple[str, Path, bool, int]]:
         """Return sorted ordinary loose object entries as (key, path, is_compressed, disk_bytes)."""
@@ -439,8 +446,7 @@ class ObjectStore:
 
     def packed_entries(self) -> list[dict[str, Any]]:
         """Return live (non-tombstoned) packed object metadata from packs/CURRENT.json."""
-        active = self._active_pack_session
-        if active is not None:
+        if (active := self._active_pack_session) is not None:
             return active.live_entries()
         if not self._has_pack_pointer():
             return []
@@ -460,10 +466,9 @@ class ObjectStore:
                 "disk_bytes": disk_bytes,
             }
         for row in self.packed_entries():
-            if row["object"] in seen:
-                continue
-            seen.add(row["object"])
-            yield dict(row, storage="packed")
+            if row["object"] not in seen:
+                seen.add(row["object"])
+                yield dict(row, storage="packed")
 
     def put(self, data: bytes, *, compress: bool = False) -> str:
         if compress:
@@ -475,8 +480,7 @@ class ObjectStore:
         if len(data) > max_bytes:
             raise ValueError("object exceeds the per-object limit")
         key = sha(data)
-        raw_path = self.directory / key
-        deflate_path = self.directory / (key + ".deflate")
+        raw_path, deflate_path = self.directory / key, self.directory / (key + ".deflate")
         if raw_path.exists() or deflate_path.exists() or self.has(key):
             if self.read(key, retained=True, expected_bytes=len(data)) != data:
                 raise ValueError("content object changed")
@@ -490,14 +494,9 @@ class ObjectStore:
         return key
 
     def _read_from_packs(
-        self,
-        key: str,
-        *,
-        retained: bool,
-        expected_bytes: int | None,
+        self, key: str, *, retained: bool, expected_bytes: int | None
     ) -> bytes | None:
-        active = self._active_pack_session
-        if active is not None:
+        if (active := self._active_pack_session) is not None:
             return active.read(key, retained=retained, expected_bytes=expected_bytes)
         if not self._has_pack_pointer():
             return None

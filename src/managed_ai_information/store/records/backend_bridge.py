@@ -46,7 +46,9 @@ _STRING_LIST_KEYS = (
     "metadata_only_ids",
     "metadata_only_kinds",
 )
-_BACKEND_KEYS = frozenset({"type", "url", "namespace", "mode", "token_env", *_STRING_LIST_KEYS})
+_BACKEND_KEYS = frozenset(
+    {"type", "url", "namespace", "mode", "token_env", "include_blobs", *_STRING_LIST_KEYS}
+)
 
 type BackendType = Literal["embedded", "membus-v2"]
 type MembusMode = Literal["shadow-async", "dual-sync", "primary"]
@@ -69,6 +71,7 @@ class BackendConfig:
     namespace: str | None = None
     mode: MembusMode = "dual-sync"
     token_env: str | None = None
+    include_blobs: bool = True
     sealed_ids: tuple[str, ...] = ()
     sealed_kinds: tuple[str, ...] = ()
     sealed_prefixes: tuple[str, ...] = ()
@@ -96,6 +99,8 @@ class BackendConfig:
         }
         if self.token_env is not None:
             out["token_env"] = self.token_env
+        if not self.include_blobs:
+            out["include_blobs"] = False
         for key in _STRING_LIST_KEYS:
             if vals := getattr(self, key):
                 out[key] = list(vals)
@@ -116,7 +121,9 @@ def parse_backend_config(raw: Any) -> BackendConfig:
         raise ValueError(f"unsupported backend type: {btype!r}")
     if btype == "embedded":
         disallowed = [
-            k for k in ("url", "namespace", "mode", "token_env") if raw.get(k) is not None
+            k
+            for k in ("url", "namespace", "mode", "token_env", "include_blobs")
+            if raw.get(k) is not None
         ]
         if disallowed:
             raise ValueError("embedded backend rejects remote fields: " + ", ".join(disallowed))
@@ -142,6 +149,10 @@ def parse_backend_config(raw: Any) -> BackendConfig:
             raise ValueError("backend.token_env must be a nonempty environment variable name")
         token_env = token_env.strip()
 
+    include_blobs = raw.get("include_blobs", True)
+    if type(include_blobs) is not bool:
+        raise ValueError("backend.include_blobs must be a boolean")
+
     lists = {k: _validate_str_tuple(raw.get(k), k) for k in _STRING_LIST_KEYS}
     return BackendConfig(
         backend_type="membus-v2",
@@ -149,6 +160,7 @@ def parse_backend_config(raw: Any) -> BackendConfig:
         namespace=ns,
         mode=mode_raw,  # type: ignore[arg-type]
         token_env=token_env,
+        include_blobs=include_blobs,
         **lists,
     )
 
@@ -258,7 +270,11 @@ class StoreBackendBridge:
             if not isinstance(path_val, str) or not path_val.startswith("object:"):
                 continue
             digest = path_val.removeprefix("object:")
+            if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                continue
             if entry.get("availability") == "sealed" or obj_store.occ_of(digest) == OCC_SEALED:
+                continue
+            if not obj_store.has(digest):
                 continue
             if self.config.mode != "shadow-async" and client.has_blob(ns, digest):
                 continue
@@ -273,7 +289,7 @@ class StoreBackendBridge:
         if not self.config.is_membus or self.config.namespace is None:
             return
         ns, (client, router) = self.config.namespace, self._ensure_client()
-        cfg = self.mirror_config(include_blobs=True)
+        cfg = self.mirror_config(include_blobs=self.config.include_blobs)
         record_id, kind = str(record["id"]), str(record.get("kind", "record"))
         vis, _ = classify_record_visibility(record_id, None, cfg)
         full_record: Mapping[str, Any] = record
@@ -319,7 +335,7 @@ class StoreBackendBridge:
             visibility=vis,
             metadata=meta,
         )
-        if vis != "Sealed":
+        if vis != "Sealed" and self.config.include_blobs:
             self._mirror_referenced_blobs(full_record, ns, client, router)
 
     def mirror_batch_receipt(self, receipt: Mapping[str, Any]) -> None:
@@ -428,14 +444,21 @@ def _resolve_target_config(
     namespace: str | None,
     mode: str | None,
     token_env: str | None,
+    include_blobs: bool | None,
     default_mode: MembusMode,
 ) -> BackendConfig:
     cur = system.backend_bridge.config
+    eff_blobs = (
+        include_blobs
+        if include_blobs is not None
+        else (cur.include_blobs if cur.is_membus else True)
+    )
     raw: dict[str, Any] = {
         "type": "membus-v2",
         "url": url if url is not None else cur.url,
         "namespace": namespace if namespace is not None else cur.namespace,
         "mode": mode if mode is not None else (cur.mode if cur.is_membus else default_mode),
+        "include_blobs": eff_blobs,
     }
     if (tok := token_env if token_env is not None else cur.token_env) is not None:
         raw["token_env"] = tok
@@ -482,7 +505,7 @@ def backend_status(
             result["health"] = client.health()
             result["healthy"] = True
             if check_parity:
-                mcfg = _mirror_config_for(system, cfg, include_blobs=True)
+                mcfg = _mirror_config_for(system, cfg, include_blobs=cfg.include_blobs)
                 result["parity"] = MembusStoreMirror().verify_parity(
                     system.root, client, mcfg, verify_blob_bytes=verify_blob_bytes
                 )
@@ -517,7 +540,7 @@ def _apply_transition(
     namespace: str | None = None,
     mode: str | None = None,
     token_env: str | None = None,
-    include_blobs: bool = True,
+    include_blobs: bool | None = None,
     verify_blob_bytes: bool = False,
 ) -> dict[str, Any]:
     is_cutover = action == "cutover"
@@ -527,11 +550,12 @@ def _apply_transition(
         namespace=namespace,
         mode=mode,
         token_env=token_env,
+        include_blobs=include_blobs,
         default_mode="primary" if is_cutover else "dual-sync",
     )
     if target.url is None or target.namespace is None:
         raise ValueError("membus-v2 backend requires a nonempty url and namespace")
-    mcfg = _mirror_config_for(system, target, include_blobs=include_blobs)
+    mcfg = _mirror_config_for(system, target, include_blobs=target.include_blobs)
     with MembusV2Backend(target.url, token=target.resolve_token(), timeout=10.0) as client:
         _abort_open_migration(client, target.namespace, action)
         report = MembusStoreMirror().apply(

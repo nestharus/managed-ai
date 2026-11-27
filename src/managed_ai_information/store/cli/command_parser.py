@@ -326,7 +326,7 @@ def _store_backend_commands(sub: Any) -> None:
         cmd.add_argument("--namespace", default=None)
         cmd.add_argument("--mode", choices=modes, default=None if name == "sync" else "primary")
         cmd.add_argument("--token-env", default=None)
-        cmd.add_argument("--no-blobs", action="store_true")
+        cmd.add_argument("--blobs", action=argparse.BooleanOptionalAction, default=None)
         cmd.add_argument("--verify-blob-bytes", action="store_true")
     rb = ba.add_parser("rollback", allow_abbrev=False)
     rb.add_argument("--reason", default=None)

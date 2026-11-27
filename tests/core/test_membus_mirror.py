@@ -513,6 +513,173 @@ class MembusMirrorUnitTests(unittest.TestCase):
                 ObjectStore.iter_objects = orig_iter  # type: ignore[method-assign]
                 ObjectStore.read = orig_read  # type: ignore[method-assign]
 
+    def test_w20a_no_blobs_persistence_and_occ_sealed_live_write(self) -> None:
+        """Bug 1 & Bug 2: ObjectStore.occ_of() + persistent include_blobs (--no-blobs/--blobs)."""
+        from managed_ai_information.core.pack_reader import OCC_HEADER_STRUCT
+        from managed_ai_information.core.storage import exclusive, read_json
+        from managed_ai_information.store.cli.command_parser import parser as store_parser
+        from managed_ai_information.store.records.backend_bridge import (
+            backend_cutover,
+            backend_status,
+            backend_sync,
+            parse_backend_config,
+        )
+        from managed_ai_information.store.records.pack_slab import (
+            execute_pack_objects,
+            plan_pack_objects,
+        )
+        from managed_ai_information.store.system import System
+
+        # Config validation: strict bool + rejected on embedded
+        self.assertFalse(
+            parse_backend_config(
+                {
+                    "type": "membus-v2",
+                    "url": "http://127.0.0.1:8787",
+                    "namespace": "ns",
+                    "include_blobs": False,
+                }
+            ).include_blobs
+        )
+        with self.assertRaises(ValueError):
+            parse_backend_config({"type": "embedded", "include_blobs": False})
+        with self.assertRaises(ValueError):
+            parse_backend_config(
+                {
+                    "type": "membus-v2",
+                    "url": "http://127.0.0.1:8787",
+                    "namespace": "ns",
+                    "include_blobs": "no",
+                }
+            )
+
+        # CLI --blobs / --no-blobs tri-state (None when omitted, False/True when explicit)
+        cli = store_parser()
+        self.assertIsNone(cli.parse_args(["--root", ".", "backend", "sync"]).blobs)
+        self.assertFalse(cli.parse_args(["--root", ".", "backend", "cutover", "--no-blobs"]).blobs)
+        self.assertTrue(cli.parse_args(["--root", ".", "backend", "sync", "--blobs"]).blobs)
+
+        with (
+            tempfile.TemporaryDirectory(prefix="membus-w20a-bugs-") as tmp,
+            _MockMembusServer() as server,
+        ):
+            root = Path(tmp) / "store"
+            System.initialize(
+                root,
+                {"contribution": "Test occ_of and persistent include_blobs."},
+                instance_id="w20a-bugs",
+            )
+            with System(root) as sys_obj, exclusive(sys_obj.ex.root / "owner.lock"):
+                pub_sha = sys_obj.ex.objects.put(b"public-basis-payload-w20a")
+                sealed_sha = sys_obj.ex.objects.put(b"packed-sealed-custody-w20a")
+                plan = plan_pack_objects(sys_obj)
+                execute_pack_objects(
+                    sys_obj,
+                    expected_plan=plan["plan_sha256"],
+                    reason="pack test blobs",
+                )
+                # Flip packed shard occupancy byte to OCC_SEALED and re-pin CURRENT.json
+                from managed_ai_information.core.storage import sha, write_json
+
+                packs_dir = sys_obj.ex.objects.packs_dir
+                with sys_obj.ex.objects.pack_session() as sess:
+                    loc = sess.locate(sealed_sha)
+                    assert loc is not None
+                    shard, slot = loc[0], loc[1]
+                    occ_name = shard.descriptor["occ"]
+                    occ_path = packs_dir / occ_name
+                raw_occ = bytearray(occ_path.read_bytes())
+                raw_occ[OCC_HEADER_STRUCT.size + slot] = OCC_SEALED
+                new_occ = bytes(raw_occ)
+                occ_path.write_bytes(new_occ)
+                cur_doc = read_json(packs_dir / "CURRENT.json")
+                for row in cur_doc["shards"]:
+                    if row["occ"] == occ_name:
+                        row["occ_sha256"] = sha(new_occ)
+                write_json(packs_dir / "CURRENT.json", cur_doc)
+
+                # Bug 1: ObjectStore.occ_of() detects OCC_SEALED with 0 slab reads; None for missing
+                self.assertEqual(sys_obj.ex.objects.occ_of(sealed_sha), OCC_SEALED)
+                self.assertIsNotNone(sys_obj.ex.objects.occ_of(pub_sha))
+                self.assertIsNone(sys_obj.ex.objects.occ_of("0" * 64))
+                self.assertIsNone(sys_obj.ex.objects.occ_of("not-a-sha"))
+
+                # Bug 2: cutover --no-blobs persists include_blobs=False & skips blob mirroring
+                backend_cutover(
+                    sys_obj,
+                    url=server.base_url,
+                    namespace="nb_ns",
+                    mode="primary",
+                    include_blobs=False,
+                )
+                self.assertFalse(read_json(root / "system.json")["backend"]["include_blobs"])
+                self.assertEqual(server.state.blobs, {})
+
+                # Live write with object:<sha> basis must NOT mirror blobs while include_blobs=False
+                sys_obj.put(
+                    {
+                        "id": "rec-no-blob",
+                        "kind": "note",
+                        "content": {"summary": "No blob mirroring active"},
+                        "relations": [],
+                        "basis": [f"object:{pub_sha}"],
+                        "active": True,
+                    },
+                    0,
+                )
+                self.assertEqual(server.state.blobs, {})
+
+                # Subsequent sync omitting include_blobs retains False; status checks 0 blobs
+                sync_rep = backend_sync(sys_obj)
+                self.assertFalse(sync_rep["backend"]["include_blobs"])
+                self.assertFalse(read_json(root / "system.json")["backend"]["include_blobs"])
+                st_rep = backend_status(sys_obj)
+                self.assertEqual(st_rep["parity"]["status"], "passed")
+                self.assertEqual(st_rep["parity"]["blobs_checked"], 0)
+
+                # Enabling include_blobs=True mirrors non-sealed object:<sha> & skips OCC_SEALED
+                backend_cutover(sys_obj, mode="primary", include_blobs=True)
+                self.assertNotIn("include_blobs", read_json(root / "system.json")["backend"])
+
+                orig_read = ObjectStore.read
+
+                def _forbid_sealed_read(obj_self: ObjectStore, key: str, **kwargs: Any) -> bytes:
+                    if key == sealed_sha:
+                        raise AssertionError("OCC_SEALED object must never be read on live mirror")
+                    return orig_read(obj_self, key, **kwargs)
+
+                ObjectStore.read = _forbid_sealed_read  # type: ignore[method-assign]
+                try:
+                    sys_obj.put(
+                        {
+                            "id": "rec-mixed-blobs",
+                            "kind": "note",
+                            "content": {"summary": "Public + OCC_SEALED basis"},
+                            "relations": [],
+                            "basis": [f"object:{pub_sha}"],
+                            "active": True,
+                        },
+                        0,
+                    )
+                    # Directly invoke mirror_record with both pub_sha, sealed_sha & missing sha
+                    sys_obj.backend_bridge._mirror_referenced_blobs(
+                        {
+                            "basis": [
+                                {"path": f"object:{pub_sha}"},
+                                {"path": f"object:{sealed_sha}"},
+                                {"path": "object:" + "f" * 64},
+                            ]
+                        },
+                        "nb_ns",
+                        sys_obj.backend_bridge._ensure_client()[0],
+                        sys_obj.backend_bridge._ensure_client()[1],
+                    )
+                finally:
+                    ObjectStore.read = orig_read  # type: ignore[method-assign]
+
+                self.assertIn(("nb_ns", pub_sha), server.state.blobs)
+                self.assertNotIn(("nb_ns", sealed_sha), server.state.blobs)
+
 
 @unittest.skipUnless(
     _MEMBUS_V2_BIN is not None,
@@ -547,8 +714,10 @@ class MembusLiveMirrorTests(unittest.TestCase):
 
             mirror = MembusStoreMirror()
             cfg = build_mirror_config("crw_live_mirror", sealed_ids=sealed_ids)
-            with EphemeralMembusDaemon(_MEMBUS_V2_BIN) as daemon:
-                backend = MembusV2Backend(daemon.base_url, timeout=15.0)
+            with (
+                EphemeralMembusDaemon(_MEMBUS_V2_BIN) as daemon,
+                MembusV2Backend(daemon.base_url, timeout=15.0) as backend,
+            ):
                 app_rep = mirror.apply(copy_store, backend, cfg, verify_blob_bytes=True)
                 self.assertEqual(app_rep["status"], "passed")
                 self.assertEqual(app_rep["migration"]["final_phase"], "committed")
