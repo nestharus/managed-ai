@@ -531,19 +531,19 @@ class RepresentationOperations:
         try:
             return self.system.receive(turn, reply_path, producer, proposals)
         except BaseException:
-            ex_root = getattr(self.ex, "root", None)
-            if not (
-                ex_root is not None and (Path(ex_root) / "turns" / turn / "return.json").exists()
-            ):
+            dir_fn = getattr(self.ex, "directory", None)
+            if callable(dir_fn):
+                native_ret: Path | None = Path(dir_fn(turn)) / "return.json"
+            else:
+                ex_root = getattr(self.ex, "root", None)
+                native_ret = Path(ex_root) / "packets" / turn / "return.json" if ex_root else None
+            if native_ret is None or not native_ret.exists():
                 reply_path.unlink(missing_ok=True)
             raise
 
     @staticmethod
     def validate_witness(
-        spec: dict[str, Any],
-        key: str,
-        witness: Any,
-        output_paths: set[str],
+        spec: dict[str, Any], key: str, witness: Any, output_paths: set[str]
     ) -> None:
         require(
             isinstance(witness, dict) and witness.get("format") == WITNESS,

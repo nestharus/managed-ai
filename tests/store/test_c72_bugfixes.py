@@ -257,6 +257,9 @@ class C72RepresentationTests(unittest.TestCase):
                 self.root = ex_root
                 self.workspace = work
 
+            def directory(self, turn: str) -> Path:
+                return ex_root / "packets" / turn
+
             def path(self, rel: str) -> Path:
                 return work / rel
 
@@ -277,9 +280,9 @@ class C72RepresentationTests(unittest.TestCase):
                 attempts["n"] += 1
                 if attempts["n"] == 1:
                     if create_native_return_before_error:
-                        tdir = ex_root / "turns" / turn
-                        tdir.mkdir(parents=True, exist_ok=True)
-                        (tdir / "return.json").write_text("{}", encoding="utf-8")
+                        pdir = self.ex.directory(turn)
+                        pdir.mkdir(parents=True, exist_ok=True)
+                        (pdir / "return.json").write_text("{}", encoding="utf-8")
                     raise RuntimeError("transient receive error")
                 return {"turn": turn, "reply": str(reply_path)}
 
