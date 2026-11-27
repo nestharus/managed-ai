@@ -17,6 +17,7 @@ from managed_ai_information.core import storage_backend_protocol as _sbp
 
 BackendConflictError = _sbp.BackendConflictError
 BackendContendedError = _sbp.BackendContendedError
+BackendGapError = _sbp.BackendGapError
 BackendRecord = _sbp.BackendRecord
 BackendUnavailableError = _sbp.BackendUnavailableError
 LeaseGrant = _sbp.LeaseGrant
@@ -29,6 +30,7 @@ StorageBackendError = _sbp.StorageBackendError
 __all__ = [
     "BackendConflictError",
     "BackendContendedError",
+    "BackendGapError",
     "BackendRecord",
     "BackendUnavailableError",
     "EmbeddedFileBackend",
@@ -263,20 +265,32 @@ class EmbeddedFileBackend:
         *,
         prefix: str | None = None,
         since_seq: int | None = None,
+        epoch: int | None = None,
         mode: str = "each",
         timeout: float | None = None,
     ) -> Iterator[_sbp.SignalEvent]:
         del mode, timeout
         ns = _sbp.validate_identifier(namespace, "namespace")
+        _sbp.validate_signal_cursor(since_seq, epoch)
+        if epoch is not None and epoch != 1:
+            raise _sbp.BackendGapError(
+                f"signal stream epoch mismatch: requested {epoch}, current 1",
+                status=410,
+                code="gap",
+            )
         with self._lock:
             snap = list(self._signals)
-        for ev in snap:
-            if (
-                ev.namespace == ns
-                and (since_seq is None or ev.seq > since_seq)
-                and (prefix is None or ev.key.startswith(prefix))
-            ):
-                yield ev
+
+        def _iter() -> Iterator[_sbp.SignalEvent]:
+            for ev in snap:
+                if (
+                    ev.namespace == ns
+                    and (since_seq is None or ev.seq > since_seq)
+                    and (prefix is None or ev.key.startswith(prefix))
+                ):
+                    yield ev
+
+        return _iter()
 
     def health(self) -> dict[str, Any]:
         return {
@@ -521,30 +535,38 @@ class MembusV2Backend:
         *,
         prefix: str | None = None,
         since_seq: int | None = None,
+        epoch: int | None = None,
         mode: str = "each",
         timeout: float | None = None,
     ) -> Iterator[_sbp.SignalEvent]:
         ns = _sbp.validate_identifier(namespace, "namespace")
+        _sbp.validate_signal_cursor(since_seq, epoch)
         params: dict[str, str] = {"mode": mode}
         if prefix is not None:
             params["prefix"] = prefix
         if since_seq is not None:
             params["since_seq"] = str(since_seq)
+        if epoch is not None:
+            params["epoch"] = str(epoch)
         qs = urllib.parse.urlencode(params)
         path = f"{self._parsed.path.rstrip('/')}/v2/signals/{_sbp.quote_segment(ns)}/stream?{qs}"
-        conn = self._open_connection(timeout=timeout)
-        try:
-            conn.request("GET", path, headers=self._headers({"Accept": "text/event-stream"}))
-            resp = conn.getresponse()
-            if resp.status != 200:
-                raise _sbp.map_http_error(resp.status, resp.read(65536))
-            yield from _sbp.parse_sse_signals(resp)
-        except StorageBackendError:
-            raise
-        except (http.client.HTTPException, TimeoutError, OSError, UnicodeDecodeError) as err:
-            raise BackendUnavailableError(str(err), status=0, code="unavailable") from None
-        finally:
-            conn.close()
+
+        def _iter() -> Iterator[_sbp.SignalEvent]:
+            conn = self._open_connection(timeout=timeout)
+            try:
+                conn.request("GET", path, headers=self._headers({"Accept": "text/event-stream"}))
+                resp = conn.getresponse()
+                if resp.status != 200:
+                    raise _sbp.map_http_error(resp.status, resp.read(65536))
+                yield from _sbp.parse_sse_signals(resp)
+            except StorageBackendError:
+                raise
+            except (http.client.HTTPException, TimeoutError, OSError, UnicodeDecodeError) as err:
+                raise BackendUnavailableError(str(err), status=0, code="unavailable") from None
+            finally:
+                conn.close()
+
+        return _iter()
 
     def register_collection(
         self,

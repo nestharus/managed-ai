@@ -42,6 +42,10 @@ class BackendUnavailableError(StorageBackendError):
     pass
 
 
+class BackendGapError(StorageBackendError):
+    """Raised when a signal stream cursor lags behind the log horizon or mismatches epoch."""
+
+
 @dataclass(frozen=True, slots=True)
 class BackendRecord:
     namespace: str
@@ -145,6 +149,7 @@ class StorageBackend(Protocol):
         *,
         prefix: str | None = None,
         since_seq: int | None = None,
+        epoch: int | None = None,
         mode: str = "each",
         timeout: float | None = None,
     ) -> Iterator[SignalEvent]: ...
@@ -265,6 +270,8 @@ def map_http_error(status: int, raw: bytes) -> StorageBackendError:
     except UnicodeDecodeError, ValueError:
         pass
     low = code.lower()
+    if status == 410 or "gap" in low or "epoch" in low:
+        return BackendGapError(msg, status=status, code=code)
     if status in (423, 429) or "lease" in low or "contend" in low:
         return BackendContendedError(msg, status=status, code=code)
     if status == 409 or "conflict" in low or "version" in low:
@@ -272,6 +279,36 @@ def map_http_error(status: int, raw: bytes) -> StorageBackendError:
     if status in (502, 503, 504):
         return BackendUnavailableError(msg, status=status, code=code)
     return StorageBackendError(msg, status=status, code=code)
+
+
+def validate_signal_cursor(since_seq: int | None, epoch: int | None) -> None:
+    """Validate optional SSE signal cursor arguments eagerly across all backends."""
+    if since_seq is not None and (
+        isinstance(since_seq, bool) or not isinstance(since_seq, int) or since_seq < 0
+    ):
+        raise ValueError(f"invalid since_seq: {since_seq!r}")
+    if epoch is not None and (
+        isinstance(epoch, bool) or not isinstance(epoch, int) or epoch <= 0
+    ):
+        raise ValueError(f"invalid epoch: {epoch!r}")
+
+
+def _build_sse_error(lines: list[str]) -> StorageBackendError:
+    raw_err = "\n".join(lines).encode("utf-8")
+    err_code = "sse_error"
+    err_msg = raw_err.decode("utf-8", errors="replace") or "SSE stream error"
+    if lines:
+        try:
+            ep = _st.strict_json_loads(raw_err, "sse_error", require_object=False)
+            if isinstance(ep, dict):
+                err_code = str(ep.get("error", err_code))
+                err_msg = str(ep.get("message", ep.get("error", err_msg)))
+        except (UnicodeDecodeError, ValueError):
+            pass
+    low = f"{err_code} {err_msg}".lower()
+    if "gap" in low or "epoch" in low:
+        return BackendGapError(err_msg, status=410, code=err_code)
+    return StorageBackendError(err_msg, status=500, code=err_code)
 
 
 def parse_sse_signals(stream: Any, *, max_line_bytes: int = _st.MAX_BYTES) -> Iterator[SignalEvent]:
@@ -298,12 +335,16 @@ def parse_sse_signals(stream: Any, *, max_line_bytes: int = _st.MAX_BYTES) -> It
                         str(p["kind"]).lower(),
                         bytes(hr) if isinstance(hr, list) else None,
                     )
+            elif ev == "error":
+                raise _build_sse_error(lines)
             ev = "message"
             lines = []
         elif ln.startswith("event:"):
             ev = ln[7:] if ln.startswith("event: ") else ln[6:]
         elif ln.startswith("data:"):
             lines.append(ln[6:] if ln.startswith("data: ") else ln[5:])
+    if ev == "error":
+        raise _build_sse_error(lines)
 
 
 def encode_local_record(
@@ -554,11 +595,19 @@ class InMemoryMirrorBackend:
         *,
         prefix: str | None = None,
         since_seq: int | None = None,
+        epoch: int | None = None,
         mode: str = "each",
         timeout: float | None = None,
     ) -> Iterator[SignalEvent]:
-        del prefix, since_seq, mode, timeout
+        del prefix, mode, timeout
         validate_identifier(namespace, "namespace")
+        validate_signal_cursor(since_seq, epoch)
+        if epoch is not None and epoch != 1:
+            raise BackendGapError(
+                f"in-memory backend epoch mismatch: requested {epoch}, current 1",
+                status=410,
+                code="gap",
+            )
         return iter(())
 
     def health(self) -> dict[str, Any]:

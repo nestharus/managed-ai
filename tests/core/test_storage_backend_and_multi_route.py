@@ -25,6 +25,7 @@ from managed_ai_information.core.storage import sha  # noqa: E402
 from managed_ai_information.core.storage_backend import (  # noqa: E402
     BackendConflictError,
     BackendContendedError,
+    BackendGapError,
     EmbeddedFileBackend,
     MembusV2Backend,
     StorageBackend,
@@ -32,6 +33,11 @@ from managed_ai_information.core.storage_backend import (  # noqa: E402
 )
 from managed_ai_information.core.storage_backend_protocol import (  # noqa: E402
     InMemoryMirrorBackend,
+    map_http_error,
+    parse_sse_signals,
+)
+from managed_ai_information.store.coordination_contract import (  # noqa: E402
+    CoordinationFacade,
 )
 
 
@@ -49,6 +55,11 @@ class _MembusV2State:
         self.signals: list[dict[str, Any]] = []
         self.migrations: list[tuple[str, str, dict[str, Any]]] = []
         self.seq = 0
+        self.epoch = 1
+        self.last_signal_query: dict[str, list[str]] = {}
+        self.force_signal_http_410 = False
+        self.force_sse_midstream_gap = False
+        self.force_sse_midstream_error = False
         self.corrupt_next_blob_get = False
 
 
@@ -148,7 +159,17 @@ def _start_membus_v2_server() -> tuple[ThreadingHTTPServer, _MembusV2State, str]
                 prefix = qs.get("prefix", [None])[0]
                 since_raw = qs.get("since_seq", [None])[0]
                 since_seq = int(since_raw) if since_raw is not None else None
+                epoch_raw = qs.get("epoch", [None])[0]
+                req_epoch = int(epoch_raw) if epoch_raw is not None else None
                 with state.lock:
+                    state.last_signal_query = qs
+                    force_410 = state.force_signal_http_410
+                    state.force_signal_http_410 = False
+                    mid_gap = state.force_sse_midstream_gap
+                    state.force_sse_midstream_gap = False
+                    mid_err = state.force_sse_midstream_error
+                    state.force_sse_midstream_error = False
+                    cur_epoch = state.epoch
                     events = [
                         ev
                         for ev in state.signals
@@ -156,10 +177,29 @@ def _start_membus_v2_server() -> tuple[ThreadingHTTPServer, _MembusV2State, str]
                         and (since_seq is None or ev["seq"] > since_seq)
                         and (prefix is None or bytes(ev["key"]).decode("utf-8").startswith(prefix))
                     ]
+                if force_410 or (req_epoch is not None and req_epoch != cur_epoch):
+                    self._send_json(
+                        410,
+                        {
+                            "error": "gap",
+                            "message": f"epoch {req_epoch} != current {cur_epoch}",
+                        },
+                    )
+                    return
                 chunks = [b'event: subscribed\ndata: {"ok": true}\n\n']
                 for ev in events:
                     chunks.append(
                         f"event: signal\nid: {ev['seq']}\ndata: {json.dumps(ev)}\n\n".encode()
+                    )
+                if mid_gap:
+                    chunks.append(
+                        b"event: error\n"
+                        b'data: {"error": "subscription gap: earliest available seq 5, '
+                        b'epoch 2"}\n\n'
+                    )
+                elif mid_err:
+                    chunks.append(
+                        b'event: error\ndata: {"error": "internal", "message": "broker reset"}\n\n'
                     )
                 payload = b"".join(chunks)
                 self.send_response(200)
@@ -751,6 +791,117 @@ class StorageBackendAndMultiRouteTests(unittest.TestCase):
         grant = mem.acquire_lease("ns", "res", "holder-1", ttl_ms=10_000)
         self.assertTrue(mem.validate_lease(grant))
         self.assertTrue(mem.release_lease(grant))
+
+    def test_stream_signals_epoch_gap_and_midstream_error_handling(self) -> None:
+        import io
+
+        state, base_url = self._start_server_with_cleanup()
+        with MembusV2Backend(base_url) as client:
+            client.put_record("research", "rec-a", b"one")
+            client.put_record("research", "rec-b", b"two")
+
+            # epoch=None omits epoch from query string.
+            no_epoch_events = list(client.stream_signals("research", since_seq=0))
+            self.assertEqual([ev.key for ev in no_epoch_events], ["rec-a", "rec-b"])
+            self.assertNotIn("epoch", state.last_signal_query)
+
+            events = list(client.stream_signals("research", since_seq=0, epoch=1))
+            self.assertEqual([ev.key for ev in events], ["rec-a", "rec-b"])
+            self.assertEqual(state.last_signal_query.get("epoch"), ["1"])
+            self.assertEqual(state.last_signal_query.get("since_seq"), ["0"])
+
+            # HTTP 410 / epoch mismatch raises BackendGapError (subclass of StorageBackendError).
+            with self.assertRaises(BackendGapError):
+                list(client.stream_signals("research", since_seq=0, epoch=99))
+            state.force_signal_http_410 = True
+            with self.assertRaises(BackendGapError):
+                list(client.stream_signals("research", since_seq=0))
+
+            # Mid-stream SSE event: error AFTER yielded events raises BackendGapError.
+            state.force_sse_midstream_gap = True
+            seen_before_gap: list[str] = []
+            with self.assertRaises(BackendGapError):
+                for ev in client.stream_signals("research", since_seq=0, epoch=1):
+                    seen_before_gap.append(ev.key)
+            self.assertEqual(seen_before_gap, ["rec-a", "rec-b"])
+
+            # Mid-stream non-gap SSE event: error raises StorageBackendError (not BackendGapError).
+            state.force_sse_midstream_error = True
+            with self.assertRaises(StorageBackendError) as err_ctx:
+                list(client.stream_signals("research", since_seq=0, epoch=1))
+            self.assertNotIsInstance(err_ctx.exception, BackendGapError)
+
+            # Invalid epoch / since_seq rejected EAGERLY on call (without iterating!).
+            for bad_epoch in (0, -1, True, False, "1", 1.5):
+                with self.assertRaises(ValueError):
+                    client.stream_signals("research", epoch=bad_epoch)  # type: ignore[arg-type]
+            for bad_seq in (-1, True, False, "0", 1.5):
+                with self.assertRaises(ValueError):
+                    client.stream_signals("research", since_seq=bad_seq)  # type: ignore[arg-type]
+
+        # Direct parse_sse_signals edge cases: EOF without blank line, empty data, malformed JSON,
+        # and multi-line data frames.
+        with self.assertRaises(BackendGapError):
+            list(parse_sse_signals(io.BytesIO(b'event: error\ndata: {"error":"gap"}\n')))
+        with self.assertRaises(StorageBackendError) as empty_err:
+            list(parse_sse_signals(io.BytesIO(b"event: error\n\n")))
+        self.assertNotIsInstance(empty_err.exception, BackendGapError)
+        with self.assertRaises(StorageBackendError):
+            list(parse_sse_signals(io.BytesIO(b"event: error\n")))
+        with self.assertRaises(BackendGapError):
+            list(parse_sse_signals(io.BytesIO(b"event: error\ndata: not-json epoch mismatch\n\n")))
+        with self.assertRaises(StorageBackendError) as plain_err:
+            list(parse_sse_signals(io.BytesIO(b"event: error\ndata: line1\ndata: line2\n\n")))
+        self.assertNotIsInstance(plain_err.exception, BackendGapError)
+        self.assertIn("line2", str(plain_err.exception))
+
+        # map_http_error: HTTP 410 empty body and non-410 gap code both yield BackendGapError.
+        self.assertIsInstance(map_http_error(410, b""), BackendGapError)
+        self.assertIsInstance(
+            map_http_error(400, b'{"error": "gap", "message": "trimmed"}'),
+            BackendGapError,
+        )
+
+        # EmbeddedFileBackend, InMemoryMirrorBackend, MultiRouteBackend, CoordinationFacade parity.
+        emb = EmbeddedFileBackend(self.base / "emb_epoch")
+        emb.put_record("research", "k1", b"v1")
+        self.assertEqual(len(list(emb.stream_signals("research", epoch=1))), 1)
+        with self.assertRaises(BackendGapError) as emb_gap:
+            emb.stream_signals("research", epoch=2)
+        self.assertEqual(emb_gap.exception.status, 410)
+        self.assertEqual(emb_gap.exception.code, "gap")
+        for bad_epoch in (0, -1, True, False, "1", 1.5):
+            with self.assertRaises(ValueError):
+                emb.stream_signals("research", epoch=bad_epoch)  # type: ignore[arg-type]
+        for bad_seq in (-1, True, False, "0", 1.5):
+            with self.assertRaises(ValueError):
+                emb.stream_signals("research", since_seq=bad_seq)  # type: ignore[arg-type]
+
+        mem = InMemoryMirrorBackend()
+        self.assertEqual(list(mem.stream_signals("research", epoch=1)), [])
+        with self.assertRaises(BackendGapError) as mem_gap:
+            mem.stream_signals("research", epoch=2)
+        self.assertEqual(mem_gap.exception.status, 410)
+        self.assertEqual(mem_gap.exception.code, "gap")
+        for bad_epoch in (0, -1, True, False, "1", 1.5):
+            with self.assertRaises(ValueError):
+                mem.stream_signals("research", epoch=bad_epoch)  # type: ignore[arg-type]
+        for bad_seq in (-1, True, False, "0", 1.5):
+            with self.assertRaises(ValueError):
+                mem.stream_signals("research", since_seq=bad_seq)  # type: ignore[arg-type]
+
+        with MultiRouteBackend(emb, mode="single") as router:
+            self.assertEqual(len(list(router.stream_signals("research", epoch=1))), 1)
+            with self.assertRaises(BackendGapError):
+                router.stream_signals("research", epoch=2)
+
+            from types import SimpleNamespace
+
+            fake_sys = SimpleNamespace(ex=SimpleNamespace(root=self.base / "facade_root"))
+            facade = CoordinationFacade(system=fake_sys, backend=router)  # type: ignore[arg-type]
+            self.assertEqual(len(list(facade.subscribe_signals("research", epoch=1))), 1)
+            with self.assertRaises(BackendGapError):
+                facade.subscribe_signals("research", epoch=2)
 
 
 if __name__ == "__main__":

@@ -415,11 +415,17 @@ class CoordinationFacade:
         *,
         prefix: str | None = None,
         since_seq: int | None = None,
+        epoch: int | None = None,
         mode: str = "each",
         timeout: float | None = None,
     ) -> Iterator[SignalEvent]:
         if self.backend is None:
             raise ValueError("signal subscription requires a configured StorageBackend")
         return self.backend.stream_signals(
-            namespace, prefix=prefix, since_seq=since_seq, mode=mode, timeout=timeout
+            namespace,
+            prefix=prefix,
+            since_seq=since_seq,
+            epoch=epoch,
+            mode=mode,
+            timeout=timeout,
         )

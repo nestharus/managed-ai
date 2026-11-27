@@ -398,11 +398,17 @@ class MultiRouteBackend:
         *,
         prefix: str | None = None,
         since_seq: int | None = None,
+        epoch: int | None = None,
         mode: str = "each",
         timeout: float | None = None,
     ) -> Iterator[SignalEvent]:
         return self._active_backend().stream_signals(
-            namespace, prefix=prefix, since_seq=since_seq, mode=mode, timeout=timeout
+            namespace,
+            prefix=prefix,
+            since_seq=since_seq,
+            epoch=epoch,
+            mode=mode,
+            timeout=timeout,
         )
 
     def health(self) -> dict[str, Any]:

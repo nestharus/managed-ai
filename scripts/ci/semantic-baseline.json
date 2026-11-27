@@ -12,7 +12,7 @@
     "max_subpackage_sccs": 0,
     "max_package_sccs": 0,
     "max_cross_package_private_imports": 0,
-    "max_cross_subpackage_shortcuts": 62,
+    "max_cross_subpackage_shortcuts": 60,
     "max_non_primitive_nexus": 135
   },
   "allowances": {
@@ -20,7 +20,7 @@
       "lines": 810
     },
     "src/managed_ai_information/companions/representation/check_representation.py": {
-      "working_set_tokens": 345235
+      "working_set_tokens": 345924
     },
     "src/managed_ai_information/companions/representation/representation.py": {
       "lines": 714
@@ -41,21 +41,24 @@
     "src/managed_ai_information/core/storage.py": {
       "lines": 732
     },
+    "src/managed_ai_information/core/storage_backend.py": {
+      "lines": 655
+    },
     "src/managed_ai_information/deployment/cli.py": {
-      "working_set_tokens": 348674
+      "working_set_tokens": 349363
     },
     "src/managed_ai_information/deployment/controller.py": {
-      "working_set_tokens": 350248
+      "working_set_tokens": 350937
     },
     "src/managed_ai_information/deployment/isolation.py": {
-      "working_set_tokens": 340231
+      "working_set_tokens": 340920
     },
     "src/managed_ai_information/deployment/select_deployment.py": {
-      "working_set_tokens": 349667
+      "working_set_tokens": 350356
     },
     "src/managed_ai_information/deployment/selection.py": {
       "lines": 666,
-      "working_set_tokens": 346859
+      "working_set_tokens": 347548
     },
     "src/managed_ai_information/host/continuing_work/continuing_work.py": {
       "lines": 805
@@ -73,7 +76,7 @@
       "lines": 680
     },
     "src/managed_ai_information/library/cli.py": {
-      "working_set_tokens": 361042
+      "working_set_tokens": 361738
     },
     "src/managed_ai_information/store/cli/command_dispatch.py": {
       "working_set_tokens": 233280
@@ -85,10 +88,10 @@
       "working_set_tokens": 158479
     },
     "src/managed_ai_information/store/domain_api.py": {
-      "working_set_tokens": 337032
+      "working_set_tokens": 337721
     },
     "src/managed_ai_information/store/manage_store.py": {
-      "working_set_tokens": 335989
+      "working_set_tokens": 336678
     },
     "src/managed_ai_information/store/query/context_discovery.py": {
       "working_set_tokens": 122922
@@ -115,7 +118,7 @@
     },
     "src/managed_ai_information/store/system.py": {
       "lines": 903,
-      "working_set_tokens": 335383
+      "working_set_tokens": 336072
     },
     "src/managed_ai_information/store/turns/capture_inputs.py": {
       "lines": 699,
@@ -138,18 +141,18 @@
     }
   },
   "summary": {
-    "module_count": 204,
-    "total_lines": 64538,
-    "total_tokens": 593243,
+    "module_count": 205,
+    "total_lines": 64923,
+    "total_tokens": 597615,
     "max_file_lines": 903,
     "max_cc": 24,
     "max_depth": 5,
-    "max_working_set_tokens": 361042,
+    "max_working_set_tokens": 361738,
     "module_scc_count": 0,
     "subpackage_scc_count": 0,
     "package_scc_count": 0,
     "cross_package_private_imports": 0,
-    "cross_subpackage_shortcut_count": 62,
+    "cross_subpackage_shortcut_count": 60,
     "max_non_primitive_nexus": 135
   }
 }
