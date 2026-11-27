@@ -499,6 +499,28 @@ class NativeBridge:
             )
         return sid, rid, producer, body, target
 
+    def _check_conflicting_pending(
+        self,
+        sid: str,
+        existing_pending: dict[str, Any],
+        requests_dir: Path,
+    ) -> bool:
+        old_obj = self._host.root / existing_pending["receipt_object"]
+        if not old_obj.is_file() or is_reparse_or_symlink(old_obj):
+            return False
+        old_body = old_obj.read_bytes()
+        if digest(old_body) != existing_pending.get("receipt_sha256"):
+            return False
+        prior_path = _temp_receipt_file(requests_dir, old_body)
+        try:
+            try:
+                self._host.reconcile_capture_native(sid, prior_path, existing_pending["producer"])
+            except ValueError as prior_exc:
+                return str(prior_exc) == "receipt identity not recorded in native Attention"
+            raise ValueError("receipt identity already used")
+        finally:
+            prior_path.unlink(missing_ok=True)
+
     def _prepare_pending_capture(
         self,
         sid: str,
@@ -517,33 +539,9 @@ class NativeBridge:
                 existing_pending.get("receipt_sha256") != receipt_sha
                 or existing_pending.get("producer") != producer
             ):
-                old_obj = self._host.root / existing_pending["receipt_object"]
-                old_body = (
-                    old_obj.read_bytes()
-                    if old_obj.is_file() and not is_reparse_or_symlink(old_obj)
-                    else None
+                created_pending = self._check_conflicting_pending(
+                    sid, existing_pending, requests_dir
                 )
-                if old_body is not None and digest(old_body) == existing_pending.get(
-                    "receipt_sha256"
-                ):
-                    prior_path = _temp_receipt_file(requests_dir, old_body)
-                    try:
-                        try:
-                            self._host.reconcile_capture_native(
-                                sid,
-                                prior_path,
-                                existing_pending["producer"],
-                            )
-                        except ValueError as prior_exc:
-                            if (
-                                str(prior_exc)
-                                == "receipt identity not recorded in native Attention"
-                            ):
-                                created_pending = True
-                        else:
-                            raise ValueError("receipt identity already used")
-                    finally:
-                        prior_path.unlink(missing_ok=True)
 
         if created_pending:
             self._host._write(
@@ -560,6 +558,23 @@ class NativeBridge:
 
         return pending_path, created_pending
 
+    def _cleanup_uncommitted_pending(
+        self,
+        sid: str,
+        producer: str,
+        selected_path: Path,
+        pending_path: Path,
+        exc: ValueError,
+    ) -> None:
+        if str(exc) in _PRECOMMIT_CLEANUP_ERRORS:
+            pending_path.unlink(missing_ok=True)
+            return
+        try:
+            self._host.reconcile_capture_native(sid, selected_path, producer)
+        except ValueError as probe_exc:
+            if str(probe_exc) == "receipt identity not recorded in native Attention":
+                pending_path.unlink(missing_ok=True)
+
     def _execute_or_reconcile_capture(
         self,
         sid: str,
@@ -573,17 +588,9 @@ class NativeBridge:
         except ValueError as exc:
             if str(exc) != "receipt identity already used":
                 if created_pending:
-                    if str(exc) in _PRECOMMIT_CLEANUP_ERRORS:
-                        pending_path.unlink(missing_ok=True)
-                    else:
-                        try:
-                            self._host.reconcile_capture_native(sid, selected_path, producer)
-                        except ValueError as probe_exc:
-                            if (
-                                str(probe_exc)
-                                == "receipt identity not recorded in native Attention"
-                            ):
-                                pending_path.unlink(missing_ok=True)
+                    self._cleanup_uncommitted_pending(
+                        sid, producer, selected_path, pending_path, exc
+                    )
                 raise
 
             try:

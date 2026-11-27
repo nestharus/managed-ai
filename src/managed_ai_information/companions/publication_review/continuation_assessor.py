@@ -25,6 +25,30 @@ def _load_strict_json(path: _Path | str) -> Any:
     return _strict_json_loads(_Path(path).read_bytes(), label=str(path), require_object=False)
 
 
+def _check_artifact_receipt(receipt: Any, seen: set[str]) -> None:
+    if not isinstance(receipt, dict):
+        raise ValueError("each artifact receipt must be an object")
+    if not isinstance(receipt.get("id"), str):
+        raise ValueError("each artifact receipt requires a string id")
+    if receipt["id"] in seen:
+        raise ValueError("artifact ids must be unique")
+    seen.add(receipt["id"])
+
+    if not isinstance(receipt.get("artifact_sha256"), str):
+        raise ValueError("each artifact receipt requires artifact_sha256")
+    for key in ("requirements", "sources"):
+        if not isinstance(receipt.get(key), dict):
+            raise ValueError("receipt." + key + " must be an object")
+    if receipt.get("scope", "fixed") not in ("fixed", "discovery"):
+        raise ValueError("receipt.scope must be fixed or discovery")
+    for key in ("selections", "accepted_inputs"):
+        if key in receipt and not isinstance(receipt[key], dict):
+            raise ValueError("receipt." + key + " must be an object")
+    for basis in receipt.get("selections", {}).values():
+        if not isinstance(basis, dict):
+            raise ValueError("each previous selection must be an object")
+
+
 def _check_inputs(previous: Any, current: Any) -> None:
     if not isinstance(previous, dict) or not isinstance(current, dict):
         raise ValueError("previous and current must be JSON objects")
@@ -46,27 +70,7 @@ def _check_inputs(previous: Any, current: Any) -> None:
 
     seen: set[str] = set()
     for receipt in previous["artifacts"]:
-        if not isinstance(receipt, dict):
-            raise ValueError("each artifact receipt must be an object")
-        if not isinstance(receipt.get("id"), str):
-            raise ValueError("each artifact receipt requires a string id")
-        if receipt["id"] in seen:
-            raise ValueError("artifact ids must be unique")
-        seen.add(receipt["id"])
-
-        if not isinstance(receipt.get("artifact_sha256"), str):
-            raise ValueError("each artifact receipt requires artifact_sha256")
-        for key in ("requirements", "sources"):
-            if not isinstance(receipt.get(key), dict):
-                raise ValueError("receipt." + key + " must be an object")
-        if receipt.get("scope", "fixed") not in ("fixed", "discovery"):
-            raise ValueError("receipt.scope must be fixed or discovery")
-        for key in ("selections", "accepted_inputs"):
-            if key in receipt and not isinstance(receipt[key], dict):
-                raise ValueError("receipt." + key + " must be an object")
-        for basis in receipt.get("selections", {}).values():
-            if not isinstance(basis, dict):
-                raise ValueError("each previous selection must be an object")
+        _check_artifact_receipt(receipt, seen)
 
     if any(not isinstance(item, dict) for item in previous["obligations"]):
         raise ValueError("each obligation must be an object")

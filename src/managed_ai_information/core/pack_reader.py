@@ -208,6 +208,35 @@ def has_pack_pointer(packs_dir: Path) -> bool:
     return True
 
 
+def _validate_pack_shard_descriptor(shard: Any) -> None:
+    if not isinstance(shard, dict):
+        raise ValueError("pack shard descriptor must be an object")
+
+    if type(shard.get("shard")) is not int or shard["shard"] < 0:
+        raise ValueError("invalid pack shard id")
+
+    if not isinstance(shard.get("slab"), str) or not _PACK_SLAB_NAME_RE.fullmatch(shard["slab"]):
+        raise ValueError(f"invalid pack slab filename: {shard.get('slab')!r}")
+
+    if not isinstance(shard.get("idx"), str) or not _PACK_IDX_NAME_RE.fullmatch(shard["idx"]):
+        raise ValueError(f"invalid pack idx filename: {shard.get('idx')!r}")
+
+    if not isinstance(shard.get("occ"), str) or not _PACK_OCC_NAME_RE.fullmatch(shard["occ"]):
+        raise ValueError(f"invalid pack occ filename: {shard.get('occ')!r}")
+
+    if type(shard.get("object_count")) is not int or shard["object_count"] < 0:
+        raise ValueError("invalid pack shard object_count")
+
+    slab_bytes = shard.get("slab_bytes")
+    if type(slab_bytes) is not int or slab_bytes < SLAB_HEADER_STRUCT.size:
+        raise ValueError("invalid pack shard slab_bytes")
+
+    for sha_field in ("slab_sha256", "idx_sha256", "occ_sha256"):
+        val = shard.get(sha_field)
+        if not isinstance(val, str) or not _PACK_HEX64_RE.fullmatch(val):
+            raise ValueError(f"invalid {sha_field} in pack pointer")
+
+
 def parse_pack_current(packs_dir: Path) -> dict[str, Any] | None:
     """Read and validate packs/CURRENT.json, or return None if no pack pointer exists."""
     if not _validate_packs_dir(packs_dir, allow_missing=True):
@@ -242,34 +271,7 @@ def parse_pack_current(packs_dir: Path) -> dict[str, Any] | None:
         raise ValueError("pack pointer shards must be a list")
 
     for shard in shards:
-        if not isinstance(shard, dict):
-            raise ValueError("pack shard descriptor must be an object")
-
-        if type(shard.get("shard")) is not int or shard["shard"] < 0:
-            raise ValueError("invalid pack shard id")
-
-        if not isinstance(shard.get("slab"), str) or not _PACK_SLAB_NAME_RE.fullmatch(
-            shard["slab"]
-        ):
-            raise ValueError(f"invalid pack slab filename: {shard.get('slab')!r}")
-
-        if not isinstance(shard.get("idx"), str) or not _PACK_IDX_NAME_RE.fullmatch(shard["idx"]):
-            raise ValueError(f"invalid pack idx filename: {shard.get('idx')!r}")
-
-        if not isinstance(shard.get("occ"), str) or not _PACK_OCC_NAME_RE.fullmatch(shard["occ"]):
-            raise ValueError(f"invalid pack occ filename: {shard.get('occ')!r}")
-
-        if type(shard.get("object_count")) is not int or shard["object_count"] < 0:
-            raise ValueError("invalid pack shard object_count")
-
-        slab_bytes = shard.get("slab_bytes")
-        if type(slab_bytes) is not int or slab_bytes < SLAB_HEADER_STRUCT.size:
-            raise ValueError("invalid pack shard slab_bytes")
-
-        for sha_field in ("slab_sha256", "idx_sha256", "occ_sha256"):
-            val = shard.get(sha_field)
-            if not isinstance(val, str) or not _PACK_HEX64_RE.fullmatch(val):
-                raise ValueError(f"invalid {sha_field} in pack pointer")
+        _validate_pack_shard_descriptor(shard)
 
     return doc
 
@@ -500,9 +502,6 @@ class PackShardHandle:
             data = decompress_zstd_bounded(payload, limit, self.slab_path)
 
         if len(data) != raw_len:
-            raise ValueError("content object changed (length changed)")
-
-        if expected_bytes is not None and len(data) != expected_bytes:
             raise ValueError("content object changed (length changed)")
 
         if self._verify_sha(data) != key_hex:

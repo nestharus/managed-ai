@@ -644,6 +644,30 @@ class StorageBackendAndMultiRouteTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ordinary"):
             EmbeddedFileBackend(self.base / "ordinary_guard")
 
+    def test_schema_migration_commit_cutover_refuses_dropped_shadow_ops(self) -> None:
+        route_a = EmbeddedFileBackend(self.base / "drop_a")
+        route_b_slow = _FailingOrSlowBackend(self.base / "drop_b", delay_s=0.35)
+        with MultiRouteBackend(
+            route_a,
+            route_b_slow,
+            mode="shadow-async",
+            route_b_timeout_ms=25,
+            max_queue_size=1,
+            max_shadow_workers=1,
+        ) as router:
+            for idx in range(12):
+                router.put_record("research", f"drop-{idx}", f"payload-{idx}".encode())
+            router.flush_shadow(timeout=2.0)
+            self.assertGreater(router.parity_summary()["counts"]["dropped_shadow_ops"], 0)
+            controller = SchemaMigrationController(router=router)
+            controller.begin_expand(
+                "research", from_version=1, target_version=2, target_sha256=sha(b'{"v":2}')
+            )
+            controller.enable_dual_write(routing_mode="shadow-async")
+            controller.record_verification(verified_through=12, mismatch_count=0, anomalies=0)
+            with self.assertRaisesRegex(ValueError, "dropped_shadow_ops"):
+                controller.commit_cutover(cutover_seq=12)
+
 
 if __name__ == "__main__":
     unittest.main()

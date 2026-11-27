@@ -38,6 +38,27 @@ from .format import (
 )
 
 
+def _expand_module_pin(
+    lib: Any,
+    h: str,
+    root_id: str,
+    seen: set[tuple[str, str]],
+    chosen: dict[tuple[str, str], tuple[Any, dict[str, Any]]],
+    chosen_modules: dict[tuple[str, str], tuple[Any, dict[str, Any]]],
+) -> None:
+    pending = [root_id]
+    while pending:
+        ident = pending.pop()
+        if (h, ident) in seen:
+            continue
+        seen.add((h, ident))
+        row = lib.modules[ident]
+        chosen_modules[(h, ident)] = (lib, row)
+        for body_id in row["members"]:
+            chosen[(h, body_id)] = (lib, lib.bodies[body_id])
+        pending.extend(row["requires"])
+
+
 def resolve(
     libraries: list[Any],
     selection: dict[str, Any],
@@ -93,17 +114,7 @@ def resolve(
             if key == "bodies":
                 chosen[(h, pin["id"])] = (lib, available[pin["id"]])
             else:
-                pending = [pin["id"]]
-                while pending:
-                    ident = pending.pop()
-                    if (h, ident) in seen:
-                        continue
-                    seen.add((h, ident))
-                    row = lib.modules[ident]
-                    chosen_modules[(h, ident)] = (lib, row)
-                    for body_id in row["members"]:
-                        chosen[(h, body_id)] = (lib, lib.bodies[body_id])
-                    pending.extend(row["requires"])
+                _expand_module_pin(lib, h, pin["id"], seen, chosen, chosen_modules)
 
     need(chosen, "selection needs at least one complete body")
 
@@ -349,6 +360,55 @@ def _open_import_lock(lock_path: Path) -> Any:
         raise
 
 
+def _verify_existing_import(
+    destination: Path,
+    raw: bytes,
+    objects: dict[str, bytes],
+    open_library: Callable[[Path], Any],
+) -> str:
+    existing = open_library(destination)
+    try:
+        existing.verify()
+        need(existing.raw == raw, "content-addressed import destination differs")
+    finally:
+        existing.close()
+
+    expected = {"catalogue.json"} | set(objects)
+    actual = {
+        p.relative_to(destination).as_posix()
+        for p in destination.rglob("*")
+        if p.is_file() or p.is_symlink()
+    }
+    need(actual == expected, "existing import has unexpected members")
+    return "already-present-verified"
+
+
+def _stage_new_import(
+    store_dir: Path,
+    ident: str,
+    destination: Path,
+    raw: bytes,
+    objects: dict[str, bytes],
+) -> str:
+    temporary = Path(tempfile.mkdtemp(prefix="." + ident + ".", dir=store_dir))
+    try:
+        (temporary / "objects").mkdir()
+        for name, body in {"catalogue.json": raw, **objects}.items():
+            with (temporary / name).open("xb") as out_stream:
+                out_stream.write(body)
+                out_stream.flush()
+                os.fsync(out_stream.fileno())
+        sync_dir(temporary / "objects")
+        sync_dir(temporary)
+        os.rename(temporary, destination)
+        sync_dir(store_dir)
+        return "imported-data"
+    except BaseException:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        raise
+
+
 def import_bundle(
     path: Path | str,
     store: Path | str,
@@ -378,39 +438,9 @@ def import_bundle(
 
             need(not is_reparse_or_symlink(destination), "import destination is a symlink")
             if destination.exists():
-                existing = open_library(destination)
-                try:
-                    existing.verify()
-                    need(existing.raw == raw, "content-addressed import destination differs")
-                finally:
-                    existing.close()
-
-                expected = {"catalogue.json"} | set(objects)
-                actual = {
-                    p.relative_to(destination).as_posix()
-                    for p in destination.rglob("*")
-                    if p.is_file() or p.is_symlink()
-                }
-                need(actual == expected, "existing import has unexpected members")
-                status = "already-present-verified"
+                status = _verify_existing_import(destination, raw, objects, open_library)
             else:
-                temporary = Path(tempfile.mkdtemp(prefix="." + ident + ".", dir=store_dir))
-                try:
-                    (temporary / "objects").mkdir()
-                    for name, body in {"catalogue.json": raw, **objects}.items():
-                        with (temporary / name).open("xb") as out_stream:
-                            out_stream.write(body)
-                            out_stream.flush()
-                            os.fsync(out_stream.fileno())
-                    sync_dir(temporary / "objects")
-                    sync_dir(temporary)
-                    os.rename(temporary, destination)
-                    sync_dir(store_dir)
-                    status = "imported-data"
-                except BaseException:
-                    if temporary.exists():
-                        shutil.rmtree(temporary)
-                    raise
+                status = _stage_new_import(store_dir, ident, destination, raw, objects)
         finally:
             if locked:
                 unlock_file(stream)

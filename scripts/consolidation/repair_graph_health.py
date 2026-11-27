@@ -19,7 +19,13 @@ for _entry in (str(SRC_ROOT), str(REPO_ROOT)):
 
 from managed_ai_information.core.formats import BATCH_FORMAT  # noqa: E402
 from managed_ai_information.core.ownership import packet_id  # noqa: E402
-from managed_ai_information.core.storage import encode, exclusive, now  # noqa: E402
+from managed_ai_information.core.storage import (  # noqa: E402
+    MAX_BYTES,
+    encode,
+    exclusive,
+    now,
+    read_bytes,
+)
 from managed_ai_information.platform import (  # noqa: E402
     atomic_bytes,
     check_ordinary_ancestors,
@@ -89,7 +95,7 @@ def _read_ordinary_json(path: Path, *, label: str) -> dict[str, Any]:
     info = checked.lstat()
     if not is_ordinary_file_stat(info):
         raise ValueError(f"ordinary {label} file required: {checked}")
-    parsed = strict_json_loads(checked.read_bytes(), checked, require_object=True)
+    parsed = strict_json_loads(read_bytes(checked, limit=MAX_BYTES), checked, require_object=True)
     if not isinstance(parsed, dict):
         raise ValueError(f"{label} must be a JSON object: {checked}")
     return parsed
@@ -889,6 +895,7 @@ def rollback_graph_repair(
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="repair_graph_health.py",
+        allow_abbrev=False,
         description=(
             "Dry-run-by-default mechanical graph-health repair CLI "
             "(self-loop dedup, unambiguous bypass re-pointing, stranded retired-parent "
@@ -929,25 +936,31 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     store_root = Path(args.store)
-    if args.rollback:
-        result = rollback_graph_repair(
-            store_root,
-            Path(args.rollback),
-            apply=bool(args.apply),
-            account=str(args.account),
-        )
-    else:
-        result = repair_graph_health(
-            store_root,
-            apply=bool(args.apply),
-            receipt_path=Path(args.receipt) if args.receipt else None,
-            link_file=Path(args.link_file) if args.link_file else None,
-            roots=list(args.roots),
-            remove_self_loops=not bool(args.no_self_loops),
-            repoint_actionable_bypasses=not bool(args.no_repoint_bypasses),
-            retire_stranded_questions=not bool(args.no_retire_stranded_questions),
-            account=str(args.account),
-        )
+    try:
+        if args.rollback:
+            if args.link_file or args.receipt:
+                raise ValueError("--rollback cannot be combined with --link-file or --receipt")
+            result = rollback_graph_repair(
+                store_root,
+                Path(args.rollback),
+                apply=bool(args.apply),
+                account=str(args.account),
+            )
+        else:
+            result = repair_graph_health(
+                store_root,
+                apply=bool(args.apply),
+                receipt_path=Path(args.receipt) if args.receipt else None,
+                link_file=Path(args.link_file) if args.link_file else None,
+                roots=list(args.roots),
+                remove_self_loops=not bool(args.no_self_loops),
+                repoint_actionable_bypasses=not bool(args.no_repoint_bypasses),
+                retire_stranded_questions=not bool(args.no_retire_stranded_questions),
+                account=str(args.account),
+            )
+    except (OSError, ValueError) as exc:
+        print(_dump_json({"ok": False, "error": str(exc)}), file=sys.stderr)
+        return 2
     print(_dump_json(result))
     return 0
 

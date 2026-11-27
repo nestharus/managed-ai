@@ -452,6 +452,38 @@ class RepairGraphHealthTests(unittest.TestCase):
             self.assertTrue(parsed["dry_run"])
             self.assertEqual(parsed["format"], REPAIR_PLAN_FORMAT)
 
+            # C69B-O1/O2: structured JSON stderr + exit 2 on invalid flags/errors.
+            bad_combo = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(REPAIR_CLI),
+                    "--store",
+                    str(store_root),
+                    "--rollback",
+                    str(base / "missing.json"),
+                    "--link-file",
+                    str(bad_link),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                check=False,
+            )
+            self.assertEqual(bad_combo.returncode, 2)
+            err_doc = json.loads(bad_combo.stderr)
+            self.assertFalse(err_doc["ok"])
+            self.assertIn("--rollback", err_doc["error"])
+
+            abbrev_proc = subprocess.run(
+                [sys.executable, "-B", str(REPAIR_CLI), "--sto", str(store_root)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                check=False,
+            )
+            self.assertEqual(abbrev_proc.returncode, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
