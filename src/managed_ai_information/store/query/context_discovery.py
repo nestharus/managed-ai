@@ -79,6 +79,7 @@ def _is_valid_project_member_path(name: Any) -> bool:
 
 class Discovery:
     def __init__(self, system: Any) -> None:
+        self._system = system
         self.records = system.record_store
         self.techniques = system.techniques
         self.projects = system.projects
@@ -107,7 +108,13 @@ class Discovery:
         return {"verified": verified, "context_request": current["context_request"]}
 
     def _init_search_state(self, supplied: dict[str, Any]) -> None:
-        self.req: dict[str, Any] = request(supplied, self.projects.current is not None)
+        raw_mode = supplied.get("search_mode", "lexical")
+        if raw_mode not in ("lexical", "bm25", "auto"):
+            raise ValueError("search_mode must be lexical, bm25 or auto")
+        self.search_mode: str = raw_mode
+        self._backend_search_meta: dict[str, Any] | None = None
+        req_input = {k: v for k, v in supplied.items() if k != "search_mode"}
+        self.req: dict[str, Any] = request(req_input, self.projects.current is not None)
         self.entries: dict[str, dict[str, Any]] = {}
         self.by_scope: dict[str, list[str]] = {scope: [] for scope in SCOPES}
         self.catalogue: dict[str, Any] | None = None
@@ -169,7 +176,7 @@ class Discovery:
                 if self.req["anchors"]:
                     self._traverse()
                 if self.req["query"].strip() or not self.req["anchors"]:
-                    self._lexical()
+                    self._run_text_search()
 
                 all_candidates = list(self.candidates.values())
                 shown = all_candidates[: self.req["limit"]]
@@ -186,7 +193,10 @@ class Discovery:
         omitted = [c["ref"] for c in all_candidates[self.req["limit"] :]]
         if omitted:
             self.saturated.add("result-limit")
-        return build_search_result(self, all_candidates, shown, selectors, omitted)
+        report = build_search_result(self, all_candidates, shown, selectors, omitted)
+        if self._backend_search_meta is not None:
+            report["backend_search"] = self._backend_search_meta
+        return report
 
     def _inventory_project(self) -> None:
         for row in sorted(self.projects.current["project_files"], key=lambda r: r["path"]):
@@ -524,19 +534,66 @@ class Discovery:
                 },
             )
 
-    def _lexical(self) -> None:
+    def _hydrate_bm25_hits(self, hits: list[tuple[str, float]]) -> None:
+        for rid, score in hits:
+            ref = "record:" + rid
+            if ref not in self.entries:
+                continue
+            item = self._inspect(ref)
+            if item is None or not self._kind_allowed(item):
+                continue
+            self._candidate(
+                item,
+                {"kind": "bm25", "score": score, "channel": "membus-tantivy"},
+            )
+
+    def _run_text_search(self) -> None:
+        query = self.req["query"].strip()
+        bridge = getattr(self._system, "backend_bridge", None)
+        if not (
+            query
+            and self.search_mode in ("bm25", "auto")
+            and "records" in self.req["scopes"]
+            and bridge is not None
+        ):
+            self._lexical()
+            return
+
+        bm25 = bridge.search_records(
+            query,
+            kinds=self.req.get("kinds"),
+            limit=self.req["limit"],
+            search_mode=self.search_mode,
+        )
+        if bm25 is None:
+            self._lexical()
+            return
+
+        self._backend_search_meta = {k: v for k, v in bm25.items() if k != "hits"}
+        if bm25["engine"] != "membus-bm25":
+            self._lexical()
+            return
+
+        self._hydrate_bm25_hits(bm25["hits"])
+        non_record = [s for s in self.req["scopes"] if s != "records"]
+        if non_record:
+            self._lexical(only_scopes=frozenset(non_record))
+
+    def _lexical(self, *, only_scopes: frozenset[str] | None = None) -> None:
         terms = self.req["query"].casefold().split()
         records_only_scope = self.req["scopes"] == ["records"]
         records_byte_exhausted = False
         zero_progress_skips = 0
 
         for ref in self._lexical_order():
+            scope = self.entries[ref]["scope"]
+            if only_scopes is not None and scope not in only_scopes:
+                continue
             if len(self.examined) >= self.req["scan_limit"] and ref not in self.examined:
                 self.saturated.add("entry-scan-budget")
                 self._skip(ref, "entry-scan-budget")
                 break
 
-            scope = self.entries[ref]["scope"]
             remaining = self.req["max_bytes"] - self.examined_bytes
             if (
                 scope == "records"

@@ -53,6 +53,7 @@ from managed_ai_information.store.protocol.inputs import (
     write_input,
 )
 from managed_ai_information.store.query.information import InformationEnvelope
+from managed_ai_information.store.records.backend_bridge import StoreBackendBridge
 from managed_ai_information.store.records.records import RecordStore
 from managed_ai_information.store.selection.domain_selection import (
     ENGINE_API,
@@ -164,12 +165,12 @@ class System:
             composition_validator=_validate_composition_record,
         )
         self.record_store.payload_validator = self.domain_selection.validate_record
-        self.record_store.retention_policy = self.descriptor.get(
-            "record_retention",
+        default_ret = (
             "current-use"
             if self.descriptor.get("store_schema") == STORE_SCHEMA
-            else "append-history",
+            else "append-history"
         )
+        self.record_store.retention_policy = self.descriptor.get("record_retention", default_ret)
         if self.record_store.retention_policy not in {"current-use", "append-history"}:
             raise ValueError("unsupported native record retention policy")
 
@@ -183,6 +184,16 @@ class System:
         )
         self.projects = ProjectSelection()
         self.command_prefix: list[str] | None = None
+        self.backend_bridge = StoreBackendBridge(self)
+
+    def close(self) -> None:
+        self.backend_bridge.close()
+
+    def __enter__(self) -> System:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
 
     @property
     def deployment(self) -> dict[str, Any] | None:
@@ -279,12 +290,16 @@ class System:
         return self.record_store.path(ident)
 
     def put(self, record: dict, expected: int) -> dict:
-        return self.record_store.put(record, expected)
+        committed = self.record_store.put(record, expected)
+        self.backend_bridge.mirror_record(committed)
+        return committed
 
     def put_batch(self, spec: dict) -> dict:
         from managed_ai_information.store.records.record_batch import put_batch
 
-        return put_batch(self, spec)
+        receipt = put_batch(self, spec)
+        self.backend_bridge.mirror_batch_receipt(receipt)
+        return receipt
 
     def reindex(self) -> dict:
         return self.record_store.reindex()
@@ -404,9 +419,9 @@ class System:
             )
             if should_check:
                 checked_ids.add(rec["id"])
-                for item in rec["basis"]:
-                    if not item["path"].startswith("object:"):
-                        basis_paths.append(item["path"])
+                basis_paths.extend(
+                    item["path"] for item in rec["basis"] if not item["path"].startswith("object:")
+                )
             elif rec["basis"]:
                 deferred_inactive += 1
 
@@ -418,20 +433,15 @@ class System:
             for rec in records:
                 if rec["id"] in checked_ids:
                     changed = self.record_store.basis_changes(
-                        rec,
-                        resolved_hashes=resolved_hashes,
-                        verified_objects=verified_objects,
+                        rec, resolved_hashes=resolved_hashes, verified_objects=verified_objects
                     )
                 elif rec["basis"] and all(item["path"] in resolved_hashes for item in rec["basis"]):
                     changed = self.record_store.basis_changes(
-                        rec,
-                        resolved_hashes=resolved_hashes,
-                        verified_objects=verified_objects,
+                        rec, resolved_hashes=resolved_hashes, verified_objects=verified_objects
                     )
                     deferred_inactive -= 1
                 else:
                     changed = []
-
                 rows.append(
                     {
                         "id": rec["id"],
@@ -441,7 +451,6 @@ class System:
                         "changed_basis": changed,
                     }
                 )
-
         return rows, deferred_inactive
 
     def status(self, *, verify_all_basis: bool = False) -> dict:
@@ -542,12 +551,7 @@ class System:
         request = dict(request)
         explicit_techniques = tuple(request.get("techniques", []))
         request["techniques"] = list(
-            dict.fromkeys(
-                [
-                    *self.domain_selection.entry_sources,
-                    *request.get("techniques", []),
-                ]
-            )
+            dict.fromkeys([*self.domain_selection.entry_sources, *request.get("techniques", [])])
         )
         capture = TurnCapture(
             self,
@@ -654,26 +658,21 @@ class System:
     ) -> dict:
         strings(proposals, "proposals")
         result = self._receive(self.ex, turn, reply, producer, proposals, wait, run_nominations)
-
         if assessment is not None and result.get("received", True):
             try:
                 result = dict(
                     result, attention_account=self.assess(turn, assessment, result["producer"])
                 )
             except (OSError, ValueError, KeyError, TypeError) as exc:
+                recovery = self.command(
+                    "assess", turn, "--receipt", str(assessment), "--producer", result["producer"]
+                )
                 result = dict(
                     result,
                     attention_account={
                         "status": "unresolved",
                         "error": str(exc),
-                        "recovery": self.command(
-                            "assess",
-                            turn,
-                            "--receipt",
-                            str(assessment),
-                            "--producer",
-                            result["producer"],
-                        ),
+                        "recovery": recovery,
                     },
                 )
         return result
@@ -838,7 +837,8 @@ def main(args: Any = None) -> None:
                 record_retention=args.record_retention,
             )
         elif args.action == "explain-context":
-            result = _act(System(args.root), args)
+            with System(args.root) as sys_obj:
+                result = _act(sys_obj, args)
         else:
             root = external(args.root)
             exchange_root = external_root(NativeLayout(root).exchange)
@@ -872,9 +872,11 @@ def main(args: Any = None) -> None:
             with owner_admission(acquire, deadline=deadline):
                 if args.action == "configure":
                     override = configuration_descriptor(root, read(args.spec))
-                    result = _act(System(root, _selection_override=override), args)
+                    with System(root, _selection_override=override) as sys_obj:
+                        result = _act(sys_obj, args)
                 else:
-                    result = _act(System(root), args, proof_store_locked=proof_lock is not None)
+                    with System(root) as sys_obj:
+                        result = _act(sys_obj, args, proof_store_locked=proof_lock is not None)
 
         _emit(result, args)
     except AdmissionContended as exc:
@@ -889,10 +891,8 @@ def main(args: Any = None) -> None:
         if args.action == "adopt":
             try:
                 basis = adopt_basis(exc)
-                if basis is not None:
-                    rendered = json.dumps(dict(failure, publication_basis=basis), allow_nan=False)
-                else:
-                    rendered = json.dumps(failure)
+                payload = dict(failure, publication_basis=basis) if basis is not None else failure
+                rendered = json.dumps(payload, allow_nan=False)
             except OSError, ValueError, KeyError, TypeError, RuntimeError:
                 rendered = json.dumps(failure)
         else:

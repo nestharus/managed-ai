@@ -52,3 +52,29 @@ Every shadowed or dual-written operation emits a structured `ParityEvent` (`op`,
 - **`attach_artifact(turn_id, payload, role, provenance) -> ArtifactReceipt`:** Stores an immutable CAS blob (`<= MAX_BYTES`) with verified SHA-256 and strict JSON provenance.
 - **`commit_consolidation_delta(lease, expected_revisions, records) -> CommitReceipt`:** Validates active lease expiry, optional backend lease validation, monotonic per-resource generation fencing, and per-record optimistic-CAS `expected_revisions` before writing any record.
 - **`subscribe_signals(namespace, prefix, since_seq, mode) -> Iterator[SignalEvent]`:** Exposes cursor-resumable SSE/local signal subscriptions for coordination wakeups.
+
+
+## 4. First-Class Selectable `membus-v2` Store Backend (`store/records/backend_bridge.py`)
+
+Embedded local files remain the zero-daemon default whenever `system.json` omits `backend` or sets `{"type": "embedded"}`. Stores can opt into live `membus` v2 routing by configuring `system.json["backend"]`:
+
+```json
+{
+  "backend": {
+    "type": "membus-v2",
+    "url": "http://127.0.0.1:8787",
+    "namespace": "my_store",
+    "mode": "dual-sync",
+    "token_env": "MEMBUS_API_TOKEN"
+  }
+}
+```
+
+- **Fail-Closed Validation:** `parse_backend_config()` enforces allowed `type` (`embedded` | `membus-v2`), allowed `mode` (`shadow-async` | `dual-sync` | `primary`), non-loopback TLS fail-closed via `validate_endpoint_url()`, identifier validation on `namespace`, and resolves bearer tokens exclusively from `os.environ[token_env]` (never persisting raw credentials in `system.json`).
+- **Live Write Routing (`System.put`, `System.put_batch`):** Committed records and non-sealed `object:<sha256>` CAS blobs are mirrored via `MultiRouteBackend` + `KeepAliveHTTPPool`. Records matching sealed policy or carrying sealed markers are written exclusively with `SearchVisibility="Sealed"` opaque metadata-only custody envelopes (`managed-ai-sealed-custody/1`) — sealed payload bytes are never indexed into Tantivy. `System.close()` / `with System(root):` drains and closes pooled HTTP sockets deterministically.
+- **Tantivy BM25 Discovery (`discover --search-mode lexical|bm25|auto`):** Default `lexical` preserves 100% zero-daemon local `HeadIndex v3` behavior. `auto` uses sub-millisecond Tantivy BM25 when `membus-v2` is configured and healthy (preserving `--kind` filtering and sealed exclusion) and gracefully falls back to local lexical search if unreachable. Explicit `--search-mode bm25` fails closed when `membus-v2` is unconfigured or unavailable.
+- **CLI Lifecycle (`managed-ai-information --root <store> backend status|sync|cutover|rollback`):**
+  - `backend status`: Reports active config, live `/v2/health`, and SHA-256 record/blob parity (read-only under `LOCK_SH`).
+  - `backend sync`: Backfills local records & CAS blobs via `MembusStoreMirror` without contracting cutover.
+  - `backend cutover`: Runs governed `Expand -> Dual-Write -> Verify -> Contract` migration via `MembusStoreMirror`, verifies zero mismatches/anomalies, and atomically persists `system.json["backend"]`.
+  - `backend rollback`: Atomically removes `system.json["backend"]` to restore zero-daemon embedded local file mode and closes any pooled client connections.

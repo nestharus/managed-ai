@@ -50,6 +50,8 @@ def is_readonly_action(args: argparse.Namespace) -> bool:
         return getattr(args, "archive_action", None) == "plan"
     if action == "retire-turns":
         return getattr(args, "retire_turns_action", None) == "plan"
+    if action == "backend":
+        return getattr(args, "backend_action", None) == "status"
     return False
 
 
@@ -238,24 +240,13 @@ def _store_maintenance_commands(sub: Any) -> None:
     pack.add_argument(
         "--apply",
         action="store_true",
-        help=(
-            "Execute shard packing and remove verified packed loose copies "
-            "(default is read-only dry-run)"
-        ),
+        help="Execute shard packing and remove verified packed loose copies (default is dry-run)",
     )
-    pack.add_argument(
-        "--shard-bytes",
-        type=int,
-        default=64 * 1024 * 1024,
-        help="Target shard slab size in bytes (default 64 MiB)",
-    )
+    pack.add_argument("--shard-bytes", type=int, default=64 * 1024 * 1024)
     pack.add_argument(
         "--compress",
         action="store_true",
-        help=(
-            "Opportunistically compress loose objects when smaller during packing "
-            "(defaults to zstd)"
-        ),
+        help="Compress loose objects when smaller during packing (defaults to zstd)",
     )
     pack.add_argument(
         "--codec",
@@ -263,20 +254,11 @@ def _store_maintenance_commands(sub: Any) -> None:
         default=None,
         help="Compression codec for packed shard frames (zstd or deflate; implies --compress)",
     )
-    pack.add_argument(
-        "--include-cold-archive",
-        action="store_true",
-        help="Also pack loose cold-archive blobs into reserved shard slabs",
-    )
-    pack.add_argument(
-        "--expected-plan",
-        default=None,
-        help="Optional plan_sha256 guard to pin dry-run plan before --apply",
-    )
+    pack.add_argument("--include-cold-archive", action="store_true")
+    pack.add_argument("--expected-plan", default=None)
     pack.add_argument(
         "--reason",
         default="Pack immutable loose exchange objects into reserved shard slabs.",
-        help="Audit account recorded in the pack-objects maintenance receipt",
     )
 
 
@@ -323,10 +305,32 @@ def _store_graph_commands(sub: Any) -> None:
     g_prof.add_argument("--check-alerts", action="store_true")
 
 
+def _store_backend_commands(sub: Any) -> None:
+    be = sub.add_parser("backend", allow_abbrev=False, help="manage optional Membus v2 backend")
+    ba = be.add_subparsers(dest="backend_action", required=True)
+    st = ba.add_parser("status", allow_abbrev=False)
+    st.add_argument("--no-parity", action="store_true")
+    st.add_argument("--verify-blob-bytes", action="store_true")
+    for name, modes in (
+        ("sync", ("shadow-async", "dual-sync", "primary")),
+        ("cutover", ("dual-sync", "primary")),
+    ):
+        cmd = ba.add_parser(name, allow_abbrev=False)
+        cmd.add_argument("--url", default=None)
+        cmd.add_argument("--namespace", default=None)
+        cmd.add_argument("--mode", choices=modes, default=None if name == "sync" else "primary")
+        cmd.add_argument("--token-env", default=None)
+        cmd.add_argument("--no-blobs", action="store_true")
+        cmd.add_argument("--verify-blob-bytes", action="store_true")
+    rb = ba.add_parser("rollback", allow_abbrev=False)
+    rb.add_argument("--reason", default=None)
+
+
 def _store_commands(sub: Any) -> None:
     _store_core_commands(sub)
     _store_maintenance_commands(sub)
     _store_graph_commands(sub)
+    _store_backend_commands(sub)
 
 
 def _turn_context_commands(sub: Any) -> None:
@@ -564,6 +568,7 @@ def _source_and_composition_commands(sub: Any) -> None:
     discovery.add_argument("--hops", type=int)
     discovery.add_argument("--limit", type=int)
     discovery.add_argument("--records-only", action="store_true")
+    discovery.add_argument("--search-mode", choices=("lexical", "bm25", "auto"), default=None)
 
     composition = sub.add_parser("compose", allow_abbrev=False)
     composition.add_argument("--record", required=True)

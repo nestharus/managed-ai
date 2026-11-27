@@ -136,6 +136,7 @@ def _discover_request(args: argparse.Namespace) -> dict[str, Any]:
             getattr(args, "hops", None),
             getattr(args, "limit", None),
             getattr(args, "records_only", False),
+            getattr(args, "search_mode", None),
         )
     )
     if args.request is None and not has_inline:
@@ -166,6 +167,8 @@ def _discover_request(args: argparse.Namespace) -> dict[str, Any]:
         req["limit"] = args.limit
     if getattr(args, "records_only", False):
         req["records_only"] = True
+    if getattr(args, "search_mode", None) is not None:
+        req["search_mode"] = args.search_mode
     return req
 
 
@@ -345,9 +348,35 @@ def _act_import(system: Any, args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _act_put_batch(system: Any, args: argparse.Namespace) -> dict[str, Any]:
-    from managed_ai_information.store.records import record_batch
+    return system.put_batch(read(args.spec))
 
-    return record_batch.put_batch(system, read(args.spec))
+
+def _act_backend(system: Any, args: argparse.Namespace) -> dict[str, Any]:
+    bridge = system.backend_bridge
+    if args.backend_action == "status":
+        return bridge.status(
+            check_parity=not getattr(args, "no_parity", False),
+            verify_blob_bytes=bool(getattr(args, "verify_blob_bytes", False)),
+        )
+    if args.backend_action == "sync":
+        return bridge.sync(
+            url=args.url,
+            namespace=args.namespace,
+            mode=args.mode,
+            token_env=args.token_env,
+            include_blobs=not args.no_blobs,
+            verify_blob_bytes=args.verify_blob_bytes,
+        )
+    if args.backend_action == "cutover":
+        return bridge.cutover(
+            url=args.url,
+            namespace=args.namespace,
+            mode=args.mode,
+            token_env=args.token_env,
+            include_blobs=not args.no_blobs,
+            verify_blob_bytes=args.verify_blob_bytes,
+        )
+    return bridge.rollback(reason=args.reason)
 
 
 def _act_configure(system: Any, args: argparse.Namespace) -> dict[str, Any]:
@@ -436,6 +465,7 @@ _ACTION_HANDLERS: dict[str, Callable[[Any, argparse.Namespace], dict[str, Any]]]
     "audit-objects": _act_audit_objects,
     "gc-objects": _act_gc_objects,
     "pack-objects": _act_pack_objects,
+    "backend": _act_backend,
     "graph": _act_graph,
     "status": _act_status,
     "abandon-context": lambda system, args: system.abandon_context(args.turn, args.account),
