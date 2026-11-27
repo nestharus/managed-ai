@@ -8,10 +8,7 @@ from typing import Any
 DEFAULT_ROOT_KINDS = frozenset({"goal", "field", "frontier"})
 DEFAULT_NAVIGATIONAL_KINDS = frozenset(
     {
-        "research-gap",
-        "research-topic-map",
-        "research-current",
-        "research-frontier",
+        "frontier",
         "frontier-family",
         "index",
         "catalogue",

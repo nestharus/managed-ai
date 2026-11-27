@@ -452,8 +452,15 @@ class GraphProfileTests(unittest.TestCase):
             write_graph_baseline(linked_dir / "bad.json", out_write)
 
     def test_domain_calibration_flags_config_and_navigational_separation(self) -> None:
-        # Navigational index hub with high fan-in (3) and 0 qualifying edges must NOT
-        # be flagged as a substantive qualification desert.
+        # Domain-neutral navigational hub ("topic-map") with high fan-in (3) and 0 qualifying
+        # edges must NOT be flagged as a substantive qualification desert by default, while
+        # domain-specific kinds ("research-topic-map") stay neutral until calibrated via config.
+        _put(
+            self.system,
+            "neutral-map-1",
+            "topic-map",
+            relations=[{"relation": "maps-to", "target": "goal"}],
+        )
         _put(
             self.system,
             "topic-map-1",
@@ -465,6 +472,7 @@ class GraphProfileTests(unittest.TestCase):
             "rclaim-1",
             "research-claim",
             relations=[
+                {"relation": "maps-to", "target": "neutral-map-1"},
                 {"relation": "maps-to", "target": "topic-map-1"},
                 {"relation": "grounds-claim", "target": "rclaim-2"},
             ],
@@ -473,21 +481,28 @@ class GraphProfileTests(unittest.TestCase):
             self.system,
             "rclaim-2",
             "research-claim",
-            relations=[{"relation": "maps-to", "target": "topic-map-1"}],
+            relations=[
+                {"relation": "maps-to", "target": "neutral-map-1"},
+                {"relation": "maps-to", "target": "topic-map-1"},
+            ],
         )
         _put(
             self.system,
             "rclaim-3",
             "research-claim",
-            relations=[{"relation": "maps-to", "target": "topic-map-1"}],
+            relations=[
+                {"relation": "maps-to", "target": "neutral-map-1"},
+                {"relation": "maps-to", "target": "topic-map-1"},
+            ],
         )
         self.system.reindex()
 
         default_rep = self.system.graph_profile()
         dens_def = default_rep["density_and_qualification"]
         self.assertEqual(dens_def["navigational_active_count"], 1)
-        self.assertEqual(dens_def["per_kind"]["research-topic-map"]["role"], "navigational")
-        self.assertNotIn("topic-map-1", [d["id"] for d in dens_def["qualification_deserts"]])
+        self.assertEqual(dens_def["per_kind"]["topic-map"]["role"], "navigational")
+        self.assertEqual(dens_def["per_kind"]["research-topic-map"]["role"], "other")
+        self.assertNotIn("neutral-map-1", [d["id"] for d in dens_def["qualification_deserts"]])
         self.assertEqual(dens_def["per_predicate"]["grounds-claim"]["category"], "other")
 
         # Domain-calibrated config file + CLI override
@@ -506,6 +521,8 @@ class GraphProfileTests(unittest.TestCase):
         )
         cal_rep = self.system.graph_profile(profile_config_path=cfg_path)
         dens_cal = cal_rep["density_and_qualification"]
+        self.assertEqual(dens_cal["per_kind"]["research-topic-map"]["role"], "navigational")
+        self.assertNotIn("topic-map-1", [d["id"] for d in dens_cal["qualification_deserts"]])
         self.assertEqual(dens_cal["per_kind"]["research-claim"]["role"], "claim")
         self.assertEqual(dens_cal["per_predicate"]["grounds-claim"]["category"], "qualifying")
         self.assertGreater(dens_cal["qualification_density"], 0.0)

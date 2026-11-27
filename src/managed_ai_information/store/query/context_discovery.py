@@ -500,8 +500,9 @@ class Discovery:
         metadata = item["metadata"].casefold()
         metadata_match = self._terms_match(terms, metadata)
         body = self._body(ref) if (terms and not metadata_match and self.req["content"]) else None
-        searchable = metadata + ("\n" + body.casefold() if body is not None else "")
-        if metadata_match or self._terms_match(terms, searchable):
+        if metadata_match or (
+            body is not None and self._terms_match(terms, metadata + "\n" + body.casefold())
+        ):
             self._candidate(
                 item,
                 {

@@ -128,23 +128,27 @@ class EphemeralMembusDaemon:
         ready_event = threading.Event()
         listen_addr: list[str] = []
 
-        self._proc = subprocess.Popen(  # noqa: S603
-            [
-                str(self.binary),
-                "serve",
-                "--data-dir",
-                str(data_dir),
-                "--http-listen",
-                "127.0.0.1:0",
-            ],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-        )
+        try:
+            self._proc = subprocess.Popen(  # noqa: S603
+                [
+                    str(self.binary),
+                    "serve",
+                    "--data-dir",
+                    str(data_dir),
+                    "--http-listen",
+                    "127.0.0.1:0",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+        except BaseException:
+            self.stop()
+            raise
         stdout_pipe = self._proc.stdout
         stderr_pipe = self._proc.stderr
 
@@ -202,21 +206,21 @@ class EphemeralMembusDaemon:
     def stop(self) -> None:
         proc = self._proc
         self._proc = None
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5.0)
+        for thread in self._threads:
+            thread.join(timeout=1.0)
+        self._threads = []
         if proc is not None:
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5.0)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=5.0)
             if proc.stdout is not None:
                 proc.stdout.close()
             if proc.stderr is not None:
                 proc.stderr.close()
-        for thread in self._threads:
-            thread.join(timeout=1.0)
-        self._threads = []
         tmp = self._tmp_path
         self._tmp_path = None
         if tmp is not None:
