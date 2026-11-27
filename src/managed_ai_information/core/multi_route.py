@@ -1,6 +1,5 @@
 """A/B multi-route storage writer and Expand->Dual-Write->Verify->Contract schema governance."""
 
-import contextlib
 import queue
 import re
 import threading
@@ -69,33 +68,6 @@ def _digest_result(value: Any) -> str | None:
     return sha(repr(value).encode("utf-8"))
 
 
-def _run_with_timeout[T](
-    fn: Callable[[], T], timeout_s: float
-) -> tuple[T | None, float, str | None]:
-    result_box: list[T] = []
-    err_box: list[str] = []
-    done = threading.Event()
-    t0 = time.perf_counter()
-
-    def target() -> None:
-        try:
-            result_box.append(fn())
-        except Exception as exc:
-            err_box.append(f"{type(exc).__name__}: {exc}")
-        finally:
-            done.set()
-
-    worker = threading.Thread(target=target, daemon=True)
-    worker.start()
-    finished = done.wait(timeout=timeout_s)
-    elapsed_ms = (time.perf_counter() - t0) * 1000.0
-    if not finished:
-        return None, elapsed_ms, "timeout"
-    if err_box:
-        return None, elapsed_ms, err_box[0]
-    return (result_box[0] if result_box else None), elapsed_ms, None
-
-
 class MultiRouteBackend:
     """A/B routing facade with fault-isolated shadow-async, dual-sync, and canary-cutover modes."""
 
@@ -107,6 +79,7 @@ class MultiRouteBackend:
         mode: RoutingMode = "single",
         route_b_timeout_ms: int = 500,
         max_queue_size: int = 256,
+        max_shadow_workers: int = 4,
         max_parity_events: int = 4096,
         fail_on_dual_mismatch: bool = True,
     ) -> None:
@@ -114,12 +87,18 @@ class MultiRouteBackend:
             raise ValueError(f"unsupported routing mode: {mode!r}")
         if mode != "single" and route_b is None:
             raise ValueError(f"routing mode {mode!r} requires route_b")
-        if route_b_timeout_ms <= 0 or max_queue_size <= 0 or max_parity_events <= 0:
-            raise ValueError("timeout, queue size, and parity capacity must be positive")
+        if (
+            route_b_timeout_ms <= 0
+            or max_queue_size <= 0
+            or max_shadow_workers <= 0
+            or max_parity_events <= 0
+        ):
+            raise ValueError("timeout, queue, worker, and parity capacities must be positive")
         self.route_a = route_a
         self.route_b = route_b
         self._mode: RoutingMode = mode
         self.route_b_timeout_ms = route_b_timeout_ms
+        self._max_shadow_workers = max_shadow_workers
         self.fail_on_dual_mismatch = fail_on_dual_mismatch
         self._lock = threading.RLock()
         self._events: deque[ParityEvent] = deque(maxlen=max_parity_events)
@@ -130,15 +109,22 @@ class MultiRouteBackend:
             "route_b_errors": 0,
             "route_b_timeouts": 0,
             "dropped_shadow_ops": 0,
+            "canary_ops": 0,
         }
-        self._queue: queue.Queue[tuple[str, str, str | None, float, Callable[[], Any]] | None] = (
+        self._queue: queue.Queue[tuple[str, str, str | None, float, Callable[[], Any]]] = (
             queue.Queue(maxsize=max_queue_size)
         )
+        self._stop_event = threading.Event()
         self._closed = False
-        self._worker = threading.Thread(
-            target=self._shadow_loop, name="multi-route-shadow", daemon=True
-        )
-        self._worker.start()
+        self._worker: threading.Thread | None = None
+        self._shadow_pool: Any = None
+        self._shadow_slots = threading.BoundedSemaphore(max_shadow_workers)
+
+    def __enter__(self) -> MultiRouteBackend:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
 
     @property
     def mode(self) -> RoutingMode:
@@ -149,9 +135,25 @@ class MultiRouteBackend:
         if mode not in _VALID_MODES:
             raise ValueError(f"unsupported routing mode: {mode!r}")
         with self._lock:
+            if self._closed:
+                raise RuntimeError("MultiRouteBackend is closed")
             if mode != "single" and self.route_b is None:
                 raise ValueError(f"routing mode {mode!r} requires route_b")
             self._mode = mode
+
+    def _ensure_shadow_started(self) -> None:
+        with self._lock:
+            if self._worker is not None:
+                return
+            from concurrent.futures import ThreadPoolExecutor
+
+            self._shadow_pool = ThreadPoolExecutor(
+                max_workers=self._max_shadow_workers, thread_name_prefix="multi-route-b"
+            )
+            self._worker = threading.Thread(
+                target=self._shadow_loop, name="multi-route-shadow", daemon=True
+            )
+            self._worker.start()
 
     def _record_event(self, event: ParityEvent) -> None:
         with self._lock:
@@ -163,21 +165,45 @@ class MultiRouteBackend:
                 self._counts["mismatched_ops"] += 1
             if event.b_error == "timeout":
                 self._counts["route_b_timeouts"] += 1
-            elif event.b_error == "shadow-queue-full":
+            elif event.b_error in ("shadow-queue-full", "shadow-saturated"):
                 self._counts["dropped_shadow_ops"] += 1
             elif event.b_error is not None:
                 self._counts["route_b_errors"] += 1
 
-    def _shadow_loop(self) -> None:
-        timeout_s = self.route_b_timeout_ms / 1000.0
-        while True:
-            item = self._queue.get()
-            if item is None:
-                self._queue.task_done()
-                return
-            op, key, a_sha, a_ms, call_b = item
+    def _run_shadow_bounded(self, call_b: Callable[[], Any]) -> tuple[Any, float, str | None]:
+        if not self._shadow_slots.acquire(blocking=False):
+            return None, 0.0, "shadow-saturated"
+        pool = self._shadow_pool
+        if pool is None:
+            self._shadow_slots.release()
+            return None, 0.0, "shadow-closed"
+        t0 = time.perf_counter()
+
+        def wrapped() -> Any:
             try:
-                b_val, b_ms, b_err = _run_with_timeout(call_b, timeout_s)
+                return call_b()
+            finally:
+                self._shadow_slots.release()
+
+        fut = pool.submit(wrapped)
+        try:
+            val = fut.result(timeout=self.route_b_timeout_ms / 1000.0)
+            return val, (time.perf_counter() - t0) * 1000.0, None
+        except TimeoutError:
+            return None, (time.perf_counter() - t0) * 1000.0, "timeout"
+        except Exception as exc:
+            return None, (time.perf_counter() - t0) * 1000.0, f"{type(exc).__name__}: {exc}"
+
+    def _shadow_loop(self) -> None:
+        while True:
+            try:
+                op, key, a_sha, a_ms, call_b = self._queue.get(timeout=0.05)
+            except queue.Empty:
+                if self._stop_event.is_set():
+                    return
+                continue
+            try:
+                b_val, b_ms, b_err = self._run_shadow_bounded(call_b)
                 b_sha = None if b_err is not None else _digest_result(b_val)
                 self._record_event(
                     ParityEvent(
@@ -207,10 +233,14 @@ class MultiRouteBackend:
             if self._closed:
                 return
             self._closed = True
+            worker = self._worker
+            pool = self._shadow_pool
         self.flush_shadow(timeout=1.0)
-        with contextlib.suppress(queue.Full):
-            self._queue.put_nowait(None)
-        self._worker.join(timeout=1.0)
+        self._stop_event.set()
+        if worker is not None:
+            worker.join(timeout=2.0)
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     def _dispatch[T](
         self,
@@ -219,31 +249,20 @@ class MultiRouteBackend:
         call_a: Callable[[StorageBackend], T],
         call_b: Callable[[StorageBackend], T] | None = None,
     ) -> T:
-        mode = self.mode
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("MultiRouteBackend is closed")
+            mode = self._mode
+            route_b = self.route_b
         fn_b = call_a if call_b is None else call_b
         if mode == "single":
             return call_a(self.route_a)
-        route_b = self.route_b
         if route_b is None:
             raise ValueError(f"routing mode {mode!r} requires route_b")
         if mode == "canary-cutover":
-            t0 = time.perf_counter()
             res_b = fn_b(route_b)
-            b_ms = (time.perf_counter() - t0) * 1000.0
-            b_sha = _digest_result(res_b)
-            self._record_event(
-                ParityEvent(
-                    op=op,
-                    key=key,
-                    a_sha=None,
-                    b_sha=b_sha,
-                    a_ms=0.0,
-                    b_ms=b_ms,
-                    b_error=None,
-                    match=True,
-                    recorded_at=now(),
-                )
-            )
+            with self._lock:
+                self._counts["canary_ops"] += 1
             return res_b
 
         t0 = time.perf_counter()
@@ -252,21 +271,12 @@ class MultiRouteBackend:
         a_sha = _digest_result(res_a)
 
         if mode == "shadow-async":
+            self._ensure_shadow_started()
             try:
                 self._queue.put_nowait((op, key, a_sha, a_ms, lambda: fn_b(route_b)))
             except queue.Full:
                 self._record_event(
-                    ParityEvent(
-                        op=op,
-                        key=key,
-                        a_sha=a_sha,
-                        b_sha=None,
-                        a_ms=a_ms,
-                        b_ms=None,
-                        b_error="shadow-queue-full",
-                        match=False,
-                        recorded_at=now(),
-                    )
+                    ParityEvent(op, key, a_sha, None, a_ms, None, "shadow-queue-full", False, now())
                 )
             return res_a
 
@@ -274,46 +284,35 @@ class MultiRouteBackend:
         tb0 = time.perf_counter()
         try:
             res_b = fn_b(route_b)
+        except Exception as exc:
             b_ms = (time.perf_counter() - tb0) * 1000.0
-            b_sha = _digest_result(res_b)
-            matched = a_sha == b_sha
             self._record_event(
                 ParityEvent(
-                    op=op,
-                    key=key,
-                    a_sha=a_sha,
-                    b_sha=b_sha,
-                    a_ms=a_ms,
-                    b_ms=b_ms,
-                    b_error=None,
-                    match=matched,
-                    recorded_at=now(),
+                    op, key, a_sha, None, a_ms, b_ms, f"{type(exc).__name__}: {exc}", False, now()
                 )
             )
-            if self.fail_on_dual_mismatch and not matched:
-                raise ValueError(f"dual-sync parity mismatch on {op} {key}: {a_sha} != {b_sha}")
-        except Exception as exc:
-            if not isinstance(exc, ValueError) or "dual-sync parity mismatch" not in str(exc):
-                b_ms = (time.perf_counter() - tb0) * 1000.0
-                self._record_event(
-                    ParityEvent(
-                        op=op,
-                        key=key,
-                        a_sha=a_sha,
-                        b_sha=None,
-                        a_ms=a_ms,
-                        b_ms=b_ms,
-                        b_error=f"{type(exc).__name__}: {exc}",
-                        match=False,
-                        recorded_at=now(),
-                    )
-                )
-            raise
+            raise RuntimeError(
+                f"dual-sync route_b failed after route_a already committed ({op} {key}): "
+                f"{exc}; reconcile route_b or abort migration"
+            ) from exc
+
+        b_ms = (time.perf_counter() - tb0) * 1000.0
+        b_sha = _digest_result(res_b)
+        matched = a_sha == b_sha
+        self._record_event(ParityEvent(op, key, a_sha, b_sha, a_ms, b_ms, None, matched, now()))
+        if self.fail_on_dual_mismatch and not matched:
+            raise ValueError(
+                f"dual-sync parity mismatch after route_a committed ({op} {key}): "
+                f"{a_sha} != {b_sha}; inspect route_b and reconcile or abort migration"
+            )
         return res_a
 
     def _active_backend(self) -> StorageBackend:
-        if self.mode == "canary-cutover" and self.route_b is not None:
-            return self.route_b
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("MultiRouteBackend is closed")
+            if self._mode == "canary-cutover" and self.route_b is not None:
+                return self.route_b
         return self.route_a
 
     def put_record(
@@ -426,9 +425,13 @@ class MultiRouteBackend:
         """Return loopback /control/route-parity aggregate counters and recent events."""
         with self._lock:
             counts = dict(self._counts)
-            recent = [ev.to_dict() for ev in list(self._events)[-recent_limit:]]
-        total = counts["total_ops"]
-        match_rate = 1.0 if total == 0 else round(counts["matched_ops"] / total, 6)
+            recent = (
+                []
+                if recent_limit <= 0
+                else [ev.to_dict() for ev in list(self._events)[-recent_limit:]]
+            )
+        compared = counts["matched_ops"] + counts["mismatched_ops"]
+        match_rate = 1.0 if compared == 0 else round(counts["matched_ops"] / compared, 6)
         return {
             "format": "managed-ai-route-parity/1",
             "mode": self.mode,
@@ -481,7 +484,11 @@ class SchemaMigrationController:
     ) -> MigrationRecord:
         if not namespace:
             raise ValueError("namespace required")
-        if target_version <= from_version:
+        if (
+            isinstance(from_version, bool)
+            or isinstance(target_version, bool)
+            or target_version <= from_version
+        ):
             raise ValueError(f"lossy schema downgrade refused: {from_version} -> {target_version}")
         if not _SHA256_RE.match(target_sha256):
             raise ValueError(f"invalid target_sha256: {target_sha256!r}")
@@ -496,14 +503,7 @@ class SchemaMigrationController:
                 target_schema_bytes=target_schema_bytes,
             )
         self._state = MigrationRecord(
-            namespace=namespace,
-            phase="expanding",
-            from_version=from_version,
-            target_version=target_version,
-            target_sha256=target_sha256,
-            verified_through=0,
-            mismatch_count=0,
-            updated_at=now(),
+            namespace, "expanding", from_version, target_version, target_sha256, 0, 0, None, now()
         )
         return self._state
 
@@ -514,14 +514,15 @@ class SchemaMigrationController:
         if self._router is not None:
             self._router.set_mode(routing_mode)
         self._state = MigrationRecord(
-            namespace=cur.namespace,
-            phase="dual-write",
-            from_version=cur.from_version,
-            target_version=cur.target_version,
-            target_sha256=cur.target_sha256,
-            verified_through=cur.verified_through,
-            mismatch_count=cur.mismatch_count,
-            updated_at=now(),
+            cur.namespace,
+            "dual-write",
+            cur.from_version,
+            cur.target_version,
+            cur.target_sha256,
+            cur.verified_through,
+            cur.mismatch_count,
+            None,
+            now(),
         )
         return self._state
 
@@ -546,20 +547,21 @@ class SchemaMigrationController:
                 verified_through=verified_through,
             )
         self._state = MigrationRecord(
-            namespace=cur.namespace,
-            phase="verified",
-            from_version=cur.from_version,
-            target_version=cur.target_version,
-            target_sha256=cur.target_sha256,
-            verified_through=verified_through,
-            mismatch_count=0,
-            updated_at=now(),
+            cur.namespace,
+            "verified",
+            cur.from_version,
+            cur.target_version,
+            cur.target_sha256,
+            verified_through,
+            0,
+            None,
+            now(),
         )
         return self._state
 
     def commit_cutover(self, cutover_seq: int) -> MigrationRecord:
         cur = self._require_phase({"verified"}, "commit_cutover")
-        if cutover_seq < 0 or cur.verified_through < cutover_seq:
+        if isinstance(cutover_seq, bool) or cutover_seq < 0 or cur.verified_through < cutover_seq:
             raise ValueError(
                 f"cannot commit cutover at seq {cutover_seq}: "
                 f"verified_through is only {cur.verified_through}"
@@ -573,14 +575,15 @@ class SchemaMigrationController:
         if self._router is not None:
             self._router.set_mode("canary-cutover")
         self._state = MigrationRecord(
-            namespace=cur.namespace,
-            phase="committed",
-            from_version=cur.from_version,
-            target_version=cur.target_version,
-            target_sha256=cur.target_sha256,
-            verified_through=cur.verified_through,
-            mismatch_count=0,
-            updated_at=now(),
+            cur.namespace,
+            "committed",
+            cur.from_version,
+            cur.target_version,
+            cur.target_sha256,
+            cur.verified_through,
+            0,
+            None,
+            now(),
         )
         return self._state
 
@@ -595,15 +598,15 @@ class SchemaMigrationController:
         if self._router is not None:
             self._router.set_mode("single")
         self._state = MigrationRecord(
-            namespace=cur.namespace,
-            phase="aborted",
-            from_version=cur.from_version,
-            target_version=cur.target_version,
-            target_sha256=cur.target_sha256,
-            verified_through=cur.verified_through,
-            mismatch_count=cur.mismatch_count,
-            reason=reason,
-            updated_at=now(),
+            cur.namespace,
+            "aborted",
+            cur.from_version,
+            cur.target_version,
+            cur.target_sha256,
+            cur.verified_through,
+            cur.mismatch_count,
+            reason,
+            now(),
         )
         return self._state
 

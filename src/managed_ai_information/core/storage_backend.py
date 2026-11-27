@@ -17,6 +17,8 @@ from managed_ai_information.core.storage import (
     ObjectStore,
     atomic_bytes,
     encode,
+    is_ordinary_file_stat,
+    read_json,
     sha,
     strict_json_loads,
 )
@@ -31,7 +33,13 @@ from managed_ai_information.core.storage_backend_protocol import (
     SignalEvent,
     StorageBackend,
     StorageBackendError,
+    encode_expected_version,
+    ensure_ordinary_dir,
+    ensure_ordinary_leaf_or_missing,
+    map_http_error,
     now_ms,
+    parse_sse_signals,
+    quote_segment,
     validate_endpoint_url,
     validate_identifier,
     validate_sha256,
@@ -58,11 +66,10 @@ class EmbeddedFileBackend:
     """Zero-dependency local StorageBackend over ObjectStore + workspace files."""
 
     def __init__(self, root: Path, *, max_signals: int = 4096) -> None:
-        self.root = Path(root)
-        self.objects_dir = self.root / "exchange/objects"
-        self.kv_dir = self.root / "work/backend-kv"
-        self.objects_dir.mkdir(parents=True, exist_ok=True)
-        self.kv_dir.mkdir(parents=True, exist_ok=True)
+        self.root = ensure_ordinary_dir(Path(root))
+        self.objects_dir = ensure_ordinary_dir(self.root / "exchange/objects")
+        self.kv_dir = ensure_ordinary_dir(self.root / "work/backend-kv")
+        self._state_path = self.root / "work/backend-state.json"
         self._objects = ObjectStore(self.objects_dir)
         self._lock = threading.RLock()
         self._leases: dict[tuple[str, str], LeaseGrant] = {}
@@ -70,6 +77,45 @@ class EmbeddedFileBackend:
         self._search_docs: dict[tuple[str, str], dict[str, Any]] = {}
         self._signals: deque[SignalEvent] = deque(maxlen=max_signals)
         self._seq = 0
+        self._reload_persisted_state()
+
+    def _reload_persisted_state(self) -> None:
+        if self._state_path.exists() or self._state_path.is_symlink():
+            doc = read_json(self._state_path)
+            self._seq = int(doc.get("seq", 0))
+            for row in doc.get("generations", ()):
+                self._generations[(str(row["namespace"]), str(row["resource"]))] = int(
+                    row["generation"]
+                )
+            for row in doc.get("leases", ()):
+                grant = LeaseGrant.from_payload(row)
+                self._leases[(grant.namespace, grant.resource)] = grant
+        for entry in sorted(self.kv_dir.iterdir(), key=lambda p: p.name):
+            if entry.name.startswith("."):
+                continue
+            info = entry.lstat()
+            if not is_ordinary_file_stat(info):
+                raise ValueError(f"ordinary KV record file required: {entry}")
+            rec = self._read_unlocked(entry)
+            if rec is not None:
+                self._index_local_record(
+                    rec.namespace, rec.key, rec.value, rec.visibility, rec.metadata
+                )
+
+    def _persist_state_unlocked(self) -> None:
+        ensure_ordinary_leaf_or_missing(self._state_path)
+        payload = {
+            "seq": self._seq,
+            "generations": [
+                {"namespace": ns, "resource": res, "generation": gen}
+                for (ns, res), gen in sorted(self._generations.items())
+            ],
+            "leases": [
+                grant.to_payload(expires_at_ms=grant.expires_at_ms)
+                for grant in self._leases.values()
+            ],
+        }
+        atomic_bytes(self._state_path, encode(payload))
 
     def _record_path(self, namespace: str, key: str) -> Path:
         ns = validate_identifier(namespace, "namespace")
@@ -79,6 +125,7 @@ class EmbeddedFileBackend:
     def _emit_signal(self, namespace: str, key: str, version: int, kind: str) -> None:
         self._seq += 1
         self._signals.append(SignalEvent(self._seq, 1, namespace, key, version, kind))
+        self._persist_state_unlocked()
 
     def _index_local_record(
         self, ns: str, key: str, value: bytes, vis: SearchVisibility, meta: Mapping[str, Any]
@@ -97,9 +144,10 @@ class EmbeddedFileBackend:
         }
 
     def _read_unlocked(self, path: Path) -> BackendRecord | None:
-        if not path.is_file():
+        try:
+            doc = read_json(path)
+        except FileNotFoundError:
             return None
-        doc = strict_json_loads(path.read_bytes(), str(path))
         raw = base64.b64decode(str(doc["value_b64"]).encode("ascii"))
         vis = validate_visibility(str(doc.get("visibility", "Public")))
         return BackendRecord(
@@ -127,6 +175,7 @@ class EmbeddedFileBackend:
         meta = dict(metadata) if metadata else {}
         with self._lock:
             path = self._record_path(namespace, key)
+            ensure_ordinary_leaf_or_missing(path)
             current = self._read_unlocked(path)
             cur_ver = 0 if current is None else current.version
             if expected_version is not None and cur_ver != expected_version:
@@ -160,6 +209,7 @@ class EmbeddedFileBackend:
     ) -> bool:
         with self._lock:
             path = self._record_path(namespace, key)
+            ensure_ordinary_leaf_or_missing(path)
             current = self._read_unlocked(path)
             cur_ver = 0 if current is None else current.version
             if expected_version is not None and cur_ver != expected_version:
@@ -223,12 +273,13 @@ class EmbeddedFileBackend:
             existing = self._leases.get((ns, res))
             if existing is not None and existing.expires_at_ms > now_val:
                 raise BackendContendedError(
-                    f"lease already held for {ns}/{res}", status=423, code="lease_held"
+                    f"lease already held for {ns}/{res}", status=409, code="lease_held"
                 )
             gen = self._generations.get((ns, res), 0) + 1
             self._generations[(ns, res)] = gen
             grant = LeaseGrant(ns, res, holder, gen, secrets.token_hex(16), now_val + ttl_ms)
             self._leases[(ns, res)] = grant
+            self._persist_state_unlocked()
             return grant
 
     def renew_lease(self, grant: LeaseGrant, ttl_ms: int) -> LeaseGrant:
@@ -239,6 +290,7 @@ class EmbeddedFileBackend:
                 raise BackendContendedError("lease is not active", status=409, code="lease_expired")
             renewed = replace(grant, expires_at_ms=now_ms() + ttl_ms)
             self._leases[(grant.namespace, grant.resource)] = renewed
+            self._persist_state_unlocked()
             return renewed
 
     def release_lease(self, grant: LeaseGrant) -> bool:
@@ -246,6 +298,7 @@ class EmbeddedFileBackend:
             if not self.validate_lease(grant):
                 return False
             self._leases.pop((grant.namespace, grant.resource), None)
+            self._persist_state_unlocked()
             return True
 
     def validate_lease(self, grant: LeaseGrant) -> bool:
@@ -281,59 +334,6 @@ class EmbeddedFileBackend:
             "root": str(self.root),
             "seq": self._seq,
         }
-
-
-def _quote(seg: str) -> str:
-    return urllib.parse.quote(seg, safe="")
-
-
-def _map_http_error(status: int, raw: bytes) -> StorageBackendError:
-    code, message = "http_error", raw.decode("utf-8", errors="replace")
-    try:
-        parsed = strict_json_loads(raw, "membus_error", require_object=False)
-        if isinstance(parsed, dict):
-            code = str(parsed.get("error", code))
-            message = str(parsed.get("message", message))
-    except UnicodeDecodeError, ValueError:
-        pass
-    low = code.lower()
-    if status == 409 or "conflict" in low or "version" in low:
-        return BackendConflictError(message, status=status, code=code)
-    if status in (423, 429) or "lease" in low or "contend" in low:
-        return BackendContendedError(message, status=status, code=code)
-    if status in (502, 503, 504):
-        return BackendUnavailableError(message, status=status, code=code)
-    return StorageBackendError(message, status=status, code=code)
-
-
-def _parse_sse_signals(stream: Any) -> Iterator[SignalEvent]:
-    event_name = "message"
-    data_lines: list[str] = []
-    while raw_line := stream.readline():
-        line = raw_line.decode("utf-8").rstrip("\r\n")
-        if line == "":
-            if data_lines and event_name == "signal":
-                p = strict_json_loads(
-                    "\n".join(data_lines).encode(), "sse_event", require_object=False
-                )
-                if isinstance(p, dict):
-                    k = bytes(p["key"]).decode() if isinstance(p["key"], list) else str(p["key"])
-                    hint_raw = p.get("value_hint")
-                    hint = bytes(hint_raw) if isinstance(hint_raw, list) else None
-                    yield SignalEvent(
-                        int(p["seq"]),
-                        int(p["epoch"]),
-                        str(p["namespace"]),
-                        k,
-                        int(p["version"]),
-                        str(p["kind"]),
-                        hint,
-                    )
-            event_name, data_lines = "message", []
-        elif line.startswith("event:"):
-            event_name = line[7:] if line.startswith("event: ") else line[6:]
-        elif line.startswith("data:"):
-            data_lines.append(line[6:] if line.startswith("data: ") else line[5:])
 
 
 class MembusV2Backend:
@@ -378,7 +378,7 @@ class MembusV2Backend:
             conn.request(method, full_path, body=body, headers=self._headers(extra))
             resp = conn.getresponse()
             if resp.status >= 400:
-                raise _map_http_error(resp.status, resp.read(65536))
+                raise map_http_error(resp.status, resp.read(65536))
             data = resp.read(max_bytes + 1)
             if len(data) > max_bytes:
                 raise StorageBackendError("membus response exceeds byte limit", code="overflow")
@@ -418,15 +418,11 @@ class MembusV2Backend:
         if len(value) > MAX_BYTES:
             raise ValueError("record payload exceeds per-object limit")
         meta = dict(metadata) if metadata else {}
-        body: dict[str, Any] = {
-            "ack": "Fast",
-            "expected": "Any" if expected_version is None else {"Version": expected_version},
-            "value_b64": base64.b64encode(value).decode("ascii"),
-            "visibility": vis,
-        }
-        # Sealed records NEVER index payload text into membus search.
-        if vis != "Sealed":
-            body["search_op"] = {
+        # Sealed records NEVER index payload text and tombstone any prior search entry.
+        search_op: dict[str, Any] = (
+            {"Delete": {"namespace": ns, "doc_id": k}}
+            if vis == "Sealed"
+            else {
                 "Index": {
                     "namespace": ns,
                     "doc_id": k,
@@ -437,14 +433,22 @@ class MembusV2Backend:
                     "visibility": vis,
                 }
             }
-        res = self._request_json("PUT", f"/v2/kv/{_quote(ns)}/{_quote(k)}", body)
+        )
+        body: dict[str, Any] = {
+            "ack": "Fast",
+            "expected": encode_expected_version(expected_version),
+            "value_b64": base64.b64encode(value).decode("ascii"),
+            "visibility": vis,
+            "search_op": search_op,
+        }
+        res = self._request_json("PUT", f"/v2/kv/{quote_segment(ns)}/{quote_segment(k)}", body)
         vers = res.get("versions", [1])
         return BackendRecord(ns, k, value, int(vers[0]) if vers else 1, vis, meta)
 
     def get_record(self, namespace: str, key: str) -> BackendRecord | None:
         ns, k = validate_identifier(namespace, "namespace"), validate_identifier(key, "key")
         try:
-            res = self._request_json("GET", f"/v2/kv/{_quote(ns)}/{_quote(k)}")
+            res = self._request_json("GET", f"/v2/kv/{quote_segment(ns)}/{quote_segment(k)}")
         except StorageBackendError as err:
             if err.status == 404:
                 return None
@@ -460,11 +464,13 @@ class MembusV2Backend:
         self, namespace: str, key: str, *, expected_version: int | None = None
     ) -> bool:
         ns, k = validate_identifier(namespace, "namespace"), validate_identifier(key, "key")
-        exp: Any = "Any" if expected_version is None else {"Version": expected_version}
+        body = {
+            "ack": "Fast",
+            "expected": encode_expected_version(expected_version),
+            "search_op": {"Delete": {"namespace": ns, "doc_id": k}},
+        }
         try:
-            self._request_json(
-                "DELETE", f"/v2/kv/{_quote(ns)}/{_quote(k)}", {"ack": "Fast", "expected": exp}
-            )
+            self._request_json("DELETE", f"/v2/kv/{quote_segment(ns)}/{quote_segment(k)}", body)
             return True
         except StorageBackendError as err:
             if err.status == 404:
@@ -478,7 +484,7 @@ class MembusV2Backend:
         expected_sha = sha(data)
         _, raw = self._request_raw(
             "PUT",
-            f"/v2/blobs/{_quote(ns)}?ack=fast",
+            f"/v2/blobs/{quote_segment(ns)}?ack=fast",
             body=data,
             content_type="application/octet-stream",
         )
@@ -490,7 +496,9 @@ class MembusV2Backend:
     def get_blob(self, namespace: str, sha256_hex: str) -> bytes | None:
         ns, digest = validate_identifier(namespace, "namespace"), validate_sha256(sha256_hex)
         try:
-            _, raw = self._request_raw("GET", f"/v2/blobs/{_quote(ns)}/{_quote(digest)}")
+            _, raw = self._request_raw(
+                "GET", f"/v2/blobs/{quote_segment(ns)}/{quote_segment(digest)}"
+            )
         except StorageBackendError as err:
             if err.status == 404:
                 return None
@@ -502,7 +510,10 @@ class MembusV2Backend:
     def has_blob(self, namespace: str, sha256_hex: str) -> bool:
         ns, digest = validate_identifier(namespace, "namespace"), validate_sha256(sha256_hex)
         try:
-            return self._request_raw("HEAD", f"/v2/blobs/{_quote(ns)}/{_quote(digest)}")[0] == 200
+            status, _ = self._request_raw(
+                "HEAD", f"/v2/blobs/{quote_segment(ns)}/{quote_segment(digest)}"
+            )
+            return status == 200
         except StorageBackendError as err:
             if err.status == 404:
                 return False
@@ -566,14 +577,14 @@ class MembusV2Backend:
         if since_seq is not None:
             params["since_seq"] = str(since_seq)
         qs = urllib.parse.urlencode(params)
-        path = f"{self._parsed.path.rstrip('/')}/v2/signals/{_quote(ns)}/stream?{qs}"
+        path = f"{self._parsed.path.rstrip('/')}/v2/signals/{quote_segment(ns)}/stream?{qs}"
         conn = self._open_connection(timeout=timeout)
         try:
             conn.request("GET", path, headers=self._headers({"Accept": "text/event-stream"}))
             resp = conn.getresponse()
             if resp.status != 200:
-                raise _map_http_error(resp.status, resp.read(65536))
-            yield from _parse_sse_signals(resp)
+                raise map_http_error(resp.status, resp.read(65536))
+            yield from parse_sse_signals(resp)
         except StorageBackendError:
             raise
         except (http.client.HTTPException, TimeoutError, OSError, UnicodeDecodeError) as err:
@@ -583,7 +594,7 @@ class MembusV2Backend:
 
     def _migration_post(self, namespace: str, action: str, body: dict[str, Any]) -> dict[str, Any]:
         ns = validate_identifier(namespace, "namespace")
-        url_path = f"/v2/catalog/collections/{_quote(ns)}/migrations/{action}"
+        url_path = f"/v2/catalog/collections/{quote_segment(ns)}/migrations/{action}"
         return dict(self._request_json("POST", url_path, body))
 
     def begin_migration(
@@ -595,14 +606,15 @@ class MembusV2Backend:
         target_sha256: str,
         target_schema_bytes: bytes = b"",
     ) -> dict[str, Any]:
+        sha_bytes = list(bytes.fromhex(validate_sha256(target_sha256)))
         return self._migration_post(
             namespace,
             "begin",
             {
                 "expected_version": expected_version,
                 "target_version": target_version,
-                "target_sha256": validate_sha256(target_sha256),
-                "target_schema_b64": base64.b64encode(target_schema_bytes).decode("ascii"),
+                "target_sha256": sha_bytes,
+                "target_schema_bytes": list(target_schema_bytes),
             },
         )
 
@@ -627,9 +639,8 @@ class MembusV2Backend:
     def abort_migration(
         self, namespace: str, *, target_version: int, reason: str
     ) -> dict[str, Any]:
-        return self._migration_post(
-            namespace, "abort", {"target_version": target_version, "reason": reason}
-        )
+        del reason
+        return self._migration_post(namespace, "abort", {"target_version": target_version})
 
     def health(self) -> dict[str, Any]:
         return dict(self._request_json("GET", "/v2/health"))

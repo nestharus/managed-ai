@@ -1,4 +1,4 @@
-"""Shared protocol, dataclasses, typed errors, and validators for StorageBackend adapters."""
+"""Shared protocol, dataclasses, typed errors, wire helpers, and validators for StorageBackend."""
 
 import ipaddress
 import re
@@ -6,7 +6,15 @@ import time
 import urllib.parse
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal, Protocol, cast, runtime_checkable
+
+from managed_ai_information.core.storage import (
+    MAX_BYTES,
+    check_ordinary_ancestors,
+    is_ordinary_file_stat,
+    strict_json_loads,
+)
 
 SearchVisibility = Literal["Public", "MetadataOnly", "Sealed"]
 
@@ -211,3 +219,91 @@ def validate_endpoint_url(base_url: str) -> urllib.parse.SplitResult:
 
 def now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def quote_segment(seg: str) -> str:
+    return urllib.parse.quote(seg, safe="")
+
+
+def encode_expected_version(expected_version: int | None) -> Any:
+    if expected_version is None:
+        return "Any"
+    if isinstance(expected_version, bool) or expected_version < 0:
+        raise ValueError(f"invalid expected_version: {expected_version!r}")
+    if expected_version == 0:
+        return "Absent"
+    return {"Version": expected_version}
+
+
+def map_http_error(status: int, raw: bytes) -> StorageBackendError:
+    """Map Membus v2 HTTP status + error code to typed StorageBackendError."""
+    code, message = "http_error", raw.decode("utf-8", errors="replace")
+    try:
+        parsed = strict_json_loads(raw, "membus_error", require_object=False)
+        if isinstance(parsed, dict):
+            code = str(parsed.get("error", code))
+            message = str(parsed.get("message", message))
+    except UnicodeDecodeError, ValueError:
+        pass
+    low = code.lower()
+    # Check lease/contention BEFORE generic 409 because live membus returns 409 + lease_held.
+    if status in (423, 429) or "lease" in low or "contend" in low:
+        return BackendContendedError(message, status=status, code=code)
+    if status == 409 or "conflict" in low or "version" in low:
+        return BackendConflictError(message, status=status, code=code)
+    if status in (502, 503, 504):
+        return BackendUnavailableError(message, status=status, code=code)
+    return StorageBackendError(message, status=status, code=code)
+
+
+def parse_sse_signals(stream: Any, *, max_line_bytes: int = MAX_BYTES) -> Iterator[SignalEvent]:
+    """Parse bounded WHATWG SSE signal events from a Membus v2 stream."""
+    event_name = "message"
+    data_lines: list[str] = []
+    while raw_line := stream.readline(max_line_bytes + 1):
+        if len(raw_line) > max_line_bytes:
+            raise StorageBackendError("SSE line exceeds byte limit", code="overflow")
+        line = raw_line.decode("utf-8").rstrip("\r\n")
+        if line == "":
+            if data_lines and event_name == "signal":
+                p = strict_json_loads(
+                    "\n".join(data_lines).encode(), "sse_event", require_object=False
+                )
+                if isinstance(p, dict):
+                    k = bytes(p["key"]).decode() if isinstance(p["key"], list) else str(p["key"])
+                    hint_raw = p.get("value_hint")
+                    hint = bytes(hint_raw) if isinstance(hint_raw, list) else None
+                    yield SignalEvent(
+                        int(p["seq"]),
+                        int(p["epoch"]),
+                        str(p["namespace"]),
+                        k,
+                        int(p["version"]),
+                        str(p["kind"]),
+                        hint,
+                    )
+            event_name, data_lines = "message", []
+        elif line.startswith("event:"):
+            event_name = line[7:] if line.startswith("event: ") else line[6:]
+        elif line.startswith("data:"):
+            data_lines.append(line[6:] if line.startswith("data: ") else line[5:])
+
+
+def ensure_ordinary_dir(path: Path) -> Path:
+    """Create and verify an ordinary (non-symlink/non-reparse) directory."""
+    probe = path
+    while not probe.exists() and not probe.is_symlink() and probe != probe.parent:
+        probe = probe.parent
+    check_ordinary_ancestors(probe, expect_dir=True, error_prefix="ordinary directory required")
+    path.mkdir(parents=True, exist_ok=True)
+    return check_ordinary_ancestors(path, expect_dir=True, error_prefix="ordinary dir required")
+
+
+def ensure_ordinary_leaf_or_missing(path: Path) -> None:
+    """Reject non-ordinary existing leaf files (symlinks, directories, FIFOs)."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return
+    if not is_ordinary_file_stat(info):
+        raise ValueError(f"ordinary file required: {path}")

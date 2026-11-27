@@ -33,7 +33,7 @@ from managed_ai_information.core.storage_backend import (  # noqa: E402
 
 
 class _MembusV2State:
-    """In-memory reference state implementing the Membus v2 HTTP/JSON/SSE contract."""
+    """Strict reference state matching live membus @ f33857f6 HTTP/JSON/SSE wire schemas."""
 
     def __init__(self) -> None:
         self.lock = threading.RLock()
@@ -47,6 +47,30 @@ class _MembusV2State:
         self.migrations: list[tuple[str, str, dict[str, Any]]] = []
         self.seq = 0
         self.corrupt_next_blob_get = False
+
+
+def _expected_matches(expected: Any, existing: dict[str, Any] | None) -> bool:
+    if expected == "Any":
+        return True
+    if expected == "Absent":
+        return existing is None
+    if isinstance(expected, dict) and "Version" in expected:
+        if existing is None:
+            return False
+        return int(existing["meta"]["version"]) == int(expected["Version"])
+    return False
+
+
+def _apply_search_op(state: _MembusV2State, search_op: Any) -> None:
+    if not isinstance(search_op, dict):
+        return
+    if "Index" in search_op:
+        doc = search_op["Index"]
+        if doc.get("visibility") != "Sealed":
+            state.search_docs[(doc["namespace"], doc["doc_id"])] = doc
+    elif "Delete" in search_op:
+        dl = search_op["Delete"]
+        state.search_docs.pop((dl["namespace"], dl["doc_id"]), None)
 
 
 def _start_membus_v2_server() -> tuple[ThreadingHTTPServer, _MembusV2State, str]:
@@ -159,18 +183,12 @@ def _start_membus_v2_server() -> tuple[ThreadingHTTPServer, _MembusV2State, str]
                 val = base64.b64decode(req["value_b64"].encode("ascii"))
                 with state.lock:
                     existing = state.kv.get((ns, key))
-                    cur_ver = 0 if existing is None else int(existing["meta"]["version"])
-                    exp = req.get("expected", "Any")
-                    if (
-                        isinstance(exp, dict)
-                        and "Version" in exp
-                        and int(exp["Version"]) != cur_ver
-                    ):
+                    if not _expected_matches(req.get("expected", "Any"), existing):
                         self._send_json(
-                            409,
-                            {"error": "version_mismatch", "message": "expected version mismatch"},
+                            409, {"error": "conflict", "message": "expected version mismatch"}
                         )
                         return
+                    cur_ver = 0 if existing is None else int(existing["meta"]["version"])
                     next_ver = cur_ver + 1
                     state.seq += 1
                     vis = req.get("visibility", "Public")
@@ -187,12 +205,7 @@ def _start_membus_v2_server() -> tuple[ThreadingHTTPServer, _MembusV2State, str]
                     }
                     search_op = req.get("search_op")
                     state.search_ops_seen.append((ns, key, search_op))
-                    if isinstance(search_op, dict) and "Index" in search_op:
-                        doc = search_op["Index"]
-                        if doc.get("visibility") != "Sealed":
-                            state.search_docs[(ns, key)] = doc
-                    else:
-                        state.search_docs.pop((ns, key), None)
+                    _apply_search_op(state, search_op)
                     state.signals.append(
                         {
                             "seq": state.seq,
@@ -219,17 +232,12 @@ def _start_membus_v2_server() -> tuple[ThreadingHTTPServer, _MembusV2State, str]
                     if existing is None:
                         self._send_json(404, {"error": "not_found", "message": "missing key"})
                         return
-                    cur_ver = int(existing["meta"]["version"])
-                    exp = req.get("expected", "Any")
-                    if (
-                        isinstance(exp, dict)
-                        and "Version" in exp
-                        and int(exp["Version"]) != cur_ver
-                    ):
+                    if not _expected_matches(req.get("expected", "Any"), existing):
                         self._send_json(409, {"error": "conflict", "message": "version conflict"})
                         return
+                    cur_ver = int(existing["meta"]["version"])
                     state.kv.pop((ns, key), None)
-                    state.search_docs.pop((ns, key), None)
+                    _apply_search_op(state, req.get("search_op"))
                     state.seq += 1
                     self._send_json(200, {"seq": state.seq, "epoch": 1, "versions": [cur_ver + 1]})
                 return
@@ -241,9 +249,7 @@ def _start_membus_v2_server() -> tuple[ThreadingHTTPServer, _MembusV2State, str]
             req = json.loads(self._read_body().decode("utf-8"))
             if parsed.path == "/v2/search/query":
                 needle = str(req.get("query", "")).lower()
-                ns = req.get("namespace")
-                kind = req.get("kind")
-                limit = int(req.get("limit", 20))
+                ns, kind, limit = req.get("namespace"), req.get("kind"), int(req.get("limit", 20))
                 hits = []
                 with state.lock:
                     for doc in state.search_docs.values():
@@ -251,8 +257,10 @@ def _start_membus_v2_server() -> tuple[ThreadingHTTPServer, _MembusV2State, str]
                             continue
                         if kind is not None and doc["kind"] != kind:
                             continue
-                        hay = f"{doc.get('title', '')}\n{doc.get('body', '')}".lower()
-                        if needle and needle in hay:
+                        if (
+                            needle
+                            and needle in f"{doc.get('title', '')}\n{doc.get('body', '')}".lower()
+                        ):
                             hits.append(
                                 {
                                     "namespace": doc["namespace"],
@@ -271,7 +279,8 @@ def _start_membus_v2_server() -> tuple[ThreadingHTTPServer, _MembusV2State, str]
                 with state.lock:
                     cur = state.leases.get(key)
                     if cur is not None and cur["expires_at_ms"] > now_ms:
-                        self._send_json(423, {"error": "lease_held", "message": "already held"})
+                        # Live membus @ f33857f6 returns 409 + {"error": "lease_held"}!
+                        self._send_json(409, {"error": "lease_held", "message": "already held"})
                         return
                     gen = state.lease_gens.get(key, 0) + 1
                     state.lease_gens[key] = gen
@@ -307,9 +316,7 @@ def _start_membus_v2_server() -> tuple[ThreadingHTTPServer, _MembusV2State, str]
                         self._send_json(200, {"ok": valid})
                         return
                     if not valid:
-                        self._send_json(
-                            409, {"error": "lease_expired", "message": "inactive lease"}
-                        )
+                        self._send_json(409, {"error": "lease_expired", "message": "inactive"})
                         return
                     assert cur is not None
                     cur["expires_at_ms"] = now_ms + int(req["ttl_ms"])
@@ -323,6 +330,21 @@ def _start_membus_v2_server() -> tuple[ThreadingHTTPServer, _MembusV2State, str]
                 and parts[4] == "migrations"
             ):
                 ns, action = parts[3], parts[5]
+                if action == "begin":
+                    # Enforce exact live membus BeginMigrationReq wire schema ([u8; 32] + Vec<u8>).
+                    sha_arr = req.get("target_sha256")
+                    schema_arr = req.get("target_schema_bytes")
+                    if (
+                        not isinstance(sha_arr, list)
+                        or len(sha_arr) != 32
+                        or not all(isinstance(x, int) and 0 <= x <= 255 for x in sha_arr)
+                        or not isinstance(schema_arr, list)
+                        or not all(isinstance(x, int) and 0 <= x <= 255 for x in schema_arr)
+                    ):
+                        self._send_json(
+                            422, {"error": "unprocessable", "message": "invalid BeginMigrationReq"}
+                        )
+                        return
                 with state.lock:
                     state.migrations.append((ns, action, req))
                 self._send_json(200, {"ok": True, "namespace": ns, "action": action})
@@ -357,8 +379,14 @@ class StorageBackendAndMultiRouteTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name)
 
-    def test_membus_v2_backend_tls_visibility_blobs_leases_and_sse_signals(self) -> None:
-        # Non-loopback plaintext HTTP is rejected fail-closed.
+    def _start_server_with_cleanup(self) -> tuple[_MembusV2State, str]:
+        server, state, base_url = _start_membus_v2_server()
+        # LIFO order: register server_close first so shutdown() runs BEFORE server_close().
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return state, base_url
+
+    def test_membus_v2_backend_wire_exactness_tls_visibility_leases_and_sse(self) -> None:
         for bad_url in (
             "http://10.0.0.8:8080",
             "http://membus.example.com:8080",
@@ -368,19 +396,15 @@ class StorageBackendAndMultiRouteTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 MembusV2Backend(bad_url)
 
-        # Loopback HTTP and non-loopback HTTPS are accepted.
         self.assertIsInstance(MembusV2Backend("https://membus.internal:8443"), StorageBackend)
         self.assertIsInstance(MembusV2Backend("http://localhost:8080"), StorageBackend)
         self.assertIsInstance(MembusV2Backend("http://[::1]:8080"), StorageBackend)
 
-        server, state, base_url = _start_membus_v2_server()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
+        state, base_url = self._start_server_with_cleanup()
         client = MembusV2Backend(base_url, token="test-token")
-
         self.assertEqual(client.health()["status"], "ok")
 
-        # KV put/get/conflict + SearchVisibility isolation.
+        # expected_version=0 sends "Absent" (succeeds on absent key, 409 Conflict once present).
         r1 = client.put_record(
             "research",
             "rec-public",
@@ -411,22 +435,34 @@ class StorageBackendAndMultiRouteTests(unittest.TestCase):
             metadata={"kind": "finding", "title": "Sealed Headline"},
         )
 
-        # Sealed record NEVER sent search_op to server, and NEVER appears in search.
-        sealed_ops = [op for ns, k, op in state.search_ops_seen if k == "rec-sealed"]
-        self.assertEqual(sealed_ops, [None])
+        # Sealed emits Delete tombstone (never Index or sealed body text).
+        sealed_ops = [op for _, k, op in state.search_ops_seen if k == "rec-sealed"]
+        self.assertEqual(
+            sealed_ops, [{"Delete": {"namespace": "research", "doc_id": "rec-sealed"}}]
+        )
         self.assertEqual(client.search("ultra-sealed-d12-body-token", namespace="research"), [])
         self.assertEqual(client.search("Sealed Headline", namespace="research"), [])
-        # MetadataOnly indexes title, NOT body.
         self.assertEqual(client.search("secret-meta-body-never-indexed", namespace="research"), [])
         self.assertEqual(
             [h.doc_id for h in client.search("MetadataOnly Headline", namespace="research")],
             ["rec-meta"],
         )
-        # Public indexes body.
         self.assertEqual(
             [h.doc_id for h in client.search("unique-public-token", namespace="research")],
             ["rec-public"],
         )
+
+        # Downgrading a Public record to Sealed tombstones its prior search entry.
+        client.put_record(
+            "research",
+            "rec-public",
+            b"now-sealed-body",
+            expected_version=1,
+            visibility="Sealed",
+            metadata={"kind": "finding", "title": "Public Title"},
+        )
+        self.assertEqual(client.search("unique-public-token", namespace="research"), [])
+        self.assertEqual(client.search("Public Title", namespace="research"), [])
 
         # Blobs: put, has, get, and integrity failure on corruption.
         blob_bytes = b"immutable-cas-payload-123"
@@ -440,7 +476,7 @@ class StorageBackendAndMultiRouteTests(unittest.TestCase):
         with self.assertRaises(StorageBackendError):
             client.get_blob("research", digest)
 
-        # Leases: acquire, contention, validate, renew, release.
+        # Leases: live membus 409 + lease_held maps cleanly to BackendContendedError!
         grant = client.acquire_lease("research", "store-owner", "worker-a", ttl_ms=10_000)
         self.assertEqual(grant.generation, 1)
         self.assertTrue(client.validate_lease(grant))
@@ -453,16 +489,21 @@ class StorageBackendAndMultiRouteTests(unittest.TestCase):
 
         # SSE signals: cursor & prefix filtering.
         all_signals = list(client.stream_signals("research", prefix="rec-"))
-        self.assertEqual([ev.key for ev in all_signals], ["rec-public", "rec-meta", "rec-sealed"])
-        tail = list(client.stream_signals("research", since_seq=all_signals[0].seq))
-        self.assertEqual([ev.key for ev in tail], ["rec-meta", "rec-sealed"])
+        self.assertEqual(
+            [ev.key for ev in all_signals],
+            ["rec-public", "rec-meta", "rec-sealed", "rec-public"],
+        )
+        tail = list(client.stream_signals("research", since_seq=all_signals[1].seq))
+        self.assertEqual([ev.key for ev in tail], ["rec-sealed", "rec-public"])
 
-        # Delete record.
-        self.assertTrue(client.delete_record("research", "rec-public", expected_version=1))
-        self.assertIsNone(client.get_record("research", "rec-public"))
+        # delete_record emits search Delete tombstone so MetadataOnly headline disappears too.
+        self.assertTrue(client.delete_record("research", "rec-meta", expected_version=1))
+        self.assertIsNone(client.get_record("research", "rec-meta"))
+        self.assertEqual(client.search("MetadataOnly Headline", namespace="research"), [])
 
-    def test_embedded_file_backend_protocol_visibility_and_leases(self) -> None:
-        backend = EmbeddedFileBackend(self.base / "embedded")
+    def test_embedded_file_backend_restart_continuity_and_visibility(self) -> None:
+        emb_root = self.base / "embedded"
+        backend = EmbeddedFileBackend(emb_root)
         self.assertIsInstance(backend, StorageBackend)
         rec = backend.put_record(
             "sw", "k1", b"alpha payload", visibility="Public", metadata={"title": "Alpha"}
@@ -471,127 +512,137 @@ class StorageBackendAndMultiRouteTests(unittest.TestCase):
         backend.put_record(
             "sw", "k-sealed", b"sealed secret", visibility="Sealed", metadata={"title": "Hidden"}
         )
-        self.assertEqual([h.doc_id for h in backend.search("alpha", namespace="sw")], ["k1"])
-        self.assertEqual(backend.search("sealed", namespace="sw"), [])
-        self.assertEqual(backend.search("Hidden", namespace="sw"), [])
+        grant1 = backend.acquire_lease("sw", "owner", "h1", ttl_ms=30_000)
+        self.assertEqual(grant1.generation, 1)
 
-        digest = backend.put_blob("sw", b"blob-data")
-        self.assertTrue(backend.has_blob("sw", digest))
-        self.assertEqual(backend.get_blob("sw", digest), b"blob-data")
-
-        grant = backend.acquire_lease("sw", "owner", "h1", ttl_ms=5_000)
-        self.assertTrue(backend.validate_lease(grant))
+        # Reopen fresh EmbeddedFileBackend instance -> search index, leases, and gens survive!
+        reopened = EmbeddedFileBackend(emb_root)
+        self.assertEqual([h.doc_id for h in reopened.search("alpha", namespace="sw")], ["k1"])
+        self.assertEqual(reopened.search("sealed", namespace="sw"), [])
+        self.assertEqual(reopened.search("Hidden", namespace="sw"), [])
+        self.assertTrue(reopened.validate_lease(grant1))
         with self.assertRaises(BackendContendedError):
-            backend.acquire_lease("sw", "owner", "h2", ttl_ms=5_000)
-        self.assertTrue(backend.release_lease(grant))
+            reopened.acquire_lease("sw", "owner", "h2", ttl_ms=30_000)
+        self.assertTrue(reopened.release_lease(grant1))
+        grant2 = reopened.acquire_lease("sw", "owner", "h2", ttl_ms=30_000)
+        self.assertEqual(grant2.generation, 2)
 
-    def test_multi_route_shadow_async_fault_and_timeout_isolation(self) -> None:
+    def test_multi_route_shadow_async_isolation_lazy_worker_and_close_guard(self) -> None:
         route_a = EmbeddedFileBackend(self.base / "route_a")
-        route_b_fail = _FailingOrSlowBackend(self.base / "route_b_fail", fail=True)
-        router = MultiRouteBackend(
-            route_a, route_b_fail, mode="shadow-async", route_b_timeout_ms=80
-        )
-        self.addCleanup(router.close)
+        # single mode with route_b=None spawns ZERO background workers.
+        with MultiRouteBackend(route_a, mode="single") as single_router:
+            self.assertIsNone(single_router._worker)
+            single_router.put_record("ns", "k0", b"zero")
+            self.assertIsNone(single_router._worker)
+        with self.assertRaises(RuntimeError):
+            single_router.put_record("ns", "k-after-close", b"nope")
 
         # Route B errors NEVER fail Route A.
-        res = router.put_record("ns", "k1", b"payload-1")
-        self.assertEqual(res.value, b"payload-1")
-        self.assertTrue(router.flush_shadow(timeout=2.0))
-        summary = router.parity_summary()
-        self.assertEqual(summary["counts"]["route_b_errors"], 1)
-        self.assertEqual(summary["counts"]["mismatched_ops"], 1)
+        route_b_fail = _FailingOrSlowBackend(self.base / "route_b_fail", fail=True)
+        with MultiRouteBackend(
+            route_a, route_b_fail, mode="shadow-async", route_b_timeout_ms=80
+        ) as router:
+            res = router.put_record("ns", "k1", b"payload-1")
+            self.assertEqual(res.value, b"payload-1")
+            self.assertTrue(router.flush_shadow(timeout=2.0))
+            summary = router.parity_summary(recent_limit=0)
+            self.assertEqual(summary["recent_events"], [])
+            self.assertEqual(summary["counts"]["route_b_errors"], 1)
+            self.assertEqual(summary["counts"]["mismatched_ops"], 1)
 
-        # Route B hang NEVER stalls Route A and times out cleanly.
-        route_b_slow = _FailingOrSlowBackend(self.base / "route_b_slow", delay_s=0.6)
-        router_slow = MultiRouteBackend(
-            route_a, route_b_slow, mode="shadow-async", route_b_timeout_ms=60
-        )
-        self.addCleanup(router_slow.close)
-        t0 = time.perf_counter()
-        res2 = router_slow.put_record("ns", "k2", b"payload-2")
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        self.assertEqual(res2.value, b"payload-2")
-        self.assertLess(elapsed_ms, 250.0)
-        self.assertTrue(router_slow.flush_shadow(timeout=2.0))
-        slow_summary = router_slow.parity_summary()
-        self.assertEqual(slow_summary["counts"]["route_b_timeouts"], 1)
-        self.assertEqual(router_slow.route_status()["authoritative"], "route_a")
+        # Route B hang NEVER stalls Route A, times out cleanly, and bounds worker threads.
+        route_b_slow = _FailingOrSlowBackend(self.base / "route_b_slow", delay_s=0.4)
+        with MultiRouteBackend(
+            route_a, route_b_slow, mode="shadow-async", route_b_timeout_ms=50, max_shadow_workers=1
+        ) as router_slow:
+            t0 = time.perf_counter()
+            res2 = router_slow.put_record("ns", "k2", b"payload-2")
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            self.assertEqual(res2.value, b"payload-2")
+            self.assertLess(elapsed_ms, 250.0)
+            self.assertTrue(router_slow.flush_shadow(timeout=2.0))
+            slow_summary = router_slow.parity_summary()
+            self.assertEqual(slow_summary["counts"]["route_b_timeouts"], 1)
 
     def test_multi_route_dual_sync_canary_and_schema_migration_governance(self) -> None:
-        server, state, base_url = _start_membus_v2_server()
-        self.addCleanup(server.shutdown)
-        self.addCleanup(server.server_close)
-
+        state, base_url = self._start_server_with_cleanup()
         route_a = EmbeddedFileBackend(self.base / "mig_a")
         route_b = MembusV2Backend(base_url)
-        router = MultiRouteBackend(route_a, route_b, mode="single")
-        self.addCleanup(router.close)
 
-        controller = SchemaMigrationController(router=router, catalog_backend=route_b)
-        target_sha = sha(b'{"schema":"v2"}')
+        with MultiRouteBackend(route_a, route_b, mode="single") as router:
+            controller = SchemaMigrationController(router=router, catalog_backend=route_b)
+            target_sha = sha(b'{"schema":"v2"}')
 
-        # Lossy downgrade refused fail-closed.
-        with self.assertRaises(ValueError):
+            with self.assertRaises(ValueError):
+                controller.begin_expand(
+                    "research", from_version=2, target_version=1, target_sha256=target_sha
+                )
+
+            st1 = controller.begin_expand(
+                "research",
+                from_version=1,
+                target_version=2,
+                target_sha256=target_sha,
+                target_schema_bytes=b'{"schema":"v2"}',
+            )
+            self.assertEqual(st1.phase, "expanding")
+            with self.assertRaises(ValueError):
+                controller.commit_cutover(cutover_seq=10)
+
+            controller.enable_dual_write(routing_mode="dual-sync")
+            router.put_record("research", "doc-1", b"dual-write-body")
+            self.assertEqual(router.parity_summary()["counts"]["matched_ops"], 1)
+
+            with self.assertRaises(ValueError):
+                controller.record_verification(verified_through=5, mismatch_count=1)
+            controller.record_verification(verified_through=5, mismatch_count=0)
+            with self.assertRaises(ValueError):
+                controller.record_verification(verified_through=4, mismatch_count=0)
+            with self.assertRaises(ValueError):
+                controller.commit_cutover(cutover_seq=10)
+            with self.assertRaises(ValueError):
+                controller.commit_cutover(cutover_seq=True)  # type: ignore[arg-type]
+
+            controller.record_verification(verified_through=10, mismatch_count=0)
+            st4 = controller.commit_cutover(cutover_seq=10)
+            self.assertEqual(st4.phase, "committed")
+            self.assertEqual(router.mode, "canary-cutover")
+
+            # Canary-cutover increments canary_ops without inflating matched_ops.
+            router.put_record("research", "doc-2", b"canary-only")
+            self.assertIsNone(route_a.get_record("research", "doc-2"))
+            parity_after_canary = router.parity_summary()
+            self.assertEqual(parity_after_canary["counts"]["matched_ops"], 1)
+            self.assertEqual(parity_after_canary["counts"]["canary_ops"], 1)
+
+            # Abort/rollback restores single mode and notifies catalog.
             controller.begin_expand(
-                "research", from_version=2, target_version=1, target_sha256=target_sha
+                "research", from_version=2, target_version=3, target_sha256=sha(b'{"schema":"v3"}')
+            )
+            controller.enable_dual_write(routing_mode="shadow-async")
+            aborted = controller.abort_rollback("canary soak drift")
+            self.assertEqual(aborted.phase, "aborted")
+            self.assertEqual(router.mode, "single")
+            self.assertEqual(
+                [act for _, act, _ in state.migrations],
+                ["begin", "advance", "advance", "commit", "begin", "abort"],
             )
 
-        # Expand -> Dual-Write -> Verify -> Commit.
-        st1 = controller.begin_expand(
-            "research", from_version=1, target_version=2, target_sha256=target_sha
-        )
-        self.assertEqual(st1.phase, "expanding")
-        # Out-of-order cutover refused.
-        with self.assertRaises(ValueError):
-            controller.commit_cutover(cutover_seq=10)
+        # Dual-sync Route B failure explicitly states Route A already committed.
+        route_b_broken = _FailingOrSlowBackend(self.base / "mig_b_fail", fail=True)
+        with (
+            MultiRouteBackend(route_a, route_b_broken, mode="dual-sync") as broken_router,
+            self.assertRaisesRegex(RuntimeError, "route_a already committed"),
+        ):
+            broken_router.put_record("research", "doc-partial", b"data")
 
-        st2 = controller.enable_dual_write(routing_mode="dual-sync")
-        self.assertEqual(st2.phase, "dual-write")
-        self.assertEqual(router.mode, "dual-sync")
-
-        # Dual-sync write hits both Route A and Route B with exact parity.
-        router.put_record("research", "doc-1", b"dual-write-body")
-        self.assertEqual(router.parity_summary()["counts"]["matched_ops"], 1)
-        got_b = route_b.get_record("research", "doc-1")
-        assert got_b is not None
-        self.assertEqual(got_b.value, b"dual-write-body")
-
-        # Verification rejects mismatches and non-monotonic watermarks.
-        with self.assertRaises(ValueError):
-            controller.record_verification(verified_through=5, mismatch_count=1)
-        st3 = controller.record_verification(verified_through=5, mismatch_count=0)
-        self.assertEqual(st3.phase, "verified")
-        with self.assertRaises(ValueError):
-            controller.record_verification(verified_through=4, mismatch_count=0)
-        # Cutover refused while verified_through < cutover_seq.
-        with self.assertRaises(ValueError):
-            controller.commit_cutover(cutover_seq=10)
-
-        controller.record_verification(verified_through=10, mismatch_count=0)
-        st4 = controller.commit_cutover(cutover_seq=10)
-        self.assertEqual(st4.phase, "committed")
-        self.assertEqual(router.mode, "canary-cutover")
-        self.assertEqual(router.route_status()["authoritative"], "route_b")
-
-        # Canary-cutover writes authoritatively to Route B.
-        router.put_record("research", "doc-2", b"canary-only")
-        self.assertIsNone(route_a.get_record("research", "doc-2"))
-        got_b2 = route_b.get_record("research", "doc-2")
-        assert got_b2 is not None
-        self.assertEqual(got_b2.value, b"canary-only")
-
-        # Abort/rollback path restores router to single (Route A) and notifies catalog.
-        controller.begin_expand(
-            "research", from_version=2, target_version=3, target_sha256=sha(b'{"schema":"v3"}')
-        )
-        controller.enable_dual_write(routing_mode="shadow-async")
-        aborted = controller.abort_rollback("canary soak drift")
-        self.assertEqual(aborted.phase, "aborted")
-        self.assertEqual(router.mode, "single")
-        self.assertEqual(
-            [act for _, act, _ in state.migrations],
-            ["begin", "advance", "advance", "commit", "begin", "abort"],
-        )
+        # EmbeddedFileBackend refuses non-ordinary leaves (e.g. directory masquerading as record).
+        guard_backend = EmbeddedFileBackend(self.base / "ordinary_guard")
+        (guard_backend.kv_dir / sha(b"research\0poisoned")).mkdir()
+        with self.assertRaisesRegex(ValueError, "ordinary"):
+            guard_backend.put_record("research", "poisoned", b"payload")
+        with self.assertRaisesRegex(ValueError, "ordinary"):
+            EmbeddedFileBackend(self.base / "ordinary_guard")
 
 
 if __name__ == "__main__":

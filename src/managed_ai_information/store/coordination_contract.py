@@ -1,14 +1,20 @@
 """Versioned information-layer contract for managed-ai-coordination."""
 
+import contextlib
 import threading
 import time
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
+from managed_ai_information.core.formats import BATCH_FORMAT
 from managed_ai_information.core.storage import (
     MAX_BYTES,
+    atomic_bytes,
     encode,
+    exclusive,
+    is_ordinary_file_stat,
     now,
     read_json,
     sha,
@@ -90,7 +96,7 @@ class ArtifactReceipt:
 
 @dataclass(frozen=True, slots=True)
 class CommitReceipt:
-    """Verified receipt for a lease-fenced, optimistic-CAS consolidation delta commit."""
+    """Verified receipt for a lease-fenced, atomic optimistic-CAS consolidation delta commit."""
 
     format: str
     lease_namespace: str
@@ -145,7 +151,7 @@ def resolve_context_bundle(system: Any, turn: str) -> BoundedBundleRef:
         chunk_hashes = tuple(chunk_meta[0]) if chunk_meta is not None else ()
         selected = tuple(str(r) for r in view_doc.get("selected_records", ()))
 
-    provisional = BoundedBundleRef(
+    ref = BoundedBundleRef(
         format=BUNDLE_REF_FORMAT,
         turn=turn,
         consumer=str(request["consumer"]),
@@ -158,22 +164,17 @@ def resolve_context_bundle(system: Any, turn: str) -> BoundedBundleRef:
         outside_view_record_objects=chunk_hashes,
         bundle_bytes=0,
     )
-    encoded_len = len(encode(provisional.to_dict()))
-    if encoded_len > MAX_BYTES:
-        raise ValueError(f"resolved bundle ref exceeds MAX_BYTES ({encoded_len} > {MAX_BYTES})")
-    return BoundedBundleRef(
-        format=provisional.format,
-        turn=provisional.turn,
-        consumer=provisional.consumer,
-        request_sha256=provisional.request_sha256,
-        context_sha256=provisional.context_sha256,
-        exposure_sha256=provisional.exposure_sha256,
-        full_view_object=provisional.full_view_object,
-        selected_records=provisional.selected_records,
-        outside_view_record_count=provisional.outside_view_record_count,
-        outside_view_record_objects=provisional.outside_view_record_objects,
-        bundle_bytes=encoded_len,
-    )
+    # Fixed-point byte accounting so bundle_bytes matches exact final serialized size.
+    for _ in range(3):
+        size = len(encode(ref.to_dict()))
+        if size == ref.bundle_bytes:
+            break
+        ref = replace(ref, bundle_bytes=size)
+    if ref.bundle_bytes > MAX_BYTES:
+        raise ValueError(
+            f"resolved bundle ref exceeds MAX_BYTES ({ref.bundle_bytes} > {MAX_BYTES})"
+        )
+    return ref
 
 
 def attach_artifact(
@@ -193,7 +194,6 @@ def attach_artifact(
     if len(payload) > MAX_BYTES:
         raise ValueError(f"artifact payload exceeds MAX_BYTES ({len(payload)} > {MAX_BYTES})")
     prov = dict(provenance)
-    # Validate provenance is strictly JSON-serializable (no NaN/Infinity/unsupported types).
     encode(prov)
     expected_digest = sha(payload)
     digest = str(objects.put(payload))
@@ -231,23 +231,45 @@ def _validate_lease_for_commit(
         raise BackendContendedError("lease rejected by backend validation", code="lease_invalid")
 
 
-def commit_consolidation_delta(
+def _fence_file_path(system: Any) -> Path:
+    return Path(system.ex.root) / "coordination-fences.json"
+
+
+def _load_fences(path: Path) -> dict[tuple[str, str], int]:
+    try:
+        doc = read_json(path)
+    except FileNotFoundError:
+        return {}
+    return {
+        (str(row["namespace"]), str(row["resource"])): int(row["generation"])
+        for row in doc.get("fences", ())
+    }
+
+
+def _save_fences(path: Path, fences: Mapping[tuple[str, str], int]) -> None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        info = None
+    if info is not None and not is_ordinary_file_stat(info):
+        raise ValueError(f"ordinary fence file required: {path}")
+    payload = {
+        "format": COORDINATION_CONTRACT_FORMAT,
+        "fences": [
+            {"namespace": ns, "resource": res, "generation": gen}
+            for (ns, res), gen in sorted(fences.items())
+        ],
+    }
+    atomic_bytes(path, encode(payload))
+
+
+def _build_batch_operations(
     system: Any,
-    lease: LeaseGrant,
     expected_revisions: Mapping[str, int],
     records: Sequence[Mapping[str, Any]],
-    *,
-    backend: StorageBackend | None = None,
-    now_ms: int | None = None,
-    min_generation: int = 1,
-) -> CommitReceipt:
-    """Validate lease fencing + optimistic-CAS expected revisions and commit records."""
-    _validate_lease_for_commit(lease, backend=backend, now_ms=now_ms, min_generation=min_generation)
-    if not records:
-        raise ValueError("consolidation delta requires at least one record")
-
+) -> list[dict[str, Any]]:
     seen_ids: set[str] = set()
-    staged: list[tuple[str, dict[str, Any], int]] = []
+    operations: list[dict[str, Any]] = []
     for raw_record in records:
         rec = dict(raw_record)
         ident = rec.get("id")
@@ -263,29 +285,74 @@ def commit_consolidation_delta(
         exp_rev = expected_revisions[ident]
         if isinstance(exp_rev, bool) or not isinstance(exp_rev, int) or exp_rev < 0:
             raise ValueError(f"invalid expected_revision for {ident!r}: {exp_rev!r}")
-        cur_rev = (
-            int(system.record_store.show(ident)["revision"])
-            if system.record_store.has_record(ident)
-            else 0
-        )
+        exists = system.record_store.has_record(ident)
+        current = system.record_store.show(ident) if exists else None
+        cur_rev = int(current["revision"]) if current is not None else 0
         if cur_rev != exp_rev:
             raise BackendConflictError(
                 f"revision mismatch for {ident!r}: expected {exp_rev}, observed {cur_rev}",
                 status=409,
                 code="revision_mismatch",
             )
-        staged.append((ident, rec, exp_rev))
+        op: dict[str, Any] = {
+            "id": ident,
+            "mode": "replace",
+            "expected_revision": exp_rev,
+            "record": rec,
+        }
+        if exp_rev > 0 and current is not None:
+            op["expected_sha256"] = str(current["sha256"])
+        operations.append(op)
+    return operations
 
-    committed: list[dict[str, Any]] = []
-    for ident, rec, exp_rev in staged:
-        saved = system.put(rec, exp_rev)
-        committed.append(
-            {
-                "id": ident,
-                "revision": int(saved["revision"]),
-                "sha256": str(saved["sha256"]),
-            }
+
+def commit_consolidation_delta(
+    system: Any,
+    lease: LeaseGrant,
+    expected_revisions: Mapping[str, int],
+    records: Sequence[Mapping[str, Any]],
+    *,
+    backend: StorageBackend | None = None,
+    now_ms: int | None = None,
+    min_generation: int = 1,
+    acquire_owner_lock: bool = True,
+) -> CommitReceipt:
+    """Validate lease fencing + optimistic CAS, then commit atomically via system.put_batch()."""
+    if not records:
+        raise ValueError("consolidation delta requires at least one record")
+    lock_cm = (
+        exclusive(Path(system.ex.root) / "owner.lock")
+        if acquire_owner_lock
+        else contextlib.nullcontext()
+    )
+    with lock_cm:
+        fence_path = _fence_file_path(system)
+        fences = _load_fences(fence_path)
+        res_key = (lease.namespace, lease.resource)
+        effective_min = max(min_generation, fences.get(res_key, 1))
+        _validate_lease_for_commit(
+            lease, backend=backend, now_ms=now_ms, min_generation=effective_min
         )
+        operations = _build_batch_operations(system, expected_revisions, records)
+        spec_id = f"coord-delta-g{lease.generation}-{sha(encode(operations))[:16]}"
+        batch_spec: dict[str, Any] = {
+            "format": BATCH_FORMAT,
+            "id": spec_id,
+            "instance_id": system.instance_id,
+            "operations": operations,
+        }
+        batch_receipt = system.put_batch(batch_spec)
+        fences[res_key] = max(effective_min, lease.generation)
+        _save_fences(fence_path, fences)
+
+    committed = tuple(
+        {
+            "id": str(row["id"]),
+            "revision": int(row["after_revision"]),
+            "sha256": str(row["after_sha256"]),
+        }
+        for row in batch_receipt["records"]
+    )
     return CommitReceipt(
         format=COMMIT_RECEIPT_FORMAT,
         lease_namespace=lease.namespace,
@@ -293,7 +360,7 @@ def commit_consolidation_delta(
         lease_holder=lease.holder,
         lease_generation=lease.generation,
         committed_count=len(committed),
-        records=tuple(committed),
+        records=committed,
         committed_at=now(),
     )
 
@@ -307,7 +374,7 @@ class CoordinationFacade:
         self.system = system
         self.backend = backend
         self._lock = threading.Lock()
-        self._high_water_gen: dict[tuple[str, str], int] = {}
+        self._high_water_gen: dict[tuple[str, str], int] = _load_fences(_fence_file_path(system))
 
     def resolve_context_bundle(self, turn: str) -> BoundedBundleRef:
         return resolve_context_bundle(self.system, turn)
@@ -324,6 +391,7 @@ class CoordinationFacade:
         records: Sequence[Mapping[str, Any]],
         *,
         now_ms: int | None = None,
+        acquire_owner_lock: bool = True,
     ) -> CommitReceipt:
         res_key = (lease.namespace, lease.resource)
         with self._lock:
@@ -336,6 +404,7 @@ class CoordinationFacade:
                 backend=self.backend,
                 now_ms=now_ms,
                 min_generation=min_gen,
+                acquire_owner_lock=acquire_owner_lock,
             )
             self._high_water_gen[res_key] = max(min_gen, lease.generation)
             return receipt

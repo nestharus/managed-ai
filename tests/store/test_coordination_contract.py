@@ -88,6 +88,7 @@ class CoordinationContractTests(unittest.TestCase):
         self.assertEqual(bundle.turn, "coord-turn")
         self.assertEqual(bundle.outside_view_record_count, len(outside_ids))
         self.assertGreaterEqual(len(bundle.outside_view_record_objects), 4)
+        self.assertEqual(bundle.bundle_bytes, len(encode(bundle.to_dict())))
         self.assertLessEqual(bundle.bundle_bytes, MAX_BYTES)
         # Chunk objects are NOT hydrated when resolving the bounded bundle handle.
         self.assertEqual(set(bundle.outside_view_record_objects) & set(read_keys), set())
@@ -109,7 +110,7 @@ class CoordinationContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             attach_artifact(self.system.ex.objects, "t1", b"ok", "blob", {"bad": float("nan")})
 
-    def test_commit_consolidation_delta_fencing_and_optimistic_cas(self) -> None:
+    def test_commit_consolidation_delta_atomic_put_batch_and_persisted_fencing(self) -> None:
         self.assertEqual(self.facade.contract_format, COORDINATION_CONTRACT_FORMAT)
         lease = self.backend.acquire_lease("software", "store", "coord-worker", ttl_ms=60_000)
 
@@ -126,57 +127,71 @@ class CoordinationContractTests(unittest.TestCase):
             "content": {"summary": "Second consolidated note."},
         }
 
-        with exclusive(self.system.ex.root / "owner.lock"):
-            receipt = self.facade.commit_consolidation_delta(
-                lease, {"note-alpha": 0, "note-beta": 0}, [rec_a, rec_b]
+        # Acquires exclusive(owner.lock) automatically and commits atomically via put_batch.
+        receipt = self.facade.commit_consolidation_delta(
+            lease, {"note-alpha": 0, "note-beta": 0}, [rec_a, rec_b]
+        )
+        self.assertEqual(receipt.format, COMMIT_RECEIPT_FORMAT)
+        self.assertEqual(receipt.committed_count, 2)
+        self.assertEqual(receipt.lease_generation, lease.generation)
+        self.assertEqual(self.system.record_store.show("note-alpha")["revision"], 1)
+        self.assertEqual(self.system.record_store.show("note-beta")["revision"], 1)
+
+        # Validation error on record #2 MUST leave record #1 untouched (atomic put_batch).
+        rec_a_v2 = dict(rec_a, content={"summary": "Updated alpha."})
+        bad_rec = {
+            "id": "bad-note",
+            "kind": "note",
+            "basis": [{"id": "nonexistent-basis"}],
+            "content": {"summary": "Invalid basis shape."},
+        }
+        with self.assertRaises(ValueError):
+            self.facade.commit_consolidation_delta(
+                lease, {"note-alpha": 1, "bad-note": 0}, [rec_a_v2, bad_rec]
             )
-            self.assertEqual(receipt.format, COMMIT_RECEIPT_FORMAT)
-            self.assertEqual(receipt.committed_count, 2)
-            self.assertEqual(receipt.lease_generation, lease.generation)
-            self.assertEqual(self.system.record_store.show("note-alpha")["revision"], 1)
-            self.assertEqual(self.system.record_store.show("note-beta")["revision"], 1)
+        self.assertEqual(self.system.record_store.show("note-alpha")["revision"], 1)
+        self.assertFalse(self.system.record_store.has_record("bad-note"))
 
-            # Optimistic-CAS mismatch rejects BEFORE mutating ANY record in the batch.
-            rec_a_v2 = dict(rec_a, content={"summary": "Updated alpha."})
-            rec_b_stale = dict(rec_b, content={"summary": "Stale beta."})
-            with self.assertRaises(BackendConflictError):
-                self.facade.commit_consolidation_delta(
-                    lease, {"note-alpha": 1, "note-beta": 0}, [rec_a_v2, rec_b_stale]
-                )
-            # Confirm note-alpha was NOT partially mutated.
-            self.assertEqual(self.system.record_store.show("note-alpha")["revision"], 1)
-
-            # Expired lease rejected fail-closed.
-            expired_lease = LeaseGrant(
-                namespace=lease.namespace,
-                resource=lease.resource,
-                holder=lease.holder,
-                generation=lease.generation,
-                token=lease.token,
-                expires_at_ms=1,
+        # Optimistic-CAS mismatch rejects BEFORE mutating ANY record in the batch.
+        rec_b_stale = dict(rec_b, content={"summary": "Stale beta."})
+        with self.assertRaises(BackendConflictError):
+            self.facade.commit_consolidation_delta(
+                lease, {"note-alpha": 1, "note-beta": 0}, [rec_a_v2, rec_b_stale]
             )
-            with self.assertRaises(BackendContendedError):
-                commit_consolidation_delta(
-                    self.system,
-                    expired_lease,
-                    {"note-alpha": 1},
-                    [rec_a_v2],
-                    backend=self.backend,
-                )
+        self.assertEqual(self.system.record_store.show("note-alpha")["revision"], 1)
 
-            # Release gen 1 and acquire gen 2 -> gen 2 commits, stale gen 1 fails!
-            self.assertTrue(self.backend.release_lease(lease))
-            lease_gen2 = self.backend.acquire_lease(
-                "software", "store", "coord-worker-2", ttl_ms=60_000
+        # Expired lease rejected fail-closed.
+        expired_lease = LeaseGrant(
+            namespace=lease.namespace,
+            resource=lease.resource,
+            holder=lease.holder,
+            generation=lease.generation,
+            token=lease.token,
+            expires_at_ms=1,
+        )
+        with self.assertRaises(BackendContendedError):
+            commit_consolidation_delta(
+                self.system,
+                expired_lease,
+                {"note-alpha": 1},
+                [rec_a_v2],
+                backend=self.backend,
             )
-            self.assertEqual(lease_gen2.generation, 2)
-            r2 = self.facade.commit_consolidation_delta(lease_gen2, {"note-alpha": 1}, [rec_a_v2])
-            self.assertEqual(r2.lease_generation, 2)
-            self.assertEqual(self.system.record_store.show("note-alpha")["revision"], 2)
 
-            # Stale generation 1 rejected even without backend check (monotonic generation fence).
-            with self.assertRaises(BackendContendedError):
-                self.facade.commit_consolidation_delta(lease, {"note-alpha": 2}, [rec_a_v2])
+        # Release gen 1 and acquire gen 2 -> gen 2 commits, stale gen 1 fails even after restart!
+        self.assertTrue(self.backend.release_lease(lease))
+        lease_gen2 = self.backend.acquire_lease(
+            "software", "store", "coord-worker-2", ttl_ms=60_000
+        )
+        self.assertEqual(lease_gen2.generation, 2)
+        r2 = self.facade.commit_consolidation_delta(lease_gen2, {"note-alpha": 1}, [rec_a_v2])
+        self.assertEqual(r2.lease_generation, 2)
+        self.assertEqual(self.system.record_store.show("note-alpha")["revision"], 2)
+
+        # Fresh CoordinationFacade with backend=None reloads persisted fence and rejects gen 1!
+        restarted_facade = CoordinationFacade(self.system, backend=None)
+        with self.assertRaises(BackendContendedError):
+            restarted_facade.commit_consolidation_delta(lease, {"note-alpha": 2}, [rec_a_v2])
 
         # Signal subscription via CoordinationFacade.
         self.backend.put_record("software", "rec:note-alpha", b"v2")
