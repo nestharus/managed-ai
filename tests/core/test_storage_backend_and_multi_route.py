@@ -30,6 +30,9 @@ from managed_ai_information.core.storage_backend import (  # noqa: E402
     StorageBackend,
     StorageBackendError,
 )
+from managed_ai_information.core.storage_backend_protocol import (  # noqa: E402
+    InMemoryMirrorBackend,
+)
 
 
 class _MembusV2State:
@@ -667,6 +670,87 @@ class StorageBackendAndMultiRouteTests(unittest.TestCase):
             controller.record_verification(verified_through=12, mismatch_count=0, anomalies=0)
             with self.assertRaisesRegex(ValueError, "dropped_shadow_ops"):
                 controller.commit_cutover(cutover_seq=12)
+
+    def test_membus_v2_keep_alive_connection_reuse_stale_reconnect_and_in_memory_mirror(
+        self,
+    ) -> None:
+        accept_lock = threading.Lock()
+        counts = {"accepts": 0, "requests": 0, "close_next": False}
+
+        class KeepAliveServer(ThreadingHTTPServer):
+            def get_request(self) -> tuple[Any, Any]:
+                sock, addr = super().get_request()
+                with accept_lock:
+                    counts["accepts"] += 1
+                return sock, addr
+
+        class KeepAliveHandler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, format: str, *args: Any) -> None:
+                del format, args
+
+            def do_HEAD(self) -> None:
+                with accept_lock:
+                    counts["requests"] += 1
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def do_GET(self) -> None:
+                with accept_lock:
+                    counts["requests"] += 1
+                    drop_now = counts["close_next"]
+                    counts["close_next"] = False
+                if drop_now:
+                    # Simulate server closing an idle keep-alive socket before sending status.
+                    self.close_connection = True
+                    return
+                raw = json.dumps({"status": "ok", "req": counts["requests"]}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+        server = KeepAliveServer(("127.0.0.1", 0), KeepAliveHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base_url = f"http://{server.server_address[0]}:{server.server_address[1]}"
+
+        with MembusV2Backend(base_url, timeout=5.0) as client:
+            for _ in range(15):
+                self.assertEqual(client.health()["status"], "ok")
+            # 404 HEAD requests also drain cleanly and stay on the persistent keep-alive socket.
+            for _ in range(5):
+                self.assertFalse(client.has_blob("research", "0" * 64))
+            self.assertLessEqual(counts["accepts"], 2)
+            self.assertEqual(counts["requests"], 20)
+
+            # Force server to drop idle keep-alive connection; client retries once cleanly.
+            with accept_lock:
+                counts["close_next"] = True
+            self.assertEqual(client.health()["status"], "ok")
+            self.assertEqual(counts["accepts"], 2)
+
+        # Context manager exit closes every idle pooled socket.
+        self.assertEqual(len(client._pool._idle), 0)
+
+    def test_in_memory_mirror_backend_protocol_and_operations(self) -> None:
+        # InMemoryMirrorBackend satisfies StorageBackend Protocol with zero disk I/O.
+        mem = InMemoryMirrorBackend()
+        self.assertIsInstance(mem, StorageBackend)
+        rec = mem.put_record("ns", "k1", b"hello", expected_version=0)
+        self.assertEqual(rec.version, 1)
+        digest = mem.put_blob("ns", b"blob-bytes")
+        self.assertTrue(mem.has_blob("ns", digest))
+        self.assertTrue(mem.delete_record("ns", "k1", expected_version=1))
+        self.assertFalse(mem.delete_record("ns", "k1"))
+        grant = mem.acquire_lease("ns", "res", "holder-1", ttl_ms=10_000)
+        self.assertTrue(mem.validate_lease(grant))
+        self.assertTrue(mem.release_lease(grant))
 
 
 if __name__ == "__main__":

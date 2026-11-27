@@ -163,6 +163,7 @@ def _build_mode_records(
     package_rel: str,
     include_tests: bool = False,
     tests_rel: str = "tests",
+    existing_ids: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes]]:
     if mode == "repo":
         desired, basis_shas, pending_digests, _ = build_repo_records(
@@ -171,6 +172,7 @@ def _build_mode_records(
             package_rel=package_rel,
             include_tests=include_tests,
             tests_rel=tests_rel,
+            existing_ids=existing_ids,
         )
         return desired, basis_shas, pending_digests
     if mode == "crw":
@@ -201,6 +203,7 @@ def plan_consolidation(
         package_rel=package_rel,
         include_tests=include_tests,
         tests_rel=tests_rel,
+        existing_ids=set(existing),
     )
 
     desired_by_id = {rec["id"]: rec for rec in desired}
@@ -260,6 +263,7 @@ def apply_consolidation(
         package_rel=package_rel,
         include_tests=include_tests,
         tests_rel=tests_rel,
+        existing_ids=set(existing),
     )
     desired_ids = {rec["id"] for rec in desired}
     managed_kinds = _managed_kinds(mode, include_tests=include_tests)

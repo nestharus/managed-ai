@@ -1,12 +1,16 @@
 """Shared protocol, dataclasses, typed errors, wire helpers, and validators for StorageBackend."""
 
 import base64
+import http.client
 import ipaddress
 import re
+import secrets
+import threading
 import time
 import urllib.parse
-from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field
+from collections import deque
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
@@ -391,3 +395,238 @@ def ensure_ordinary_leaf_or_missing(path: Path) -> None:
         return
     if not is_ordinary_file_stat(info):
         raise ValueError(f"ordinary file required: {path}")
+
+
+_STALE_KEEPALIVE_ERRORS = (
+    http.client.RemoteDisconnected,
+    http.client.CannotSendRequest,
+    BrokenPipeError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+)
+_REUSABLE_ERROR_STATUSES: frozenset[int] = frozenset({404, 409, 422, 423, 429})
+
+
+class KeepAliveHTTPPool:
+    """Thread-safe persistent HTTP/1.1 connection pool with single-retry stale reconnect."""
+
+    def __init__(
+        self,
+        opener: Callable[[float | None], http.client.HTTPConnection | http.client.HTTPSConnection],
+        *,
+        max_idle: int = 4,
+    ) -> None:
+        self._opener = opener
+        self._max_idle = max(1, max_idle)
+        self._lock = threading.RLock()
+        self._idle: deque[http.client.HTTPConnection | http.client.HTTPSConnection] = deque()
+
+    def _acquire(
+        self,
+    ) -> tuple[http.client.HTTPConnection | http.client.HTTPSConnection, bool]:
+        with self._lock:
+            if self._idle:
+                return self._idle.pop(), True
+        return self._opener(None), False
+
+    def _release(
+        self,
+        conn: http.client.HTTPConnection | http.client.HTTPSConnection,
+        *,
+        reusable: bool,
+    ) -> None:
+        if reusable:
+            with self._lock:
+                if len(self._idle) < self._max_idle:
+                    self._idle.append(conn)
+                    return
+        conn.close()
+
+    def close(self) -> None:
+        with self._lock:
+            conns = list(self._idle)
+            self._idle.clear()
+        for conn in conns:
+            conn.close()
+
+    def request(
+        self,
+        method: str,
+        full_path: str,
+        *,
+        headers: dict[str, str],
+        body: bytes | None = None,
+        max_bytes: int = MAX_BYTES,
+    ) -> tuple[int, bytes]:
+        req_headers = dict(headers)
+        req_headers.setdefault("Connection", "keep-alive")
+        for attempt in range(2):
+            conn, reused = self._acquire()
+            reusable = False
+            try:
+                conn.request(method, full_path, body=body, headers=req_headers)
+                resp = conn.getresponse()
+                if resp.status >= 400:
+                    err_body = resp.read(65536)
+                    reusable = (
+                        (not resp.will_close)
+                        and resp.isclosed()
+                        and resp.status in _REUSABLE_ERROR_STATUSES
+                    )
+                    raise map_http_error(resp.status, err_body)
+                data = resp.read(max_bytes + 1)
+                if len(data) > max_bytes:
+                    raise StorageBackendError("membus response exceeds byte limit", code="overflow")
+                reusable = (not resp.will_close) and resp.isclosed()
+                return resp.status, data
+            except StorageBackendError:
+                raise
+            except _STALE_KEEPALIVE_ERRORS as err:
+                if reused and attempt == 0:
+                    continue
+                raise BackendUnavailableError(str(err), status=0, code="unavailable") from None
+            except (http.client.HTTPException, TimeoutError, OSError) as err:
+                raise BackendUnavailableError(str(err), status=0, code="unavailable") from None
+            finally:
+                self._release(conn, reusable=reusable)
+        raise BackendUnavailableError("membus request failed after reconnect", status=0)
+
+
+class InMemoryMirrorBackend:
+    """Zero-disk-fsync digest-only in-RAM Route A backend for MembusStoreMirror.apply()."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._versions: dict[tuple[str, str], int] = {}
+        self._blob_digests: set[tuple[str, str]] = set()
+        self._leases: dict[tuple[str, str], LeaseGrant] = {}
+        self._generations: dict[tuple[str, str], int] = {}
+
+    def put_record(
+        self,
+        namespace: str,
+        key: str,
+        value: bytes,
+        *,
+        expected_version: int | None = None,
+        visibility: SearchVisibility = "Public",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> BackendRecord:
+        ns = validate_identifier(namespace, "namespace")
+        k = validate_identifier(key, "key")
+        vis = validate_visibility(visibility)
+        if len(value) > MAX_BYTES:
+            raise ValueError("record payload exceeds per-object limit")
+        with self._lock:
+            cur = self._versions.get((ns, k), 0)
+            if expected_version is not None and cur != expected_version:
+                raise BackendConflictError(
+                    f"expected version {expected_version}, found {cur}", status=409
+                )
+            nxt = cur + 1
+            self._versions[(ns, k)] = nxt
+        return BackendRecord(ns, k, value, nxt, vis, dict(metadata) if metadata else {})
+
+    def get_record(self, namespace: str, key: str) -> BackendRecord | None:
+        validate_identifier(namespace, "namespace")
+        validate_identifier(key, "key")
+        return None
+
+    def delete_record(
+        self, namespace: str, key: str, *, expected_version: int | None = None
+    ) -> bool:
+        ns, k = validate_identifier(namespace, "namespace"), validate_identifier(key, "key")
+        with self._lock:
+            cur = self._versions.get((ns, k))
+            if cur is None:
+                return False
+            if expected_version is not None and cur != expected_version:
+                raise BackendConflictError(
+                    f"expected version {expected_version}, found {cur}", status=409
+                )
+            self._versions.pop((ns, k), None)
+            return True
+
+    def put_blob(self, namespace: str, data: bytes) -> str:
+        ns = validate_identifier(namespace, "namespace")
+        if len(data) > MAX_BYTES:
+            raise ValueError("blob exceeds per-object limit")
+        digest = sha(data)
+        with self._lock:
+            self._blob_digests.add((ns, digest))
+        return digest
+
+    def get_blob(self, namespace: str, sha256_hex: str) -> bytes | None:
+        validate_identifier(namespace, "namespace")
+        validate_sha256(sha256_hex)
+        return None
+
+    def has_blob(self, namespace: str, sha256_hex: str) -> bool:
+        ns, digest = validate_identifier(namespace, "namespace"), validate_sha256(sha256_hex)
+        with self._lock:
+            return (ns, digest) in self._blob_digests
+
+    def search(
+        self,
+        query: str,
+        *,
+        namespace: str | None = None,
+        kind: str | None = None,
+        mode: str = "Bm25",
+        limit: int = 20,
+    ) -> list[SearchHit]:
+        del query, namespace, kind, mode, limit
+        return []
+
+    def acquire_lease(self, namespace: str, resource: str, holder: str, ttl_ms: int) -> LeaseGrant:
+        ns, res = validate_identifier(namespace, "namespace"), validate_identifier(resource, "res")
+        if not holder or ttl_ms <= 0:
+            raise ValueError("lease holder and positive ttl_ms required")
+        with self._lock:
+            now_val = now_ms()
+            cur = self._leases.get((ns, res))
+            if cur is not None and cur.expires_at_ms > now_val:
+                raise BackendContendedError(f"lease held for {ns}/{res}", status=409)
+            gen = self._generations.get((ns, res), 0) + 1
+            self._generations[(ns, res)] = gen
+            grant = LeaseGrant(ns, res, holder, gen, secrets.token_hex(16), now_val + ttl_ms)
+            self._leases[(ns, res)] = grant
+            return grant
+
+    def renew_lease(self, grant: LeaseGrant, ttl_ms: int) -> LeaseGrant:
+        if ttl_ms <= 0:
+            raise ValueError("positive ttl_ms required")
+        with self._lock:
+            if not self.validate_lease(grant):
+                raise BackendContendedError("lease is not active", status=409)
+            renewed = replace(grant, expires_at_ms=now_ms() + ttl_ms)
+            self._leases[(grant.namespace, grant.resource)] = renewed
+            return renewed
+
+    def release_lease(self, grant: LeaseGrant) -> bool:
+        with self._lock:
+            if not self.validate_lease(grant):
+                return False
+            self._leases.pop((grant.namespace, grant.resource), None)
+            return True
+
+    def validate_lease(self, grant: LeaseGrant) -> bool:
+        with self._lock:
+            cur = self._leases.get((grant.namespace, grant.resource))
+            return cur == grant and cur.expires_at_ms > now_ms()
+
+    def stream_signals(
+        self,
+        namespace: str,
+        *,
+        prefix: str | None = None,
+        since_seq: int | None = None,
+        mode: str = "each",
+        timeout: float | None = None,
+    ) -> Iterator[SignalEvent]:
+        del prefix, since_seq, mode, timeout
+        validate_identifier(namespace, "namespace")
+        return iter(())
+
+    def health(self) -> dict[str, Any]:
+        return {"status": "ok", "backend": "in-memory-mirror"}

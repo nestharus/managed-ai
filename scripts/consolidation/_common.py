@@ -70,26 +70,41 @@ def git_head_sha(repo_root: Path) -> str:
     return proc.stdout.strip() or "unknown"
 
 
-def file_digest_entry(root: Path, rel_path: str) -> dict[str, Any]:
+def file_digest_entry(
+    root: Path,
+    rel_path: str,
+    *,
+    checked_root: Path | None = None,
+    verified_dirs: set[Path] | None = None,
+) -> dict[str, Any]:
     """Stream-hash one ordinary source file strictly contained within root."""
     safe_rel = relative_path(rel_path)
-    checked_root = check_ordinary_ancestors(
-        root,
-        expect_dir=True,
-        error_prefix="ordinary source root required",
-    ).resolve(strict=True)
-    target = check_ordinary_ancestors(
-        checked_root / safe_rel,
-        expect_dir=False,
-        error_prefix=f"ordinary source file required ({safe_rel})",
-    )
+    if checked_root is None:
+        checked_root = check_ordinary_ancestors(
+            root,
+            expect_dir=True,
+            error_prefix="ordinary source root required",
+        ).resolve(strict=True)
+    target = checked_root / safe_rel
+    parent = target.parent
+    if verified_dirs is None or parent not in verified_dirs:
+        checked_parent = check_ordinary_ancestors(
+            parent,
+            expect_dir=True,
+            error_prefix=f"ordinary source file required ({safe_rel})",
+        ).resolve(strict=True)
+        if not checked_parent.is_relative_to(checked_root):
+            raise ValueError(f"source path escapes repository root: {safe_rel}")
+        if verified_dirs is not None:
+            verified_dirs.add(parent)
+            cur = parent
+            while cur != checked_root and cur.parent != cur:
+                cur = cur.parent
+                verified_dirs.add(cur)
     info = target.lstat()
     if not is_ordinary_file_stat(info):
         raise ValueError(f"ordinary source file required ({safe_rel}): {target}")
-    resolved_target = target.resolve(strict=True)
-    if not resolved_target.is_relative_to(checked_root):
-        raise ValueError(f"source path escapes repository root: {safe_rel}")
-    digest = sha256_file(resolved_target)
+    digest = sha256_file(target)
     return {"path": safe_rel, "bytes": info.st_size, "sha256": digest}
 
 

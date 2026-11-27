@@ -14,7 +14,12 @@ for _entry in (str(SRC_ROOT), str(REPO_ROOT)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
 
-from managed_ai_information.platform import check_ordinary_ancestors  # noqa: E402
+from managed_ai_information.core.ownership import relative_path  # noqa: E402
+from managed_ai_information.core.storage import MAX_BYTES, read_bytes, sha  # noqa: E402
+from managed_ai_information.platform import (  # noqa: E402
+    check_ordinary_ancestors,
+    is_ordinary_file_stat,
+)
 from managed_ai_information.store.system import System  # noqa: E402
 from scripts.ci.semantic_profile import (  # noqa: E402
     DEFAULT_BUDGETS,
@@ -27,10 +32,13 @@ from scripts.consolidation._common import (  # noqa: E402
     dump_json,
     file_digest_entry,
     git_head_sha,
-    load_existing_records,
     slugify_id,
 )
-from scripts.consolidation.test_value_analyzer import analyze_test_value  # noqa: E402
+from scripts.consolidation.test_value_analyzer import (  # noqa: E402
+    analyze_test_value,
+    extract_facade_reexports,
+    has_executable_statements,
+)
 
 INGEST_REPO_FORMAT = "managed-ai-repo-ingest/1"
 
@@ -68,8 +76,7 @@ def _hotspot_record_id(module_name: str) -> str:
     return slugify_id("hotspot", trimmed)
 
 
-def _extract_public_exports(file_path: Path) -> list[str]:
-    tree = ast.parse(file_path.read_text(encoding="utf-8"), filename=str(file_path))
+def _extract_public_exports_from_tree(tree: ast.Module) -> list[str]:
     for stmt in tree.body:
         if isinstance(stmt, ast.Assign):
             for target in stmt.targets:
@@ -87,6 +94,49 @@ def _extract_public_exports(file_path: Path) -> list[str]:
         ) and not stmt.name.startswith("_"):
             exports.append(stmt.name)
     return sorted(exports)[:40]
+
+
+def _scan_profile_module_source(
+    checked_repo: Path,
+    mod: dict[str, Any],
+    known_names: set[str],
+    verified_dirs: set[Path],
+    *,
+    collect_test_meta: bool,
+) -> tuple[list[str], dict[str, Any], bool, dict[tuple[str, str], str]]:
+    """Read and parse one profiled module once for exports, digest pin, and facade reexports."""
+    mod_name: str = mod["module"]
+    safe_rel = relative_path(str(mod["path"]))
+    target = checked_repo / safe_rel
+    parent = target.parent
+    if parent not in verified_dirs:
+        checked_parent = check_ordinary_ancestors(
+            parent, expect_dir=True, error_prefix=f"ordinary source file required ({safe_rel})"
+        ).resolve(strict=True)
+        if not checked_parent.is_relative_to(checked_repo):
+            raise ValueError(f"source path escapes repository root: {safe_rel}")
+        verified_dirs.add(parent)
+        cur = parent
+        while cur != checked_repo and cur.parent != cur:
+            cur = cur.parent
+            verified_dirs.add(cur)
+    info = target.lstat()
+    if not is_ordinary_file_stat(info):
+        raise ValueError(f"ordinary source file required ({safe_rel}): {target}")
+    raw = read_bytes(target, MAX_BYTES)
+    digest_entry = {"path": safe_rel, "bytes": len(raw), "sha256": sha(raw)}
+    tree = ast.parse(raw.decode("utf-8"), filename=safe_rel)
+    exports = _extract_public_exports_from_tree(tree)
+    has_exec = has_executable_statements(tree) if collect_test_meta else True
+    is_init = safe_rel.endswith("/__init__.py") or safe_rel == "__init__.py"
+    is_facade = is_init or mod_name.endswith(".domain_api")
+    reexports = (
+        extract_facade_reexports(mod_name, is_init, tree, known_names)
+        if (collect_test_meta and is_facade)
+        else {}
+    )
+    del tree
+    return exports, digest_entry, has_exec, reexports
 
 
 def _parent_component_id(module_name: str, existing_ids: set[str]) -> str | None:
@@ -175,14 +225,14 @@ def _build_one_module_bundle(
     scc_members: set[str],
     cross_pkg_priv_callers: set[str],
     commit: str,
+    exports: list[str],
+    digest_entry: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes]]:
     mod_name: str = mod["module"]
     rel_path: str = mod["path"]
     mod_id = mod_ids_by_name[mod_name]
-    exports = _extract_public_exports(checked_repo / rel_path)
     is_facade = rel_path.endswith("/__init__.py") or mod_name.endswith(".domain_api")
 
-    digest_entry = file_digest_entry(checked_repo, rel_path)
     basis_rel, basis_bytes, basis_sha = compute_digest_basis(
         mod_id,
         source_repo=checked_repo.name,
@@ -277,17 +327,30 @@ def _build_test_value_records(
     mod_basis_by_id: dict[str, dict[str, str]],
     effective_existing: set[str],
     commit: str,
+    *,
+    precomputed_prod: tuple[dict[str, dict[str, Any]], dict[tuple[str, str], str]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes], dict[str, Any]]:
-    report = analyze_test_value(checked_repo, package_rel=package_rel, tests_rel=tests_rel)
+    test_digests: dict[str, dict[str, Any]] = {}
+    report = analyze_test_value(
+        checked_repo,
+        package_rel=package_rel,
+        tests_rel=tests_rel,
+        precomputed_prod=precomputed_prod,
+        digest_out=test_digests,
+        commit=commit,
+    )
     records: list[dict[str, Any]] = []
     basis_shas: dict[str, dict[str, str]] = {}
     pending_digests: dict[str, bytes] = {}
     cluster_members = {c["cluster_id"]: c["members"] for c in report["overlap_clusters"]}
+    verified_dirs: set[Path] = {checked_repo}
 
     for suite in report["suites"]:
         suite_id = str(suite["suite_id"])
         rel_path = str(suite["path"])
-        digest_entry = file_digest_entry(checked_repo, rel_path)
+        digest_entry = test_digests.get(rel_path) or file_digest_entry(
+            checked_repo, rel_path, checked_root=checked_repo, verified_dirs=verified_dirs
+        )
         basis_rel, basis_bytes, basis_sha = compute_digest_basis(
             suite_id, source_repo=checked_repo.name, files=[digest_entry]
         )
@@ -378,6 +441,7 @@ def build_repo_records(
     package_rel: str = "src/managed_ai_information",
     include_tests: bool = False,
     tests_rel: str = "tests",
+    existing_ids: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes], dict[str, Any]]:
     """Purely compute desired repo records and in-memory digest pins (zero disk writes)."""
     checked_repo = check_ordinary_ancestors(
@@ -385,7 +449,9 @@ def build_repo_records(
     ).resolve(strict=True)
     profile = profile_repository(checked_repo, package_rel=package_rel)
     commit = git_head_sha(checked_repo)
-    existing_ids = set(load_existing_records(system))
+    resolved_existing = (
+        set(system.record_store.ids()) if existing_ids is None else set(existing_ids)
+    )
 
     relationships = profile["relationships"]
     scc_members: set[str] = {
@@ -399,7 +465,7 @@ def build_repo_records(
         mod["module"]: _module_record_id(mod["module"]) for mod in profile["modules"]
     }
     profile_rels: list[dict[str, str]] = []
-    if "managed-ai-architecture" in existing_ids:
+    if "managed-ai-architecture" in resolved_existing:
         profile_rels.append({"relation": "maps-to", "target": "managed-ai-architecture"})
     desired: list[dict[str, Any]] = [
         {
@@ -419,7 +485,7 @@ def build_repo_records(
     ]
     basis_shas: dict[str, dict[str, str]] = {"profile-head": {}}
     pending_digests: dict[str, bytes] = {}
-    effective_existing = set(existing_ids)
+    effective_existing = set(resolved_existing)
 
     has_companions = any(
         len(mod["module"].split(".")) >= 2 and mod["module"].split(".")[1] == "companions"
@@ -448,7 +514,34 @@ def build_repo_records(
         basis_shas["pkg-companions"] = {}
         effective_existing.add("pkg-companions")
 
+    known_names = set(mod_ids_by_name)
+    verified_dirs: set[Path] = {checked_repo}
+    precomputed_mods: dict[str, dict[str, Any]] = {}
+    precomputed_reexports: dict[tuple[str, str], str] = {}
+
     for mod in profile["modules"]:
+        exports, digest_entry, has_exec, mod_reexports = _scan_profile_module_source(
+            checked_repo,
+            mod,
+            known_names,
+            verified_dirs,
+            collect_test_meta=include_tests,
+        )
+        if include_tests:
+            mod_name = str(mod["module"])
+            rel_path = str(mod["path"])
+            is_facade = rel_path.endswith("/__init__.py") or mod_name.endswith(".domain_api")
+            precomputed_mods[mod_name] = {
+                "module": mod_name,
+                "module_id": mod_ids_by_name[mod_name],
+                "path": rel_path,
+                "lines": int(mod["lines"]),
+                "is_facade": is_facade,
+                "has_executable_code": has_exec,
+                "internal_imports": list(mod["internal_imports"]),
+            }
+            if mod_reexports:
+                precomputed_reexports.update(mod_reexports)
         bundle_records, bundle_basis, bundle_digests = _build_one_module_bundle(
             checked_repo,
             mod,
@@ -457,6 +550,8 @@ def build_repo_records(
             scc_members,
             cross_pkg_priv_callers,
             commit,
+            exports,
+            digest_entry,
         )
         desired.extend(bundle_records)
         basis_shas.update(bundle_basis)
@@ -471,6 +566,7 @@ def build_repo_records(
             basis_shas,
             effective_existing,
             commit,
+            precomputed_prod=(precomputed_mods, precomputed_reexports),
         )
         desired.extend(test_recs)
         basis_shas.update(test_basis)
