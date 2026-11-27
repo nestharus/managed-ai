@@ -12,7 +12,7 @@ from types import TracebackType
 from typing import Any, BinaryIO
 
 from managed_ai_information.core.storage import (
-    _OPEN_RO_NOFOLLOW,
+    OPEN_RO_NOFOLLOW,
     has_ordinary_file,
     is_ordinary_file_stat,
     sync_dir,
@@ -165,7 +165,7 @@ def _prune_old_generations(directory: Path, keep_name: str) -> None:
 def _open_readonly_ordinary(path: Path) -> tuple[BinaryIO, int] | None:
     if hasattr(os, "O_NOFOLLOW"):
         try:
-            fd = os.open(path, _OPEN_RO_NOFOLLOW)
+            fd = os.open(path, OPEN_RO_NOFOLLOW)
         except OSError:
             return None
 

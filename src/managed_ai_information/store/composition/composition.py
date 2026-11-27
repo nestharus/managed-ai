@@ -227,7 +227,7 @@ class Composition:
 
     def _basis(self, record: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], int]:
         from managed_ai_information.core.storage import is_ordinary_file_stat
-        from managed_ai_information.store.records.records import is_content_addressed_basis
+        from managed_ai_information.store.protocol.basis_pins import is_content_addressed_basis
 
         captured: dict[str, dict[str, Any]] = {}
         used = 0

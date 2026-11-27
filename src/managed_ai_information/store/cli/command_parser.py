@@ -309,6 +309,13 @@ def _store_graph_commands(sub: Any) -> None:
 
     graph.add_parser("lint", allow_abbrev=False)
 
+    g_prof = graph.add_parser("profile", allow_abbrev=False, help="profile knowledge-graph health")
+    g_prof.add_argument("--roots", nargs="+", action="extend", default=[])
+    g_prof.add_argument("--include-cochange", action="store_true")
+    g_prof.add_argument("--baseline", type=Path, default=None)
+    g_prof.add_argument("--write-baseline", type=Path, default=None)
+    g_prof.add_argument("--check-alerts", action="store_true")
+
 
 def _store_commands(sub: Any) -> None:
     _store_core_commands(sub)

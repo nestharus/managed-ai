@@ -31,7 +31,7 @@ from ..ownership import (
     relative_path as _relative,
 )
 from ..storage import (
-    _OPEN_RO_NOFOLLOW,
+    OPEN_RO_NOFOLLOW,
     ObjectStore,
     encode,
     exclusive,
@@ -304,7 +304,7 @@ class PacketContext:
 
                     for rel, name in members:
                         try:
-                            fd = os.open(name, _OPEN_RO_NOFOLLOW, dir_fd=cur)
+                            fd = os.open(name, OPEN_RO_NOFOLLOW, dir_fd=cur)
                         except OSError as exc:
                             if exc.errno == errno.ELOOP:
                                 raise ValueError("workspace symlinks are not supported") from None

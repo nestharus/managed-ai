@@ -35,6 +35,14 @@ def emit(result: dict[str, Any], args: argparse.Namespace) -> None:
             sys.stdout.buffer.write((rendered + "\n").encode("ascii"))
         else:
             print(rendered)
+    if (
+        getattr(args, "action", None) == "graph"
+        and getattr(args, "graph_action", None) == "profile"
+        and getattr(args, "check_alerts", False)
+        and isinstance(result, dict)
+        and result.get("alert_count", 0) > 0
+    ):
+        raise SystemExit(1)
 
 
 def _context_request(args: argparse.Namespace) -> dict[str, Any]:
@@ -230,6 +238,20 @@ def _act_graph(system: Any, args: argparse.Namespace) -> dict[str, Any]:
             max_hops=args.max_hops,
             active_only=args.active_only,
             relations=args.relations,
+        )
+    if args.graph_action == "profile":
+        from managed_ai_information.store.query import graph_profile
+
+        raw_roots = getattr(args, "roots", None) or []
+        parsed_roots = [
+            part.strip() for item in raw_roots for part in item.split(",") if part.strip()
+        ]
+        return graph_profile.profile(
+            system,
+            roots=parsed_roots,
+            include_cochange=bool(getattr(args, "include_cochange", False)),
+            baseline_path=getattr(args, "baseline", None),
+            write_baseline_path=getattr(args, "write_baseline", None),
         )
     return graph_query.lint(system)
 

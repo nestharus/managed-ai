@@ -19,9 +19,7 @@ from managed_ai_information.platform import (
     OPEN_DIR_NOFOLLOW as _OPEN_DIR_NOFOLLOW,
 )
 from managed_ai_information.platform import (
-    OPEN_RO_NOFOLLOW as _OPEN_RO_NOFOLLOW,
-)
-from managed_ai_information.platform import (
+    OPEN_RO_NOFOLLOW,
     admission_deadline,
     check_ordinary_ancestors,
     has_ordinary_dir,
@@ -67,6 +65,7 @@ from .pack_reader import (
     parse_pack_current,
 )
 
+_OPEN_RO_NOFOLLOW = OPEN_RO_NOFOLLOW
 _ORIG_PATH_OPEN = Path.open
 
 

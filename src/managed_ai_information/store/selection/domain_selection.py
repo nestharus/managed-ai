@@ -15,7 +15,7 @@ from managed_ai_information.core import formats as _formats
 from managed_ai_information.core.formats import CATALOGUE_FORMAT, DOMAIN_FORMAT, INFORMATION_FORMAT
 from managed_ai_information.core.ownership import packet_id
 from managed_ai_information.core.storage import (
-    _OPEN_RO_NOFOLLOW,
+    OPEN_RO_NOFOLLOW,
     check_ordinary_ancestors,
     encode,
     is_ordinary_dir_stat,
@@ -132,7 +132,7 @@ def _read_ordinary_posix(
             opened_fds.append(cur)
 
         try:
-            leaf_fd = os.open(parts[-1], _OPEN_RO_NOFOLLOW, dir_fd=cur)
+            leaf_fd = os.open(parts[-1], OPEN_RO_NOFOLLOW, dir_fd=cur)
         except OSError as exc:
             if exc.errno in _FILE_OPEN_ERRNOS:
                 raise ValueError(err_msg) from None

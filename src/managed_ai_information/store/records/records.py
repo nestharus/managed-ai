@@ -3,7 +3,6 @@
 import errno
 import json
 import os
-import re
 import stat
 from collections.abc import Callable, Generator, Iterable, Iterator
 from contextlib import contextmanager
@@ -13,8 +12,8 @@ from typing import Any
 from managed_ai_information.core.formats import COMPOSITION_FORMAT
 from managed_ai_information.core.ownership import packet_id, relative_path
 from managed_ai_information.core.storage import (
-    _OPEN_RO_NOFOLLOW,
     MAX_BYTES,
+    OPEN_RO_NOFOLLOW,
     atomic_bytes,
     encode,
     is_ordinary_file_stat,
@@ -24,6 +23,12 @@ from managed_ai_information.core.storage import (
 )
 from managed_ai_information.platform import PLATFORM
 from managed_ai_information.store.governance.feedback import KIND as FEEDBACK_KIND
+from managed_ai_information.store.protocol.basis_pins import (
+    content_addressed_sha as content_addressed_sha,
+)
+from managed_ai_information.store.protocol.basis_pins import (
+    is_content_addressed_basis as is_content_addressed_basis,
+)
 from managed_ai_information.store.protocol.identities import (
     digest,
     exact_fields,
@@ -45,47 +50,6 @@ from managed_ai_information.store.records.cold_archive import ColdArchive
 from managed_ai_information.store.records.head_index import HeadIndex, build_entry
 from managed_ai_information.store.records.head_receipts import MIN_BYTES, HeadReceipts
 
-_SHARD_CONTENT_RE = re.compile(r"^([0-9a-f]{2})/([0-9a-f]{64})\.[A-Za-z0-9._-]+$")
-_OBJECT_BASIS_RE = re.compile(r"^object:([0-9a-f]{64})$")
-
-
-def content_addressed_sha(path: str, *, prefixes: tuple[str, ...] = ()) -> str | None:
-    """Return the embedded 64-hex digest if path is an immutable content-addressed basis reference.
-
-    Always recognizes generic `object:<64hex>`. Also recognizes domain-declared
-    content-addressed workspace prefixes `<prefix><sha[:2]>/<sha>.<ext>`.
-    """
-    if not isinstance(path, str):
-        return None
-
-    obj_match = _OBJECT_BASIS_RE.fullmatch(path)
-    if obj_match:
-        return obj_match.group(1)
-
-    for prefix in prefixes:
-        norm = prefix if prefix.endswith("/") else prefix + "/"
-        if path.startswith(norm):
-            sub = path[len(norm) :]
-            orig_match = _SHARD_CONTENT_RE.fullmatch(sub)
-            if orig_match and orig_match.group(1) == orig_match.group(2)[:2]:
-                return orig_match.group(2)
-
-    return None
-
-
-def is_content_addressed_basis(item: dict, *, prefixes: tuple[str, ...] = ()) -> bool:
-    """Return True when a captured basis pin matches its own content-addressed path digest."""
-    if not isinstance(item, dict):
-        return False
-
-    expected = item.get("sha256")
-    size = item.get("bytes")
-    if not isinstance(expected, str) or type(size) is not int or size < 0:
-        return False
-
-    embedded = content_addressed_sha(item.get("path", ""), prefixes=prefixes)
-    return embedded is not None and embedded == expected
-
 
 class RecordStore:
     def __init__(
@@ -95,6 +59,7 @@ class RecordStore:
         envelope: Any,
         *,
         content_addressed_basis_prefixes: tuple[str, ...] = (),
+        composition_validator: Callable[[dict[str, Any]], Any] | None = None,
     ) -> None:
         self.ex = exchange
         self.work = exchange.workspace
@@ -105,6 +70,7 @@ class RecordStore:
         self.format = record_format
         self.envelope = envelope
         self.payload_validator: Callable[[dict[str, Any], dict[str, Any] | None], Any] | None = None
+        self.composition_validator: Callable[[dict[str, Any]], Any] | None = composition_validator
         self.retention_policy = "append-history"
         self.content_addressed_basis_prefixes = tuple(content_addressed_basis_prefixes)
         self._deferred_index_ids: list[str] | None = None
@@ -159,7 +125,7 @@ class RecordStore:
         path = self.path(ident)
         if hasattr(os, "O_NOFOLLOW"):
             try:
-                fd = os.open(path, _OPEN_RO_NOFOLLOW)
+                fd = os.open(path, OPEN_RO_NOFOLLOW)
             except FileNotFoundError:
                 if self.cold_archive.has(ident):
                     return len(self.cold_archive.read(ident)[1])
@@ -683,10 +649,12 @@ class RecordStore:
     ) -> None:
         self.envelope.validate_write(record, previous, mode=information_mode)
         content = record.get("content")
-        if isinstance(content, dict) and content.get("format") == COMPOSITION_FORMAT:
-            from managed_ai_information.store.composition.composition import Composition
-
-            Composition(None).profile(record)
+        if (
+            isinstance(content, dict)
+            and content.get("format") == COMPOSITION_FORMAT
+            and self.composition_validator is not None
+        ):
+            self.composition_validator(record)
         if self.payload_validator is not None:
             self.payload_validator(record, previous)
 

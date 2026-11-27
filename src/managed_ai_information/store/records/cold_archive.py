@@ -16,8 +16,8 @@ from managed_ai_information.core.formats import COLD_ARCHIVE_MANIFEST_FORMAT as 
 from managed_ai_information.core.formats import COMPOSITION_FORMAT, RESTORE_RECEIPT_FORMAT
 from managed_ai_information.core.ownership import packet_id
 from managed_ai_information.core.storage import (
-    _OPEN_RO_NOFOLLOW,
     DEFAULT_SHARD_TARGET_BYTES,
+    OPEN_RO_NOFOLLOW,
     PackSession,
     atomic_bytes,
     encode,
@@ -56,7 +56,7 @@ PROTECTED_KINDS = frozenset({"goal", "obligation", "received-duty-reference", FE
 def _open_archived_blob(path: Path) -> BinaryIO:
     if hasattr(os, "O_NOFOLLOW"):
         try:
-            fd = os.open(path, _OPEN_RO_NOFOLLOW)
+            fd = os.open(path, OPEN_RO_NOFOLLOW)
         except OSError as exc:
             if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
                 raise ValueError(f"ordinary archived record blob required: {path}") from None

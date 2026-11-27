@@ -124,6 +124,12 @@ def _emit(*args: Any, **kwargs: Any) -> None:
     emit(*args, **kwargs)
 
 
+def _validate_composition_record(record: dict[str, Any]) -> None:
+    from managed_ai_information.store.composition.composition import Composition
+
+    Composition(None).profile(record)
+
+
 class System:
     def __init__(
         self,
@@ -155,6 +161,7 @@ class System:
             FORMAT,
             InformationEnvelope(self.ex.objects),
             content_addressed_basis_prefixes=self.domain_selection.content_addressed_basis_prefixes,
+            composition_validator=_validate_composition_record,
         )
         self.record_store.payload_validator = self.domain_selection.validate_record
         self.record_store.retention_policy = self.descriptor.get(
@@ -747,6 +754,11 @@ class System:
         from managed_ai_information.store.composition.composition import Composition
 
         return Composition(self).inspect(record, focus=focus, limit=limit, pair_limit=pair_limit)
+
+    def graph_profile(self, **kwargs: Any) -> dict[str, Any]:
+        from managed_ai_information.store.query import graph_profile
+
+        return graph_profile.profile(self, **kwargs)
 
 
 @dataclass(frozen=True)

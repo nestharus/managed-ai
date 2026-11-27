@@ -746,6 +746,179 @@ class Wave7ArchitectureTests(unittest.TestCase):
             f"Single-child meta-folder wrappers found: {single_child_wrappers}",
         )
 
+    def test_w14_zero_sccs_and_zero_cross_top_private_imports(self) -> None:
+        """Enforce 0 module/subpackage/top-package SCCs and 0 cross-top _private imports."""
+        from managed_ai_information.store import domain_api
+
+        # Verify PEP 562 lazy deployment exports on domain_api remain fully intact
+        for sym in (
+            "Deployment",
+            "DeploymentSelection",
+            "code_identity",
+            "open_admitted_store",
+            "opened_admitted_store",
+            "read_descriptor_bytes",
+            "report_admission",
+            "runtime_binding",
+        ):
+            self.assertIn(sym, dir(domain_api))
+            self.assertIsNotNone(getattr(domain_api, sym))
+
+        mod_edges: dict[str, set[str]] = {}
+        sub_edges: dict[str, set[str]] = {}
+        top_edges: dict[str, set[str]] = {}
+        cross_top_private: list[str] = []
+
+        all_py = sorted(ENGINE.rglob("*.py"))
+        known_modules: set[str] = set()
+        file_to_mod: dict[Path, str] = {}
+        for py in all_py:
+            rel = py.relative_to(ENGINE).as_posix()
+            parts = rel[:-3].split("/")
+            mod = ".".join(parts[:-1]) if parts[-1] == "__init__" else ".".join(parts)
+            if not mod:
+                continue
+            known_modules.add(mod)
+            file_to_mod[py] = mod
+            mod_edges.setdefault(mod, set())
+
+        def _resolve_target(
+            cur_mod: str, is_init: bool, module: str | None, level: int
+        ) -> str | None:
+            if level > 0:
+                base_parts = cur_mod.split(".") if is_init else cur_mod.split(".")[:-1]
+                up = level - 1
+                if up > len(base_parts):
+                    return None
+                prefix = base_parts[: len(base_parts) - up]
+                target = ".".join(prefix + (module.split(".") if module else []))
+            elif module and module.startswith("managed_ai_information."):
+                target = module[len("managed_ai_information.") :]
+            else:
+                return None
+            return target or None
+
+        def _match_module(cand: str) -> str | None:
+            cur = cand
+            while cur:
+                if cur in known_modules:
+                    return cur
+                if "." not in cur:
+                    return None
+                cur = cur.rsplit(".", 1)[0]
+            return None
+
+        for py, cur_mod in file_to_mod.items():
+            is_init = py.name == "__init__.py"
+            cur_top = cur_mod.split(".")[0]
+            cur_sub = ".".join(cur_mod.split(".")[:2])
+            sub_edges.setdefault(cur_sub, set())
+            top_edges.setdefault(cur_top, set())
+            tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+            for node in ast.walk(tree):
+                targets: list[str] = []
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.startswith("managed_ai_information."):
+                            targets.append(alias.name[len("managed_ai_information.") :])
+                elif isinstance(node, ast.ImportFrom):
+                    base = _resolve_target(cur_mod, is_init, node.module, node.level)
+                    if base:
+                        tgt_top = base.split(".")[0]
+                        if tgt_top != cur_top:
+                            for alias in node.names:
+                                if alias.name.startswith("_") and not (
+                                    alias.name.startswith("__") and alias.name.endswith("__")
+                                ):
+                                    cross_top_private.append(
+                                        f"{cur_mod}:{node.lineno} <- {base}.{alias.name}"
+                                    )
+                        sub_matched = False
+                        non_sub = False
+                        for alias in node.names:
+                            cand = f"{base}.{alias.name}"
+                            matched = _match_module(cand)
+                            if matched and matched != base:
+                                targets.append(matched)
+                                sub_matched = True
+                            else:
+                                non_sub = True
+                        if non_sub or not sub_matched:
+                            matched_base = _match_module(base)
+                            if matched_base:
+                                targets.append(matched_base)
+                for tgt in targets:
+                    matched = _match_module(tgt)
+                    if not matched or matched == cur_mod:
+                        continue
+                    mod_edges[cur_mod].add(matched)
+                    tgt_sub = ".".join(matched.split(".")[:2])
+                    if tgt_sub != cur_sub:
+                        sub_edges[cur_sub].add(tgt_sub)
+                    tgt_top = matched.split(".")[0]
+                    if tgt_top != cur_top:
+                        top_edges[cur_top].add(tgt_top)
+
+        def _find_sccs(graph: dict[str, set[str]]) -> list[list[str]]:
+            idx = 0
+            indices: dict[str, int] = {}
+            low: dict[str, int] = {}
+            stack: list[str] = []
+            on_stack: set[str] = set()
+            out: list[list[str]] = []
+
+            for start in sorted(graph):
+                if start in indices:
+                    continue
+                call: list[tuple[str, list[str], int]] = [(start, sorted(graph.get(start, ())), 0)]
+                indices[start] = low[start] = idx
+                idx += 1
+                stack.append(start)
+                on_stack.add(start)
+                while call:
+                    v, nbrs, pos = call[-1]
+                    if pos < len(nbrs):
+                        call[-1] = (v, nbrs, pos + 1)
+                        w = nbrs[pos]
+                        if w not in indices:
+                            indices[w] = low[w] = idx
+                            idx += 1
+                            stack.append(w)
+                            on_stack.add(w)
+                            call.append((w, sorted(graph.get(w, ())), 0))
+                        elif w in on_stack and indices[w] < low[v]:
+                            low[v] = indices[w]
+                    else:
+                        call.pop()
+                        if call:
+                            p = call[-1][0]
+                            if low[v] < low[p]:
+                                low[p] = low[v]
+                        if low[v] == indices[v]:
+                            comp: list[str] = []
+                            while True:
+                                w = stack.pop()
+                                on_stack.remove(w)
+                                comp.append(w)
+                                if w == v:
+                                    break
+                            if len(comp) >= 2:
+                                out.append(sorted(comp))
+            return out
+
+        self.assertEqual(_find_sccs(mod_edges), [], f"Module SCCs found: {_find_sccs(mod_edges)}")
+        self.assertEqual(
+            _find_sccs(sub_edges), [], f"Subpackage SCCs found: {_find_sccs(sub_edges)}"
+        )
+        self.assertEqual(
+            _find_sccs(top_edges), [], f"Top-level package SCCs found: {_find_sccs(top_edges)}"
+        )
+        self.assertEqual(
+            cross_top_private,
+            [],
+            f"Cross-top-package _private imports found: {cross_top_private}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

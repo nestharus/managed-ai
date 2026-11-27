@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from managed_ai_information.core.ownership import packet_id
-from managed_ai_information.core.storage import _OPEN_RO_NOFOLLOW, is_ordinary_file_stat
+from managed_ai_information.core.storage import OPEN_RO_NOFOLLOW, is_ordinary_file_stat
 from managed_ai_information.store.protocol.inputs import parse_input_bytes
 from managed_ai_information.store.query.discovery_report import digest
 from managed_ai_information.store.records.head_index_bin import FLAG_ACTIVE
@@ -62,7 +62,7 @@ def _read_record_bounded_posix(
     full_path = discovery.records.work / "records" / filename
 
     try:
-        fd = os.open(filename, _OPEN_RO_NOFOLLOW, dir_fd=records_fd)
+        fd = os.open(filename, OPEN_RO_NOFOLLOW, dir_fd=records_fd)
     except FileNotFoundError:
         return _fallback_read_bounded(discovery, ref, ident)
     except OSError as exc:
@@ -180,7 +180,7 @@ def _read_raw_posix(
 ) -> bytes:
     full_path = records_root / "records" / filename
     try:
-        fd = os.open(filename, _OPEN_RO_NOFOLLOW, dir_fd=records_fd)
+        fd = os.open(filename, OPEN_RO_NOFOLLOW, dir_fd=records_fd)
     except OSError as exc:
         if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
             raise ValueError(f"ordinary JSON file required: {full_path}") from None

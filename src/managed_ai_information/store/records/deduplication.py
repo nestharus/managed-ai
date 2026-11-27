@@ -10,7 +10,7 @@ from typing import Any
 from managed_ai_information.core.formats import DEDUP_PLAN_FORMAT, DEDUP_RECEIPT_FORMAT
 from managed_ai_information.core.ownership import relative_path
 from managed_ai_information.core.storage import (
-    _OPEN_RO_NOFOLLOW,
+    OPEN_RO_NOFOLLOW,
     encode,
     is_ordinary_dir_stat,
     is_ordinary_file_stat,
@@ -41,7 +41,7 @@ def _read_ordinary_unbounded(path: Path) -> bytes:
     """Read an ordinary non-symlink regular file without following symlinks."""
     if hasattr(os, "O_NOFOLLOW"):
         try:
-            fd = os.open(path, _OPEN_RO_NOFOLLOW)
+            fd = os.open(path, OPEN_RO_NOFOLLOW)
         except OSError as exc:
             if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
                 raise ValueError(f"ordinary file required: {path}") from None

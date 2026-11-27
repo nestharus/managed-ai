@@ -14,7 +14,7 @@ from typing import Any
 from managed_ai_information.core.formats import HEAD_INDEX_FORMAT
 from managed_ai_information.core.ownership import packet_id
 from managed_ai_information.core.storage import (
-    _OPEN_RO_NOFOLLOW,
+    OPEN_RO_NOFOLLOW,
     is_ordinary_dir_stat,
     is_ordinary_file_stat,
     sha,
@@ -198,7 +198,7 @@ def _read_dir_fd_raw(
     filename: str, full_path: Path, records_fd: int
 ) -> tuple[bytes, os.stat_result]:
     try:
-        fd = os.open(filename, _OPEN_RO_NOFOLLOW, dir_fd=records_fd)
+        fd = os.open(filename, OPEN_RO_NOFOLLOW, dir_fd=records_fd)
     except OSError as exc:
         if exc.errno in _BAD_OPEN_ERRNOS:
             raise ValueError(f"ordinary JSON file required: {full_path}") from None

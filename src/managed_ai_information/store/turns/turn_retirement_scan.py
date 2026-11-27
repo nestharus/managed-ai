@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from managed_ai_information.core.storage import (
-    _OPEN_RO_NOFOLLOW,
+    OPEN_RO_NOFOLLOW,
     encode,
     is_ordinary_dir_stat,
     is_ordinary_file_stat,
@@ -28,7 +28,7 @@ from managed_ai_information.store.records.hot_refs import (
 
 
 def _open_nofollow(path: str, _flags: int) -> int:
-    return os.open(path, _OPEN_RO_NOFOLLOW)
+    return os.open(path, OPEN_RO_NOFOLLOW)
 
 
 def _scan_turn_directory(
@@ -83,7 +83,7 @@ def _read_record_raw_for_refs(
     full = records_dir / name
     if dir_fd is not None and hasattr(os, "O_NOFOLLOW"):
         try:
-            fd = os.open(name, _OPEN_RO_NOFOLLOW, dir_fd=dir_fd)
+            fd = os.open(name, OPEN_RO_NOFOLLOW, dir_fd=dir_fd)
         except OSError as exc:
             if exc.errno in (errno.ELOOP, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
                 raise ValueError(f"ordinary record file required: {full}") from None

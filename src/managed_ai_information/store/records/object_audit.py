@@ -12,8 +12,8 @@ from managed_ai_information.core.formats import OBJECT_AUDIT_FORMAT as AUDIT_FOR
 from managed_ai_information.core.formats import OBJECT_GC_RECEIPT_FORMAT as GC_RECEIPT_FORMAT
 from managed_ai_information.core.ownership import packet_id
 from managed_ai_information.core.storage import (
-    _OPEN_RO_NOFOLLOW,
     OCC_SEALED,
+    OPEN_RO_NOFOLLOW,
     encode,
     is_ordinary_file_stat,
     now,
@@ -78,7 +78,7 @@ def _read_live_record_raw(
     if records_fd is not None and hasattr(os, "O_NOFOLLOW"):
         full_path = store.work / "records" / filename
         try:
-            fd = os.open(filename, _OPEN_RO_NOFOLLOW, dir_fd=records_fd)
+            fd = os.open(filename, OPEN_RO_NOFOLLOW, dir_fd=records_fd)
         except OSError as exc:
             if exc.errno in (errno.ELOOP, errno.ENOENT, errno.ENOTDIR, errno.EISDIR, errno.ENXIO):
                 raise ValueError(f"ordinary JSON file required: {full_path}") from None
