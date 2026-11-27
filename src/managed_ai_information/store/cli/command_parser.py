@@ -607,10 +607,10 @@ def _source_and_composition_commands(sub: Any) -> None:
     decision.add_argument("--retain", metavar="REVIEW_SHA256")
     revision.add_argument("--reason")
 
-    imp = sub.add_parser("impact", allow_abbrev=False, help="Component & symbol impact analysis")
-    imp.add_argument("--repo", type=Path, required=True)
+    imp = sub.add_parser("impact", allow_abbrev=False, help="Impact analysis")
+    imp.add_argument("--repo", type=Path, default=Path("."))
     imp.add_argument("--targets", nargs="+", default=[])
-    imp.add_argument("--git-diff", default=None)
+    imp.add_argument("--git-diff", nargs="?", const="HEAD", default=None)
     imp.add_argument("--crw-store", type=Path, default=None)
     imp.add_argument("--package-dir", default="src/managed_ai_information")
     imp.add_argument("--scan-roots", nargs="+", default=["src", "scripts", "tests"])

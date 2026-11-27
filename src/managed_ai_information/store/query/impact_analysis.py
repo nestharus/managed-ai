@@ -110,16 +110,16 @@ def _walk_ordinary_root(
 
 
 def resolve_git_diff_targets(repo_root: Path, git_diff_rev: str) -> list[str]:
-    """Return sorted repository-relative paths changed relative to git_diff_rev."""
+    """Return sorted repo-relative paths changed relative to git_diff_rev."""
     rev = git_diff_rev.strip()
     if not rev or rev.startswith("-"):
         raise ValueError(f"invalid --git-diff revision: {git_diff_rev!r}")
     checked_repo = check_ordinary_ancestors(
-        repo_root, expect_dir=True, error_prefix="ordinary repository root required"
+        repo_root, expect_dir=True, error_prefix="ordinary repo root required"
     ).resolve(strict=True)
     git_bin = shutil.which("git")
     if not git_bin:
-        raise ValueError("git executable not found in PATH")
+        raise ValueError("git not found in PATH")
     cmd = [git_bin, "-C", str(checked_repo), "diff", "--name-only", rev, "--"]
     proc = subprocess.run(  # noqa: S603
         cmd, capture_output=True, text=True, encoding="utf-8", check=False, timeout=30
@@ -187,7 +187,7 @@ def _collect_stmt_symbols(
 
 
 def extract_public_symbols(file_path: Path, rel_path: str) -> list[dict[str, Any]]:
-    """Extract top-level public functions, classes, constants, and re-exports from a .py file."""
+    """Extract top-level public symbols and re-exports from a .py file."""
     tree = ast.parse(read_bytes(file_path, MAX_BYTES).decode("utf-8"), filename=rel_path)
     all_names = _extract_all_exports(tree)
     symbols: dict[str, dict[str, Any]] = {}
@@ -326,7 +326,7 @@ def trace_symbol_callers(
     package_rel: str = "src/managed_ai_information",
     scan_roots: tuple[str, ...] = ("src", "scripts", "tests"),
 ) -> list[dict[str, Any]]:
-    """Trace unchanged symbol-level callers across src/, scripts/, and tests/."""
+    """Trace unchanged symbol callers across scan_roots."""
     if not target_symbols:
         return []
     target_files = {rel for rel, _ in target_symbols.values()}
@@ -538,18 +538,18 @@ def _resolve_target_entry(
         while anc != checked_repo and not anc.exists() and not anc.is_symlink():
             anc = anc.parent
         checked_anc = check_ordinary_ancestors(
-            anc, expect_dir=True, error_prefix=f"ordinary target parent required ({rel})"
+            anc, expect_dir=True, error_prefix=f"ordinary target parent ({rel})"
         ).resolve(strict=True)
         if not checked_anc.is_relative_to(checked_repo):
-            raise ValueError(f"ordinary repository target file required: {rel}")
+            raise ValueError(f"ordinary target file required: {rel}")
     else:
         file_path = check_ordinary_ancestors(
-            raw_target, expect_dir=False, error_prefix=f"ordinary target required ({rel})"
+            raw_target, expect_dir=False, error_prefix=f"ordinary target ({rel})"
         ).resolve(strict=True)
         if not file_path.is_relative_to(checked_repo) or not is_ordinary_file_stat(
             file_path.lstat()
         ):
-            raise ValueError(f"ordinary repository target file required: {rel}")
+            raise ValueError(f"ordinary target file required: {rel}")
     mod_name = _path_to_module_name(rel, package_rel)
     mod_id = mod_by_path.get(rel) or (_record_id_for("mod", mod_name) if mod_name else None)
     facade_id = facade_by_path.get(rel)
@@ -585,11 +585,13 @@ def analyze_impact(
     max_crw_constituents: int = 8,
     max_crw_controls: int = 12,
 ) -> dict[str, Any]:
-    """Compute component, symbol-caller, artifact-graph, and optional CRW risk impact report."""
+    """Compute component, symbol, graph, and optional CRW impact report."""
     if not targets:
-        raise ValueError("at least one target path is required for impact analysis")
+        raise ValueError("at least one target required")
+    if any(type(v) is not int or v < 0 for v in (max_crw_constituents, max_crw_controls)):
+        raise ValueError("CRW limits must be >= 0")
     checked_repo = check_ordinary_ancestors(
-        repo_root, expect_dir=True, error_prefix="ordinary repository root required"
+        repo_root, expect_dir=True, error_prefix="ordinary repo root required"
     ).resolve(strict=True)
     norm_targets = sorted({relative_path(t.replace("\\", "/")) for t in targets})
     records, mod_by_path, facade_by_path = _build_store_index(system)

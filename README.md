@@ -113,6 +113,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contributor setup (`uv sync --group d
 ## Documentation
 
 - [Architecture](ARCHITECTURE.md) — domain-native ownership, `platform/` leaf boundary, schemas, records, and guarded recomposition.
+- [Platform architecture](docs/platform-architecture.md) and [Coordination, ingestion & backend contract](docs/coordination-contract.md) — `managed-ai-coordination-contract/1`, `store.ingest`, and selectable `membus-v2` backend wire contract.
 - [Engine overview](docs/engine/README.md), [Capabilities](docs/engine/CAPABILITIES.md), and [Instances & domains](docs/engine/INSTANCES.md).
 - [CLI field reference](docs/engine/CLI-FIELD-REFERENCE.md) and [Native store contract](docs/engine/store/README.md).
 - [Companions](docs/companions/README.md), [Collective coordination](docs/collective/README.md), and [Examples](examples/README.md).
