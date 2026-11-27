@@ -7,6 +7,13 @@
     "max_depth": 5,
     "max_working_set_tokens": 60000
   },
+  "relationship_budgets": {
+    "max_module_sccs": 1,
+    "max_subpackage_sccs": 1,
+    "max_package_sccs": 1,
+    "max_cross_package_private_imports": 9,
+    "max_non_primitive_nexus": 130
+  },
   "allowances": {
     "src/managed_ai_information/collective/store/database.py": {
       "max_depth": 6
@@ -199,6 +206,11 @@
     "max_file_lines": 943,
     "max_cc": 36,
     "max_depth": 6,
-    "max_working_set_tokens": 297371
+    "max_working_set_tokens": 297371,
+    "module_scc_count": 1,
+    "subpackage_scc_count": 1,
+    "package_scc_count": 1,
+    "cross_package_private_imports": 9,
+    "max_non_primitive_nexus": 130
   }
 }

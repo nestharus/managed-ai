@@ -360,6 +360,167 @@ class SemanticProfileTests(unittest.TestCase):
         self.assertEqual(json.loads(p_leaf_file.stderr)["status"], "error")
         self.assertEqual(real_file.read_text(encoding="utf-8"), '{"sentinel": true}\n')
 
+    def test_relationship_bottlenecks_sccs_bypasses_privates_and_nexus(self) -> None:
+        repo = _write_pkg(
+            self.tmp / "rel-repo",
+            {
+                "src/pkg/__init__.py": "",
+                "src/pkg/alpha/__init__.py": "",
+                "src/pkg/alpha/_internal.py": "HIDDEN = 7\n",
+                "src/pkg/alpha/core.py": "\n".join(
+                    [
+                        "from pkg.beta.worker import run_worker",
+                        "",
+                        "def _secret() -> int:",
+                        "    return 1",
+                        "",
+                        "def run_core() -> int:",
+                        "    return run_worker() + _secret()",
+                        "",
+                    ]
+                ),
+                "src/pkg/beta/__init__.py": "",
+                "src/pkg/beta/worker.py": "\n".join(
+                    [
+                        "from pkg.alpha import _internal",
+                        "from pkg.alpha.core import _secret, run_core",
+                        "from pkg.gamma.leaf import helper",
+                        "",
+                        "def run_worker() -> int:",
+                        "    val = helper() + _secret() + _internal.HIDDEN",
+                        "    return val + (0 if run_core else 1)",
+                        "",
+                    ]
+                ),
+                "src/pkg/gamma/__init__.py": "",
+                "src/pkg/gamma/leaf.py": "\n".join(
+                    [
+                        "def helper() -> int:",
+                        "    return 42",
+                        "",
+                    ]
+                ),
+                "src/pkg/top.py": "\n".join(
+                    [
+                        "from pkg.beta.worker import run_worker",
+                        "from pkg.gamma.leaf import helper",
+                        "",
+                        "def entry() -> int:",
+                        "    return run_worker() + helper()",
+                        "",
+                    ]
+                ),
+            },
+        )
+        profile = profile_repository(repo, package_rel="src/pkg", top_n=10)
+        rel = profile["relationships"]
+        rel_sum = rel["summary"]
+
+        # 1. Tarjan SCC: alpha.core <-> beta.worker forms a module & package SCC
+        self.assertEqual(rel_sum["module_scc_count"], 1)
+        self.assertGreater(rel_sum["module_scc_tokens_locked"], 0)
+        self.assertEqual(rel_sum["package_scc_count"], 1)
+        self.assertEqual(
+            rel["sccs"]["module"][0]["members"],
+            ["pkg.alpha.core", "pkg.beta.worker"],
+        )
+
+        # 2. Cross-package _private imports: both symbol (_secret) and submodule (_internal)
+        self.assertEqual(rel_sum["cross_package_private_imports"], 2)
+        priv_syms = {row["symbol"] for row in rel["private_imports"]}
+        self.assertEqual(priv_syms, {"_secret", "_internal"})
+        self.assertTrue(all(row["scope"] == "cross_package" for row in rel["private_imports"]))
+
+        # 3. Shortcut triangle: top -> beta.worker -> gamma.leaf AND top -> gamma.leaf
+        self.assertGreaterEqual(rel_sum["shortcut_pair_count"], 1)
+        self.assertGreaterEqual(rel_sum["cross_subpackage_shortcut_count"], 1)
+
+        # 4. Spaghetti nexus & blast radius on beta.worker (fan_in=2, fan_out=3 -> nexus=6)
+        by_mod = {m["module"]: m for m in profile["modules"]}
+        self.assertEqual(by_mod["pkg.beta.worker"]["nexus_score"], 6)
+        self.assertGreater(by_mod["pkg.beta.worker"]["blast_radius"], 0)
+
+        # 5. Relationship budget breach fails check_budget and reports tightenable after fix
+        strict_baseline = build_baseline(
+            profile,
+            budgets={
+                "max_file_lines": 200,
+                "max_cc": 10,
+                "max_depth": 5,
+                "max_working_set_tokens": 5000,
+            },
+            relationship_budgets={
+                "max_module_sccs": 0,
+                "max_subpackage_sccs": 0,
+                "max_package_sccs": 0,
+                "max_cross_package_private_imports": 0,
+                "max_non_primitive_nexus": 10,
+            },
+        )
+        # Baseline auto-captures actuals (1 SCC, 1 private import) so current passes:
+        self.assertEqual(check_budget(profile, strict_baseline)["status"], "passed")
+
+        # Tightening relationship_budgets to 0 causes failure on SCC + private import:
+        zero_baseline = dict(strict_baseline)
+        zero_baseline["relationship_budgets"] = {
+            "max_module_sccs": 0,
+            "max_subpackage_sccs": 0,
+            "max_package_sccs": 0,
+            "max_cross_package_private_imports": 0,
+            "max_non_primitive_nexus": 10,
+        }
+        failed = check_budget(profile, zero_baseline)
+        self.assertEqual(failed["status"], "failed")
+        failed_metrics = {v["metric"] for v in failed["violations"]}
+        self.assertIn("module_scc_count", failed_metrics)
+        self.assertIn("cross_package_private_imports", failed_metrics)
+
+    def test_phantom_cochange_graceful_without_git_and_detects_in_git_repo(self) -> None:
+        repo = _write_pkg(
+            self.tmp / "nogit-repo",
+            {
+                "src/pkg/__init__.py": "",
+                "src/pkg/a.py": "VAL = 1\n",
+                "src/pkg/b.py": "VAL = 2\n",
+            },
+        )
+        # Without .git -> gracefully returns available=False, rc=0
+        no_git = profile_repository(repo, package_rel="src/pkg", git_cochange=True)
+        self.assertFalse(no_git["relationships"]["phantom_cochange"]["available"])
+
+        git_bin = os.environ.get("GIT_BIN") or __import__("shutil").which("git")
+        if git_bin is None:
+            return
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+        subprocess.run([git_bin, "init"], cwd=repo, env=env, check=True, capture_output=True)
+        subprocess.run([git_bin, "config", "user.name", "test"], cwd=repo, env=env, check=True)
+        subprocess.run(
+            [git_bin, "config", "user.email", "test@example.com"], cwd=repo, env=env, check=True
+        )
+        for step in range(3):
+            (repo / "src/pkg/a.py").write_text(f"VAL = {step}\n", encoding="utf-8")
+            (repo / "src/pkg/b.py").write_text(f"VAL = {step + 10}\n", encoding="utf-8")
+            subprocess.run([git_bin, "add", "."], cwd=repo, env=env, check=True)
+            subprocess.run(
+                [git_bin, "commit", "-m", f"step {step}"],
+                cwd=repo,
+                env=env,
+                check=True,
+                capture_output=True,
+            )
+
+        with_git = profile_repository(
+            repo, package_rel="src/pkg", git_cochange=True, cochange_window=20, cochange_min=3
+        )
+        phantom = with_git["relationships"]["phantom_cochange"]
+        self.assertTrue(phantom["available"])
+        self.assertEqual(phantom["pair_count"], 1)
+        self.assertEqual(phantom["pairs"][0]["cochange_count"], 3)
+        self.assertEqual(
+            {phantom["pairs"][0]["file_a"], phantom["pairs"][0]["file_b"]},
+            {"src/pkg/a.py", "src/pkg/b.py"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
