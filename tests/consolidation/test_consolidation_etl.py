@@ -274,18 +274,106 @@ class ConsolidationETLTests(unittest.TestCase):
         crw_prof = sys_obj.graph_profile(roots=["crw-catalog"])
         self.assertEqual(crw_prof["bottlenecks"]["structural_scc_count"], 0)
 
-        # If sibling real CRW checkout exists locally, verify full 12/40/48 ingest!
-        real_crw = _REPO.parent.parent / "code-review-workflows" / "trunk"
-        if (real_crw / "risk-axis-reviewers" / "observer-dimensions.json").is_file():
+        # If sibling real CRW checkout exists locally, verify 12/40/54 ingest + coverage manifest!
+        real_crw = next(
+            (
+                p / "code-review-workflows" / "trunk"
+                for p in _REPO.parents[:3]
+                if (
+                    p
+                    / "code-review-workflows"
+                    / "trunk"
+                    / "risk-axis-reviewers"
+                    / "observer-dimensions.json"
+                ).is_file()
+            ),
+            None,
+        )
+        if real_crw is not None:
             real_store = self._init_store("real-crw-store")
             real_res = ingest_crw(real_crw, real_store, dry_run=False)
             self.assertTrue(real_res["applied"])
             self.assertGreaterEqual(real_res["counts"]["families"], 12)
             self.assertGreaterEqual(real_res["counts"]["constituents"], 40)
-            self.assertGreaterEqual(real_res["counts"]["controls"], 48)
+            self.assertGreaterEqual(real_res["counts"]["controls"], 54)
+            self.assertEqual(real_res["counts"]["mapped_controls"], real_res["counts"]["controls"])
+            self.assertEqual(real_res["counts"]["covered_constituents"], 34)
+            self.assertEqual(len(real_res["counts"]["zero_control_constituents"]), 6)
             self.assertEqual(real_res["lint_anomalies"], 0)
-            real_prof = System(real_store).graph_profile(roots=["crw-catalog"])
+            real_sys = System(real_store)
+            real_prof = real_sys.graph_profile(roots=["crw-catalog"])
             self.assertEqual(real_prof["bottlenecks"]["structural_scc_count"], 0)
+            o01 = real_sys.show("crw-ctrl-o01")
+            self.assertIn(
+                {"relation": "supports", "target": "crw-fam-organization-and-communication"},
+                o01["relations"],
+            )
+            self.assertIn(
+                {"relation": "supports", "target": "crw-dim-relationship-choreography-risk"},
+                o01["relations"],
+            )
+
+        # Synthetic CRW coverage-manifest.json: maps O01 -> family + constituent, flags uncovered
+        cov_manifest = {
+            "format": "crw-control-coverage/1",
+            "controls": {
+                "O01": {
+                    "families": ["organization-and-communication"],
+                    "constituents": ["entity-identity-risk"],
+                    "escape_class": "boundary-test-escape",
+                }
+            },
+        }
+        manifest_path = (
+            crw
+            / "risk-axis-reviewers/evals/organization-boundary-controls-v1/coverage-manifest.json"
+        )
+        manifest_path.write_text(json.dumps(cov_manifest, indent=2) + "\n", encoding="utf-8")
+        cov_res = ingest_crw(crw, store, dry_run=False)
+        self.assertTrue(cov_res["applied"])
+        self.assertEqual(cov_res["lint_anomalies"], 0)
+        self.assertEqual(cov_res["counts"]["mapped_controls"], 1)
+        self.assertEqual(cov_res["counts"]["covered_constituents"], 1)
+        self.assertEqual(
+            cov_res["counts"]["zero_control_constituents"],
+            ["crw-dim-install-friction-risk"],
+        )
+        o01_syn = System(store).show("crw-ctrl-o01")
+        self.assertIn(
+            {"relation": "supports", "target": "crw-fam-organization-and-communication"},
+            o01_syn["relations"],
+        )
+        self.assertIn(
+            {"relation": "supports", "target": "crw-dim-entity-identity-risk"},
+            o01_syn["relations"],
+        )
+        self.assertEqual(o01_syn["content"]["escape_class"], "boundary-test-escape")
+        cat_syn = System(store).show("crw-catalog")
+        self.assertEqual(cat_syn["content"]["unknowns"], ["crw-dim-install-friction-risk"])
+        self.assertEqual(
+            System(store).graph_profile(roots=["crw-catalog"])["bottlenecks"][
+                "structural_scc_count"
+            ],
+            0,
+        )
+        # Idempotent re-run after manifest ingest writes 0 records
+        cov_res2 = ingest_crw(crw, store, dry_run=False)
+        self.assertFalse(cov_res2["applied"])
+        self.assertEqual(cov_res2["written_count"], 0)
+
+        # Unknown constituent slug in coverage-manifest.json fails closed
+        bad_manifest = {
+            "format": "crw-control-coverage/1",
+            "controls": {
+                "O01": {
+                    "families": ["organization-and-communication"],
+                    "constituents": ["does-not-exist-risk"],
+                }
+            },
+        }
+        manifest_path.write_text(json.dumps(bad_manifest) + "\n", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            ingest_crw(crw, store, dry_run=True)
 
     def test_obligation_lifecycle_verified_closure_and_regression_detection(self) -> None:
         repo = _write_files(

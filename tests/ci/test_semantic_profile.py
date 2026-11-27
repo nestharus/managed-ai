@@ -454,19 +454,24 @@ class SemanticProfileTests(unittest.TestCase):
                 "max_subpackage_sccs": 0,
                 "max_package_sccs": 0,
                 "max_cross_package_private_imports": 0,
+                "max_cross_subpackage_shortcuts": 0,
                 "max_non_primitive_nexus": 10,
             },
         )
-        # Baseline auto-captures actuals (1 SCC, 1 private import) so current passes:
+        # Baseline auto-captures actuals (SCC, private imports, shortcuts) so current passes:
         self.assertEqual(check_budget(profile, strict_baseline)["status"], "passed")
+        self.assertGreaterEqual(
+            strict_baseline["relationship_budgets"]["max_cross_subpackage_shortcuts"], 1
+        )
 
-        # Tightening relationship_budgets to 0 causes failure on SCC + private import:
+        # Tightening relationship_budgets to 0 causes failure on SCC, private import, & shortcuts:
         zero_baseline = dict(strict_baseline)
         zero_baseline["relationship_budgets"] = {
             "max_module_sccs": 0,
             "max_subpackage_sccs": 0,
             "max_package_sccs": 0,
             "max_cross_package_private_imports": 0,
+            "max_cross_subpackage_shortcuts": 0,
             "max_non_primitive_nexus": 10,
         }
         failed = check_budget(profile, zero_baseline)
@@ -474,6 +479,38 @@ class SemanticProfileTests(unittest.TestCase):
         failed_metrics = {v["metric"] for v in failed["violations"]}
         self.assertIn("module_scc_count", failed_metrics)
         self.assertIn("cross_package_private_imports", failed_metrics)
+        self.assertIn("cross_subpackage_shortcut_count", failed_metrics)
+
+        # Removing the shortcut edge from top.py reports max_cross_subpackage_shortcuts tightenable:
+        (repo / "src/pkg/top.py").write_text(
+            "from pkg.beta.worker import run_worker\n\n"
+            "def entry() -> int:\n"
+            "    return run_worker()\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        reprofiled = profile_repository(repo, package_rel="src/pkg", top_n=10)
+        self.assertEqual(
+            reprofiled["relationships"]["summary"]["cross_subpackage_shortcut_count"], 0
+        )
+        tight_res = check_budget(reprofiled, strict_baseline)
+        self.assertEqual(tight_res["status"], "passed")
+        tight_metrics = {t["metric"] for t in tight_res["tightenable"]}
+        self.assertIn("cross_subpackage_shortcut_count", tight_metrics)
+
+        # Legacy 5-key relationship_budgets baselines (without max_cross_subpackage_shortcuts)
+        # still load cleanly while unknown keys are rejected fail-closed.
+        legacy_path = self.tmp / "legacy-rel-baseline.json"
+        legacy_doc = dict(strict_baseline)
+        legacy_doc["relationship_budgets"] = {
+            k: v
+            for k, v in strict_baseline["relationship_budgets"].items()
+            if k != "max_cross_subpackage_shortcuts"
+        }
+        legacy_path.write_text(json.dumps(legacy_doc, indent=2) + "\n", encoding="utf-8")
+        loaded_legacy = load_baseline(legacy_path)
+        self.assertNotIn("max_cross_subpackage_shortcuts", loaded_legacy["relationship_budgets"])
+        self.assertEqual(check_budget(profile, loaded_legacy)["status"], "passed")
 
     def test_phantom_cochange_graceful_without_git_and_detects_in_git_repo(self) -> None:
         repo = _write_pkg(
