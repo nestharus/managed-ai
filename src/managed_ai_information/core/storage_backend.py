@@ -33,7 +33,11 @@ from managed_ai_information.core.storage_backend_protocol import (
     SignalEvent,
     StorageBackend,
     StorageBackendError,
+    build_collection_registration,
+    build_search_op,
+    decode_local_record,
     encode_expected_version,
+    encode_local_record,
     ensure_ordinary_dir,
     ensure_ordinary_leaf_or_missing,
     map_http_error,
@@ -104,18 +108,14 @@ class EmbeddedFileBackend:
 
     def _persist_state_unlocked(self) -> None:
         ensure_ordinary_leaf_or_missing(self._state_path)
-        payload = {
-            "seq": self._seq,
-            "generations": [
-                {"namespace": ns, "resource": res, "generation": gen}
-                for (ns, res), gen in sorted(self._generations.items())
-            ],
-            "leases": [
-                grant.to_payload(expires_at_ms=grant.expires_at_ms)
-                for grant in self._leases.values()
-            ],
-        }
-        atomic_bytes(self._state_path, encode(payload))
+        gens = [
+            {"namespace": ns, "resource": res, "generation": g}
+            for (ns, res), g in sorted(self._generations.items())
+        ]
+        leases = [g.to_payload(expires_at_ms=g.expires_at_ms) for g in self._leases.values()]
+        atomic_bytes(
+            self._state_path, encode({"seq": self._seq, "generations": gens, "leases": leases})
+        )
 
     def _record_path(self, namespace: str, key: str) -> Path:
         ns = validate_identifier(namespace, "namespace")
@@ -145,19 +145,9 @@ class EmbeddedFileBackend:
 
     def _read_unlocked(self, path: Path) -> BackendRecord | None:
         try:
-            doc = read_json(path)
+            return decode_local_record(read_json(path))
         except FileNotFoundError:
             return None
-        raw = base64.b64decode(str(doc["value_b64"]).encode("ascii"))
-        vis = validate_visibility(str(doc.get("visibility", "Public")))
-        return BackendRecord(
-            str(doc["namespace"]),
-            str(doc["key"]),
-            raw,
-            int(doc["version"]),
-            vis,
-            dict(doc.get("metadata", {})),
-        )
 
     def put_record(
         self,
@@ -185,16 +175,7 @@ class EmbeddedFileBackend:
             next_ver = cur_ver + 1
             atomic_bytes(
                 path,
-                encode(
-                    {
-                        "namespace": namespace,
-                        "key": key,
-                        "version": next_ver,
-                        "visibility": vis,
-                        "metadata": meta,
-                        "value_b64": base64.b64encode(value).decode("ascii"),
-                    }
-                ),
+                encode(encode_local_record(namespace, key, next_ver, vis, meta, value)),
             )
             self._index_local_record(namespace, key, value, vis, meta)
             self._emit_signal(namespace, key, next_ver, "put")
@@ -418,28 +399,12 @@ class MembusV2Backend:
         if len(value) > MAX_BYTES:
             raise ValueError("record payload exceeds per-object limit")
         meta = dict(metadata) if metadata else {}
-        # Sealed records NEVER index payload text and tombstone any prior search entry.
-        search_op: dict[str, Any] = (
-            {"Delete": {"namespace": ns, "doc_id": k}}
-            if vis == "Sealed"
-            else {
-                "Index": {
-                    "namespace": ns,
-                    "doc_id": k,
-                    "kind": str(meta.get("kind", "record")),
-                    "title": str(meta.get("title", k)),
-                    "tags": list(meta.get("tags", ())),
-                    "body": value.decode("utf-8", errors="replace") if vis == "Public" else "",
-                    "visibility": vis,
-                }
-            }
-        )
         body: dict[str, Any] = {
             "ack": "Fast",
             "expected": encode_expected_version(expected_version),
             "value_b64": base64.b64encode(value).decode("ascii"),
             "visibility": vis,
-            "search_op": search_op,
+            "search_op": build_search_op(ns, k, value, vis, meta),
         }
         res = self._request_json("PUT", f"/v2/kv/{quote_segment(ns)}/{quote_segment(k)}", body)
         vers = res.get("versions", [1])
@@ -528,6 +493,8 @@ class MembusV2Backend:
         mode: str = "Bm25",
         limit: int = 20,
     ) -> list[SearchHit]:
+        if not query.strip() or limit <= 0:
+            return []
         res = self._request_json(
             "POST",
             "/v2/search/query",
@@ -556,7 +523,12 @@ class MembusV2Backend:
         )
 
     def release_lease(self, grant: LeaseGrant) -> bool:
-        return bool(self._request_json("POST", "/v2/leases/release", grant.to_payload())["ok"])
+        try:
+            return bool(self._request_json("POST", "/v2/leases/release", grant.to_payload())["ok"])
+        except StorageBackendError as err:
+            if err.status == 404 or isinstance(err, BackendContendedError):
+                return False
+            raise
 
     def validate_lease(self, grant: LeaseGrant) -> bool:
         return bool(self._request_json("POST", "/v2/leases/validate", grant.to_payload())["ok"])
@@ -591,6 +563,33 @@ class MembusV2Backend:
             raise BackendUnavailableError(str(err), status=0, code="unavailable") from None
         finally:
             conn.close()
+
+    def register_collection(
+        self,
+        namespace: str,
+        *,
+        schema_version: int = 1,
+        schema_bytes: bytes = b"{}",
+        store_profile: str = "Mixed",
+        expected_version: int | None = None,
+    ) -> dict[str, Any]:
+        payload = build_collection_registration(
+            namespace,
+            schema_version=schema_version,
+            schema_bytes=schema_bytes,
+            store_profile=store_profile,
+            expected_version=expected_version,
+        )
+        return dict(self._request_json("POST", "/v2/catalog/collections", payload))
+
+    def get_collection(self, namespace: str) -> dict[str, Any] | None:
+        ns = validate_identifier(namespace, "namespace")
+        try:
+            return dict(self._request_json("GET", f"/v2/catalog/collections/{quote_segment(ns)}"))
+        except StorageBackendError as err:
+            if err.status == 404:
+                return None
+            raise
 
     def _migration_post(self, namespace: str, action: str, body: dict[str, Any]) -> dict[str, Any]:
         ns = validate_identifier(namespace, "namespace")
