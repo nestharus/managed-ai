@@ -2,7 +2,6 @@
 
 import argparse
 import json
-import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -125,6 +124,21 @@ def dispatch_operation(field: Field, request: Any) -> Any:
     return OPERATIONS[op](field, params)
 
 
+_MAX_REQUEST_BYTES = 2 * 1024 * 1024
+
+
+def _read_bounded_request(req_path: Path | None) -> bytes:
+    if req_path is not None:
+        checked = require_ordinary_non_symlink(req_path, "request file", must_exist=True)
+        require(checked.lstat().st_size <= _MAX_REQUEST_BYTES, "request exceeds byte bound")
+        with checked.open("rb") as stream:
+            raw = stream.read(_MAX_REQUEST_BYTES + 1)
+    else:
+        raw = sys.stdin.buffer.read(_MAX_REQUEST_BYTES + 1)
+    require(len(raw) <= _MAX_REQUEST_BYTES, "request exceeds byte bound")
+    return raw
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint for signal-field queue operations."""
     parser = argparse.ArgumentParser(
@@ -138,18 +152,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        if args.request is not None:
-            req_path = require_ordinary_non_symlink(args.request, "request file", must_exist=True)
-            raw_request = req_path.read_bytes()
-        else:
-            raw_request = sys.stdin.buffer.read()
+        raw_request = _read_bounded_request(args.request)
 
         request = loads_strict(raw_request)
         with Field(args.db) as field:
             result = dispatch_operation(field, request)
         print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
         return 0
-    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
+    except (OSError, ValueError, KeyError, TypeError) as exc:
         print(
             json.dumps({"status": "unresolved", "reason": str(exc)}, allow_nan=False),
             file=sys.stderr,

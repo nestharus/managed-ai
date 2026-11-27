@@ -8,12 +8,13 @@ import re
 import shutil
 import stat
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 from managed_ai_information.core.ownership import packet_id, relative_path
 from managed_ai_information.core.storage import (
+    MAX_BYTES,
     OPEN_RO_NOFOLLOW,
     atomic_bytes,
     check_ordinary_ancestors,
@@ -22,13 +23,21 @@ from managed_ai_information.core.storage import (
 )
 
 DIGEST_REL_DIR = "sources/repo-digests"
+DEFAULT_CHUNK_SIZE = 200
+DEFAULT_MAX_BATCH_BYTES = MAX_BYTES - 131_072
+INGEST_CHECKPOINT_FORMAT = "managed-ai-ingest-checkpoint/1"
+_BATCH_ENVELOPE_OVERHEAD = 512
 _NON_ID_RE = re.compile(r"[^A-Za-z0-9_-]+")
 _RECORD_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,120}$")
 _PROVENANCE_SELF_LOOPS = frozenset({"revises native navigation from"})
 
 __all__ = [
+    "DEFAULT_CHUNK_SIZE",
+    "DEFAULT_MAX_BATCH_BYTES",
     "DIGEST_REL_DIR",
+    "INGEST_CHECKPOINT_FORMAT",
     "apply_desired_records",
+    "apply_desired_records_chunked",
     "canonical_bytes",
     "compute_digest_basis",
     "dump_json",
@@ -36,6 +45,7 @@ __all__ = [
     "git_head_sha",
     "load_existing_records",
     "normalize_relations",
+    "partition_ingest_operations",
     "record_matches_desired",
     "slugify_id",
     "write_digest_basis",
@@ -287,8 +297,8 @@ def _count_structural_anomalies(system: Any) -> int:
 
 
 def _plan_ingest_ops(
-    desired_records: list[dict[str, Any]],
-    basis_shas_by_id: dict[str, dict[str, str]],
+    desired_records: Iterable[dict[str, Any]],
+    basis_shas_by_id: Mapping[str, dict[str, str]],
     existing: dict[str, dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[str], list[str], list[str], set[str]]:
     ops: list[dict[str, Any]] = []
@@ -324,6 +334,211 @@ def _plan_ingest_ops(
     return ops, added, updated, unchanged, touched_basis
 
 
+def partition_ingest_operations(
+    operations: list[dict[str, Any]],
+    *,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    max_batch_bytes: int = DEFAULT_MAX_BATCH_BYTES,
+) -> list[list[dict[str, Any]]]:
+    """Deterministically split ingest ops into count- and byte-bounded batches (< MAX_BYTES)."""
+    if type(chunk_size) is not int or chunk_size < 1:
+        raise ValueError("chunk_size must be a positive integer")
+    if type(max_batch_bytes) is not int or not (1 <= max_batch_bytes < MAX_BYTES):
+        raise ValueError(f"max_batch_bytes must be an integer in [1, {MAX_BYTES - 1}]")
+
+    chunks: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    current_bytes = _BATCH_ENVELOPE_OVERHEAD
+
+    for op in operations:
+        raw = canonical_bytes(op)
+        op_bytes = len(raw) + 4 * (raw.count(b"\n") + 1) + 2
+        if _BATCH_ENVELOPE_OVERHEAD + op_bytes >= max_batch_bytes:
+            raise ValueError(
+                f"single ingest operation exceeds max_batch_bytes ({max_batch_bytes}): {op['id']}"
+            )
+        if current and (len(current) >= chunk_size or current_bytes + op_bytes >= max_batch_bytes):
+            chunks.append(current)
+            current = []
+            current_bytes = _BATCH_ENVELOPE_OVERHEAD
+        current.append(op)
+        current_bytes += op_bytes
+
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _write_checkpoint(path: Path, payload: dict[str, Any]) -> None:
+    expanded = path.expanduser()
+    abs_target = Path(os.path.abspath(expanded))
+    parent = abs_target.parent
+    ancestors = [*reversed(parent.parents), parent]
+    for anc in ancestors:
+        if anc.exists() or anc.is_symlink():
+            check_ordinary_ancestors(
+                anc, expect_dir=True, error_prefix="ordinary checkpoint directory required"
+            )
+        else:
+            anc.mkdir()
+            check_ordinary_ancestors(
+                anc, expect_dir=True, error_prefix="ordinary checkpoint directory required"
+            )
+    checked_parent = check_ordinary_ancestors(
+        parent, expect_dir=True, error_prefix="ordinary checkpoint directory required"
+    )
+    dest = checked_parent / abs_target.name
+    try:
+        info = dest.lstat()
+    except FileNotFoundError:
+        info = None
+    if info is not None and not is_ordinary_file_stat(info):
+        raise ValueError(f"ordinary non-symlink checkpoint file required: {dest}")
+    atomic_bytes(dest, canonical_bytes(payload))
+
+
+def _write_chunk_digests(
+    system: Any,
+    chunk_ops: list[dict[str, Any]],
+    pending_digests: Mapping[str, bytes] | None,
+) -> None:
+    if not pending_digests:
+        return
+    chunk_basis: set[str] = set()
+    for op in chunk_ops:
+        chunk_basis.update(op["record"].get("basis", ()))
+    if not chunk_basis:
+        return
+    for digest_id, encoded in sorted(pending_digests.items()):
+        rel_path = f"{DIGEST_REL_DIR}/{packet_id(digest_id)}.json"
+        if rel_path in chunk_basis:
+            write_digest_basis_bytes(system, digest_id, encoded)
+
+
+def apply_desired_records_chunked(
+    system: Any,
+    desired_records: Iterable[dict[str, Any]],
+    basis_shas_by_id: Mapping[str, dict[str, str]],
+    *,
+    batch_prefix: str,
+    pending_digests: Mapping[str, bytes] | None = None,
+    dry_run: bool = False,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    max_batch_bytes: int = DEFAULT_MAX_BATCH_BYTES,
+    checkpoint_path: Path | str | None = None,
+    on_chunk: Callable[[dict[str, Any]], None] | None = None,
+    lint_fn: Callable[[Any], Mapping[str, Any]] | None = None,
+    skip_lint: bool = False,
+) -> dict[str, Any]:
+    """Idempotently apply large desired-record sets in count- and byte-bounded batches."""
+    records_list = list(desired_records)
+    if dry_run:
+        existing = load_existing_records(system)
+        ops, added_ids, updated_ids, unchanged_ids, _ = _plan_ingest_ops(
+            records_list, basis_shas_by_id, existing
+        )
+        chunks = partition_ingest_operations(
+            ops, chunk_size=chunk_size, max_batch_bytes=max_batch_bytes
+        )
+        return {
+            "applied": False,
+            "dry_run": True,
+            "added": added_ids,
+            "updated": updated_ids,
+            "unchanged_count": len(unchanged_ids),
+            "written_count": 0,
+            "chunk_count": len(chunks),
+            "chunk_size": chunk_size,
+            "max_batch_bytes": max_batch_bytes,
+            "batch_ids": [],
+            "batch_id": None,
+            "lint_anomalies": None,
+        }
+
+    ckpt = Path(checkpoint_path) if checkpoint_path is not None else None
+    batch_ids: list[str] = []
+    written_total = 0
+
+    with exclusive(system.ex.root / "owner.lock"):
+        existing = load_existing_records(system)
+        operations, added_ids, updated_ids, unchanged_ids, _ = _plan_ingest_ops(
+            records_list, basis_shas_by_id, existing
+        )
+        chunks = partition_ingest_operations(
+            operations, chunk_size=chunk_size, max_batch_bytes=max_batch_bytes
+        )
+        if not chunks:
+            return {
+                "applied": False,
+                "dry_run": False,
+                "added": added_ids,
+                "updated": updated_ids,
+                "unchanged_count": len(unchanged_ids),
+                "written_count": 0,
+                "chunk_count": 0,
+                "chunk_size": chunk_size,
+                "max_batch_bytes": max_batch_bytes,
+                "batch_ids": [],
+                "batch_id": None,
+                "lint_anomalies": None,
+            }
+
+        total_chunks = len(chunks)
+        try:
+            for idx, chunk_ops in enumerate(chunks, 1):
+                _write_chunk_digests(system, chunk_ops, pending_digests)
+                chunk_hash = hashlib.sha256(canonical_bytes(chunk_ops)).hexdigest()[:12]
+                prefix = batch_prefix if total_chunks == 1 else f"{batch_prefix}-c{idx:04d}"
+                batch_id = slugify_id(prefix, chunk_hash)
+                spec: dict[str, Any] = {
+                    "format": "managed-ai-batch-update/1",
+                    "id": batch_id,
+                    "operations": chunk_ops,
+                }
+                system.put_batch(spec)
+                batch_ids.append(batch_id)
+                written_total += len(chunk_ops)
+                progress = {
+                    "format": INGEST_CHECKPOINT_FORMAT,
+                    "batch_prefix": batch_prefix,
+                    "chunk_index": idx,
+                    "total_chunks": total_chunks,
+                    "batch_id": batch_id,
+                    "chunk_written_count": len(chunk_ops),
+                    "cumulative_written_count": written_total,
+                    "complete": idx == total_chunks,
+                }
+                if ckpt is not None:
+                    _write_checkpoint(ckpt, progress)
+                if on_chunk is not None:
+                    on_chunk(progress)
+        finally:
+            if written_total > 0:
+                system.reindex()
+        anomalies: int | None
+        if skip_lint:
+            anomalies = None
+        elif lint_fn is not None:
+            anomalies = int(lint_fn(system).get("anomaly_count", 0))
+        else:
+            anomalies = _count_structural_anomalies(system)
+
+    return {
+        "applied": True,
+        "dry_run": False,
+        "added": added_ids,
+        "updated": updated_ids,
+        "unchanged_count": len(unchanged_ids),
+        "written_count": written_total,
+        "chunk_count": len(chunks),
+        "chunk_size": chunk_size,
+        "max_batch_bytes": max_batch_bytes,
+        "batch_ids": batch_ids,
+        "batch_id": batch_ids[-1] if batch_ids else None,
+        "lint_anomalies": anomalies,
+    }
+
+
 def apply_desired_records(
     system: Any,
     desired_records: list[dict[str, Any]],
@@ -333,69 +548,22 @@ def apply_desired_records(
     pending_digests: dict[str, bytes] | None = None,
     dry_run: bool = False,
     lint_fn: Callable[[Any], Mapping[str, Any]] | None = None,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    max_batch_bytes: int = DEFAULT_MAX_BATCH_BYTES,
+    checkpoint_path: Path | str | None = None,
+    on_chunk: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Idempotently apply only added/changed records under exclusive owner.lock."""
-    if dry_run:
-        existing = load_existing_records(system)
-        _, added_ids, updated_ids, unchanged_ids, _ = _plan_ingest_ops(
-            desired_records, basis_shas_by_id, existing
-        )
-        return {
-            "applied": False,
-            "dry_run": True,
-            "added": added_ids,
-            "updated": updated_ids,
-            "unchanged_count": len(unchanged_ids),
-            "written_count": 0,
-            "batch_id": None,
-            "lint_anomalies": None,
-        }
-
-    with exclusive(system.ex.root / "owner.lock"):
-        existing = load_existing_records(system)
-        operations, added_ids, updated_ids, unchanged_ids, touched_basis = _plan_ingest_ops(
-            desired_records, basis_shas_by_id, existing
-        )
-        if not operations:
-            return {
-                "applied": False,
-                "dry_run": False,
-                "added": added_ids,
-                "updated": updated_ids,
-                "unchanged_count": len(unchanged_ids),
-                "written_count": 0,
-                "batch_id": None,
-                "lint_anomalies": None,
-            }
-
-        if pending_digests:
-            for digest_id, encoded in sorted(pending_digests.items()):
-                rel_path = f"{DIGEST_REL_DIR}/{packet_id(digest_id)}.json"
-                if rel_path in touched_basis:
-                    write_digest_basis_bytes(system, digest_id, encoded)
-
-        batch_hash = hashlib.sha256(canonical_bytes(operations)).hexdigest()[:12]
-        batch_id = slugify_id(batch_prefix, batch_hash)
-        spec: dict[str, Any] = {
-            "format": "managed-ai-batch-update/1",
-            "id": batch_id,
-            "operations": operations,
-        }
-        system.put_batch(spec)
-        system.reindex()
-        anomalies = (
-            int(lint_fn(system).get("anomaly_count", 0))
-            if lint_fn is not None
-            else _count_structural_anomalies(system)
-        )
-
-    return {
-        "applied": True,
-        "dry_run": False,
-        "added": added_ids,
-        "updated": updated_ids,
-        "unchanged_count": len(unchanged_ids),
-        "written_count": len(operations),
-        "batch_id": batch_id,
-        "lint_anomalies": anomalies,
-    }
+    """Idempotently apply added/changed records under exclusive owner.lock with safe chunking."""
+    return apply_desired_records_chunked(
+        system,
+        desired_records,
+        basis_shas_by_id,
+        batch_prefix=batch_prefix,
+        pending_digests=pending_digests,
+        dry_run=dry_run,
+        chunk_size=chunk_size,
+        max_batch_bytes=max_batch_bytes,
+        checkpoint_path=checkpoint_path,
+        on_chunk=on_chunk,
+        lint_fn=lint_fn,
+    )

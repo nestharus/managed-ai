@@ -65,7 +65,7 @@ Trend coordinate belongs in the observing agreement. Position within a manuscrip
 
 ## Repeated service, restart and changed work
 
-`enroll` admits dynamic shared uses. `change` visits only enrolled reverse dependencies for that source. `pull` takes the oldest eligible ticket under a local SQLite write transaction. Updating an already pending live use changes its desired basis without moving its pending ticket. Actual service moves a newly changed obligation behind older waiting work. A repeatedly hot early subset therefore cannot hold every bounded turn merely by remaining in `changed-basis` status.
+`enroll` admits dynamic shared uses. `change` visits only enrolled reverse dependencies for that source. `pull` takes the oldest eligible ticket under a local lock-fenced atomic write transaction (pure-stdlib JSON storage with optional Membus v2 backend mirroring; zero SQLite dependency). Updating an already pending live use changes its desired basis without moving its pending ticket. Actual service moves a newly changed obligation behind older waiting work. A repeatedly hot early subset therefore cannot hold every bounded turn merely by remaining in `changed-basis` status.
 
 A returned live result must match the current use, definition, generation and declared source cut. A stale result cannot overwrite the live observation. If a live wakeup was missed while the callback ran, its actual stale return refreshes that affected job to the current declared basis before further service; it preserves an already pending ticket. Its queue account is retained once for diagnosis; the complete returned candidate belongs to its actual native owner when it has continuing use. A retry explicitly replaces the attempt token, so a late former worker cannot consume the new attempt. This is queue fencing, not downstream effect fencing.
 
@@ -89,11 +89,11 @@ A graph factor can require topology or higher-order relationships that scalar lo
 
 ## Cost and retained state
 
-The actual SQLite operation counter counts executed adapter statements; returned-row counts count Python-visible selected rows. They are not disk-page reads, provider tokens or total interpretation cost. A fresh `reconcile` scans all enrolled live uses and their supplied dependencies. Incremental `change` follows an indexed source-to-use relation. `status` scans the known pending region and returns counts. These costs are explicit; bounded worker packets do not imply bounded total work.
+The store operation counter counts executed adapter operations; returned-row counts count Python-visible selected rows. They are not provider tokens or total interpretation cost. A fresh `reconcile` scans all enrolled live uses and their supplied dependencies. Incremental `change` follows an indexed source-to-use relation. `status` scans the known pending region and returns counts. These costs are explicit; bounded worker packets do not imply bounded total work.
 
 Current live pending storage is bounded by enrolled live uses. Historical selections grow when deliberately retained. Distinct unserved occurrences grow with their actual owed rate. If required occurrences arrive faster than they can be served, no lossless fixed-size queue can promise eventual service without another premise—more service capacity, backpressure, a changed receiving contract or an admissible sufficient compression. The adapter preserves the debt and reports the blocked/budget state rather than claiming all signal lifetimes cost O(dimensions).
 
-The SQLite file can retain allocated pages after rows are deleted; current row counts are not physical shrinkage. Selected history, current observations and still owed occurrence support have different retention rules. Do not retain every old queue delivery or input snapshot by default. Actual native evidence remains selected by its receiving purpose.
+Selected history, current observations and still owed occurrence support have different retention rules. Do not retain every old queue delivery or input snapshot by default. Actual native evidence remains selected by its receiving purpose.
 
 ## Retained evidence and current invocation
 
@@ -102,7 +102,7 @@ The received scheduling study (`stores/research/work/findings/signal-field-evide
 For actual enrollment, use the `Field` API under its local owner or send one CLI request:
 
 ```bash
-python3 -B src/managed_ai_information/host/signal_field/queue.py --db /absolute/host/signal-field.sqlite --request /absolute/operation.json
+python3 -B src/managed_ai_information/host/signal_field/queue.py --db /absolute/host/signal-field.json --request /absolute/operation.json
 ```
 
 An operation is `{"op":"enroll","spec":...}`, `{"op":"change","source":...,"epoch":...,"position":...,"value":...}`, or `{"op":"run","argv":["/absolute/permitted-worker"],"budget":5,"timeout":60}`. A budget is a resource bound, not a mandated five-dimension batch. `pull`, `receive`, `retry`, `retain`, `pending`, `inspect`, `reconcile` and `status` are also available. A change of receiving lifetime requires a distinct use identity so that an existing owed lifetime is not silently repurposed. Keep the runtime database outside shipped source; the queue is one host's continuing state, not another copy of the core engine.

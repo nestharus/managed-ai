@@ -9,7 +9,6 @@ Text is returned as evidence, never executed. No semantic acceptance is inferred
 import contextlib
 import math
 import os
-import sqlite3
 import stat
 import time
 import uuid
@@ -100,7 +99,7 @@ class SourceService:
         search_module_path: Path | str | None = None,
         _search: SearchImplementation | None = None,
     ) -> None:
-        self.db: sqlite3.Connection | None = None
+        self.db: Any = None
         self.root = Path(corpus_root).absolute()
         need(
             self.root.is_dir() and not self.root.is_symlink(), "Ordinary corpus directory required."
@@ -300,7 +299,7 @@ class SourceService:
     def refresh(self) -> dict[str, Any]:
         """Observe every eligible complete body and atomically replace the derived lexical view."""
         started = time.perf_counter()
-        db = sqlite3.connect(":memory:")
+        db = self.search.FtsAnalyzer.new_store()
         members: dict[str, dict[str, Any]] = {}
         excluded: dict[str, str] = {}
         row_paths: dict[int, str] = {}
@@ -331,11 +330,7 @@ class SourceService:
                 members[rel] = {"sha256": digest(data), "bytes": len(data), "title": title}
                 row_id = len(row_paths) + 1
                 row_paths[row_id] = rel
-                db.execute(
-                    "INSERT INTO body_docs(rowid,id,title,summary,body) VALUES(?,?,?,?,?)",
-                    (row_id, rel, title, summary, text),
-                )
-            db.commit()
+                self.search.FtsAnalyzer.add(db, "body_docs", row_id, rel, title, summary, text)
 
             observation = {
                 "kind": "inventory",
@@ -568,16 +563,13 @@ class SourceService:
         return deepcopy(self.ledger)
 
     def stats(self) -> dict[str, Any]:
-        page_count = (
-            self.db.execute("PRAGMA page_count").fetchone()[0] if self.db is not None else 0
-        )
-        page_size = self.db.execute("PRAGMA page_size").fetchone()[0] if self.db is not None else 0
+        index_bytes = self.db.estimated_bytes() if self.db is not None else 0
         return {
             **self._stats,
             "cache_limit_bytes": self.max_cache_bytes,
             "cache_payload_bytes": self.cache_bytes,
             "cache_entries": len(self.cache),
-            "index_db_page_bytes": page_count * page_size,
+            "index_db_page_bytes": index_bytes,
             "receipt_file_bytes": self.ledger_path.stat().st_size
             if self.ledger_path.exists()
             else 0,
@@ -586,9 +578,8 @@ class SourceService:
             "preparation_policy": "on_demand",
             "eligible_bodies": len(self.members) if self.inventory_id is not None else None,
             "scope": (
-                "Successful corpus byte reads and local retained payload/page sizes; excludes "
-                "interpreter imports, SQLite process overhead, provider inference and complete "
-                "economic costs."
+                "Successful corpus byte reads and local retained payload/index sizes; excludes "
+                "interpreter imports, provider inference and complete economic costs."
             ),
         }
 
@@ -600,7 +591,7 @@ class SourceService:
     def __del__(self) -> None:
         db = getattr(self, "db", None)
         if db is not None:
-            with contextlib.suppress(sqlite3.Error, OSError):
+            with contextlib.suppress(ValueError, OSError):
                 db.close()
             self.db = None
 

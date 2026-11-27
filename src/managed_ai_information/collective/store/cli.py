@@ -2,7 +2,6 @@
 
 import argparse
 import json
-import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -121,6 +120,6 @@ def main(argv: list[str] | None = None, *, product: Path = PRODUCT) -> int:
 
         print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
         return 0 if not isinstance(result, dict) or result.get("status") != "refused" else 2
-    except (ValueError, sqlite3.Error, OSError) as exc:
+    except (ValueError, OSError) as exc:
         print(json.dumps({"status": "unresolved", "error": str(exc)}, allow_nan=False))
         return 3

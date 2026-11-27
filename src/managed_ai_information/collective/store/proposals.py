@@ -33,7 +33,7 @@ class Proposals:
         owned(target, r["actor"])
 
         require(
-            self.db.execute("SELECT 1 FROM contexts WHERE id=?", (ident,)).fetchone() is None,
+            self.db.get_context_raw(ident) is None,
             "already-exists",
             "Context identity already exists",
         )
@@ -106,26 +106,21 @@ class Proposals:
             captured["basis"].append(source_pin)
 
         require(len(encoded(captured).encode()) <= CONTEXT_LIMIT, "context-bound", CONTEXT_DETAIL)
-        self.db.execute(
-            "INSERT INTO contexts VALUES (?,?,?)", (ident, r["actor"], encoded(captured))
-        )
+        self.db.put_context(ident, r["actor"], encoded(captured))
         return {"context": captured, "sha256": digest(captured)}
 
     def propose(self, r: dict[str, Any]) -> dict[str, Any]:
         fields(r, {"actor", "command", "op", "id", "context", "body"})
         ident = name(r.get("id"))
-        row = self.db.execute(
-            "SELECT record FROM contexts WHERE id=?",
-            (name(r.get("context")),),
-        ).fetchone()
-        require(row is not None, "missing-context", "Context is unavailable")
+        raw_ctx = self.db.get_context_raw(name(r.get("context")))
+        require(raw_ctx is not None, "missing-context", "Context is unavailable")
 
-        context = loads_strict(row[0])
+        context = loads_strict(raw_ctx)
         require(
             context["actor"] == r["actor"], "wrong-owner", "Context belongs to another participant"
         )
         require(
-            self.db.execute("SELECT 1 FROM proposals WHERE id=?", (ident,)).fetchone() is None,
+            self.db.get_proposal_raw(ident) is None,
             "already-exists",
             "Proposal identity already exists",
         )
@@ -139,9 +134,7 @@ class Proposals:
             "sha256": digest(content),
             "received_at": self.clock(),
         }
-        self.db.execute(
-            "INSERT INTO proposals VALUES (?,?,?)", (ident, r["actor"], encoded(proposal))
-        )
+        self.db.put_proposal(ident, r["actor"], encoded(proposal))
         return {
             "proposal": proposal,
             "scope": (
@@ -155,20 +148,17 @@ class Proposals:
         ident: Any,
         actor: str | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-        row = self.db.execute("SELECT record FROM proposals WHERE id=?", (name(ident),)).fetchone()
-        require(row is not None, "missing-proposal", "Proposal is unavailable")
+        raw_prop = self.db.get_proposal_raw(name(ident))
+        require(raw_prop is not None, "missing-proposal", "Proposal is unavailable")
 
-        proposal = loads_strict(row[0])
+        proposal = loads_strict(raw_prop)
         if actor is not None:
             require(
                 proposal["actor"] == actor, "wrong-owner", "Proposal belongs to another participant"
             )
 
-        ctx_row = self.db.execute(
-            "SELECT record FROM contexts WHERE id=?",
-            (proposal["context"],),
-        ).fetchone()
-        context = loads_strict(ctx_row[0])
+        raw_ctx = self.db.get_context_raw(proposal["context"])
+        context = loads_strict(raw_ctx)
         target = self.revisions.get(context["target"]["id"])
         owned(target, proposal["actor"])
         require(
@@ -179,14 +169,13 @@ class Proposals:
         return proposal, context, target
 
     def retained(self, kind: str, ident: str) -> Any:
-        queries = {
-            "context": "SELECT record FROM contexts WHERE id=?",
-            "proposal": "SELECT record FROM proposals WHERE id=?",
-        }
-        query = queries.get(kind)
-        if query is None:
+        key = name(ident)
+        if kind == "context":
+            raw = self.db.get_context_raw(key)
+        elif kind == "proposal":
+            raw = self.db.get_proposal_raw(key)
+        else:
             raise ValueError("Unknown retained kind")
-        row = self.db.execute(query, (name(ident),)).fetchone()
-        if not row:
+        if raw is None:
             raise ValueError("Retained body is unavailable")
-        return loads_strict(row[0])
+        return loads_strict(raw)

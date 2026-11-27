@@ -27,8 +27,10 @@ class Collective:
         *,
         clock: Callable[[], float] = time.time,
         product: Path | str = PRODUCT,
+        backend: Any | None = None,
+        namespace: str = "collective",
     ) -> None:
-        self.database = CollectiveDatabase(database, product)
+        self.database = CollectiveDatabase(database, product, backend=backend, namespace=namespace)
         self.path = self.database.path
         self.clock = clock
 

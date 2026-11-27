@@ -1,74 +1,33 @@
-"""Store-to-Membus v2 mirror, parity verifier, and governed migration engine.
-
-Pure-stdlib core module mirroring records + CAS exchange objects into Membus v2 via
-MultiRouteBackend + SchemaMigrationController. Sealed entries always emit opaque
-SearchVisibility='Sealed' custody envelopes (never indexed into Tantivy).
-"""
+"""Store-to-Membus v2 mirror, parity verifier, and governed chunked migration engine."""
 
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from managed_ai_information.core.multi_route import (
-    MultiRouteBackend,
-    RoutingMode,
-    SchemaMigrationController,
-)
-from managed_ai_information.core.storage import (
-    MAX_BYTES,
-    OCC_SEALED,
-    ObjectStore,
-    encode,
-    is_ordinary_file_stat,
-    read_bytes,
-    sha,
-    strict_json_loads,
-)
-from managed_ai_information.core.storage_backend import (
-    BackendUnavailableError,
-    EmbeddedFileBackend,
-    MembusV2Backend,
-    SearchHit,
-    SearchVisibility,
-    StorageBackend,
-    StorageBackendError,
-)
-from managed_ai_information.core.storage_backend_protocol import (
-    InMemoryMirrorBackend,
-    ensure_ordinary_dir,
-    validate_endpoint_url,
-    validate_identifier,
-)
+from managed_ai_information.core import membus_mirror_ops as _ops
+from managed_ai_information.core import multi_route as _mr
+from managed_ai_information.core import storage as _st
+from managed_ai_information.core import storage_backend as _sb
+from managed_ai_information.core import storage_backend_protocol as _sbp
 
+COLD_RECORD_KINDS = _ops.COLD_RECORD_KINDS
+DEFAULT_MIRROR_CHUNK_SIZE = _ops.DEFAULT_MIRROR_CHUNK_SIZE
+DEFAULT_MIRROR_MAX_BATCH_BYTES = _ops.DEFAULT_MIRROR_MAX_BATCH_BYTES
+MIRROR_CHECKPOINT_FORMAT = _ops.MIRROR_CHECKPOINT_FORMAT
 MIRROR_REPORT_FORMAT = "managed-ai-membus-mirror/1"
 SEALED_CUSTODY_FORMAT = "managed-ai-sealed-custody/1"
-
-__all__ = [
-    "MIRROR_REPORT_FORMAT",
-    "SEALED_CUSTODY_FORMAT",
-    "BackendUnavailableError",
-    "InMemoryMirrorBackend",
-    "MembusStoreMirror",
-    "MembusV2Backend",
-    "MirrorConfig",
-    "MirrorInventoryItem",
-    "MirrorPlan",
-    "MultiRouteBackend",
-    "RoutingMode",
-    "SearchHit",
-    "StorageBackendError",
-    "classify_record_visibility",
-    "validate_endpoint_url",
-    "validate_identifier",
-]
+BACKEND_ERRORS = (_sb.BackendUnavailableError, _sb.StorageBackendError, OSError, ValueError)
+InMemoryMirrorBackend = _sbp.InMemoryMirrorBackend
+MembusV2Backend = _sb.MembusV2Backend
+MultiRouteBackend = _mr.MultiRouteBackend
+validate_endpoint_url = _sbp.validate_endpoint_url
+validate_identifier = _sbp.validate_identifier
 
 
 @dataclass(frozen=True, slots=True)
 class MirrorConfig:
-    """Policy governing visibility classification and scope of a store-to-Membus mirror."""
-
     namespace: str
     sealed_ids: frozenset[str] = frozenset()
     sealed_kinds: frozenset[str] = frozenset()
@@ -77,31 +36,30 @@ class MirrorConfig:
     metadata_only_kinds: frozenset[str] = frozenset()
     include_blobs: bool = True
     include_inactive: bool = True
+    include_cold_records: bool = False
+    inactive_as_metadata_only: bool = False
 
     def __post_init__(self) -> None:
-        validate_identifier(self.namespace, "namespace")
+        _sbp.validate_identifier(self.namespace, "namespace")
 
 
 @dataclass(frozen=True, slots=True)
 class MirrorInventoryItem:
-    """One record scheduled for mirroring into Membus v2."""
-
     record_id: str
     key: str
     path: Path
     kind: str
     title: str
-    visibility: SearchVisibility
+    visibility: _sbp.SearchVisibility
     sealed_reason: str | None
     expected_sha256: str
     payload_bytes: int
     active: bool
+    source_tier: str = "hot"
 
 
 @dataclass(frozen=True, slots=True)
 class MirrorPlan:
-    """Read-only inventory of records and CAS blobs to mirror."""
-
     store_root: str
     namespace: str
     instance_id: str
@@ -137,492 +95,68 @@ class MirrorPlan:
             "skipped_oversize_blobs": list(self.skipped_oversize_blobs),
             "skipped_sealed_blobs": list(self.skipped_sealed_blobs),
             "sealed_records": [
-                {"record_id": item.record_id, "reason": item.sealed_reason}
-                for item in self.records
-                if item.visibility == "Sealed"
+                {"record_id": i.record_id, "reason": i.sealed_reason}
+                for i in self.records
+                if i.visibility == "Sealed"
             ],
         }
 
 
-def _sealed_custody_payload(record_id: str, *, kind: str = "sealed") -> bytes:
-    """Return an opaque metadata-only custody marker that never contains sealed text."""
-    return encode(
+def sealed_custody_payload(record_id: str, *, kind: str = "sealed") -> bytes:
+    return _st.encode(
         {"format": SEALED_CUSTODY_FORMAT, "id": record_id, "kind": kind, "visibility": "Sealed"}
     )
 
 
-def _extract_title(record_id: str, record: Mapping[str, Any]) -> str:
-    content = record.get("content")
-    if isinstance(content, Mapping):
-        for field in ("title", "name", "heading", "summary", "question"):
-            val = content.get(field)
-            if isinstance(val, str) and val.strip():
-                return val.strip()[:160]
+def extract_record_title(record_id: str, record: Mapping[str, Any]) -> str:
+    if isinstance(c := record.get("content"), Mapping):
+        for f in ("title", "name", "heading", "summary", "question"):
+            if isinstance(v := c.get(f), str) and v.strip():
+                return v.strip()[:160]
     return record_id
 
 
-def _has_record_sealed_marker(record: Mapping[str, Any]) -> str | None:
-    if record.get("availability") == "sealed":
-        return "record-availability-sealed"
-    if record.get("sealed") is True:
-        return "record-sealed-flag"
-    if record.get("visibility") == "Sealed":
-        return "record-visibility-sealed"
-    content = record.get("content")
-    if isinstance(content, Mapping) and (
-        content.get("availability") == "sealed" or content.get("sealed") is True
-    ):
-        return "content-sealed-marker"
-    basis = record.get("basis")
-    if isinstance(basis, list):
-        for entry in basis:
-            if isinstance(entry, Mapping) and entry.get("availability") == "sealed":
-                return "basis-availability-sealed"
-    return None
-
-
 def classify_record_visibility(
-    record_id: str,
-    record: Mapping[str, Any] | None,
-    config: MirrorConfig,
-) -> tuple[SearchVisibility, str | None]:
-    """Determine SearchVisibility and optional sealed reason for a record."""
+    record_id: str, record: Mapping[str, Any] | None, config: MirrorConfig
+) -> tuple[_sbp.SearchVisibility, str | None]:
     if record_id in config.sealed_ids:
         return "Sealed", "explicit-sealed-id"
-    if any(record_id.startswith(prefix) for prefix in config.sealed_prefixes):
+    if any(record_id.startswith(p) for p in config.sealed_prefixes):
         return "Sealed", "explicit-sealed-prefix"
     if record is None:
         return "Public", None
-
-    kind = str(record.get("kind", "record"))
-    if kind in config.sealed_kinds:
+    k = str(record.get("kind", "record"))
+    if k in config.sealed_kinds:
         return "Sealed", "explicit-sealed-kind"
-    marker = _has_record_sealed_marker(record)
-    if marker is not None:
-        return "Sealed", marker
-
+    c, b = record.get("content"), record.get("basis")
+    for cond, rsn in (
+        (record.get("availability") == "sealed", "record-availability-sealed"),
+        (record.get("sealed") is True, "record-sealed-flag"),
+        (record.get("visibility") == "Sealed", "record-visibility-sealed"),
+        (
+            isinstance(c, Mapping)
+            and (c.get("availability") == "sealed" or c.get("sealed") is True),
+            "content-sealed-marker",
+        ),
+        (
+            isinstance(b, list)
+            and any(isinstance(e, Mapping) and e.get("availability") == "sealed" for e in b),
+            "basis-availability-sealed",
+        ),
+    ):
+        if cond:
+            return "Sealed", rsn
     if (
         record_id in config.metadata_only_ids
-        or kind in config.metadata_only_kinds
+        or k in config.metadata_only_kinds
+        or k in COLD_RECORD_KINDS
         or record.get("visibility") == "MetadataOnly"
+        or record.get("cold") is True
+        or record.get("archived") is True
+        or (config.inactive_as_metadata_only and record.get("active") is False)
     ):
         return "MetadataOnly", None
     return "Public", None
-
-
-def _read_store_descriptor(store_root: Path) -> tuple[str, str, bytes]:
-    sys_path = store_root / "system.json"
-    info = sys_path.lstat()
-    if not is_ordinary_file_stat(info):
-        raise ValueError(f"ordinary system.json required: {sys_path}")
-    raw = read_bytes(sys_path, MAX_BYTES)
-    doc = strict_json_loads(raw, "system.json")
-    instance_id = str(doc.get("instance_id", store_root.name))
-    store_schema = str(doc.get("store_schema", "managed-ai-store/1"))
-    schema_doc = {
-        "format": "managed-ai-membus-collection-schema/1",
-        "instance_id": instance_id,
-        "store_schema": store_schema,
-        "schema_bindings": doc.get("schema_bindings", {}),
-    }
-    return instance_id, store_schema, encode(schema_doc)
-
-
-def _make_sealed_item(
-    record_id: str, key: str, rec_path: Path, kind: str, reason: str | None, *, active: bool
-) -> MirrorInventoryItem:
-    custody = _sealed_custody_payload(record_id, kind=kind)
-    return MirrorInventoryItem(
-        record_id,
-        key,
-        rec_path,
-        kind,
-        record_id,
-        "Sealed",
-        reason,
-        sha(custody),
-        len(custody),
-        active,
-    )
-
-
-def _scan_record_file(
-    rec_path: Path, config: MirrorConfig
-) -> tuple[MirrorInventoryItem | None, str | None]:
-    info = rec_path.lstat()
-    if not is_ordinary_file_stat(info):
-        raise ValueError(f"ordinary record file required: {rec_path}")
-    record_id = validate_identifier(rec_path.stem, "record_id")
-    key = f"records/{record_id}"
-
-    # Pre-read sealed check: NEVER open or parse payload text of pre-sealed IDs/prefixes!
-    pre_vis, pre_reason = classify_record_visibility(record_id, None, config)
-    if pre_vis == "Sealed":
-        return _make_sealed_item(record_id, key, rec_path, "sealed", pre_reason, active=True), None
-    if info.st_size > MAX_BYTES:
-        return None, "oversize"
-
-    raw = read_bytes(rec_path, MAX_BYTES)
-    record = strict_json_loads(raw, rec_path.name)
-    active = bool(record.get("active", True))
-    if not config.include_inactive and not active:
-        return None, "inactive"
-
-    kind = str(record.get("kind", "record"))
-    vis, reason = classify_record_visibility(record_id, record, config)
-    if vis == "Sealed":
-        return _make_sealed_item(record_id, key, rec_path, kind, reason, active=active), None
-    return (
-        MirrorInventoryItem(
-            record_id,
-            key,
-            rec_path,
-            kind,
-            _extract_title(record_id, record),
-            vis,
-            None,
-            sha(raw),
-            len(raw),
-            active,
-        ),
-        None,
-    )
-
-
-def _payload_for_item(item: MirrorInventoryItem) -> bytes:
-    if item.visibility == "Sealed":
-        return _sealed_custody_payload(item.record_id, kind=item.kind)
-    raw = read_bytes(item.path, MAX_BYTES)
-    if sha(raw) != item.expected_sha256:
-        raise ValueError(f"record changed concurrently during mirror: {item.record_id}")
-    return raw
-
-
-def _record_metadata(item: MirrorInventoryItem) -> dict[str, Any]:
-    if item.visibility == "Sealed":
-        return {"kind": item.kind, "title": item.record_id, "tags": ["sealed"]}
-    status_tag = "active" if item.active else "inactive"
-    return {"kind": item.kind, "title": item.title, "tags": [item.kind, status_tag]}
-
-
-class MembusStoreMirror:
-    """Mirrors a managed-ai-information store into Membus v2 with governed parity."""
-
-    def plan(self, store_root: Path | str, config: MirrorConfig) -> MirrorPlan:
-        root = ensure_ordinary_dir(Path(store_root))
-        instance_id, store_schema, schema_bytes = _read_store_descriptor(root)
-        records_dir = ensure_ordinary_dir(root / "work/records")
-
-        items: list[MirrorInventoryItem] = []
-        pub_count = meta_count = sealed_count = skipped_inactive = 0
-        oversize_records: list[str] = []
-
-        for entry in sorted(records_dir.iterdir(), key=lambda p: p.name):
-            if entry.name.startswith(".") or not entry.name.endswith(".json"):
-                continue
-            item, skip_reason = _scan_record_file(entry, config)
-            if skip_reason == "oversize":
-                oversize_records.append(entry.stem)
-                continue
-            if skip_reason == "inactive" or item is None:
-                skipped_inactive += 1
-                continue
-            items.append(item)
-            if item.visibility == "Public":
-                pub_count += 1
-            elif item.visibility == "MetadataOnly":
-                meta_count += 1
-            else:
-                sealed_count += 1
-
-        blobs: list[tuple[str, int]] = []
-        oversize_blobs: list[str] = []
-        sealed_blobs: list[str] = []
-        objects_dir = root / "exchange/objects"
-        if config.include_blobs and objects_dir.exists():
-            ensure_ordinary_dir(objects_dir)
-            for row in ObjectStore(objects_dir).iter_objects():
-                digest = str(row["object"])
-                if row.get("occ") == OCC_SEALED:
-                    sealed_blobs.append(digest)
-                    continue
-                raw_size = int(row.get("raw_bytes", row.get("disk_bytes", 0)))
-                if raw_size > MAX_BYTES:
-                    oversize_blobs.append(digest)
-                    continue
-                blobs.append((digest, raw_size))
-            blobs.sort(key=lambda pair: pair[0])
-            sealed_blobs.sort()
-
-        return MirrorPlan(
-            str(root),
-            config.namespace,
-            instance_id,
-            store_schema,
-            schema_bytes,
-            tuple(items),
-            tuple(blobs),
-            pub_count,
-            meta_count,
-            sealed_count,
-            skipped_inactive,
-            tuple(oversize_records),
-            tuple(oversize_blobs),
-            tuple(sealed_blobs),
-        )
-
-    def verify_parity(
-        self,
-        store_root: Path | str,
-        backend: StorageBackend,
-        config: MirrorConfig,
-        *,
-        plan: MirrorPlan | None = None,
-        verify_blob_bytes: bool = False,
-    ) -> dict[str, Any]:
-        """Read-only SHA-256 parity check across all planned records and CAS blobs."""
-        active_plan = plan if plan is not None else self.plan(store_root, config)
-        ns = active_plan.namespace
-        missing_records: list[str] = []
-        mismatched_records: list[str] = []
-        sealed_verified = 0
-
-        for item in active_plan.records:
-            remote = backend.get_record(ns, item.key)
-            if remote is None:
-                missing_records.append(item.record_id)
-                continue
-            if sha(remote.value) != item.expected_sha256:
-                mismatched_records.append(item.record_id)
-                continue
-            if item.visibility == "Sealed":
-                sealed_verified += 1
-
-        missing_blobs: list[str] = []
-        mismatched_blobs: list[str] = []
-        for digest, _ in active_plan.blobs:
-            if verify_blob_bytes:
-                raw = backend.get_blob(ns, digest)
-                if raw is None:
-                    missing_blobs.append(digest)
-                elif sha(raw) != digest:
-                    mismatched_blobs.append(digest)
-            elif not backend.has_blob(ns, digest):
-                missing_blobs.append(digest)
-
-        ok = not (missing_records or mismatched_records or missing_blobs or mismatched_blobs)
-        return {
-            "format": MIRROR_REPORT_FORMAT,
-            "mode": "verify-parity",
-            "status": "passed" if ok else "failed",
-            "namespace": ns,
-            "records_checked": len(active_plan.records),
-            "blobs_checked": len(active_plan.blobs),
-            "sealed_verified": sealed_verified,
-            "missing_records": missing_records,
-            "mismatched_records": mismatched_records,
-            "missing_blobs": missing_blobs,
-            "mismatched_blobs": mismatched_blobs,
-        }
-
-    def _prepare_collection_version(
-        self, backend: Any, namespace: str, schema_bytes: bytes
-    ) -> tuple[int, bool]:
-        if not hasattr(backend, "get_collection") or not hasattr(backend, "register_collection"):
-            return 1, False
-        existing = backend.get_collection(namespace)
-        if existing is None:
-            reg = backend.register_collection(
-                namespace, schema_version=1, schema_bytes=schema_bytes
-            )
-            return int(reg.get("schema_version", 1)), True
-        return int(existing.get("schema_version", 1)), False
-
-    def _mirror_records_and_blobs(
-        self,
-        root: Path,
-        plan: MirrorPlan,
-        router: MultiRouteBackend,
-        backend: StorageBackend,
-    ) -> tuple[int, int, int]:
-        ns = plan.namespace
-        records_written = 0
-        for item in plan.records:
-            payload = _payload_for_item(item)
-            meta = _record_metadata(item)
-            router.put_record(
-                ns,
-                item.key,
-                payload,
-                expected_version=None,
-                visibility=item.visibility,
-                metadata=meta,
-            )
-            records_written += 1
-
-        blobs_written = 0
-        blobs_skipped_existing = 0
-        objects_dir = root / "exchange/objects"
-        if plan.blobs and objects_dir.exists():
-            obj_store = ObjectStore(objects_dir)
-            with obj_store.pack_session():
-                for digest, _ in plan.blobs:
-                    if backend.has_blob(ns, digest):
-                        blobs_skipped_existing += 1
-                        continue
-                    raw = obj_store.read(digest, retained=False)
-                    if len(raw) > MAX_BYTES:
-                        continue
-                    router.put_blob(ns, raw)
-                    blobs_written += 1
-        return records_written, blobs_written, blobs_skipped_existing
-
-    def apply(
-        self,
-        store_root: Path | str,
-        backend: StorageBackend,
-        config: MirrorConfig,
-        *,
-        local_route_dir: Path | None = None,
-        contract_cutover: bool = True,
-        verify_blob_bytes: bool = False,
-    ) -> dict[str, Any]:
-        """Run Expand -> Dual-Write -> Verify -> Contract mirror into Membus v2."""
-        started = time.monotonic()
-        root = ensure_ordinary_dir(Path(store_root))
-        plan = self.plan(root, config)
-        ns = plan.namespace
-
-        from_version, registered = self._prepare_collection_version(backend, ns, plan.schema_bytes)
-        target_version = from_version + 1
-        target_schema = encode(
-            {
-                "format": "managed-ai-membus-collection-schema/1",
-                "instance_id": plan.instance_id,
-                "store_schema": plan.store_schema,
-                "mirrored_version": target_version,
-                "record_count": len(plan.records),
-                "blob_count": len(plan.blobs),
-            }
-        )
-
-        route_a: StorageBackend = (
-            InMemoryMirrorBackend()
-            if local_route_dir is None
-            else EmbeddedFileBackend(ensure_ordinary_dir(local_route_dir))
-        )
-        with MultiRouteBackend(route_a, backend, mode="single", route_b_timeout_ms=10_000) as (
-            router
-        ):
-            controller = SchemaMigrationController(router=router, catalog_backend=backend)
-            controller.begin_expand(
-                ns,
-                from_version=from_version,
-                target_version=target_version,
-                target_sha256=sha(target_schema),
-                target_schema_bytes=target_schema,
-            )
-            try:
-                controller.enable_dual_write(routing_mode="dual-sync")
-                rec_written, blob_written, blob_skipped = self._mirror_records_and_blobs(
-                    root, plan, router, backend
-                )
-                route_parity = router.parity_summary(recent_limit=5)
-                verify_report = self.verify_parity(
-                    root, backend, config, plan=plan, verify_blob_bytes=verify_blob_bytes
-                )
-                mismatches = int(route_parity["counts"]["mismatched_ops"]) + int(
-                    route_parity["counts"]["route_b_errors"]
-                )
-                anomalies = sum(
-                    len(verify_report[k])
-                    for k in (
-                        "missing_records",
-                        "mismatched_records",
-                        "missing_blobs",
-                        "mismatched_blobs",
-                    )
-                )
-                if mismatches != 0 or anomalies != 0:
-                    raise ValueError(
-                        f"mirror parity failed: mismatches={mismatches}, anomalies={anomalies}"
-                    )
-                live_seq = int(backend.health().get("latest_seq", 0))
-                final_state = controller.record_verification(
-                    verified_through=live_seq, mismatch_count=0, anomalies=0
-                )
-                if contract_cutover:
-                    final_state = controller.commit_cutover(cutover_seq=live_seq)
-                final_router_mode = router.mode
-            except Exception as exc:
-                st = controller.state
-                if st is not None and st.phase in ("expanding", "dual-write", "verified"):
-                    controller.abort_rollback(str(exc) or type(exc).__name__)
-                raise
-
-        elapsed_ms = round((time.monotonic() - started) * 1000.0, 2)
-        return {
-            "format": MIRROR_REPORT_FORMAT,
-            "mode": "apply",
-            "status": "passed",
-            "store_root": plan.store_root,
-            "namespace": ns,
-            "collection_registered": registered,
-            "migration": {
-                "from_version": from_version,
-                "target_version": target_version,
-                "final_phase": final_state.phase if final_state is not None else "unknown",
-                "final_router_mode": final_router_mode,
-                "verified_through": live_seq,
-            },
-            "records_mirrored": rec_written,
-            "blobs_mirrored": blob_written,
-            "blobs_reused": blob_skipped,
-            "visibility_counts": {
-                "Public": plan.public_count,
-                "MetadataOnly": plan.metadata_only_count,
-                "Sealed": plan.sealed_count,
-            },
-            "route_parity": route_parity["counts"],
-            "parity_verification": verify_report,
-            "elapsed_ms": elapsed_ms,
-        }
-
-    def search(
-        self,
-        backend: StorageBackend,
-        query: str,
-        *,
-        namespace: str,
-        kind: str | None = None,
-        mode: str = "Bm25",
-        limit: int = 20,
-    ) -> dict[str, Any]:
-        """Run a live Tantivy search query against a mirrored Membus v2 namespace."""
-        ns = validate_identifier(namespace, "namespace")
-        hits: list[SearchHit] = backend.search(
-            query, namespace=ns, kind=kind, mode=mode, limit=limit
-        )
-        return {
-            "format": MIRROR_REPORT_FORMAT,
-            "mode": "search",
-            "namespace": ns,
-            "query": query,
-            "search_mode": mode,
-            "kind": kind,
-            "hit_count": len(hits),
-            "hits": [
-                {
-                    "namespace": h.namespace,
-                    "doc_id": h.doc_id,
-                    "kind": h.kind,
-                    "title": h.title,
-                    "score": h.score,
-                    "visibility": h.visibility,
-                }
-                for h in hits
-            ],
-        }
 
 
 def build_mirror_config(
@@ -635,15 +169,359 @@ def build_mirror_config(
     metadata_only_kinds: Iterable[str] = (),
     include_blobs: bool = True,
     include_inactive: bool = True,
+    include_cold_records: bool = False,
+    inactive_as_metadata_only: bool = False,
 ) -> MirrorConfig:
-    """Convenience constructor normalizing iterable filters into a frozen MirrorConfig."""
+    c = lambda xs: [s.strip() for s in xs if s.strip()]  # noqa: E731
     return MirrorConfig(
-        namespace=namespace,
-        sealed_ids=frozenset(s.strip() for s in sealed_ids if s.strip()),
-        sealed_kinds=frozenset(s.strip() for s in sealed_kinds if s.strip()),
-        sealed_prefixes=tuple(s.strip() for s in sealed_prefixes if s.strip()),
-        metadata_only_ids=frozenset(s.strip() for s in metadata_only_ids if s.strip()),
-        metadata_only_kinds=frozenset(s.strip() for s in metadata_only_kinds if s.strip()),
-        include_blobs=include_blobs,
-        include_inactive=include_inactive,
+        namespace,
+        frozenset(c(sealed_ids)),
+        frozenset(c(sealed_kinds)),
+        tuple(c(sealed_prefixes)),
+        frozenset(c(metadata_only_ids)),
+        frozenset(c(metadata_only_kinds)),
+        include_blobs,
+        include_inactive,
+        include_cold_records,
+        inactive_as_metadata_only,
     )
+
+
+def _mk_sealed(
+    rid: str, key: str, p: Path, k: str, rsn: str | None, *, active: bool
+) -> MirrorInventoryItem:
+    c = sealed_custody_payload(rid, kind=k)
+    return MirrorInventoryItem(rid, key, p, k, rid, "Sealed", rsn, _st.sha(c), len(c), active)
+
+
+def _scan_rec(rp: Path, cfg: MirrorConfig) -> tuple[MirrorInventoryItem | None, str | None]:
+    info = rp.lstat()
+    if not _st.is_ordinary_file_stat(info):
+        raise ValueError(f"ordinary record file required: {rp}")
+    rid = _sbp.validate_identifier(rp.stem, "record_id")
+    key = f"records/{rid}"
+    pv, pr = classify_record_visibility(rid, None, cfg)
+    if pv == "Sealed":
+        return _mk_sealed(rid, key, rp, "sealed", pr, active=True), None
+    if info.st_size > _st.MAX_BYTES:
+        return None, "oversize"
+    raw = _st.read_bytes(rp, _st.MAX_BYTES)
+    rec = _st.strict_json_loads(raw, rp.name)
+    act = bool(rec.get("active", True))
+    if not cfg.include_inactive and not act:
+        return None, "inactive"
+    kind = str(rec.get("kind", "record"))
+    vis, rsn = classify_record_visibility(rid, rec, cfg)
+    if vis == "Sealed":
+        return _mk_sealed(rid, key, rp, kind, rsn, active=act), None
+    t = extract_record_title(rid, rec)
+    return MirrorInventoryItem(rid, key, rp, kind, t, vis, None, _st.sha(raw), len(raw), act), None
+
+
+def _item_payload(root: Path, it: MirrorInventoryItem) -> bytes:
+    if it.visibility == "Sealed":
+        return sealed_custody_payload(it.record_id, kind=it.kind)
+    if it.source_tier == "cold":
+        return _ops.read_cold_archive_payload(
+            root, it.record_id, it.payload_bytes, it.expected_sha256
+        )
+    raw = _st.read_bytes(it.path, _st.MAX_BYTES)
+    if _st.sha(raw) != it.expected_sha256:
+        raise ValueError(f"record changed concurrently during mirror: {it.record_id}")
+    return raw
+
+
+def _item_meta(it: MirrorInventoryItem) -> dict[str, Any]:
+    if it.visibility == "Sealed":
+        return {"kind": it.kind, "title": it.record_id, "tags": ["sealed"]}
+    tags = [it.kind, "active" if it.active else "inactive"]
+    if it.source_tier == "cold":
+        tags.append("cold-archive")
+    return {"kind": it.kind, "title": it.title, "tags": tags}
+
+
+class MembusStoreMirror:
+    """Mirrors a managed-ai-information store into Membus v2 with governed chunked parity."""
+
+    def plan(self, store_root: Path | str, config: MirrorConfig) -> MirrorPlan:
+        root = _sbp.ensure_ordinary_dir(Path(store_root))
+        sp = root / "system.json"
+        if not _st.is_ordinary_file_stat(sp.lstat()):
+            raise ValueError(f"ordinary system.json required: {sp}")
+        desc = _st.strict_json_loads(_st.read_bytes(sp, _st.MAX_BYTES), "system.json")
+        iid = str(desc.get("instance_id", root.name))
+        sc = str(desc.get("store_schema", "managed-ai-store/1"))
+        sb = _st.encode(
+            {
+                "format": "managed-ai-membus-collection-schema/1",
+                "instance_id": iid,
+                "store_schema": sc,
+                "schema_bindings": desc.get("schema_bindings", {}),
+            }
+        )
+        items: list[MirrorInventoryItem] = []
+        seen: set[str] = set()
+        sk_inact, over_r = 0, []
+        for e in sorted(
+            _sbp.ensure_ordinary_dir(root / "work/records").iterdir(), key=lambda p: p.name
+        ):
+            if e.name.startswith(".") or not e.name.endswith(".json"):
+                continue
+            it, rsn = _scan_rec(e, config)
+            if rsn == "oversize":
+                over_r.append(e.stem)
+            elif rsn == "inactive" or it is None:
+                sk_inact += 1
+                seen.add(e.stem)
+            else:
+                items.append(it)
+                seen.add(it.record_id)
+        if config.include_cold_records:
+            ci, co = _ops.scan_cold_archive_records(
+                root, config, classify_record_visibility, MirrorInventoryItem, _mk_sealed
+            )
+            over_r.extend(co)
+            for it in ci:
+                if it.record_id not in seen:
+                    items.append(it)
+                    seen.add(it.record_id)
+        items.sort(key=lambda i: i.record_id)
+        pub, meta = (
+            sum(i.visibility == "Public" for i in items),
+            sum(i.visibility == "MetadataOnly" for i in items),
+        )
+        blobs: list[tuple[str, int]] = []
+        over_b, sealed_b, odir = [], [], root / "exchange/objects"
+        if config.include_blobs and odir.exists():
+            _sbp.ensure_ordinary_dir(odir)
+            for row in _st.ObjectStore(odir).iter_objects():
+                d = str(row["object"])
+                if row.get("occ") == _st.OCC_SEALED:
+                    sealed_b.append(d)
+                elif (sz := int(row.get("raw_bytes", row.get("disk_bytes", 0)))) > _st.MAX_BYTES:
+                    over_b.append(d)
+                else:
+                    blobs.append((d, sz))
+            blobs.sort()
+            sealed_b.sort()
+        return MirrorPlan(
+            str(root),
+            config.namespace,
+            iid,
+            sc,
+            sb,
+            tuple(items),
+            tuple(blobs),
+            pub,
+            meta,
+            len(items) - pub - meta,
+            sk_inact,
+            tuple(over_r),
+            tuple(over_b),
+            tuple(sealed_b),
+        )
+
+    def verify_parity(
+        self,
+        store_root: Path | str,
+        backend: _sb.StorageBackend,
+        config: MirrorConfig,
+        *,
+        plan: MirrorPlan | None = None,
+        verify_blob_bytes: bool = False,
+    ) -> dict[str, Any]:
+        act = plan or self.plan(store_root, config)
+        ns = act.namespace
+        mr: list[str] = []
+        br: list[str] = []
+        mb: list[str] = []
+        bb: list[str] = []
+        sok = 0
+        for it in act.records:
+            if (rem := backend.get_record(ns, it.key)) is None:
+                mr.append(it.record_id)
+            elif _st.sha(rem.value) != it.expected_sha256 or (
+                rem.visibility_reported and rem.visibility != it.visibility
+            ):
+                br.append(it.record_id)
+            elif it.visibility == "Sealed":
+                sok += 1
+        for d, _ in act.blobs:
+            if verify_blob_bytes:
+                if (raw := backend.get_blob(ns, d)) is None:
+                    mb.append(d)
+                elif _st.sha(raw) != d:
+                    bb.append(d)
+            elif not backend.has_blob(ns, d):
+                mb.append(d)
+        ok = not (mr or br or mb or bb)
+        return {
+            "format": MIRROR_REPORT_FORMAT,
+            "mode": "verify-parity",
+            "status": "passed" if ok else "failed",
+            "namespace": ns,
+            "records_checked": len(act.records),
+            "blobs_checked": len(act.blobs),
+            "sealed_verified": sok,
+            "missing_records": mr,
+            "mismatched_records": br,
+            "missing_blobs": mb,
+            "mismatched_blobs": bb,
+        }
+
+    def apply(
+        self,
+        store_root: Path | str,
+        backend: _sb.StorageBackend,
+        config: MirrorConfig,
+        *,
+        local_route_dir: Path | None = None,
+        contract_cutover: bool = True,
+        verify_blob_bytes: bool = False,
+        chunk_size: int = DEFAULT_MIRROR_CHUNK_SIZE,
+        max_batch_bytes: int = DEFAULT_MIRROR_MAX_BATCH_BYTES,
+        checkpoint_path: Path | str | None = None,
+        on_chunk: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        t0, root = time.monotonic(), _sbp.ensure_ordinary_dir(Path(store_root))
+        plan = self.plan(root, config)
+        ns, ckpt = plan.namespace, Path(checkpoint_path) if checkpoint_path is not None else None
+        fv, reg = 1, False
+        if hasattr(backend, "get_collection") and hasattr(backend, "register_collection"):
+            b: Any = backend
+            ex = b.get_collection(ns)
+            if ex is None:
+                r = b.register_collection(ns, schema_version=1, schema_bytes=plan.schema_bytes)
+                fv, reg = int(r.get("schema_version", 1)), True
+            else:
+                fv = int(ex.get("schema_version", 1))
+        tv = fv + 1
+        ts = _st.encode(
+            {
+                "format": "managed-ai-membus-collection-schema/1",
+                "instance_id": plan.instance_id,
+                "store_schema": plan.store_schema,
+                "mirrored_version": tv,
+                "record_count": len(plan.records),
+                "blob_count": len(plan.blobs),
+            }
+        )
+        ra: _sb.StorageBackend = (
+            _sbp.InMemoryMirrorBackend()
+            if local_route_dir is None
+            else _sb.EmbeddedFileBackend(_sbp.ensure_ordinary_dir(local_route_dir))
+        )
+        with _mr.MultiRouteBackend(ra, backend, mode="single", route_b_timeout_ms=10_000) as rtr:
+            ctrl = _mr.SchemaMigrationController(router=rtr, catalog_backend=backend)
+            ctrl.begin_expand(
+                ns,
+                from_version=fv,
+                target_version=tv,
+                target_sha256=_st.sha(ts),
+                target_schema_bytes=ts,
+            )
+            try:
+                ctrl.enable_dual_write(routing_mode="dual-sync")
+                rw, bw, bs, rc, bc, rr = _ops.execute_chunked_mirror(
+                    root,
+                    plan,
+                    rtr,
+                    backend,
+                    _item_payload,
+                    _item_meta,
+                    chunk_size=chunk_size,
+                    max_batch_bytes=max_batch_bytes,
+                    checkpoint_path=ckpt,
+                    on_chunk=on_chunk,
+                )
+                rp = rtr.parity_summary(recent_limit=5)["counts"]
+                ver = self.verify_parity(
+                    root, backend, config, plan=plan, verify_blob_bytes=verify_blob_bytes
+                )
+                mm = int(rp["mismatched_ops"]) + int(rp["route_b_errors"])
+                an = sum(
+                    len(ver[f"{p}_{s}"])
+                    for p in ("missing", "mismatched")
+                    for s in ("records", "blobs")
+                )
+                if mm or an:
+                    raise ValueError(f"mirror parity failed: mismatches={mm}, anomalies={an}")
+                seq = int(backend.health().get("latest_seq", 0))
+                fst = ctrl.record_verification(verified_through=seq, mismatch_count=0, anomalies=0)
+                if contract_cutover:
+                    fst = ctrl.commit_cutover(cutover_seq=seq)
+                fmode = rtr.mode
+            except Exception as exc:
+                if (st := ctrl.state) is not None and st.phase in (
+                    "expanding",
+                    "dual-write",
+                    "verified",
+                ):
+                    ctrl.abort_rollback(str(exc) or type(exc).__name__)
+                raise
+        return {
+            "format": MIRROR_REPORT_FORMAT,
+            "mode": "apply",
+            "status": "passed",
+            "store_root": plan.store_root,
+            "namespace": ns,
+            "collection_registered": reg,
+            "migration": {
+                "from_version": fv,
+                "target_version": tv,
+                "final_phase": fst.phase if fst is not None else "unknown",
+                "final_router_mode": fmode,
+                "verified_through": seq,
+            },
+            "records_mirrored": rw,
+            "records_resumed_from_checkpoint": rr,
+            "blobs_mirrored": bw,
+            "blobs_reused": bs,
+            "chunk_count": rc,
+            "blob_chunk_count": bc,
+            "chunk_size": chunk_size,
+            "max_batch_bytes": max_batch_bytes,
+            "visibility_counts": {
+                "Public": plan.public_count,
+                "MetadataOnly": plan.metadata_only_count,
+                "Sealed": plan.sealed_count,
+            },
+            "route_parity": rp,
+            "parity_verification": ver,
+            "elapsed_ms": round((time.monotonic() - t0) * 1000.0, 2),
+        }
+
+    def sync(
+        self,
+        store_root: Path | str,
+        backend: _sb.StorageBackend,
+        config: MirrorConfig,
+        *,
+        contract_cutover: bool = False,
+        **kw: Any,
+    ) -> dict[str, Any]:
+        return self.apply(store_root, backend, config, contract_cutover=contract_cutover, **kw)
+
+    def search(
+        self,
+        backend: _sb.StorageBackend,
+        query: str,
+        *,
+        namespace: str,
+        kind: str | None = None,
+        mode: str = "Bm25",
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        ns = _sbp.validate_identifier(namespace, "namespace")
+        hits = backend.search(query, namespace=ns, kind=kind, mode=mode, limit=limit)
+        keys = ("namespace", "doc_id", "kind", "title", "score", "visibility")
+        return {
+            "format": MIRROR_REPORT_FORMAT,
+            "mode": "search",
+            "namespace": ns,
+            "query": query,
+            "search_mode": mode,
+            "kind": kind,
+            "hit_count": len(hits),
+            "hits": [{k: getattr(h, k) for k in keys} for h in hits],
+        }

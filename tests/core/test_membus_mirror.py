@@ -752,6 +752,312 @@ class MembusLiveMirrorTests(unittest.TestCase):
                     )
                     self.assertEqual(s_rep["hit_count"], 0, msg=f"sealed leaked in {mode}")
 
+    def test_chunked_sync_checkpoint_resume_and_cold_records_metadata_only(self) -> None:
+        from managed_ai_information.core.storage_backend import EmbeddedFileBackend
+
+        with tempfile.TemporaryDirectory(prefix="membus-chunked-sync-") as tmp:
+            root = Path(tmp) / "store"
+            _write_fixture_store(root)
+
+            # Add cold-record / archived-history records + extra bulk notes
+            for idx in range(8):
+                (root / "work" / "records" / f"bulk-note-{idx:02d}.json").write_bytes(
+                    encode(
+                        {
+                            "id": f"bulk-note-{idx:02d}",
+                            "kind": "note",
+                            "active": True,
+                            "revision": 1,
+                            "content": {"title": f"Bulk Note {idx}", "body": "B" * 900},
+                        }
+                    )
+                )
+            (root / "work" / "records" / "hist-cold-01.json").write_bytes(
+                encode(
+                    {
+                        "id": "hist-cold-01",
+                        "kind": "cold-record",
+                        "active": False,
+                        "revision": 1,
+                        "content": {
+                            "title": "Archived Ledger Slice",
+                            "archived_body": "coldonlyhiddenphrase998",
+                        },
+                    }
+                )
+            )
+            # Also add a compressed exchange/cold-records entry
+            import zlib as _zlib
+
+            cold_rec_bytes = encode(
+                {
+                    "id": "cold-archived-99",
+                    "kind": "note",
+                    "active": False,
+                    "revision": 1,
+                    "content": {
+                        "title": "Cold Archived Record",
+                        "body": "coldarchivehiddenphrase777",
+                    },
+                }
+            )
+            cold_dir = root / "exchange" / "cold-records"
+            (cold_dir / "records").mkdir(parents=True, exist_ok=True)
+            (cold_dir / "records" / "cold-archived-99.json.deflate").write_bytes(
+                _zlib.compress(cold_rec_bytes, level=6)
+            )
+            (cold_dir / "manifest.json").write_bytes(
+                encode(
+                    {
+                        "format": "g60-cold-archive-manifest/1",
+                        "instance_id": "mirror-fixture",
+                        "record_format": "g60-record/1",
+                        "records": {
+                            "cold-archived-99": {
+                                "id": "cold-archived-99",
+                                "kind": "note",
+                                "revision": 1,
+                                "sha256": sha(cold_rec_bytes),
+                                "active": False,
+                                "raw_bytes": len(cold_rec_bytes),
+                                "raw_sha256": sha(cold_rec_bytes),
+                            }
+                        },
+                    }
+                )
+            )
+
+            backend_dir = Path(tmp) / "embedded-target"
+            backend = EmbeddedFileBackend(backend_dir)
+            ckpt = Path(tmp) / "mirror-ckpt.json"
+            mirror = MembusStoreMirror()
+            cfg = build_mirror_config(
+                "bulk_sync_ns",
+                sealed_ids=("explicit-sealed-1",),
+                metadata_only_kinds=("index",),
+                include_cold_records=True,
+                include_blobs=True,
+            )
+
+            # Plan classifies both cold-record and exchange/cold-records entry as MetadataOnly
+            plan = mirror.plan(root, cfg)
+            vis_by_id = {item.record_id: item.visibility for item in plan.records}
+            self.assertEqual(vis_by_id["hist-cold-01"], "MetadataOnly")
+            self.assertEqual(vis_by_id["cold-archived-99"], "MetadataOnly")
+            self.assertEqual(vis_by_id["bulk-note-00"], "Public")
+
+            # Simulate interruption after 2 chunks via on_chunk callback
+            seen: list[dict[str, Any]] = []
+
+            def stop_after_two(progress: dict[str, Any]) -> None:
+                seen.append(dict(progress))
+                if len(seen) == 2:
+                    raise RuntimeError("simulated sync interruption")
+
+            with self.assertRaisesRegex(RuntimeError, "simulated sync interruption"):
+                mirror.sync(
+                    root,
+                    backend,
+                    cfg,
+                    chunk_size=3,
+                    max_batch_bytes=3000,
+                    checkpoint_path=ckpt,
+                    on_chunk=stop_after_two,
+                )
+            self.assertTrue(ckpt.is_file())
+            self.assertEqual(len(seen), 2)
+
+            # Resume from checkpoint completes remaining chunks & passes full SHA-256 parity
+            resumed = mirror.sync(
+                root,
+                backend,
+                cfg,
+                chunk_size=3,
+                max_batch_bytes=3000,
+                checkpoint_path=ckpt,
+                verify_blob_bytes=True,
+            )
+            self.assertEqual(resumed["status"], "passed")
+            self.assertGreater(resumed["records_resumed_from_checkpoint"], 0)
+            self.assertEqual(
+                resumed["records_mirrored"] + resumed["records_resumed_from_checkpoint"],
+                len(plan.records),
+            )
+            self.assertEqual(resumed["parity_verification"]["status"], "passed")
+
+            # Cold-record and cold-archived bodies are stored in KV but NOT full-text indexed!
+            self.assertIsNotNone(backend.get_record("bulk_sync_ns", "records/hist-cold-01"))
+            self.assertIsNotNone(backend.get_record("bulk_sync_ns", "records/cold-archived-99"))
+            self.assertEqual(
+                backend.search("coldonlyhiddenphrase998", namespace="bulk_sync_ns"), []
+            )
+            self.assertEqual(
+                backend.search("coldarchivehiddenphrase777", namespace="bulk_sync_ns"), []
+            )
+            self.assertTrue(backend.search("Boundary migration", namespace="bulk_sync_ns"))
+
+    def test_crw_cold_sealed_preservation_negative_raw_bytes_and_visibility_parity(self) -> None:
+        import unittest.mock as _mock
+        import zlib as _zlib
+
+        from managed_ai_information.core.storage_backend import EmbeddedFileBackend
+
+        with tempfile.TemporaryDirectory(prefix="membus-crw-regress-") as tmp:
+            root = Path(tmp) / "store"
+            _write_fixture_store(root)
+            obj_store = ObjectStore(root / "exchange" / "objects")
+            sealed_obj = obj_store.put(b"sealed-basis-secret-bytes")
+
+            # Cold-archived records: (1) availability=sealed, (2) OCC_SEALED basis,
+            # and (3) cw-cycle-archive hot record defaulting to MetadataOnly.
+            (root / "work" / "records" / "cycle-arch-01.json").write_bytes(
+                encode(
+                    {
+                        "id": "cycle-arch-01",
+                        "kind": "cw-cycle-archive",
+                        "revision": 1,
+                        "active": True,
+                        "content": {"title": "Cycle 01", "body": "cyclehiddenbody991"},
+                    }
+                )
+            )
+            cold_sealed_raw = encode(
+                {
+                    "id": "cold-sealed-1",
+                    "kind": "note",
+                    "revision": 1,
+                    "active": False,
+                    "availability": "sealed",
+                    "content": {"title": "Cold Secret", "body": "coldsealedleakedtoken441"},
+                }
+            )
+            cold_occ_raw = encode(
+                {
+                    "id": "cold-occ-sealed-2",
+                    "kind": "note",
+                    "revision": 1,
+                    "active": False,
+                    "basis": [{"path": f"object:{sealed_obj}", "sha256": sealed_obj}],
+                    "content": {"title": "Cold OCC", "body": "coldoccsealedleakedtoken552"},
+                }
+            )
+            cold_dir = root / "exchange" / "cold-records"
+            (cold_dir / "records").mkdir(parents=True, exist_ok=True)
+            (cold_dir / "records" / "cold-sealed-1.json.deflate").write_bytes(
+                _zlib.compress(cold_sealed_raw, level=6)
+            )
+            (cold_dir / "records" / "cold-occ-sealed-2.json.deflate").write_bytes(
+                _zlib.compress(cold_occ_raw, level=6)
+            )
+            (cold_dir / "manifest.json").write_bytes(
+                encode(
+                    {
+                        "format": "g60-cold-archive-manifest/1",
+                        "instance_id": "mirror-fixture",
+                        "record_format": "g60-record/1",
+                        "records": {
+                            "cold-sealed-1": {
+                                "id": "cold-sealed-1",
+                                "kind": "note",
+                                "revision": 1,
+                                "active": False,
+                                "raw_bytes": len(cold_sealed_raw),
+                                "raw_sha256": sha(cold_sealed_raw),
+                            },
+                            "cold-occ-sealed-2": {
+                                "id": "cold-occ-sealed-2",
+                                "kind": "note",
+                                "revision": 1,
+                                "active": False,
+                                "raw_bytes": len(cold_occ_raw),
+                                "raw_sha256": sha(cold_occ_raw),
+                            },
+                        },
+                    }
+                )
+            )
+
+            mirror = MembusStoreMirror()
+            cfg = build_mirror_config(
+                "crw_sec_ns",
+                sealed_ids=("explicit-sealed-1",),
+                include_cold_records=True,
+                include_blobs=True,
+            )
+            with _mock.patch.object(
+                ObjectStore,
+                "occ_of",
+                lambda _s, d: OCC_SEALED if d == sealed_obj else 1,
+            ):
+                plan = mirror.plan(root, cfg)
+            vis = {it.record_id: it.visibility for it in plan.records}
+            self.assertEqual(vis["cycle-arch-01"], "MetadataOnly")
+            self.assertEqual(vis["cold-sealed-1"], "Sealed")
+            self.assertEqual(vis["cold-occ-sealed-2"], "Sealed")
+
+            # include_inactive=False excludes inactive cold records too
+            active_only_cfg = build_mirror_config(
+                "crw_sec_ns",
+                sealed_ids=("explicit-sealed-1",),
+                include_cold_records=True,
+                include_inactive=False,
+            )
+            active_ids = {it.record_id for it in mirror.plan(root, active_only_cfg).records}
+            self.assertNotIn("cold-sealed-1", active_ids)
+            self.assertNotIn("cold-occ-sealed-2", active_ids)
+
+            # Sync onto EmbeddedFileBackend & confirm no sealed text leaked
+            backend = EmbeddedFileBackend(Path(tmp) / "emb")
+            with _mock.patch.object(
+                ObjectStore,
+                "occ_of",
+                lambda _s, d: OCC_SEALED if d == sealed_obj else 1,
+            ):
+                rep = mirror.sync(root, backend, cfg)
+            self.assertEqual(rep["status"], "passed")
+            for leaked in ("coldsealedleakedtoken441", "coldoccsealedleakedtoken552"):
+                self.assertEqual(backend.search(leaked, namespace="crw_sec_ns"), [])
+            stored_cold_sealed = backend.get_record("crw_sec_ns", "records/cold-sealed-1")
+            assert stored_cold_sealed is not None
+            self.assertEqual(stored_cold_sealed.visibility, "Sealed")
+            self.assertNotIn(b"coldsealedleakedtoken441", stored_cold_sealed.value)
+
+            # verify_parity catches visibility mismatch even when bytes match
+            backend.put_record(
+                "crw_sec_ns",
+                "records/cold-sealed-1",
+                stored_cold_sealed.value,
+                expected_version=None,
+                visibility="Public",
+                metadata={"kind": "note", "title": "tampered"},
+            )
+            parity = mirror.verify_parity(root, backend, cfg, plan=plan)
+            self.assertEqual(parity["status"], "failed")
+            self.assertIn("cold-sealed-1", parity["mismatched_records"])
+
+            # Negative raw_bytes is refused before any zlib decompression
+            (cold_dir / "manifest.json").write_bytes(
+                encode(
+                    {
+                        "format": "g60-cold-archive-manifest/1",
+                        "instance_id": "mirror-fixture",
+                        "record_format": "g60-record/1",
+                        "records": {
+                            "cold-neg": {
+                                "id": "cold-neg",
+                                "kind": "note",
+                                "revision": 1,
+                                "active": True,
+                                "raw_bytes": -1,
+                                "raw_sha256": "0" * 64,
+                            }
+                        },
+                    }
+                )
+            )
+            with self.assertRaisesRegex(ValueError, "invalid cold archive raw_bytes"):
+                mirror.plan(root, cfg)
+
 
 if __name__ == "__main__":
     unittest.main()

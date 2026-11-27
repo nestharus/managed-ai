@@ -1,11 +1,11 @@
-"""Compose concrete owners inside one SQLite transaction; the database owns commit."""
+"""Compose concrete owners inside one atomic store transaction; the database owns commit."""
 
-import sqlite3
 from collections.abc import Callable
 from typing import Any
 
 from .claims import Claims
 from .contract import account, fields, pin
+from .database import CollectiveState
 from .notices import NoticeBoard
 from .proposals import Proposals
 from .reviews import ImpactReviews
@@ -14,7 +14,7 @@ from .uses import ReceivingUses
 
 
 class Session:
-    def __init__(self, db: sqlite3.Connection, clock: Callable[[], float]) -> None:
+    def __init__(self, db: CollectiveState, clock: Callable[[], float]) -> None:
         self.revisions = Revisions(db, clock)
         self.notices = NoticeBoard(db, self.revisions, clock)
         self.proposals = Proposals(db, self.revisions, self.notices, clock)

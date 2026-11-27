@@ -36,7 +36,7 @@ MAX_WORKER_DRAIN_BYTES = DEFAULT_CONFIG.max_worker_drain_bytes
 
 @runtime_checkable
 class SignalFieldService(Protocol):
-    """Local SQLite-backed observing-use eligibility and scheduling contract."""
+    """Local pure-stdlib JSON-backed observing-use eligibility and scheduling contract."""
 
     def enroll(self, spec: dict[str, Any]) -> dict[str, Any]: ...
 

@@ -6,7 +6,6 @@ import ast
 import gc
 import io
 import json
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -459,8 +458,10 @@ class Wave7PerformanceAndContractRegressionTests(unittest.TestCase):
         )
         self.assertEqual(assembled, expected)
 
+        from managed_ai_information.library.lexical import FtsAnalyzer
+
         orphan = object.__new__(source_tools.SourceService)
-        orphan.db = sqlite3.connect(":memory:")
+        orphan.db = FtsAnalyzer.new_store()
         orphan.__del__()
         self.assertIsNone(orphan.db)
 

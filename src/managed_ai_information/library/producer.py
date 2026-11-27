@@ -1,7 +1,7 @@
 """Catalogue-pinned FTS5 discovery service with explicit bounded LRU retention.
 
 Fixes P7-1:
-- Bounds retained catalogues and open SQLite FTS5 connections via an OrderedDict
+- Bounds retained catalogues and pure-stdlib inverted indexes via an OrderedDict
   LRU cap (SearchConfig.max_retained_catalogues), closing evicted Library instances.
 - Hashes catalogue.json BEFORE decoded()/check_manifest() so unchanged current
   observations hit the retained Library in O(1) without reparsing the manifest.
@@ -16,9 +16,8 @@ from typing import Any
 from . import catalogue as _catalogue
 from .config import DEFAULT_LIBRARY_CONFIG, LibraryConfig
 from .format import digest, need, relative, sha
-from .lexical import SQLITE_ERRORS
 
-_PRODUCER_ERRORS: tuple[type[BaseException], ...] = (ValueError, OSError, *SQLITE_ERRORS)
+_PRODUCER_ERRORS: tuple[type[BaseException], ...] = (ValueError, OSError)
 
 
 class Producer:

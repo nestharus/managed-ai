@@ -98,7 +98,7 @@ def worker_outcome(
 
 
 def job_view(row: Any) -> dict[str, Any]:
-    """Project a SQLite jobs row into its structured inspection representation."""
+    """Project a jobs record into its structured inspection representation."""
     columns = tuple(row.keys())
     outcome = (
         row["worker_outcome"] if "worker_outcome" in columns and row["worker_outcome"] else None

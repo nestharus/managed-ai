@@ -7,7 +7,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,27 +27,15 @@ from managed_ai_information.library.catalogue import (  # noqa: E402
     Library,
 )
 
-
-def has_fts5():
-    if catalogue.sqlite3 is None:
-        return False
-    try:
-        with closing(catalogue.sqlite3.connect(":memory:")) as connection:
-            connection.execute("CREATE VIRTUAL TABLE availability USING fts5(body)")
-        return True
-    except catalogue.SQLITE_ERRORS:
-        return False
-
-
-FTS5_AVAILABLE = has_fts5()
+FTS5_AVAILABLE = True
 NO_SQLITE_CLI = """
 import importlib.abc
 import runpy
 import sys
 class NoSQLiteBinding(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname == '_sqlite3':
-            raise ModuleNotFoundError('simulated Python without _sqlite3')
+        if fullname in {'_sqlite3', 'sqlite3'}:
+            raise ModuleNotFoundError('simulated Python without sqlite3')
 sys.meta_path.insert(0, NoSQLiteBinding())
 source, library, backend = sys.argv[1:]
 sys.argv = [source, '--library', library, 'discover', '--query', 'Complete', '--backend', backend]
@@ -236,42 +223,9 @@ class DiscoveryTest(unittest.TestCase):
         self.assertEqual(result["bodies"][0]["matched_terms"], ["correcting"])
         lib.close()
 
-    def test_missing_fts_is_explicit_and_default_stays_available(self):
-        class MissingExtensionError(Exception):
-            pass
-
-        class MissingExtensionConnection:
-            closed = False
-
-            def execute(self, statement):
-                raise MissingExtensionError("no such module: fts5")
-
-            def close(self):
-                self.closed = True
-
-        connection = MissingExtensionConnection()
-
-        class MissingExtensionSQLite:
-            @staticmethod
-            def connect(path):
-                return connection
-
-        with (
-            patch.object(catalogue, "sqlite3", MissingExtensionSQLite),
-            patch.object(catalogue, "SQLITE_ERRORS", (MissingExtensionError,)),
-            self.assertRaisesRegex(ValueError, "FTS5 preparation unavailable"),
-        ):
-            self.library.discover("Complete", backend="fts5")
-        self.assertTrue(connection.closed)
-        self.assertEqual(self.library.discover("Complete")["coverage"]["matched_bodies"], 2)
-        with patch.object(catalogue, "sqlite3", None):
-            with self.assertRaisesRegex(ValueError, "SQLite support unavailable"):
-                self.library.discover("Complete", backend="fts5")
-            self.assertEqual(self.library.discover("Complete")["coverage"]["matched_bodies"], 2)
-
-    def test_cli_without_sqlite_binding_keeps_default_and_refuses_fts(self):
+    def test_cli_without_sqlite_binding_runs_both_bm25_and_fts5(self):
         source = str((ENGINE / "library/cli.py").resolve())
-        for backend, expected_exit in [("bm25", 0), ("fts5", 2)]:
+        for backend in ("bm25", "fts5"):
             result = subprocess.run(
                 [
                     sys.executable,
@@ -285,17 +239,11 @@ class DiscoveryTest(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertEqual(result.returncode, expected_exit, result.stderr)
-            if backend == "bm25":
-                returned = json.loads(result.stdout)["libraries"][0]
-                self.assertEqual(returned["coverage"]["matched_bodies"], 2)
-                self.assertEqual(returned["query"]["backend"], "bm25")
-            else:
-                refused = json.loads(result.stderr)
-                self.assertEqual(refused["status"], "refused")
-                self.assertIn("SQLite support unavailable", refused["error"])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            returned = json.loads(result.stdout)["libraries"][0]
+            self.assertEqual(returned["coverage"]["matched_bodies"], 2)
+            self.assertEqual(returned["query"]["backend"], backend)
 
-    @unittest.skipUnless(FTS5_AVAILABLE, "optional SQLite FTS5 unavailable")
     def test_prepared_contentless_index_preserves_rank_phrases_and_module_results(self):
         lib = self.make_library(
             "prepared",
@@ -305,7 +253,7 @@ class DiscoveryTest(unittest.TestCase):
                 "three.md": b"AI explanation",
             },
         )
-        output = self.root / "prepared.sqlite"
+        output = self.root / "prepared.idx"
         receipt = lib.prepare_index(output)
         for query in [
             "correcting",
@@ -327,10 +275,9 @@ class DiscoveryTest(unittest.TestCase):
             )
             self.assertEqual(actual["coverage"]["verified_bodies"], 0)
             self.assertEqual(actual["coverage"]["examined_body_bytes"], 0)
-        with closing(catalogue.sqlite3.connect(output)) as db:
-            self.assertEqual(db.execute("SELECT body FROM body_docs").fetchall(), [(None,)] * 3)
-            self.assertEqual(db.execute("PRAGMA freelist_count").fetchone()[0], 0)
-        self.assertEqual(lib_format.digest(output.read_bytes()), receipt["index"]["sha256"])
+        raw_index = output.read_bytes()
+        self.assertFalse(raw_index.startswith(b"SQLite format 3\x00"))
+        self.assertEqual(lib_format.digest(raw_index), receipt["index"]["sha256"])
 
     @unittest.skipUnless(FTS5_AVAILABLE, "optional SQLite FTS5 unavailable")
     def test_prepared_nomination_does_not_claim_source_verification(self):
@@ -407,30 +354,7 @@ class DiscoveryTest(unittest.TestCase):
         self.assertFalse((self.root / "failed.sqlite").exists())
         self.assertFalse(list(self.root.glob(".knowledge-index-*")))
 
-    @unittest.skipUnless(FTS5_AVAILABLE, "optional SQLite FTS5 unavailable")
-    def test_prepared_index_private_copy_fallback(self):
-        output = self.root / "fallback.sqlite"
-        receipt = self.library.prepare_index(output)
-        connect = catalogue.sqlite3.connect
-
-        class NoDeserialize:
-            def __init__(self, *args, **kwargs):
-                self.connection = connect(*args, **kwargs)
-
-            def __getattr__(self, name):
-                if name == "deserialize":
-                    raise AttributeError(name)
-                return getattr(self.connection, name)
-
-        expected = self.library.discover("Complete", backend="fts5")
-        with patch.object(catalogue.sqlite3, "connect", NoDeserialize):
-            result = self.library.discover(
-                "Complete", backend="fts5", index=output, index_sha256=receipt["index"]["sha256"]
-            )
-        self.assertEqual(result["bodies"], expected["bodies"])
-        self.assertEqual(lib_format.digest(output.read_bytes()), receipt["index"]["sha256"])
-
-    def test_prepared_index_options_are_explicit_and_sqlite_remains_optional(self):
+    def test_prepared_index_rejects_legacy_sqlite_and_explicit_options(self):
         for options in [
             {"index": "not-read"},
             {"index_sha256": "0" * 64},
@@ -438,14 +362,17 @@ class DiscoveryTest(unittest.TestCase):
         ]:
             with self.assertRaises(ValueError):
                 self.library.discover("Complete", **options)
-        with patch.object(catalogue, "sqlite3", None):
-            with self.assertRaisesRegex(ValueError, "SQLite support unavailable"):
-                self.library.prepare_index(self.root / "missing.sqlite")
-            with self.assertRaisesRegex(ValueError, "SQLite support unavailable"):
-                self.library.discover(
-                    "Complete", backend="fts5", index="not-read", index_sha256="0" * 64
-                )
-            self.assertEqual(self.library.discover("Complete")["coverage"]["verified_bodies"], 2)
+        legacy_sql = self.root / "legacy.sqlite"
+        legacy_bytes = b"SQLite format 3\x00" + b"\x00" * 128
+        legacy_sql.write_bytes(legacy_bytes)
+        with self.assertRaisesRegex(ValueError, "legacy SQLite"):
+            self.library.discover(
+                "Complete",
+                backend="fts5",
+                index=legacy_sql,
+                index_sha256=lib_format.digest(legacy_bytes),
+            )
+        self.assertEqual(self.library.discover("Complete")["coverage"]["verified_bodies"], 2)
 
     def test_empty_query_does_not_assert_an_unread_index_was_verified(self):
         result = self.library.discover(
@@ -538,10 +465,7 @@ class DiscoveryBatchTest(unittest.TestCase):
         )
 
     def test_filtered_questions_do_not_open_or_verify_an_image(self):
-        with (
-            patch.object(catalogue, "PreparedIndex", side_effect=AssertionError("opened index")),
-            patch.object(catalogue, "sqlite3", None),
-        ):
+        with patch.object(catalogue, "PreparedIndex", side_effect=AssertionError("opened index")):
             result = self.library.discover_batch(
                 ["a in the", '""'], index=self.root / "absent", index_sha256="0" * 64
             )
@@ -659,26 +583,14 @@ class DiscoveryBatchTest(unittest.TestCase):
         self.assertIsNone(opened[0].temporary)
         self.assertIn("three.md", result["results"][0]["coverage"]["omitted_body_ids"])
 
-    @unittest.skipUnless(FTS5_AVAILABLE, "optional SQLite FTS5 unavailable")
-    def test_query_failure_closes_private_copy_without_partial_return(self):
+    def test_query_failure_closes_image_without_partial_return(self):
         args = self.prepare()
-        opened, paths = [], []
-        original_connect = catalogue.sqlite3.connect
-
-        class NoDeserialize:
-            def __init__(self, *a, **kw):
-                self.connection = original_connect(*a, **kw)
-
-            def __getattr__(self, name):
-                if name == "deserialize":
-                    raise AttributeError(name)
-                return getattr(self.connection, name)
+        opened = []
 
         class FailingIndex(catalogue.PreparedIndex):
             def __init__(self, *a, **kw):
                 super().__init__(*a, **kw)
                 opened.append(self)
-                paths.append(Path(self.temporary.name))
                 self.calls = 0
 
             def search(self, table, parsed):
@@ -688,7 +600,6 @@ class DiscoveryBatchTest(unittest.TestCase):
                 return super().search(table, parsed)
 
         with (
-            patch.object(catalogue.sqlite3, "connect", NoDeserialize),
             patch.object(catalogue, "PreparedIndex", FailingIndex),
             self.assertRaisesRegex(RuntimeError, "simulated query interruption"),
         ):
@@ -696,7 +607,6 @@ class DiscoveryBatchTest(unittest.TestCase):
         self.assertEqual(len(opened), 1)
         self.assertIsNone(opened[0].db)
         self.assertIsNone(opened[0].temporary)
-        self.assertFalse(paths[0].exists())
 
     @unittest.skipUnless(FTS5_AVAILABLE, "optional SQLite FTS5 unavailable")
     def test_cli_batch_returns_ordered_results_and_refuses_oversized_input(self):

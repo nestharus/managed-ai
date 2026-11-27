@@ -1,14 +1,7 @@
-"""Lexical search index engines over verified library bodies.
-
-Separates in-memory BM25/FTS5 indexing (SearchIndex, RetainedSearch) and
-pinned external SQLite FTS5 derivative queries (PreparedIndex) from catalogue
-custody. Implements lazy phrase-surface materialization (P7-12) so BM25 term
-queries avoid retaining duplicated full-text field copies in RAM.
-"""
+"""Lexical search index engines over verified library bodies."""
 
 import math
 import re
-import tempfile
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
@@ -16,10 +9,8 @@ from typing import Any
 
 from .config import DEFAULT_LIBRARY_CONFIG, LibraryConfig
 from .contract import SearchScope
-from .format import decoded, digest, need, read_bytes, sha
-from .lexical import SQLITE_ERRORS, TOKEN, FtsAnalyzer, sqlite3
-
-_UNSET: Any = object()
+from .format import digest, need, read_bytes, sha
+from .lexical import TOKEN, FtsAnalyzer, LexicalStore
 
 
 class SearchIndex:
@@ -30,65 +21,42 @@ class SearchIndex:
         rows: list[dict[str, Any]],
         backend: str,
         *,
-        sqlite_mod: Any = _UNSET,
-        sqlite_errors: tuple[type[BaseException], ...] | None = None,
         config: LibraryConfig = DEFAULT_LIBRARY_CONFIG,
     ) -> None:
-        self.backend = backend
-        self.config = config
-        self.db: Any = None
-        self.ids = {row["id"] for row in rows}
+        self.backend, self.config = backend, config
+        self.db: LexicalStore | None = None
+        self.ids = {r["id"] for r in rows}
         self._phrase_rows: list[tuple[str, tuple[str, str, str, str]]] | None = None
         self._fields: dict[str, list[str]] | None = None
-
-        sql = sqlite3 if sqlite_mod is _UNSET else sqlite_mod
-        sql_errs = SQLITE_ERRORS if sqlite_errors is None else sqlite_errors
-
         if backend == "fts5":
-            if sql is None:
-                raise ValueError("SQLite support unavailable; use --backend bm25")
-            try:
-                self.db = sql.connect(":memory:")
-                FtsAnalyzer.create(self.db, "docs", config=config.search)
-                self.db.executemany(
-                    "INSERT INTO docs VALUES(?,?,?,?)",
-                    [(r["id"], r["title"], r["summary"], r["text"]) for r in rows],
-                )
-            except sql_errs as exc:
-                self.close()
-                raise ValueError(
-                    "SQLite FTS5 preparation unavailable; use --backend bm25: " + str(exc)
-                ) from exc
+            st = FtsAnalyzer.new_store()
+            FtsAnalyzer.create(st, "docs", config=config.search)
+            for r in rows:
+                FtsAnalyzer.add(st, "docs", r["id"], r["id"], r["title"], r["summary"], r["text"])
+            self.db = st
             return
-
         self.frequencies: dict[str, Counter[str]] = {}
         self.df: Counter[str] = Counter()
         self.lengths: dict[str, int] = {}
-        raw_surfaces: list[tuple[str, tuple[str, str, str, str]]] = []
-
-        for row in rows:
-            ident = row["id"]
-            freq: Counter[str] = Counter()
-            for field_key in ("id", "title", "summary", "text"):
-                freq.update(TOKEN.findall(row[field_key].casefold()))
-            self.frequencies[ident] = freq
-            self.lengths[ident] = sum(freq.values())
-            for term in freq:
-                self.df[term] += 1
-            raw_surfaces.append((ident, (row["id"], row["title"], row["summary"], row["text"])))
-
-        # Defer building padded token strings until a quoted phrase query arrives (P7-12).
-        self._phrase_rows = raw_surfaces
+        raw_s: list[tuple[str, tuple[str, str, str, str]]] = []
+        for r in rows:
+            i, fq = r["id"], Counter[str]()
+            for k in ("id", "title", "summary", "text"):
+                fq.update(TOKEN.findall(r[k].casefold()))
+            self.frequencies[i], self.lengths[i] = fq, sum(fq.values())
+            for t in fq:
+                self.df[t] += 1
+            raw_s.append((i, (r["id"], r["title"], r["summary"], r["text"])))
+        self._phrase_rows = raw_s
         self.average = sum(self.lengths.values()) / max(1, len(rows)) or 1.0
 
     @property
     def fields(self) -> dict[str, list[str]]:
-        """Lazily materialize tokenized phrase-search surfaces on first phrase query."""
         if self._fields is None:
-            built: dict[str, list[str]] = {}
-            for ident, parts in self._phrase_rows or ():
-                built[ident] = [" " + " ".join(TOKEN.findall(p.casefold())) + " " for p in parts]
-            self._fields = built
+            self._fields = {
+                i: [" " + " ".join(TOKEN.findall(p.casefold())) + " " for p in ps]
+                for i, ps in (self._phrase_rows or ())
+            }
             self._phrase_rows = None
         return self._fields
 
@@ -110,50 +78,37 @@ class SearchIndex:
         units = parsed["terms"] + parsed["phrases"]
         if not units:
             return {}
-
         if self.backend == "fts5":
             return FtsAnalyzer.search(self.db, "docs", units, config=self.config.search)
-
-        phrase_counts: dict[str, dict[str, int]] = {}
-        phrase_df: dict[str, int] = {}
-
+        pc: dict[str, dict[str, int]] = {}
+        pdf: dict[str, int] = {}
         if parsed["phrases"]:
-            surfaces = self.fields
-            for phrase in parsed["phrases"]:
-                pattern = re.compile("(?=" + re.escape(" " + phrase + " ") + ")")
-                counts = {
-                    ident: sum(len(pattern.findall(field)) for field in field_list)
-                    for ident, field_list in surfaces.items()
-                }
-                phrase_counts[phrase] = counts
-                phrase_df[phrase] = sum(count > 0 for count in counts.values())
-
-        result: dict[str, dict[str, Any]] = {}
-        count = len(self.ids)
-
-        for ident, frequencies in self.frequencies.items():
-            norm = 1.2 * (0.25 + 0.75 * self.lengths[ident] / self.average)
-            hits: list[str] = []
-            score = 0.0
-
-            for term in parsed["terms"]:
-                frequency = frequencies[term]
-                if frequency:
-                    hits.append(term)
-                    idf = math.log1p((count - self.df[term] + 0.5) / (self.df[term] + 0.5))
-                    score += idf * frequency * 2.2 / (frequency + norm)
-
-            for phrase in parsed["phrases"]:
-                frequency = phrase_counts[phrase][ident]
-                if frequency:
-                    hits.append(phrase)
-                    idf = math.log1p((count - phrase_df[phrase] + 0.5) / (phrase_df[phrase] + 0.5))
-                    score += idf * frequency * 2.2 / (frequency + norm)
-
+            sf = self.fields
+            for ph in parsed["phrases"]:
+                pat = re.compile("(?=" + re.escape(" " + ph + " ") + ")")
+                cs = {i: sum(len(pat.findall(f)) for f in fl) for i, fl in sf.items()}
+                pc[ph], pdf[ph] = cs, sum(c > 0 for c in cs.values())
+        res: dict[str, dict[str, Any]] = {}
+        n = len(self.ids)
+        for i, fq in self.frequencies.items():
+            norm = 1.2 * (0.25 + 0.75 * self.lengths[i] / self.average)
+            hits, sc = [], 0.0
+            for t in parsed["terms"]:
+                if f := fq[t]:
+                    hits.append(t)
+                    sc += (
+                        math.log1p((n - self.df[t] + 0.5) / (self.df[t] + 0.5))
+                        * f
+                        * 2.2
+                        / (f + norm)
+                    )
+            for ph in parsed["phrases"]:
+                if f := pc[ph][i]:
+                    hits.append(ph)
+                    sc += math.log1p((n - pdf[ph] + 0.5) / (pdf[ph] + 0.5)) * f * 2.2 / (f + norm)
             if hits:
-                result[ident] = {"score": score, "matched_terms": hits}
-
-        return result
+                res[i] = {"score": sc, "matched_terms": hits}
+        return res
 
 
 class PreparedIndex:
@@ -167,58 +122,28 @@ class PreparedIndex:
         *,
         config: LibraryConfig = DEFAULT_LIBRARY_CONFIG,
         reader: Callable[[Path | str, int], bytes] = read_bytes,
-        sqlite_mod: Any = _UNSET,
     ) -> None:
-        self.db: Any = None
-        self.temporary: tempfile.TemporaryDirectory[str] | None = None
+        self.db: LexicalStore | None = None
+        self.temporary: Any = None
         self.config = config
-        sql = sqlite3 if sqlite_mod is _UNSET else sqlite_mod
-
-        if sql is None:
-            raise ValueError("SQLite support unavailable; use ordinary BM25 discovery")
         data = reader(path, config.search.max_index_bytes)
         need(digest(data) == sha(expected_sha256), "prepared index differs from expected digest")
-
-        self.bytes = len(data)
-        self.sha256 = expected_sha256
-        self.basis = basis
-
+        self.bytes, self.sha256, self.basis = len(data), expected_sha256, basis
         try:
-            self.db = sql.connect(":memory:")
-            if hasattr(self.db, "deserialize"):
-                self.db.deserialize(data)
-            else:
-                self.db.close()
-                self.db = None
-                self.temporary = tempfile.TemporaryDirectory(prefix="knowledge-index-")
-                copied = Path(self.temporary.name) / "verified.sqlite"
-                copied.write_bytes(data)
-                self.db = sql.connect(copied.as_uri() + "?mode=ro", uri=True)
-
-            self.db.execute("PRAGMA query_only=ON")
-            self.db.execute("PRAGMA trusted_schema=OFF")
-
-            row = self.db.execute("SELECT value FROM metadata WHERE key='basis'").fetchone()
-            need(
-                row is not None
-                and isinstance(row[0], str)
-                and len(row[0].encode("utf-8")) <= config.limits.max_manifest_bytes,
-                "invalid prepared index basis",
+            st = LexicalStore.deserialize(
+                data,
+                max_uncompressed_bytes=max(config.search.max_index_bytes * 4, 64 * 1024 * 1024),
             )
             need(
-                decoded(row[0]) == basis,
+                st.basis == basis,
                 "prepared index basis differs; rebuild for this catalogue, analyzer and scope",
             )
-
-            for query_sql, identities in (
-                ("SELECT rowid FROM body_docs ORDER BY rowid", basis["bodies"]),
-                ("SELECT rowid FROM module_docs ORDER BY rowid", basis["modules"]),
-            ):
-                found = [r[0] for r in self.db.execute(query_sql)]
+            for tn, ids in (("body_docs", basis["bodies"]), ("module_docs", basis["modules"])):
                 need(
-                    found == list(range(1, len(identities) + 1)),
+                    st.table(tn).keys == list(range(1, len(ids) + 1)),
                     "prepared index row coverage differs",
                 )
+            self.db = st
         except Exception:
             self.close()
             raise
@@ -228,23 +153,16 @@ class PreparedIndex:
         units = parsed["terms"] + parsed["phrases"]
         if not units:
             return {}
-
         ids = self.basis["bodies" if table == "body_docs" else "modules"]
         return {
-            ids[row - 1]: hit
-            for row, hit in FtsAnalyzer.search(
-                self.db, table, units, config=self.config.search
-            ).items()
+            ids[r - 1]: h
+            for r, h in FtsAnalyzer.search(self.db, table, units, config=self.config.search).items()
         }
 
     def close(self) -> None:
         if self.db is not None:
             self.db.close()
             self.db = None
-
-        if self.temporary is not None:
-            self.temporary.cleanup()
-            self.temporary = None
 
     def __enter__(self) -> PreparedIndex:
         return self
@@ -265,26 +183,12 @@ class RetainedSearch:
         documents: list[dict[str, Any]],
         modules: list[dict[str, Any]],
         *,
-        sqlite_mod: Any = _UNSET,
-        sqlite_errors: tuple[type[BaseException], ...] | None = None,
         config: LibraryConfig = DEFAULT_LIBRARY_CONFIG,
     ) -> None:
         self.scope = scope
-        self.bodies = SearchIndex(
-            documents,
-            scope.backend,
-            sqlite_mod=sqlite_mod,
-            sqlite_errors=sqlite_errors,
-            config=config,
-        )
+        self.bodies = SearchIndex(documents, scope.backend, config=config)
         try:
-            self.modules = SearchIndex(
-                modules,
-                scope.backend,
-                sqlite_mod=sqlite_mod,
-                sqlite_errors=sqlite_errors,
-                config=config,
-            )
+            self.modules = SearchIndex(modules, scope.backend, config=config)
         except Exception:
             self.bodies.close()
             raise

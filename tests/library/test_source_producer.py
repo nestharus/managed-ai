@@ -16,22 +16,11 @@ if str(_REPO) not in sys.path:
 from managed_ai_information.library import catalogue  # noqa: E402
 from managed_ai_information.library import format as lib_format  # noqa: E402
 from managed_ai_information.library.catalogue import Library  # noqa: E402
+from managed_ai_information.library.lexical import FtsAnalyzer  # noqa: E402
 from managed_ai_information.library.producer import Producer  # noqa: E402
 
-
-def has_fts5():
-    if catalogue.sqlite3 is None:
-        return False
-    try:
-        with closing(catalogue.sqlite3.connect(":memory:")) as connection:
-            connection.execute("CREATE VIRTUAL TABLE availability USING fts5(body)")
-        return True
-    except catalogue.SQLITE_ERRORS:
-        return False
-
-
-FTS5_AVAILABLE = has_fts5()
-NEEDS_FTS5 = unittest.skipUnless(FTS5_AVAILABLE, "optional SQLite FTS5 unavailable")
+FTS5_AVAILABLE = True
+NEEDS_FTS5 = unittest.skipUnless(FTS5_AVAILABLE, "pure-stdlib inverted index unavailable")
 
 
 class SourceProducerTest(unittest.TestCase):
@@ -341,23 +330,24 @@ class SourceProducerTest(unittest.TestCase):
 
     @NEEDS_FTS5
     def test_close_releases_native_indexes_and_new_instance_reconstructs(self):
-        connections = []
-        connect = catalogue.sqlite3.connect
+        stores = []
+        orig_new_store = FtsAnalyzer.new_store
 
-        def observed_connect(*args, **kwargs):
-            connection = connect(*args, **kwargs)
-            connections.append(connection)
-            return connection
+        def observed_new_store():
+            store = orig_new_store()
+            stores.append(store)
+            return store
 
-        with patch.object(catalogue.sqlite3, "connect", side_effect=observed_connect):
+        with patch.object(FtsAnalyzer, "new_store", side_effect=observed_new_store):
             self.assert_ok(self.request("discover", query="source"))
             self.assert_ok(self.request("discover", query="source", scan_limit=1))
-        self.assertTrue(connections)
+        self.assertTrue(stores)
         self.producer.close()
         self.producer.close()
-        for connection in connections:
-            with self.assertRaises(catalogue.sqlite3.ProgrammingError):
-                connection.execute("SELECT 1")
+        for store in stores:
+            self.assertTrue(store.closed)
+            with self.assertRaises(ValueError):
+                store.table("docs")
         self.producer = Producer(self.directory)
         self.addCleanup(self.producer.close)
         expected = self.oracle.discover("source", backend="fts5")

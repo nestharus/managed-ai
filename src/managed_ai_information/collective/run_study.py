@@ -288,7 +288,7 @@ def run(directory: Path | str) -> dict[str, Any]:
         raise ValueError("Select a new study directory outside the product tree")
 
     resolved_dir.mkdir(parents=True)
-    database = resolved_dir / "collective.sqlite"
+    database = resolved_dir / "collective.json"
     Collective.initialize(database)
     store = Collective(database)
 

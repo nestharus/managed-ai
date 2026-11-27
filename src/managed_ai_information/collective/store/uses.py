@@ -35,36 +35,30 @@ class ReceivingUses:
             self.require_current(target["id"])
             self.enroll(target["id"], proposal["id"], context["basis"])
 
-    def changed(self, target: str) -> Any:
-        return self.db.execute(
-            """
-            SELECT pin FROM use_sources s WHERE target=? AND EXISTS (
-                SELECT 1 FROM versions v WHERE v.id=s.source
-                AND v.revision>json_extract(s.pin,'$.revision'))
-            ORDER BY source LIMIT 1""",
-            (target,),
-        ).fetchone()
+    def changed(self, target: str) -> str | None:
+        for source, raw_pin in sorted(self.db.use_sources_for_target(target).items()):
+            prior = loads_strict(raw_pin)
+            if self.db.max_version_revision(source) > prior["revision"]:
+                return raw_pin
+        return None
 
     def source(self, target: str, source: str | None = None) -> dict[str, Any] | None:
         """Expose one carried relation at its original and current source editions."""
         name(target)
         if source is None:
-            row = self.changed(target)
+            raw_pin = self.changed(target)
         else:
-            row = self.db.execute(
-                "SELECT pin FROM use_sources WHERE target=? AND source=?",
-                (target, name(source)),
-            ).fetchone()
-        if row is None:
+            raw_pin = self.db.get_use_source(target, name(source))
+        if raw_pin is None:
             return None
 
-        prior = loads_strict(row[0])
+        prior = loads_strict(raw_pin)
         return {"source": prior, "current": self.revisions.source(prior["id"])}
 
     def require_current(self, target: str) -> None:
         stale = self.changed(target)
-        if stale:
-            prior = loads_strict(stale[0])
+        if stale is not None:
+            prior = loads_strict(stale)
             raise Refused(
                 "basis-changed", "Requalify the receiving relationship for " + prior["id"]
             )
@@ -92,12 +86,9 @@ class ReceivingUses:
         self.revisions.verify([current], current=True, keep_bodies=False)
         if not isinstance(current, dict):
             raise Refused("invalid-input", "Incomplete source pin")
-        row = self.db.execute(
-            "SELECT pin FROM use_sources WHERE target=? AND source=?",
-            (target["id"], current["id"]),
-        ).fetchone()
+        raw_prior = self.db.get_use_source(target["id"], current["id"])
         require(
-            row is not None and loads_strict(row[0]) == r.get("prior"),
+            raw_prior is not None and loads_strict(raw_prior) == r.get("prior"),
             "use-relation-changed",
             "Return the exact prior source edition enrolled for this receiving target",
         )
@@ -110,15 +101,9 @@ class ReceivingUses:
         )
         why = account(r.get("account"))
         if disposition == "renew":
-            self.db.execute(
-                "UPDATE use_sources SET pin=? WHERE target=? AND source=?",
-                (encoded(current), target["id"], current["id"]),
-            )
+            self.db.put_use_source(target["id"], current["id"], encoded(current), overwrite=True)
         else:
-            self.db.execute(
-                "DELETE FROM use_sources WHERE target=? AND source=?",
-                (target["id"], current["id"]),
-            )
+            self.db.delete_use_source(target["id"], current["id"])
 
         decision = {
             "target": pin(target),
@@ -138,16 +123,12 @@ class ReceivingUses:
         why: str,
     ) -> None:
         for current in context["basis"]:
-            old = self.db.execute(
-                "SELECT pin FROM use_sources WHERE target=? AND source=?",
-                (target["id"], current["id"]),
-            ).fetchone()
-            if old:
-                old_pin = loads_strict(old[0])
+            raw_old = self.db.get_use_source(target["id"], current["id"])
+            if raw_old is not None:
+                old_pin = loads_strict(raw_old)
                 if old_pin != current:
-                    self.db.execute(
-                        "UPDATE use_sources SET pin=? WHERE target=? AND source=?",
-                        (encoded(current), target["id"], current["id"]),
+                    self.db.put_use_source(
+                        target["id"], current["id"], encoded(current), overwrite=True
                     )
                     self.notices.emit(
                         "qualified-use-source",
@@ -165,18 +146,14 @@ class ReceivingUses:
                     )
 
     def enroll(self, target: str, proposal: str, basis: list[dict[str, Any]]) -> None:
-        self.db.executemany(
-            "INSERT OR IGNORE INTO use_sources VALUES (?,?,?)",
-            ((target, item["id"], encoded(item)) for item in basis if item["id"] != target),
-        )
-        self.db.execute(
-            """
-            INSERT OR IGNORE INTO use_sources(target,source,pin)
-            SELECT ?,json_extract(p.value,'$.id'),p.value
-            FROM impact_reviews r,json_each(r.judgment,'$.basis') p
-            WHERE r.proposal=? AND json_extract(p.value,'$.id') != ?""",
-            (target, proposal, target),
-        )
+        for item in basis:
+            if item["id"] != target:
+                self.db.put_use_source(target, item["id"], encoded(item), overwrite=False)
+        for raw_judgment in self.db.reviews_for_proposal(proposal).values():
+            judgment = loads_strict(raw_judgment)
+            for item in judgment.get("basis", ()):
+                if item["id"] != target:
+                    self.db.put_use_source(target, item["id"], encoded(item), overwrite=False)
 
     def take(self, r: dict[str, Any]) -> dict[str, Any]:
         """Admit the exact reviewed edition at this receiver's local point of use."""
@@ -212,11 +189,12 @@ class ReceivingUses:
         )
 
         self.require_current(approval["id"])
-        qualified = self.db.execute(
-            """SELECT 1 FROM events WHERE kind='qualified-use-source'
-            AND subject=? AND json_extract(body,'$.target.revision')=? LIMIT 1""",
-            (approval["id"], approval["revision"]),
-        ).fetchone()
+        qualified = any(
+            ev["kind"] == "qualified-use-source"
+            and ev["subject"] == approval["id"]
+            and loads_strict(ev["body"]).get("target", {}).get("revision") == approval["revision"]
+            for ev in self.db.data["events"]
+        )
         require(
             not qualified,
             "basis-changed",
@@ -225,7 +203,7 @@ class ReceivingUses:
 
         if approval.get("staged_treatments"):
             require(
-                not self.reviews.changed(approval["proposal"], installed_target=approval["id"]),
+                self.reviews.changed(approval["proposal"], installed_target=approval["id"]) is None,
                 "basis-changed",
                 "A source used to treat an offer changed before receiving use",
             )
@@ -251,7 +229,7 @@ class ReceivingUses:
         )
         self.revisions.save(record)
         self.notices.accepted_revision(record, r["actor"])
-        self.db.execute("DELETE FROM use_sources WHERE target=?", (approval["id"],))
+        self.db.delete_use_source(approval["id"])
         if lease:
             self.claims.finish(approval["id"])
 

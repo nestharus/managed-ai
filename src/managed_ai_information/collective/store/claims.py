@@ -7,7 +7,7 @@ from .contract import fields, integer, name, owned, require
 
 
 class Claims:
-    """Owner lease manager within one collective SQLite transaction."""
+    """Owner lease manager within one collective store transaction."""
 
     def __init__(self, db: Any, revisions: Any, clock: Any) -> None:
         self.db = db
@@ -25,26 +25,21 @@ class Claims:
             "Target revision changed",
         )
         seconds = integer(r.get("seconds", 60), "claim seconds", 1, 300)
-        old = self.db.execute("SELECT * FROM claims WHERE target=?", (target["id"],)).fetchone()
+        old = self.db.get_claim(target["id"])
         require(
             not old or not old["active"] or old["expires"] <= self.clock(),
             "already-claimed",
             "This target has an active claim",
         )
 
-        generation = old["generation"] + 1 if old else 1
+        generation = int(old["generation"]) + 1 if old else 1
         token = uuid.uuid4().hex
         expiry = self.clock() + seconds
-        self.db.execute(
-            "INSERT INTO claims VALUES (?,?,?,?,?,1) ON CONFLICT(target) "
-            "DO UPDATE SET actor=excluded.actor,generation=excluded.generation,"
-            "token=excluded.token,expires=excluded.expires,active=1",
-            (target["id"], r["actor"], generation, token, expiry),
-        )
+        self.db.put_claim(target["id"], r["actor"], generation, token, expiry, active=1)
         return {"target": target["id"], "generation": generation, "token": token, "expires": expiry}
 
     def check(self, target: str, actor: str, token: str | None) -> Any:
-        lease = self.db.execute("SELECT * FROM claims WHERE target=?", (target,)).fetchone()
+        lease = self.db.get_claim(target)
         if token is not None or (lease and lease["active"]):
             require(
                 lease is not None
@@ -66,4 +61,4 @@ class Claims:
         return {"released": target["id"]}
 
     def finish(self, target: str) -> None:
-        self.db.execute("UPDATE claims SET active=0 WHERE target=?", (target,))
+        self.db.set_claim_inactive(target)

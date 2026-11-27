@@ -33,7 +33,7 @@ _SUBSYSTEM_CRW_HINTS: dict[str, tuple[str, ...]] = {
     "representation": ("witness", "rollback", "boundary", "symlink", "atomic", "contract"),
     "material_retention": ("archive", "zip", "compression", "decompression", "retention", "lock"),
     "continuing_work": ("handoff", "recovery", "resume", "lock", "custody", "ownership"),
-    "signal_field": ("queue", "dispatch", "allowlist", "worker", "timeout", "sqlite"),
+    "signal_field": ("queue", "dispatch", "allowlist", "worker", "timeout", "journal"),
     "consolidation": ("etl", "ingestion", "drift", "idempotent", "coverage", "manifest"),
     "platform": ("windows", "posix", "symlink", "reparse", "filesystem", "lock", "portability"),
 }

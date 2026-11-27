@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Read canonical core or store-selected sources, or operate published source libraries.
-
-Explicit top-level --library requests dispatch directly to the published library
-reader without mutating sys.argv.
-"""
+"""Read canonical core or store-selected sources, or operate published source libraries."""
 
 import argparse
 import json
@@ -20,7 +16,7 @@ if __name__ == "__main__":
 from managed_ai_information import __version__
 from managed_ai_information.library.config import DEFAULT_LIBRARY_CONFIG
 
-_SUBCOMMANDS = frozenset(
+_SUBS = frozenset(
     {
         "verify",
         "show",
@@ -34,341 +30,265 @@ _SUBCOMMANDS = frozenset(
         "import",
     }
 )
-_DISCOVER_FLAGS = frozenset(
-    {
-        "--kind",
-        "--limit",
-        "--offset",
-        "--content",
-        "-h",
-        "--help",
-    }
-)
+_DFLAGS = frozenset({"--kind", "--limit", "--offset", "--content", "-h", "--help"})
 
 
 def _is_top_level_library_invocation(argv: list[str]) -> bool:
-    """Return True only when --library is given before the subcommand."""
-    idx = 0
-    while idx < len(argv):
-        arg = argv[idx]
-        if arg == "--":
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--":
             return False
-        if arg == "--library" or arg.startswith("--library="):
+        if a == "--library" or a.startswith("--library="):
             return True
-        if arg == "--store":
-            idx += 2
+        if a == "--store":
+            i += 2
             continue
-        if arg.startswith("--store="):
-            idx += 1
+        if a.startswith("--store="):
+            i += 1
             continue
-        if arg in _SUBCOMMANDS or not arg.startswith("-"):
+        if a in _SUBS or not a.startswith("-"):
             return False
-        idx += 1
+        i += 1
     return False
 
 
 def _normalize_query_arg(argv: list[str]) -> list[str]:
-    """Allow `discover --query --something` without argparse treating the query as a flag."""
     out = list(argv)
-    for idx, arg in enumerate(out):
-        if arg == "--query" and idx + 1 < len(out):
-            nxt = out[idx + 1]
+    for i, a in enumerate(out):
+        if a == "--query" and i + 1 < len(out):
+            n = out[i + 1]
             if (
-                nxt.startswith("-")
-                and nxt not in _DISCOVER_FLAGS
-                and not any(
-                    nxt.startswith(flag + "=") for flag in ("--kind", "--limit", "--offset")
-                )
+                n.startswith("-")
+                and n not in _DFLAGS
+                and not n.startswith(("--kind=", "--limit=", "--offset="))
             ):
-                out[idx] = "--query=" + nxt
-                del out[idx + 1]
+                out[i] = "--query=" + n
+                del out[i + 1]
                 break
     return out
 
 
 def _build_library_parser() -> argparse.ArgumentParser:
-    scfg = DEFAULT_LIBRARY_CONFIG.search
-    bcfg = DEFAULT_LIBRARY_CONFIG.batch
-
-    parser = argparse.ArgumentParser(
+    sc, bc = DEFAULT_LIBRARY_CONFIG.search, DEFAULT_LIBRARY_CONFIG.batch
+    p = argparse.ArgumentParser(
         description="Browse, verify and acquire published source libraries.", allow_abbrev=False
     )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    parser.add_argument("--library", action="append", type=Path)
-    sub = parser.add_subparsers(dest="action", required=True)
-
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    p.add_argument("--library", action="append", type=Path)
+    sub = p.add_subparsers(dest="action", required=True)
     sub.add_parser("verify", allow_abbrev=False)
     sub.add_parser("modules", allow_abbrev=False)
+    sh = sub.add_parser("show", allow_abbrev=False)
+    sh.add_argument("identity")
+    sh.add_argument("--text", action="store_true")
 
-    show = sub.add_parser("show", allow_abbrev=False)
-    show.add_argument("identity")
-    show.add_argument("--text", action="store_true")
+    def _lim(cmd: argparse.ArgumentParser, *, result: bool = True) -> None:
+        if result:
+            cmd.add_argument("--limit", type=int, default=sc.default_limit)
+        cmd.add_argument("--scan-limit", type=int, default=sc.default_scan_limit)
+        cmd.add_argument("--max-bytes", type=int, default=sc.default_max_bytes)
 
-    discover = sub.add_parser("discover", allow_abbrev=False)
-    discover.add_argument("--query", required=True)
-    discover.add_argument("--limit", type=int, default=scfg.default_limit)
-    discover.add_argument("--scan-limit", type=int, default=scfg.default_scan_limit)
-    discover.add_argument("--max-bytes", type=int, default=scfg.default_max_bytes)
-    discover.add_argument("--backend", choices=("bm25", "fts5", "literal"), default="bm25")
-    discover.add_argument(
+    d = sub.add_parser("discover", allow_abbrev=False)
+    d.add_argument("--query", required=True)
+    _lim(d)
+    d.add_argument("--backend", choices=("bm25", "fts5", "literal"), default="bm25")
+    d.add_argument(
         "--index",
         type=Path,
         help="Nominate from this prepared derivative; requires FTS5 and digest",
     )
-    discover.add_argument(
+    d.add_argument(
         "--index-sha256", help="Exact expected digest from the selected prepare-index receipt"
     )
-
-    batch = sub.add_parser(
+    b = sub.add_parser(
         "discover-batch",
         allow_abbrev=False,
         help="Share one verified prepared image across queries",
     )
-    batch.add_argument(
+    b.add_argument(
         "--queries", type=Path, required=True, help="UTF-8 JSON array of 1 to 32 query strings"
     )
-    batch.add_argument("--index", type=Path, required=True)
-    batch.add_argument("--index-sha256", required=True)
-    batch.add_argument("--limit", type=int, default=scfg.default_limit)
-    batch.add_argument("--scan-limit", type=int, default=scfg.default_scan_limit)
-    batch.add_argument("--max-bytes", type=int, default=scfg.default_max_bytes)
-    batch.add_argument("--max-result-bytes", type=int, default=bcfg.max_result_bytes)
-
-    prepare = sub.add_parser(
+    b.add_argument("--index", type=Path, required=True)
+    b.add_argument("--index-sha256", required=True)
+    _lim(b)
+    b.add_argument("--max-result-bytes", type=int, default=bc.max_result_bytes)
+    pr = sub.add_parser(
         "prepare-index", allow_abbrev=False, help="Verify sources and build immutable FTS5 index"
     )
-    prepare.add_argument("--output", type=Path, required=True)
-    prepare.add_argument("--scan-limit", type=int, default=scfg.default_scan_limit)
-    prepare.add_argument("--max-bytes", type=int, default=scfg.default_max_bytes)
-
-    ctx = sub.add_parser("context", allow_abbrev=False)
-    ctx.add_argument("--selection", type=Path, required=True)
-    ctx.add_argument("--max-bytes", type=int, default=scfg.default_max_bytes)
-
-    exp = sub.add_parser("export", allow_abbrev=False)
-    exp.add_argument("--selection", type=Path, required=True)
-    exp.add_argument("--edition", required=True)
-    exp.add_argument("--output", type=Path, required=True)
-
-    ins = sub.add_parser("inspect", allow_abbrev=False)
-    ins.add_argument("--bundle", type=Path, required=True)
-
-    imp = sub.add_parser("import", allow_abbrev=False)
-    imp.add_argument("--bundle", type=Path, required=True)
-    imp.add_argument("--store", type=Path, required=True)
-
-    return parser
+    pr.add_argument("--output", type=Path, required=True)
+    _lim(pr, result=False)
+    c = sub.add_parser("context", allow_abbrev=False)
+    c.add_argument("--selection", type=Path, required=True)
+    c.add_argument("--max-bytes", type=int, default=sc.default_max_bytes)
+    e = sub.add_parser("export", allow_abbrev=False)
+    e.add_argument("--selection", type=Path, required=True)
+    e.add_argument("--edition", required=True)
+    e.add_argument("--output", type=Path, required=True)
+    sub.add_parser("inspect", allow_abbrev=False).add_argument("--bundle", type=Path, required=True)
+    im = sub.add_parser("import", allow_abbrev=False)
+    im.add_argument("--bundle", type=Path, required=True)
+    im.add_argument("--store", type=Path, required=True)
+    return p
 
 
-def _dispatch_library_action(args: argparse.Namespace, libraries: list[Any]) -> Any:
+def _dispatch_library_action(a: argparse.Namespace, libs: list[Any]) -> Any:
     from managed_ai_information.library.bundle import context, export
     from managed_ai_information.library.format import decoded, need, read_bytes
 
-    if args.action == "verify":
-        return {"libraries": [lib.verify() for lib in libraries]}
-
-    if args.action == "modules":
+    if a.action == "verify":
+        return {"libraries": [lb.verify() for lb in libs]}
+    if a.action == "modules":
         return {
             "libraries": [
                 {
-                    "library_sha256": lib.sha256,
+                    "library_sha256": lb.sha256,
                     "modules": [
-                        {"pin": lib.pin(row, "module"), "entry": row}
-                        for row in lib.modules.values()
+                        {"pin": lb.pin(r, "module"), "entry": r} for r in lb.modules.values()
                     ],
                 }
-                for lib in libraries
+                for lb in libs
             ]
         }
-
-    if args.action == "show":
-        found = [lib for lib in libraries if args.identity in lib.bodies]
-        need(found, f"identity absent from the selected libraries: {args.identity}")
+    if a.action == "show":
+        found = [lb for lb in libs if a.identity in lb.bodies]
+        need(found, f"identity absent from the selected libraries: {a.identity}")
         need(
             len(found) == 1,
-            f"identity is present in several selected libraries: {args.identity}; "
+            f"identity is present in several selected libraries: {a.identity}; "
             "select one with --library",
         )
-        result = found[0].show(args.identity)
-        if args.text:
-            sys.stdout.write(result["text"])
+        res = found[0].show(a.identity)
+        if a.text:
+            sys.stdout.write(res["text"])
             return None
-        return result
-
-    if args.action == "prepare-index":
-        need(len(libraries) == 1, "prepare-index requires one selected library")
-        return libraries[0].prepare_index(args.output, args.scan_limit, args.max_bytes)
-
-    if args.action == "discover":
-        need(
-            args.index is None or len(libraries) == 1,
-            "prepared discovery requires one selected library",
-        )
+        return res
+    if a.action == "prepare-index":
+        need(len(libs) == 1, "prepare-index requires one selected library")
+        return libs[0].prepare_index(a.output, a.scan_limit, a.max_bytes)
+    if a.action == "discover":
+        need(a.index is None or len(libs) == 1, "prepared discovery requires one selected library")
         return {
             "libraries": [
-                lib.discover(
-                    args.query,
-                    args.limit,
-                    args.scan_limit,
-                    args.max_bytes,
-                    args.backend,
-                    args.index,
-                    args.index_sha256,
+                lb.discover(
+                    a.query, a.limit, a.scan_limit, a.max_bytes, a.backend, a.index, a.index_sha256
                 )
-                for lib in libraries
+                for lb in libs
             ]
         }
-
-    if args.action == "discover-batch":
-        need(len(libraries) == 1, "discover-batch requires one selected library")
-        queries = decoded(read_bytes(args.queries, DEFAULT_LIBRARY_CONFIG.batch.max_input_bytes))
-        return libraries[0].discover_batch(
-            queries,
-            index=args.index,
-            index_sha256=args.index_sha256,
-            limit=args.limit,
-            scan_limit=args.scan_limit,
-            max_bytes=args.max_bytes,
-            max_result_bytes=args.max_result_bytes,
+    if a.action == "discover-batch":
+        need(len(libs) == 1, "discover-batch requires one selected library")
+        qs = decoded(read_bytes(a.queries, DEFAULT_LIBRARY_CONFIG.batch.max_input_bytes))
+        return libs[0].discover_batch(
+            qs,
+            index=a.index,
+            index_sha256=a.index_sha256,
+            limit=a.limit,
+            scan_limit=a.scan_limit,
+            max_bytes=a.max_bytes,
+            max_result_bytes=a.max_result_bytes,
         )
-
-    selection = decoded(
-        read_bytes(args.selection, DEFAULT_LIBRARY_CONFIG.limits.max_manifest_bytes)
+    sel = decoded(read_bytes(a.selection, DEFAULT_LIBRARY_CONFIG.limits.max_manifest_bytes))
+    return (
+        context(libs, sel, a.max_bytes)
+        if a.action == "context"
+        else export(libs, sel, a.edition, a.output)
     )
-    if args.action == "context":
-        return context(libraries, selection, args.max_bytes)
-    return export(libraries, selection, args.edition, args.output)
 
 
 def run_library_cli(argv: list[str] | None = None) -> None:
     """CLI entrypoint for published source libraries."""
-    args = _build_library_parser().parse_args(argv)
     import zipfile
 
     from managed_ai_information.library.bundle import import_bundle, inspect_bundle
     from managed_ai_information.library.catalogue import Library
-    from managed_ai_information.library.lexical import SQLITE_ERRORS
 
-    libraries: list[Library] = []
-    cli_errors: tuple[type[BaseException], ...] = (
-        OSError,
-        ValueError,
-        KeyError,
-        UnicodeError,
-        RuntimeError,
-        zipfile.BadZipFile,
-        *SQLITE_ERRORS,
-    )
-
+    args = _build_library_parser().parse_args(argv)
+    libs: list[Library] = []
+    errs = (OSError, ValueError, KeyError, UnicodeError, RuntimeError, zipfile.BadZipFile)
     try:
         if args.action == "inspect":
-            result: Any = inspect_bundle(args.bundle)
+            res: Any = inspect_bundle(args.bundle)
         elif args.action == "import":
-            result = import_bundle(args.bundle, args.store, open_library=Library)
+            res = import_bundle(args.bundle, args.store, open_library=Library)
         else:
-            default_lib = Path(__file__).resolve().parent / "library"
-            libraries = [Library(path) for path in (args.library or [default_lib])]
-            result = _dispatch_library_action(args, libraries)
-            if result is None:
+            dlib = Path(__file__).resolve().parent / "library"
+            libs = [Library(p) for p in (args.library or [dlib])]
+            if (res := _dispatch_library_action(args, libs)) is None:
                 return
-
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-    except cli_errors as exc:
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+    except errs as exc:
         print(
             json.dumps({"status": "refused", "operation": args.action, "error": str(exc)}),
             file=sys.stderr,
         )
         raise SystemExit(2) from None
     finally:
-        for lib in libraries:
-            lib.close()
+        for lb in libs:
+            lb.close()
 
 
-def _execute_catalogue_action(catalogue: Any, args: argparse.Namespace) -> Any:
-    if args.action == "show":
-        result = catalogue.search(args.identity)
-        if args.text:
-            sys.stdout.write(result["body"])
+def _execute_catalogue_action(cat: Any, a: argparse.Namespace) -> Any:
+    if a.action == "show":
+        res = cat.search(a.identity)
+        if a.text:
+            sys.stdout.write(res["body"])
             return None
-        return result
-
-    if args.action == "discover":
-        return catalogue.search(
-            query=args.query,
-            kind=args.kind,
-            limit=args.limit,
-            offset=args.offset,
-            content=args.content,
+        return res
+    if a.action == "discover":
+        return cat.search(
+            query=a.query, kind=a.kind, limit=a.limit, offset=a.offset, content=a.content
         )
-
-    verified = []
-    sealed = []
-    for entry in catalogue.index()["entries"]:
-        if entry.get("availability") == "sealed":
-            sealed.append(entry["id"])
-            continue
-        raw = catalogue.body(entry)
-        verified.append({"id": entry["id"], "sha256": entry["sha256"], "bytes": len(raw)})
-
-    if getattr(args, "summary", False):
-        return {
-            "status": "verified",
-            "verified_count": len(verified),
-            "verified_bytes": sum(row["bytes"] for row in verified),
-            "sealed_count": len(sealed),
-            "sealed_without_body_read": sealed,
-            "scope": (
-                "Exact canonical byte custody; no participant acquisition or semantic acceptance "
-                "is "
-                "inferred."
-            ),
+    ver, sld = [], []
+    for e in cat.index()["entries"]:
+        if e.get("availability") == "sealed":
+            sld.append(e["id"])
+        else:
+            ver.append({"id": e["id"], "sha256": e["sha256"], "bytes": len(cat.body(e))})
+    scope = (
+        "Exact canonical byte custody; no participant acquisition or semantic acceptance is "
+        "inferred."
+    )
+    extra: dict[str, Any] = (
+        {
+            "verified_count": len(ver),
+            "verified_bytes": sum(r["bytes"] for r in ver),
+            "sealed_count": len(sld),
         }
-
-    return {
-        "status": "verified",
-        "sources": verified,
-        "sealed_without_body_read": sealed,
-        "scope": (
-            "Exact canonical byte custody; no participant acquisition or semantic acceptance is "
-            "inferred."
-        ),
-    }
+        if getattr(a, "summary", False)
+        else {"sources": ver}
+    )
+    return {"status": "verified", **extra, "sealed_without_body_read": sld, "scope": scope}
 
 
 def _build_store_catalogue_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    parser.add_argument("--store", type=Path)
-    sub = parser.add_subparsers(dest="action", required=True)
-
-    verify_cmd = sub.add_parser("verify", allow_abbrev=False)
-    verify_cmd.add_argument(
+    p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    p.add_argument("--store", type=Path)
+    sub = p.add_subparsers(dest="action", required=True)
+    sub.add_parser("verify", allow_abbrev=False).add_argument(
         "--summary",
         action="store_true",
         help="Return verified/sealed counts and byte totals instead of listing every source",
     )
-
-    show = sub.add_parser("show", allow_abbrev=False)
-    show.add_argument("identity")
-    show.add_argument("--text", action="store_true")
-
-    discover = sub.add_parser("discover", allow_abbrev=False)
-    discover.add_argument("--query", default="")
-    discover.add_argument("--kind")
-    discover.add_argument("--limit", type=int, default=25)
-    discover.add_argument("--offset", type=int, default=0)
-    discover.add_argument("--content", action="store_true")
-
-    return parser
+    sh = sub.add_parser("show", allow_abbrev=False)
+    sh.add_argument("identity")
+    sh.add_argument("--text", action="store_true")
+    d = sub.add_parser("discover", allow_abbrev=False)
+    d.add_argument("--query", default="")
+    d.add_argument("--kind")
+    d.add_argument("--limit", type=int, default=25)
+    d.add_argument("--offset", type=int, default=0)
+    d.add_argument("--content", action="store_true")
+    return p
 
 
 def main(argv: list[str] | None = None) -> None:
     """Unified managed-ai-library CLI entrypoint."""
-    raw_argv = list(sys.argv[1:] if argv is None else argv)
-    if _is_top_level_library_invocation(raw_argv):
-        run_library_cli(raw_argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if _is_top_level_library_invocation(raw):
+        run_library_cli(raw)
         return
-
     from managed_ai_information.core.ownership import NativeLayout, external_root
     from managed_ai_information.core.storage import (
         AdmissionContended,
@@ -378,34 +298,30 @@ def main(argv: list[str] | None = None) -> None:
     )
     from managed_ai_information.store.selection.installed_catalogue import InstalledCatalogue
 
-    args = _build_store_catalogue_parser().parse_args(_normalize_query_arg(raw_argv))
-    engine_root = Path(__file__).resolve().parent.parent
-
+    args = _build_store_catalogue_parser().parse_args(_normalize_query_arg(raw))
+    eroot = Path(__file__).resolve().parent.parent
     try:
         if args.store:
             from managed_ai_information.store.system import System
 
             root = external_root(args.store)
-            lock_path = external_root(NativeLayout(root).exchange) / "owner.lock"
+            lp = external_root(NativeLayout(root).exchange) / "owner.lock"
             try:
                 with owner_admission(
-                    lambda stack: stack.enter_context(shared(lock_path, allow_readonly_open=True)),
+                    lambda s: s.enter_context(shared(lp, allow_readonly_open=True)),
                     deadline=admission_deadline(),
                 ):
-                    catalogue = System(root).techniques
-                    result = _execute_catalogue_action(catalogue, args)
+                    res = _execute_catalogue_action(System(root).techniques, args)
             except AdmissionContended as exc:
                 print(json.dumps(exc.result(args.action)), file=sys.stderr)
                 raise SystemExit(75) from None
         else:
-            catalogue = InstalledCatalogue(engine_root / "store")
-            result = _execute_catalogue_action(catalogue, args)
+            res = _execute_catalogue_action(InstalledCatalogue(eroot / "store"), args)
     except (ValueError, OSError, KeyError, TypeError) as exc:
         print(json.dumps({"status": "unresolved", "error": str(exc)}), file=sys.stderr)
         raise SystemExit(2) from None
-
-    if result is not None:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+    if res is not None:
+        print(json.dumps(res, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

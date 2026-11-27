@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Optional host queue facade for supplied observing uses; no semantic observer or effect authority.
 
-One local SQLite owner. The capable host supplies use definitions, source observations,
+One local atomic JSON store owner. The capable host supplies use definitions, source observations,
 worker invocation and semantic acceptance. Public symbols are re-exported here so direct
 CLI execution, importlib loading, and external domain planner exec() stay compatible.
 """

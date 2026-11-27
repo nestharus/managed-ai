@@ -4,7 +4,6 @@
 import importlib.util
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -344,48 +343,31 @@ class SignalFieldQueueTests(unittest.TestCase):
             self.assertEqual(res["worker"]["stderr"], "u2 failed")
 
     def test_legacy_database_without_worker_outcome_column_migrates_cleanly(self):
-        legacy_db = self.root / "legacy.sqlite"
-        conn = sqlite3.connect(legacy_db)
-        conn.executescript("""
-        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE sources (
-            id TEXT PRIMARY KEY,
-            epoch TEXT NOT NULL,
-            position INTEGER NOT NULL,
-            value TEXT NOT NULL
-        );
-        CREATE TABLE uses (
-            id TEXT PRIMARY KEY,
-            spec TEXT NOT NULL,
-            signature TEXT NOT NULL,
-            generation INTEGER NOT NULL,
-            latest TEXT,
-            last_rejected TEXT
-        );
-        CREATE TABLE dependencies (
-            source TEXT NOT NULL,
-            use_id TEXT NOT NULL,
-            PRIMARY KEY (source, use_id)
-        );
-        CREATE TABLE jobs (
-            id TEXT PRIMARY KEY,
-            use_id TEXT NOT NULL,
-            generation INTEGER NOT NULL,
-            basis TEXT NOT NULL,
-            spec TEXT NOT NULL,
-            ticket INTEGER,
-            token TEXT,
-            gap TEXT,
-            attempt TEXT
-        );
-        CREATE TABLE selected_history (name TEXT PRIMARY KEY, snapshot TEXT NOT NULL);
-        INSERT INTO meta VALUES ('format', 'g60-signal-field/1');
-        INSERT INTO meta VALUES ('sequence', '0');
-        """)
-        conn.commit()
-        conn.close()
+        legacy_db = self.root / "legacy.json"
+        legacy_payload = {
+            "meta": {"format": "g60-signal-field/1", "sequence": "1"},
+            "sources": {},
+            "uses": {},
+            "dependencies": {},
+            "jobs": {
+                "use:legacy": {
+                    "id": "use:legacy",
+                    "use_id": "legacy",
+                    "generation": 1,
+                    "basis": "{}",
+                    "spec": json.dumps(sample_use("legacy")),
+                    "ticket": 1,
+                    "token": None,
+                    "gap": None,
+                    "attempt": None,
+                }
+            },
+            "selected_history": {},
+        }
+        legacy_db.write_text(json.dumps(legacy_payload), encoding="utf-8")
 
         with queue_mod.Field(legacy_db) as field:
+            self.assertIsNone(field.inspect(job_id="use:legacy")["worker_outcome"])
             field.enroll(sample_use("migrated"))
             res = field.run(
                 [sys.executable, "-c", "import sys; sys.stderr.write('boom'); sys.exit(2)"],
@@ -396,6 +378,12 @@ class SignalFieldQueueTests(unittest.TestCase):
             self.assertEqual(
                 field.inspect(job_id=res["in_flight_job"])["worker_outcome"]["stderr"], "boom"
             )
+
+        # Legacy binary SQLite file is rejected cleanly without importing sqlite3.
+        legacy_sql = self.root / "legacy_bin.sqlite"
+        legacy_sql.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+        with self.assertRaisesRegex(ValueError, "legacy SQLite"):
+            queue_mod.Field(legacy_sql)
 
     # --- W5-B3: NTFS junction / symlink ancestors, handle close on init error, pending stall,
     # bounded capture ---
@@ -456,12 +444,12 @@ class SignalFieldQueueTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "symlink or reparse point"):
             queue_mod.planning_snapshot(link_dir / "snap.sqlite", lambda: real_db.read_bytes())
 
-    def test_corrupt_database_closes_sqlite_handle_on_init_failure(self):
-        corrupt = self.root / "corrupt.sqlite"
-        corrupt.write_bytes(b"not a valid sqlite database header at all")
-        with self.assertRaises(sqlite3.DatabaseError):
+    def test_corrupt_database_closes_handle_on_init_failure(self):
+        corrupt = self.root / "corrupt.json"
+        corrupt.write_bytes(b"not a valid json database payload at all")
+        with self.assertRaises(ValueError):
             queue_mod.Field(corrupt)
-        # Immediately unlinking fails with WinError 32 on Windows if the SQLite connection leaked.
+        # Immediately unlinking fails with WinError 32 on Windows if a file handle leaked.
         corrupt.unlink()
         self.assertFalse(corrupt.exists())
 
@@ -550,6 +538,59 @@ class SignalFieldQueueTests(unittest.TestCase):
                 len(res_err["worker"]["stderr"].encode("utf-8")),
                 queue_mod.MAX_WORKER_STREAM_BYTES,
             )
+
+    def test_stat_ino_reload_detached_refresh_and_noop_suppression(self):
+        class _CountingBackend:
+            def __init__(self) -> None:
+                self.puts = 0
+
+            def put_record(self, *_args, **_kwargs) -> None:
+                self.puts += 1
+
+        backend = _CountingBackend()
+        db_path = self.root / "ino_noop.json"
+        with queue_mod.Field(db_path, backend=backend) as field:
+            use = sample_use("alpha")
+            self.assertTrue(field.enroll(use)["changed"])
+            self.assertEqual(backend.puts, 1)
+
+            # Detached refresh copy cannot mutate internal state
+            snap = field.db.refresh()
+            snap["uses"].clear()
+            self.assertIn("alpha", field.db.refresh()["uses"])
+
+            # Unchanged enroll and refused receive must not rewrite or mirror
+            before_stat = db_path.lstat()
+            self.assertFalse(field.enroll(use)["changed"])
+            self.assertEqual(backend.puts, 1)
+            self.assertEqual(db_path.lstat().st_ino, before_stat.st_ino)
+
+            bad = field.receive(
+                {"job": "use:missing", "token": "bad"},
+                {"state": "complete", "account": "nope"},
+            )
+            self.assertEqual(bad["status"], "refused")
+            self.assertEqual(backend.puts, 1)
+
+            # External atomic replacement with same size & mtime_ns reloads via st_ino
+            raw_before = db_path.read_bytes()
+            replaced_doc = json.loads(raw_before.decode("utf-8"))
+            replaced_doc["meta"]["sequence"] = "9"
+            raw_after = (
+                json.dumps(replaced_doc, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode("utf-8")
+            self.assertEqual(len(raw_after), len(raw_before))
+            tmp_swap = db_path.with_suffix(".swap")
+            tmp_swap.write_bytes(raw_after)
+            os.utime(tmp_swap, ns=(before_stat.st_atime_ns, before_stat.st_mtime_ns))
+            os.replace(tmp_swap, db_path)
+            self.assertEqual(field.db.refresh()["meta"]["sequence"], "9")
+
+        # CLI enforces bounded request size
+        big_req = self.root / "huge_req.json"
+        big_req.write_bytes(b" " * (2 * 1024 * 1024 + 16))
+        rc = queue_mod.main(["--db", str(db_path), "--request", str(big_req)])
+        self.assertEqual(rc, 2)
 
 
 if __name__ == "__main__":

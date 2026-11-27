@@ -23,6 +23,16 @@ class Revisions:
         self.db = db
         self.clock = clock
 
+    def _raw(self, ident: str, revision: int | None = None) -> str:
+        name(ident)
+        if revision is None:
+            raw = self.db.artifact_raw(ident)
+        else:
+            rev = integer(revision, "revision", 1)
+            raw = self.db.version_raw(ident, rev)
+        require(raw is not None, "missing-artifact", "Artifact or version is unavailable: " + ident)
+        return str(raw)
+
     def get(
         self,
         ident: str,
@@ -30,35 +40,10 @@ class Revisions:
         *,
         byte_limit: int | None = None,
     ) -> dict[str, Any]:
-        name(ident)
-        if revision is None:
-            if byte_limit is None:
-                row = self.db.execute(
-                    "SELECT record FROM artifacts WHERE id=?", (ident,)
-                ).fetchone()
-            else:
-                row = self.db.execute(
-                    "SELECT CASE WHEN length(CAST(record AS BLOB)) <= ? THEN record END FROM "
-                    "artifacts WHERE id=?",
-                    (byte_limit, ident),
-                ).fetchone()
-        else:
-            rev = integer(revision, "revision", 1)
-            if byte_limit is None:
-                row = self.db.execute(
-                    "SELECT record FROM versions WHERE id=? AND revision=?",
-                    (ident, rev),
-                ).fetchone()
-            else:
-                row = self.db.execute(
-                    "SELECT CASE WHEN length(CAST(record AS BLOB)) <= ? THEN record END "
-                    "FROM versions WHERE id=? AND revision=?",
-                    (byte_limit, ident, rev),
-                ).fetchone()
-
-        require(row is not None, "missing-artifact", "Artifact or version is unavailable: " + ident)
-        require(row[0] is not None, "context-bound", CONTEXT_DETAIL)
-        return loads_strict(row[0])
+        raw = self._raw(ident, revision)
+        if byte_limit is not None:
+            require(len(raw.encode("utf-8")) <= byte_limit, "context-bound", CONTEXT_DETAIL)
+        return loads_strict(raw)
 
     def source(
         self,
@@ -70,41 +55,14 @@ class Revisions:
         """Read a bounded content slice or just its pin without expanding a revision's audit
         trail.
         """
-        name(ident)
-        if revision is None:
-            if with_body:
-                row = self.db.execute(
-                    "SELECT json_extract(record,'$.revision'),json_extract(record,'$.sha256'),"
-                    "json_extract(record,'$.owner'),record -> '$.body' FROM artifacts WHERE id=?",
-                    (ident,),
-                ).fetchone()
-            else:
-                row = self.db.execute(
-                    "SELECT json_extract(record,'$.revision'),json_extract(record,'$.sha256') "
-                    "FROM artifacts WHERE id=?",
-                    (ident,),
-                ).fetchone()
-        else:
-            rev = integer(revision, "revision", 1)
-            if with_body:
-                row = self.db.execute(
-                    "SELECT json_extract(record,'$.revision'),json_extract(record,'$.sha256'),"
-                    "json_extract(record,'$.owner'),record -> '$.body' FROM versions WHERE id=? "
-                    "AND "
-                    "revision=?",
-                    (ident, rev),
-                ).fetchone()
-            else:
-                row = self.db.execute(
-                    "SELECT json_extract(record,'$.revision'),json_extract(record,'$.sha256') "
-                    "FROM versions WHERE id=? AND revision=?",
-                    (ident, rev),
-                ).fetchone()
-
-        require(row is not None, "missing-artifact", "Artifact or version is unavailable: " + ident)
-        value: dict[str, Any] = {"id": ident, "revision": row[0], "sha256": row[1]}
+        record = loads_strict(self._raw(ident, revision))
+        value: dict[str, Any] = {
+            "id": ident,
+            "revision": record["revision"],
+            "sha256": record["sha256"],
+        }
         if with_body:
-            value.update(owner=row[2], body=loads_strict(row[3]))
+            value.update(owner=record["owner"], body=record["body"])
         return value
 
     def verify(
@@ -147,14 +105,7 @@ class Revisions:
 
     def save(self, record: dict[str, Any]) -> None:
         raw = encoded(record)
-        self.db.execute(
-            "INSERT INTO artifacts(id,record) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET "
-            "record=excluded.record",
-            (record["id"], raw),
-        )
-        self.db.execute(
-            "INSERT INTO versions VALUES (?,?,?)", (record["id"], record["revision"], raw)
-        )
+        self.db.save_artifact(record["id"], record["revision"], raw)
 
     def successor(
         self,
@@ -177,14 +128,14 @@ class Revisions:
         }
 
     def find(self, ident: str) -> dict[str, Any] | None:
-        row = self.db.execute("SELECT record FROM artifacts WHERE id=?", (ident,)).fetchone()
-        return loads_strict(row[0]) if row else None
+        raw = self.db.artifact_raw(ident)
+        return loads_strict(raw) if raw is not None else None
 
     def first(self, r: dict[str, Any]) -> dict[str, Any]:
         fields(r, {"actor", "command", "op", "id", "body", "reconsider_from"})
         ident = name(r.get("id"))
         require(
-            self.db.execute("SELECT 1 FROM artifacts WHERE id=?", (ident,)).fetchone() is None,
+            self.db.artifact_raw(ident) is None,
             "already-exists",
             "Artifact identity already exists",
         )

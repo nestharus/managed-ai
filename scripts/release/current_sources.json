@@ -49,8 +49,8 @@
       "link_base": "../../docs/collective/README.md",
       "presentation": "../../docs/collective/README.md",
       "kind": "guide",
-      "sha256": "37ea291be9b6b92873cce3265686d32a3211188e6cc3aaafda6c34cd9ff70e9b",
-      "bytes": 34245,
+      "sha256": "b3c88377c229b0bbdb64ac65aa827f324ef4c081eadf4a1dc862fe933ecea7f0",
+      "bytes": 32525,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -59,8 +59,8 @@
       "link_base": "../../docs/engine/library/README.md",
       "presentation": "../../docs/engine/library/README.md",
       "kind": "guide",
-      "sha256": "5397425a1a63d0ee395766e534176deb80dd4e45165176528d5dc422bcfcf9a0",
-      "bytes": 9053,
+      "sha256": "e5200a76ff317b485101d1a5d2a7655a814f1800204bfbf3a9965dae3284d351",
+      "bytes": 9151,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -69,8 +69,8 @@
       "link_base": "../../docs/engine/library/CONTRACT.md",
       "presentation": "../../docs/engine/library/CONTRACT.md",
       "kind": "guide",
-      "sha256": "87dfddc50f8a824cd14a944578c8c326492b1b761340e50722ffeda68b5bc0b6",
-      "bytes": 24186,
+      "sha256": "9c3472ca4d6aaeb8855710a4b68be357076f5aaefd25031e72bd8abef602c156",
+      "bytes": 24255,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     },
     {
@@ -279,8 +279,8 @@
       "link_base": "../../docs/engine/host/SIGNAL-FIELD.md",
       "presentation": "../../docs/engine/host/SIGNAL-FIELD.md",
       "kind": "guide",
-      "sha256": "92298ff15af40ad9babc6a33e01649b6ac1aada01005bce288273a14b2ea08ad",
-      "bytes": 17524,
+      "sha256": "8d3a543b3c89f7ecb9c6277a32b0c84354f60fd5a68dc10866ef4caaf110ed1a",
+      "bytes": 17488,
       "provenance": "Canonical maintained operating source; one body shared by direct reading and native catalogue acquisition."
     }
   ]

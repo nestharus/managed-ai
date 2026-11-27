@@ -30,7 +30,7 @@ class ImpactReviews:
         self.revisions.verify(context["basis"], current=True, keep_bodies=False)
 
         no = integer(r.get("notice"), "notice", 1)
-        row = self.db.execute("SELECT * FROM notices WHERE id=?", (no,)).fetchone()
+        row = self.db.get_notice(no)
         require(
             row is not None and row["receiver"] == r["actor"],
             "wrong-recipient",
@@ -69,48 +69,47 @@ class ImpactReviews:
             "disposition": r["disposition"],
             "account": r["account"],
         }
-        self.db.execute(
-            "INSERT INTO impact_reviews VALUES (?,?,?) ON CONFLICT(proposal,notice) "
-            "DO UPDATE SET judgment=excluded.judgment",
-            (proposal["id"], no, encoded(judgment)),
-        )
+        self.db.put_review(proposal["id"], no, encoded(judgment))
         return {"review": judgment, "state": "pending"}
 
-    def changed(self, proposal: str, *, installed_target: str | None = None) -> Any:
-        return self.db.execute(
-            """
-            SELECT r.notice FROM impact_reviews AS r, json_each(r.judgment, '$.basis') AS p
-            WHERE r.proposal=? AND json_extract(p.value,'$.id') IS NOT ? AND EXISTS (
-                SELECT 1 FROM versions AS v WHERE v.id=json_extract(p.value,'$.id')
-                    AND v.revision>json_extract(p.value,'$.revision'))
-            ORDER BY r.notice LIMIT 1""",
-            (proposal, installed_target),
-        ).fetchone()
+    def changed(self, proposal: str, *, installed_target: str | None = None) -> int | None:
+        for notice_id, raw_judgment in sorted(self.db.reviews_for_proposal(proposal).items()):
+            judgment = loads_strict(raw_judgment)
+            for item in judgment.get("basis", ()):
+                src_id = item["id"]
+                if (
+                    src_id != installed_target
+                    and self.db.max_version_revision(src_id) > item["revision"]
+                ):
+                    return notice_id
+        return None
 
-    def missing(self, target: dict[str, Any], proposal: str, direct: Any) -> Any:
-        return self.db.execute(
-            """
-            SELECT n.id FROM notices AS n
-            WHERE n.target=? AND n.receiver=? AND n.required=1 AND n.state='pending'
-                AND n.id NOT IN (SELECT value FROM json_each(?))
-                AND NOT EXISTS (
-                    SELECT 1 FROM impact_reviews AS r WHERE r.proposal=? AND r.notice=n.id
-                )
-            ORDER BY n.id LIMIT 1""",
-            (target["id"], target["owner"], encoded(list(direct)), proposal),
-        ).fetchone()
+    def missing(self, target: dict[str, Any], proposal: str, direct: Any) -> int | None:
+        direct_set = set(direct)
+        reviewed = set(self.db.reviews_for_proposal(proposal))
+        for row in self.db.data["notices"]:
+            if (
+                row["target"] == target["id"]
+                and row["receiver"] == target["owner"]
+                and row["required"] == 1
+                and row["state"] == "pending"
+                and row["id"] not in direct_set
+                and row["id"] not in reviewed
+            ):
+                return int(row["id"])
+        return None
 
     def next(self, ident: str) -> dict[str, Any]:
         """Find one missing or changed judgment for this exact proposal."""
         proposal, context, target = self.proposals.current(ident)
         self.revisions.verify(context["basis"], current=True, keep_bodies=False)
-        row = self.missing(target, proposal["id"], [])
-        if row:
-            return {"notice": row[0], "reason": "unreviewed"}
-        row = self.changed(proposal["id"])
+        missing_id = self.missing(target, proposal["id"], [])
+        if missing_id is not None:
+            return {"notice": missing_id, "reason": "unreviewed"}
+        changed_id = self.changed(proposal["id"])
         return (
-            {"notice": row[0], "reason": "changed-source"}
-            if row
+            {"notice": changed_id, "reason": "changed-source"}
+            if changed_id is not None
             else {"notice": None, "reason": None}
         )
 
@@ -140,26 +139,29 @@ class ImpactReviews:
             self.validate_disposition(item)
             treated[no] = item
 
-        missing = self.missing(target, proposal["id"], treated)
+        missing_id = self.missing(target, proposal["id"], treated)
         require(
-            not missing,
+            missing_id is None,
             "reconsideration-required",
             "A required impact lacks a judgment for this proposal",
         )
-        require(not self.changed(proposal["id"]), "basis-changed", "A staged review source changed")
+        require(
+            self.changed(proposal["id"]) is None,
+            "basis-changed",
+            "A staged review source changed",
+        )
 
         for no in treated:
             require(
-                not self.db.execute(
-                    "SELECT 1 FROM impact_reviews WHERE proposal=? AND notice=?",
-                    (proposal["id"], no),
-                ).fetchone(),
+                self.db.get_review(proposal["id"], no) is None,
                 "duplicate-treatment",
                 "This notice already has a staged judgment for this proposal",
             )
-            actual = self.db.execute("SELECT * FROM notices WHERE id=?", (no,)).fetchone()
+            actual = self.db.get_notice(no)
             require(
-                actual["receiver"] == target["owner"] and actual["receipt"] is None,
+                actual is not None
+                and actual["receiver"] == target["owner"]
+                and actual["receipt"] is None,
                 "notice-changed",
                 "Notice was already treated or is addressed elsewhere",
             )
@@ -169,10 +171,7 @@ class ImpactReviews:
                 "An offered impact must be treated at its nominated receiving target",
             )
 
-        staged = self.db.execute(
-            "SELECT count(*) FROM impact_reviews WHERE proposal=?",
-            (proposal["id"],),
-        ).fetchone()[0]
+        staged = len(self.db.reviews_for_proposal(proposal["id"]))
         return treated, staged
 
     def settle(
@@ -184,35 +183,38 @@ class ImpactReviews:
         treated: dict[int, dict[str, Any]],
         staged: int,
     ) -> None:
+        artifact_pin = pin(record)
         for no, item in treated.items():
             receipt = {
                 "actor": target["owner"],
                 "disposition": item["disposition"],
                 "account": item["account"],
-                "artifact": pin(record),
+                "artifact": artifact_pin,
                 "context": context["id"],
             }
-            self.db.execute(
-                "UPDATE notices SET state=?,receipt=? WHERE id=?",
-                ("received", encoded(receipt), no),
-            )
+            row = self.db.get_notice(no)
+            if row is not None:
+                row["state"] = "received"
+                row["receipt"] = encoded(receipt)
 
         if staged:
-            updated = self.db.execute(
-                """UPDATE notices SET state='received',
-                    receipt=json_set(r.judgment,'$.artifact',json(?),'$.context',?)
-                    FROM impact_reviews AS r WHERE r.proposal=? AND notices.id=r.notice
-                    AND notices.state='pending' AND notices.target=? AND notices.receiver=?""",
-                (
-                    encoded(pin(record)),
-                    context["id"],
-                    proposal["id"],
-                    target["id"],
-                    target["owner"],
-                ),
-            )
+            updated = 0
+            for notice_id, raw_judgment in self.db.reviews_for_proposal(proposal["id"]).items():
+                row = self.db.get_notice(notice_id)
+                if (
+                    row is not None
+                    and row["state"] == "pending"
+                    and row["target"] == target["id"]
+                    and row["receiver"] == target["owner"]
+                ):
+                    judgment = loads_strict(raw_judgment)
+                    judgment["artifact"] = artifact_pin
+                    judgment["context"] = context["id"]
+                    row["state"] = "received"
+                    row["receipt"] = encoded(judgment)
+                    updated += 1
             require(
-                updated.rowcount == staged,
+                updated == staged,
                 "notice-changed",
                 "Reviewed duties changed before publication",
             )

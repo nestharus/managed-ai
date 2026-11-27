@@ -37,19 +37,11 @@ class NoticeBoard:
         self.clock = clock
 
     def emit(self, kind: str, subject: str, actor: str, payload: Any) -> int:
-        seq = self.db.execute(
-            "INSERT INTO events(kind,subject,actor,body) VALUES (?,?,?,?)",
-            (kind, subject, actor, encoded(payload)),
-        ).lastrowid
-        return seq
+        return int(self.db.emit_event(kind, subject, actor, encoded(payload)))
 
     def accepted_revision(self, record: dict[str, Any], actor: str) -> int:
         seq = self.emit("accepted-artifact", record["id"], actor, {"artifact": pin(record)})
-        watches = self.db.execute(
-            "SELECT actor,reason FROM watches WHERE subject=?",
-            (record["id"],),
-        ).fetchall()
-        for watch in watches:
+        for watch in self.db.watches_for_subject(record["id"]):
             payload = {
                 "event": seq,
                 "artifact": pin(record),
@@ -58,10 +50,13 @@ class NoticeBoard:
                     "A declared followed artifact changed; applicability needs interpretation."
                 ),
             }
-            self.db.execute(
-                "INSERT INTO notices(receiver,target,kind,required,body,state) VALUES "
-                "(?,?,?,?,?,?)",
-                (watch["actor"], record["id"], "source-change", 0, encoded(payload), "pending"),
+            self.db.add_notice(
+                watch["actor"],
+                record["id"],
+                "source-change",
+                0,
+                encoded(payload),
+                "pending",
             )
         return seq
 
@@ -82,17 +77,14 @@ class NoticeBoard:
             "target_at_offer": pin(target),
             "policy_at_offer": target["reconsider_from"],
         }
-        notice = self.db.execute(
-            "INSERT INTO notices(receiver,target,kind,required,body,state) VALUES (?,?,?,?,?,?)",
-            (
-                target["owner"],
-                target["id"],
-                "proposed-impact",
-                int(required),
-                encoded(payload),
-                "pending",
-            ),
-        ).lastrowid
+        notice = self.db.add_notice(
+            target["owner"],
+            target["id"],
+            "proposed-impact",
+            int(required),
+            encoded(payload),
+            "pending",
+        )
         seq = self.emit(
             "offered-impact", target["id"], r["actor"], {"notice": notice, "required": required}
         )
@@ -110,13 +102,9 @@ class NoticeBoard:
         fields(r, {"actor", "command", "op", "subject", "reason"})
         subject = name(r.get("subject"))
         reason = account(r.get("reason"))
-        self.db.execute(
-            "INSERT INTO watches VALUES (?,?,?) ON CONFLICT(actor,subject) DO UPDATE SET "
-            "reason=excluded.reason",
-            (r["actor"], subject, reason),
-        )
+        self.db.put_watch(r["actor"], subject, reason)
         snapshot = self.revisions.find(subject)
-        cursor = self.db.execute("SELECT COALESCE(MAX(seq),0) FROM events").fetchone()[0]
+        cursor = self.db.max_event_seq()
         return {
             "subject": subject,
             "snapshot": snapshot,
@@ -149,7 +137,7 @@ class NoticeBoard:
         fields(r, {"actor", "command", "op", "notice", "account"})
         no = integer(r.get("notice"), "notice", 1)
         why = account(r.get("account"))
-        row = self.db.execute("SELECT * FROM notices WHERE id=?", (no,)).fetchone()
+        row = self.db.get_notice(no)
         require(
             row is not None and row["receiver"] == r["actor"],
             "wrong-recipient",
@@ -169,17 +157,12 @@ class NoticeBoard:
             "scope": "Acknowledged delivery; no semantic uptake or target acceptance inferred.",
         }
         state = "pending" if row["required"] else "received"
-        self.db.execute(
-            "UPDATE notices SET state=?,acknowledgment=? WHERE id=?",
-            (state, encoded(acknowledgment), no),
-        )
+        row["state"] = state
+        row["acknowledgment"] = encoded(acknowledgment)
         return {"notice": no, "state": state, "acknowledgment": acknowledgment}
 
     def notice(self, ident: int) -> dict[str, Any]:
-        row = self.db.execute(
-            "SELECT * FROM notices WHERE id=?",
-            (integer(ident, "notice", 1),),
-        ).fetchone()
+        row = self.db.get_notice(integer(ident, "notice", 1))
         require(row is not None, "missing-notice", "Notice is unavailable")
         return decode_notice(row)
 
@@ -194,25 +177,20 @@ class NoticeBoard:
         cursor = after
         examined = 0
         items: list[dict[str, Any]] = []
-        rows = self.db.execute(
-            "SELECT seq, actor, CASE WHEN kind='open-encounter' THEN body END AS account "
-            "FROM events WHERE seq>? ORDER BY seq LIMIT ?",
-            (after, scan_limit),
-        )
-        for row in rows:
-            cursor = row["seq"]
+        for row in self.db.data["events"]:
+            seq = int(row["seq"])
+            if seq <= after:
+                continue
+            cursor = seq
             examined += 1
-            if row["account"] is not None:
-                items.append(
-                    {"event": cursor, "actor": row["actor"], **loads_strict(row["account"])}
-                )
+            if row["kind"] == "open-encounter":
+                items.append({"event": cursor, "actor": row["actor"], **loads_strict(row["body"])})
                 if len(items) == limit:
                     break
+            if examined >= scan_limit:
+                break
 
-        more = (
-            self.db.execute("SELECT 1 FROM events WHERE seq>? LIMIT 1", (cursor,)).fetchone()
-            is not None
-        )
+        more = any(int(ev["seq"]) > cursor for ev in self.db.data["events"])
         return {
             "items": items,
             "after": after,
@@ -233,25 +211,20 @@ class NoticeBoard:
 
         if kind == "inbox":
             name(actor, "actor")
-            total = self.db.execute(
-                "SELECT COUNT(*) FROM notices WHERE receiver=? AND state=? AND id>?",
-                (actor, "pending", after),
-            ).fetchone()[0]
-            rows = self.db.execute(
-                "SELECT * FROM notices WHERE receiver=? AND state=? AND id>? ORDER BY id LIMIT ?",
-                (actor, "pending", after, limit),
-            ).fetchall()
-            values = [decode_notice(row) for row in rows]
+            matching = [
+                row
+                for row in self.db.data["notices"]
+                if row["receiver"] == actor and row["state"] == "pending" and int(row["id"]) > after
+            ]
+            total = len(matching)
+            values = [decode_notice(row) for row in matching[:limit]]
             key = "id"
         elif kind == "changes":
-            total = self.db.execute("SELECT COUNT(*) FROM events WHERE seq>?", (after,)).fetchone()[
-                0
+            matching_events = [row for row in self.db.data["events"] if int(row["seq"]) > after]
+            total = len(matching_events)
+            values = [
+                {**dict(row), "body": loads_strict(row["body"])} for row in matching_events[:limit]
             ]
-            rows = self.db.execute(
-                "SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT ?",
-                (after, limit),
-            ).fetchall()
-            values = [{**dict(row), "body": loads_strict(row["body"])} for row in rows]
             key = "seq"
         else:
             raise ValueError("Unknown view")
@@ -284,21 +257,21 @@ class NoticeBoard:
         nominated: list[int],
         staged: bool,
     ) -> list[dict[str, Any]]:
-        required = (
-            []
-            if staged
-            else self.db.execute(
-                "SELECT * FROM notices WHERE receiver=? AND target=? AND required=1 AND "
-                "state='pending' LIMIT 129",
-                (actor, target),
-            ).fetchall()
-        )
-        selected = {row["id"]: decode_notice(row) for row in required}
+        required_rows: list[dict[str, Any]] = []
+        if not staged:
+            for row in self.db.data["notices"]:
+                if (
+                    row["receiver"] == actor
+                    and row["target"] == target
+                    and row["required"] == 1
+                    and row["state"] == "pending"
+                ):
+                    required_rows.append(row)
+                    if len(required_rows) >= 129:
+                        break
+        selected = {int(row["id"]): decode_notice(row) for row in required_rows}
         for no in nominated:
-            row = self.db.execute(
-                "SELECT * FROM notices WHERE id=?",
-                (integer(no, "notice", 1),),
-            ).fetchone()
+            row = self.db.get_notice(integer(no, "notice", 1))
             require(
                 row is not None and row["receiver"] == actor,
                 "wrong-recipient",
@@ -315,11 +288,10 @@ class NoticeBoard:
         return list(selected.values())
 
     def has_pending_required(self, target: dict[str, Any]) -> bool:
-        return (
-            self.db.execute(
-                "SELECT 1 FROM notices WHERE target=? AND receiver=? AND required=1 AND "
-                "state='pending' LIMIT 1",
-                (target["id"], target["owner"]),
-            ).fetchone()
-            is not None
+        return any(
+            row["target"] == target["id"]
+            and row["receiver"] == target["owner"]
+            and row["required"] == 1
+            and row["state"] == "pending"
+            for row in self.db.data["notices"]
         )

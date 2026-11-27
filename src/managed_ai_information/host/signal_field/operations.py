@@ -1,6 +1,5 @@
 """Signal-field queue service operations: enrollment, change fan-out, scheduling, and inspection."""
 
-import sqlite3
 import uuid
 from collections.abc import Generator, Iterable
 from contextlib import contextmanager
@@ -23,14 +22,12 @@ from .inspection import (
     run_worker_loop,
 )
 from .models import job_view, oversized_job_summary
-from .storage import open_signal_database, validate_db_path
+from .storage import SignalFieldStore, open_signal_database, validate_db_path
 from .worker import run_worker_bounded
-
-_SQL_IN_CHUNK = 400
 
 
 class Field:
-    """One local SQLite owner for recoverable observing-use eligibility and bounded service."""
+    """One local atomic JSON store owner for recoverable observing-use eligibility."""
 
     def __init__(
         self,
@@ -38,10 +35,14 @@ class Field:
         *,
         product: Path | None = None,
         config: SignalFieldConfig = DEFAULT_CONFIG,
+        backend: Any | None = None,
+        namespace: str = "signal-field",
     ) -> None:
         self.config = config
         self.path = validate_db_path(path, product=product)
-        self.db = open_signal_database(self.path, config)
+        self.db: SignalFieldStore = open_signal_database(self.path, config)
+        self._backend = backend
+        self._namespace = namespace
         self.sql_calls = 0
         self.rows_returned = 0
 
@@ -55,54 +56,44 @@ class Field:
         self.close()
 
     @contextmanager
-    def mutation(self) -> Generator[None]:
-        self.execute("BEGIN IMMEDIATE")
-        try:
-            yield
-            self.db.commit()
-        except BaseException:
-            self.db.rollback()
-            raise
-
-    def execute(self, query: str, values: tuple[Any, ...] = ()) -> sqlite3.Cursor:
+    def mutation(self) -> Generator[dict[str, Any]]:
         self.sql_calls += 1
-        return self.db.execute(query, values)
+        with self.db.transaction() as state:
+            yield state
+        committed = self.db.last_committed_bytes
+        if self._backend is not None and committed is not None:
+            self._backend.put_record(
+                self._namespace,
+                f"signal-field/{self.path.name}",
+                committed,
+                expected_version=None,
+                visibility="MetadataOnly",
+                metadata={"kind": "signal-field", "title": self.path.name},
+            )
 
-    def one(self, query: str, values: tuple[Any, ...] = ()) -> Any:
-        row = self.execute(query, values).fetchone()
-        self.rows_returned += int(row is not None)
-        return row
+    def _read_state(self) -> dict[str, Any]:
+        self.sql_calls += 1
+        return self.db.refresh()
 
-    def all(self, query: str, values: tuple[Any, ...] = ()) -> list[Any]:
-        rows = self.execute(query, values).fetchall()
-        self.rows_returned += len(rows)
-        return rows
-
-    def ticket(self) -> int:
-        next_val = int(self.one("SELECT value FROM meta WHERE key=?", ("sequence",))["value"]) + 1
-        self.execute("UPDATE meta SET value=? WHERE key=?", (str(next_val), "sequence"))
+    def _next_ticket(self, state: dict[str, Any]) -> int:
+        next_val = int(state["meta"]["sequence"]) + 1
+        state["meta"]["sequence"] = str(next_val)
         return next_val
 
-    def _sources_map(self, names: Iterable[str]) -> dict[str, dict[str, Any]]:
-        unique = sorted(set(names))
-        if not unique:
-            return {}
-
+    def _sources_map_from_state(
+        self, state: dict[str, Any], names: Iterable[str]
+    ) -> dict[str, dict[str, Any]]:
         loaded: dict[str, dict[str, Any]] = {}
-        for offset in range(0, len(unique), _SQL_IN_CHUNK):
-            chunk = unique[offset : offset + _SQL_IN_CHUNK]
-            rows = self.all(
-                "SELECT id, epoch, position, value FROM sources WHERE id IN (SELECT value FROM "
-                "json_each(?))",
-                (encoded(chunk),),
-            )
-            for row in rows:
-                loaded[row["id"]] = {
+        sources = state["sources"]
+        for src in sorted(set(names)):
+            row = sources.get(src)
+            if row is not None:
+                self.rows_returned += 1
+                loaded[src] = {
                     "epoch": row["epoch"],
                     "position": row["position"],
                     "value": loads_strict(row["value"]),
                 }
-
         return loaded
 
     def _basis_from_map(
@@ -113,28 +104,13 @@ class Field:
         return {name: source_map.get(name) for name in spec["sources"]}
 
     def basis(self, spec: dict[str, Any]) -> dict[str, dict[str, Any] | None]:
-        return self._basis_from_map(spec, self._sources_map(spec["sources"]))
+        state = self._read_state()
+        return self._basis_from_map(spec, self._sources_map_from_state(state, spec["sources"]))
 
-    def _existing_tickets(self, job_ids: Iterable[str]) -> dict[str, int | None]:
-        unique = sorted(set(job_ids))
-        if not unique:
-            return {}
-
-        tickets: dict[str, int | None] = {}
-        for offset in range(0, len(unique), _SQL_IN_CHUNK):
-            chunk = unique[offset : offset + _SQL_IN_CHUNK]
-            rows = self.all(
-                "SELECT id, ticket FROM jobs WHERE id IN (SELECT value FROM json_each(?))",
-                (encoded(chunk),),
-            )
-            for row in rows:
-                tickets[row["id"]] = row["ticket"]
-
-        return tickets
-
-    def queue(
+    def _queue_in_state(
         self,
-        use: Any,
+        state: dict[str, Any],
+        use: dict[str, Any],
         basis: dict[str, Any],
         *,
         occurrence: Any = None,
@@ -145,29 +121,36 @@ class Field:
         key = (
             ("occurrence:" + digest([use["id"], occurrence])) if occurrence else "use:" + use["id"]
         )
+        old = state["jobs"].get(key)
         if ticket_known:
-            ticket = existing_ticket if existing_ticket is not None else self.ticket()
+            ticket = existing_ticket if existing_ticket is not None else self._next_ticket(state)
         else:
-            old = self.one("SELECT ticket FROM jobs WHERE id=?", (key,))
-            ticket = old["ticket"] if old and old["ticket"] is not None else self.ticket()
-
-        self.execute(
-            """INSERT INTO jobs (
-                id, use_id, generation, basis, spec, ticket, token, gap, attempt, worker_outcome
+            ticket = (
+                old["ticket"]
+                if old is not None and old["ticket"] is not None
+                else self._next_ticket(state)
             )
-            VALUES (?,?,?,?,?,?,NULL,?,NULL,NULL)
-            ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,
-            basis=excluded.basis, spec=excluded.spec, ticket=excluded.ticket, gap=excluded.gap""",
-            (
-                key,
-                use["id"],
-                use["generation"],
-                encoded(basis),
-                use["spec"],
-                ticket,
-                encoded(gap) if gap else None,
-            ),
-        )
+
+        encoded_gap = encoded(gap) if gap else None
+        if old is None:
+            state["jobs"][key] = {
+                "id": key,
+                "use_id": use["id"],
+                "generation": use["generation"],
+                "basis": encoded(basis),
+                "spec": use["spec"],
+                "ticket": ticket,
+                "token": None,
+                "gap": encoded_gap,
+                "attempt": None,
+                "worker_outcome": None,
+            }
+        else:
+            old["generation"] = use["generation"]
+            old["basis"] = encoded(basis)
+            old["spec"] = use["spec"]
+            old["ticket"] = ticket
+            old["gap"] = encoded_gap
         return key
 
     def enroll(self, spec: dict[str, Any]) -> dict[str, Any]:
@@ -192,8 +175,8 @@ class Field:
         )
 
         signature = digest(spec)
-        with self.mutation():
-            old = self.one("SELECT * FROM uses WHERE id=?", (spec["id"],))
+        with self.mutation() as state:
+            old = state["uses"].get(spec["id"])
             require(
                 not old or loads_strict(old["spec"])["mode"] == spec["mode"],
                 "a different receiving lifetime requires a distinct use identity",
@@ -201,20 +184,42 @@ class Field:
             if old and old["signature"] == signature:
                 return {"enrolled": spec["id"], "changed": False}
 
-            generation = old["generation"] + 1 if old else 1
-            self.execute(
-                """INSERT INTO uses VALUES (?,?,?,?,NULL,NULL)
-                ON CONFLICT(id) DO UPDATE SET spec=excluded.spec, signature=excluded.signature,
-                generation=excluded.generation""",
-                (spec["id"], encoded(spec), signature, generation),
-            )
-            self.execute("DELETE FROM dependencies WHERE use_id=?", (spec["id"],))
-            for source in spec["sources"]:
-                self.execute("INSERT INTO dependencies VALUES (?,?)", (source, spec["id"]))
+            generation = int(old["generation"]) + 1 if old else 1
+            if old is None:
+                use_row: dict[str, Any] = {
+                    "id": spec["id"],
+                    "spec": encoded(spec),
+                    "signature": signature,
+                    "generation": generation,
+                    "latest": None,
+                    "last_rejected": None,
+                }
+                state["uses"][spec["id"]] = use_row
+            else:
+                old["spec"] = encoded(spec)
+                old["signature"] = signature
+                old["generation"] = generation
+                use_row = old
 
-            use = self.one("SELECT * FROM uses WHERE id=?", (spec["id"],))
+            # Remove stale dependency edges for this use_id.
+            for src_key in list(state["dependencies"]):
+                bucket = state["dependencies"][src_key]
+                if spec["id"] in bucket:
+                    bucket = [uid for uid in bucket if uid != spec["id"]]
+                    if bucket:
+                        state["dependencies"][src_key] = bucket
+                    else:
+                        del state["dependencies"][src_key]
+
+            for source in spec["sources"]:
+                deps = state["dependencies"].setdefault(source, [])
+                if spec["id"] not in deps:
+                    deps.append(spec["id"])
+                    deps.sort()
+
             if spec["mode"] != "each-change":
-                self.queue(use, self.basis(spec))
+                src_map = self._sources_map_from_state(state, spec["sources"])
+                self._queue_in_state(state, use_row, self._basis_from_map(spec, src_map))
 
         return {"enrolled": spec["id"], "changed": True, "generation": generation}
 
@@ -235,8 +240,8 @@ class Field:
         require(type(position) is int and position >= 0, "position must be a nonnegative integer")
         require(type(notify) is bool and type(reset) is bool, "notify and reset must be booleans")
 
-        with self.mutation():
-            old = self.one("SELECT * FROM sources WHERE id=?", (source,))
+        with self.mutation() as state:
+            old = state["sources"].get(source)
             require(
                 not old or old["epoch"] == epoch or reset,
                 "stream epoch changed; explicit source reset required",
@@ -252,17 +257,17 @@ class Field:
                     "reason": "already observed stream position",
                 }
 
-            self.execute(
-                """INSERT INTO sources VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET
-                epoch=excluded.epoch, position=excluded.position, value=excluded.value""",
-                (source, epoch, position, encoded(value)),
-            )
+            old_snapshot = dict(old) if old is not None else None
+            state["sources"][source] = {
+                "id": source,
+                "epoch": epoch,
+                "position": position,
+                "value": encoded(value),
+            }
 
-            users = self.all(
-                """SELECT uses.* FROM uses JOIN dependencies ON uses.id=dependencies.use_id
-                WHERE dependencies.source=? ORDER BY uses.id""",
-                (source,),
-            )
+            dep_ids = sorted(state["dependencies"].get(source, ()))
+            users = [state["uses"][uid] for uid in dep_ids if uid in state["uses"]]
+            self.rows_returned += len(users)
 
             parsed_users = [(use, loads_strict(use["spec"])) for use in users]
             active_specs = [
@@ -272,11 +277,7 @@ class Field:
             ]
 
             needed_sources = {name for _, spec in active_specs for name in spec["sources"]}
-            source_map = self._sources_map(needed_sources)
-            live_job_ids = [
-                "use:" + use["id"] for use, spec in active_specs if spec["mode"] == "live"
-            ]
-            tickets = self._existing_tickets(live_job_ids)
+            source_map = self._sources_map_from_state(state, needed_sources)
 
             live = 0
             occurrences = 0
@@ -285,23 +286,29 @@ class Field:
             for use, spec in active_specs:
                 basis = self._basis_from_map(spec, source_map)
                 if spec["mode"] == "live":
-                    next_gen = use["generation"] + 1
-                    self.execute("UPDATE uses SET generation=? WHERE id=?", (next_gen, use["id"]))
-                    updated_use = {"id": use["id"], "generation": next_gen, "spec": use["spec"]}
+                    next_gen = int(use["generation"]) + 1
+                    use["generation"] = next_gen
                     job_key = "use:" + use["id"]
-                    self.queue(
-                        updated_use,
+                    existing_job = state["jobs"].get(job_key)
+                    self._queue_in_state(
+                        state,
+                        use,
                         basis,
-                        existing_ticket=tickets.get(job_key),
+                        existing_ticket=existing_job["ticket"] if existing_job else None,
                         ticket_known=True,
                     )
                     live += 1
                 else:
                     gap = None
-                    if old and (old["epoch"] != epoch or position != old["position"] + 1):
+                    if old_snapshot and (
+                        old_snapshot["epoch"] != epoch or position != old_snapshot["position"] + 1
+                    ):
                         gap = {
                             "source": source,
-                            "before": {"epoch": old["epoch"], "position": old["position"]},
+                            "before": {
+                                "epoch": old_snapshot["epoch"],
+                                "position": old_snapshot["position"],
+                            },
                             "after": {"epoch": epoch, "position": position},
                             "requires": (
                                 "Recover missing owed occurrences or obtain a separately "
@@ -310,7 +317,9 @@ class Field:
                             ),
                         }
                         gaps += 1
-                    self.queue(use, basis, occurrence=[source, epoch, position], gap=gap)
+                    self._queue_in_state(
+                        state, use, basis, occurrence=[source, epoch, position], gap=gap
+                    )
                     occurrences += 1
 
         return {
@@ -324,44 +333,34 @@ class Field:
     def reconcile(self) -> dict[str, Any]:
         """Recover live rechecks from current dependencies; never fabricate missed occurrences."""
         queued = 0
-        with self.mutation():
-            uses = self.all("SELECT * FROM uses ORDER BY id")
+        with self.mutation() as state:
             live_entries = []
             needed_sources: set[str] = set()
-            for use in uses:
+            for _, use in sorted(state["uses"].items()):
+                self.rows_returned += 1
                 spec = loads_strict(use["spec"])
                 if spec["mode"] != "live":
                     continue
                 live_entries.append((use, spec))
                 needed_sources.update(spec["sources"])
 
-            source_map = self._sources_map(needed_sources)
-            live_job_ids = ["use:" + use["id"] for use, _ in live_entries]
-            jobs_by_id: dict[str, Any] = {}
-            for offset in range(0, len(live_job_ids), _SQL_IN_CHUNK):
-                chunk = live_job_ids[offset : offset + _SQL_IN_CHUNK]
-                for row in self.all(
-                    "SELECT * FROM jobs WHERE id IN (SELECT value FROM json_each(?))",
-                    (encoded(chunk),),
-                ):
-                    jobs_by_id[row["id"]] = row
+            source_map = self._sources_map_from_state(state, needed_sources)
 
             for use, spec in live_entries:
                 basis = self._basis_from_map(spec, source_map)
                 basis_encoded = encoded(basis)
                 latest = loads_strict(use["latest"]) if use["latest"] else None
                 job_key = "use:" + use["id"]
-                job = jobs_by_id.get(job_key)
+                job = state["jobs"].get(job_key)
                 if job and job["basis"] == basis_encoded and job["spec"] == use["spec"]:
                     continue
                 if latest and latest["basis"] == basis and latest["signature"] == use["signature"]:
                     continue
 
-                next_gen = use["generation"] + 1
-                self.execute("UPDATE uses SET generation=? WHERE id=?", (next_gen, use["id"]))
-                updated_use = {"id": use["id"], "generation": next_gen, "spec": use["spec"]}
-                self.queue(
-                    updated_use,
+                use["generation"] = int(use["generation"]) + 1
+                self._queue_in_state(
+                    state,
+                    use,
                     basis,
                     existing_ticket=job["ticket"] if job is not None else None,
                     ticket_known=True,
@@ -374,14 +373,17 @@ class Field:
         }
 
     def pull(self) -> dict[str, Any] | None:
-        with self.mutation():
-            job = self.one(
-                "SELECT * FROM jobs WHERE ticket IS NOT NULL AND token IS NULL AND gap IS NULL "
-                "ORDER BY ticket, id LIMIT 1"
-            )
-            if job is None:
+        with self.mutation() as state:
+            eligible = [
+                job
+                for job in state["jobs"].values()
+                if job["ticket"] is not None and job["token"] is None and job["gap"] is None
+            ]
+            if not eligible:
                 return None
 
+            job = min(eligible, key=lambda row: (int(row["ticket"]), str(row["id"])))
+            self.rows_returned += 1
             token = uuid.uuid4().hex
             packet = {
                 "job": job["id"],
@@ -391,41 +393,37 @@ class Field:
                 "spec": loads_strict(job["spec"]),
                 "basis": loads_strict(job["basis"]),
             }
-            self.execute(
-                "UPDATE jobs SET token=?, ticket=NULL, attempt=?, worker_outcome=NULL WHERE id=?",
-                (token, encoded(packet), job["id"]),
-            )
+            job["token"] = token
+            job["ticket"] = None
+            job["attempt"] = encoded(packet)
+            job["worker_outcome"] = None
             return packet
 
     def _record_stale_return(
         self,
-        job: Any,
-        use: Any,
+        state: dict[str, Any],
+        job: dict[str, Any],
+        use: dict[str, Any],
         packet: dict[str, Any],
         result: dict[str, Any],
     ) -> dict[str, Any]:
-        self.execute(
-            "UPDATE uses SET last_rejected=? WHERE id=?",
-            (
-                encoded(
-                    {"generation": packet["generation"], "basis": packet["basis"], "result": result}
-                ),
-                use["id"],
-            ),
+        use["last_rejected"] = encoded(
+            {"generation": packet["generation"], "basis": packet["basis"], "result": result}
         )
         if packet["spec"]["mode"] == "live":
             current_spec = loads_strict(use["spec"])
-            current_basis = self.basis(current_spec)
+            current_basis = self._basis_from_map(
+                current_spec, self._sources_map_from_state(state, current_spec["sources"])
+            )
             if job["basis"] != encoded(current_basis) or job["spec"] != use["spec"]:
-                self.execute("UPDATE uses SET generation=generation+1 WHERE id=?", (use["id"],))
-                use = self.one("SELECT * FROM uses WHERE id=?", (use["id"],))
-            self.queue(use, current_basis)
+                use["generation"] = int(use["generation"]) + 1
+            self._queue_in_state(state, use, current_basis)
 
-        self.execute(
-            "UPDATE jobs SET token=NULL, attempt=NULL, worker_outcome=NULL, "
-            "ticket=COALESCE(ticket,?) WHERE id=?",
-            (self.ticket(), job["id"]),
-        )
+        job["token"] = None
+        job["attempt"] = None
+        job["worker_outcome"] = None
+        if job["ticket"] is None:
+            job["ticket"] = self._next_ticket(state)
         return {
             "status": "stale",
             "reason": (
@@ -456,8 +454,8 @@ class Field:
             "worker must supply an account; service is not semantic acceptance",
         )
 
-        with self.mutation():
-            job = self.one("SELECT * FROM jobs WHERE id=?", (packet["job"],))
+        with self.mutation() as state:
+            job = state["jobs"].get(packet["job"])
             if not job or job["token"] != packet["token"]:
                 return {"status": "refused", "reason": "unknown, completed or replaced attempt"}
             if job["attempt"] != encoded(packet):
@@ -466,7 +464,7 @@ class Field:
                     "reason": "packet differs from the actual captured attempt",
                 }
 
-            use = self.one("SELECT * FROM uses WHERE id=?", (job["use_id"],))
+            use = state["uses"][job["use_id"]]
             matches = (
                 job["use_id"] == packet["use"]
                 and job["generation"] == packet["generation"]
@@ -474,13 +472,12 @@ class Field:
                 and loads_strict(job["basis"]) == packet["basis"]
             )
             if packet["spec"]["mode"] == "live":
-                matches = (
-                    matches
-                    and use["spec"] == job["spec"]
-                    and self.basis(packet["spec"]) == packet["basis"]
+                live_basis = self._basis_from_map(
+                    packet["spec"], self._sources_map_from_state(state, packet["spec"]["sources"])
                 )
+                matches = matches and use["spec"] == job["spec"] and live_basis == packet["basis"]
             if not matches:
-                return self._record_stale_return(job, use, packet, result)
+                return self._record_stale_return(state, job, use, packet, result)
 
             snapshot = {
                 "signature": digest(packet["spec"]),
@@ -491,16 +488,15 @@ class Field:
             }
             current_contract = use["signature"] == snapshot["signature"]
             if current_contract:
-                self.execute("UPDATE uses SET latest=? WHERE id=?", (encoded(snapshot), use["id"]))
+                use["latest"] = encoded(snapshot)
 
             if result["state"] == "blocked" and packet["spec"]["mode"] == "each-change":
-                self.execute(
-                    "UPDATE jobs SET token=NULL, attempt=NULL, worker_outcome=NULL, gap=? WHERE "
-                    "id=?",
-                    (encoded({"requires": result["account"]}), job["id"]),
-                )
+                job["token"] = None
+                job["attempt"] = None
+                job["worker_outcome"] = None
+                job["gap"] = encoded({"requires": result["account"]})
             else:
-                self.execute("DELETE FROM jobs WHERE id=?", (job["id"],))
+                del state["jobs"][job["id"]]
 
             return {
                 "status": "received",
@@ -520,16 +516,16 @@ class Field:
             isinstance(job_id, str) and job_id and isinstance(token, str) and token,
             "job_id and token must be nonempty strings",
         )
-        with self.mutation():
-            row = self.one("SELECT * FROM jobs WHERE id=?", (job_id,))
+        with self.mutation() as state:
+            row = state["jobs"].get(job_id)
             require(
                 row is not None and row["token"] == token, "attempt is absent or already replaced"
             )
-            self.execute(
-                "UPDATE jobs SET token=NULL, attempt=NULL, worker_outcome=NULL, "
-                "ticket=COALESCE(ticket,?) WHERE id=?",
-                (self.ticket(), job_id),
-            )
+            row["token"] = None
+            row["attempt"] = None
+            row["worker_outcome"] = None
+            if row["ticket"] is None:
+                row["ticket"] = self._next_ticket(state)
         return {"retry_eligible": job_id, "old_worker_fenced": True}
 
     def retain(self, use_id: str, name: str) -> dict[str, Any]:
@@ -537,17 +533,16 @@ class Field:
             isinstance(use_id, str) and use_id and isinstance(name, str) and name.strip(),
             "use_id and retained name must be nonempty strings",
         )
-        with self.mutation():
-            row = self.one("SELECT latest FROM uses WHERE id=?", (use_id,))
+        with self.mutation() as state:
+            row = state["uses"].get(use_id)
             require(row and row["latest"], "no actual received observation to retain")
-            previous = self.one("SELECT snapshot FROM selected_history WHERE name=?", (name,))
+            previous = state["selected_history"].get(name)
             require(
                 not previous or previous["snapshot"] == row["latest"],
                 "retained name identifies different historical observation",
             )
-            self.execute(
-                "INSERT OR IGNORE INTO selected_history VALUES (?,?)", (name, row["latest"])
-            )
+            if previous is None:
+                state["selected_history"][name] = {"name": name, "snapshot": row["latest"]}
         return {"retained": name, "scope": "Explicit historical cut; no current validity inferred."}
 
     @staticmethod
@@ -579,11 +574,10 @@ class Field:
         return field_status(self)
 
     def _record_worker_outcome(self, packet: dict[str, Any], outcome: dict[str, Any]) -> None:
-        with self.mutation():
-            self.execute(
-                "UPDATE jobs SET worker_outcome=? WHERE id=? AND token=?",
-                (encoded(outcome), packet["job"], packet["token"]),
-            )
+        with self.mutation() as state:
+            job = state["jobs"].get(packet["job"])
+            if job is not None and job["token"] == packet["token"]:
+                job["worker_outcome"] = encoded(outcome)
 
     def _unresolved_run(
         self,

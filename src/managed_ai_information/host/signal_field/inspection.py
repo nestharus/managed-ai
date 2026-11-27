@@ -23,7 +23,11 @@ def pending_jobs(field: Any, after: str, limit: int, max_bytes: int) -> dict[str
         f"{field.config.max_inspect_bytes}",
     )
 
-    rows = field.all("SELECT * FROM jobs WHERE id>? ORDER BY id LIMIT ?", (after, limit + 1))
+    state = field._read_state()
+    matching = [row for jid, row in sorted(state["jobs"].items()) if jid > after]
+    rows = matching[: limit + 1]
+    field.rows_returned += len(rows)
+
     items: list[dict[str, Any]] = []
     # Exact UTF-8 JSON array length: "[]" is 2 bytes, each subsequent element adds 1 byte for ",".
     running_bytes = 2
@@ -85,19 +89,23 @@ def inspect_entity(
         f"{field.config.max_inspect_bytes}",
     )
 
+    state = field._read_state()
     if job_id is not None:
-        row = field.one("SELECT * FROM jobs WHERE id=?", (job_id,))
+        row = state["jobs"].get(job_id)
         require(row is not None, "pending job is absent")
+        field.rows_returned += 1
         result = job_view(row)
     elif history_name is not None:
-        row = field.one("SELECT snapshot FROM selected_history WHERE name=?", (history_name,))
+        row = state["selected_history"].get(history_name)
         require(row is not None, "selected historical account is absent")
+        field.rows_returned += 1
         result = {"name": history_name, "historical": loads_strict(row["snapshot"])}
     else:
-        row = field.one("SELECT * FROM uses WHERE id=?", (use_id,))
+        row = state["uses"].get(use_id)
         require(row is not None, "receiving use is absent")
+        field.rows_returned += 1
         spec = loads_strict(row["spec"])
-        basis = field.basis(spec)
+        basis = field._basis_from_map(spec, field._sources_map_from_state(state, spec["sources"]))
         latest = loads_strict(row["latest"]) if row["latest"] else None
         result = {
             "use": use_id,
@@ -121,39 +129,32 @@ def inspect_entity(
 
 
 def field_status(field: Any) -> dict[str, Any]:
-    counts = field.one(
-        """SELECT
-            COUNT(*) AS total,
-            COALESCE(
-                SUM(CASE WHEN gap IS NOT NULL THEN 1 ELSE 0 END), 0
-            ) AS blocked_occurrences,
-            COALESCE(
-                SUM(CASE WHEN gap IS NULL AND token IS NOT NULL THEN 1 ELSE 0 END), 0
-            ) AS in_flight,
-            COALESCE(
-                SUM(CASE WHEN gap IS NULL AND token IS NULL THEN 1 ELSE 0 END), 0
-            ) AS eligible
-        FROM jobs"""
-    )
-    blocked_live = field.one(
-        """SELECT COUNT(*) AS n
-        FROM uses
-        WHERE latest IS NOT NULL
-          AND json_extract(spec, '$.mode') != 'each-change'
-          AND json_extract(latest, '$.result.state') = 'blocked'"""
-    )["n"]
+    state = field._read_state()
+    jobs = list(state["jobs"].values())
+    total = len(jobs)
+    blocked_occurrences = sum(1 for row in jobs if row["gap"] is not None)
+    in_flight = sum(1 for row in jobs if row["gap"] is None and row["token"] is not None)
+    eligible = sum(1 for row in jobs if row["gap"] is None and row["token"] is None)
+
+    blocked_live = 0
+    for use in state["uses"].values():
+        if not use["latest"]:
+            continue
+        if loads_strict(use["spec"]).get("mode") == "each-change":
+            continue
+        latest_doc = loads_strict(use["latest"])
+        if isinstance(latest_doc, dict) and latest_doc.get("result", {}).get("state") == "blocked":
+            blocked_live += 1
 
     return {
         "format": field.config.format_version,
-        "eligible": counts["eligible"],
-        "in_flight": counts["in_flight"],
-        "blocked_occurrences": counts["blocked_occurrences"],
+        "eligible": eligible,
+        "in_flight": in_flight,
+        "blocked_occurrences": blocked_occurrences,
         "blocked_live_uses": blocked_live,
-        "uses": field.one("SELECT COUNT(*) AS n FROM uses")["n"],
-        "selected_historical_observations": field.one("SELECT COUNT(*) AS n FROM selected_history")[
-            "n"
-        ],
-        "remaining_jobs": counts["total"],
+        "uses": len(state["uses"]),
+        "selected_historical_observations": len(state["selected_history"]),
+        "remaining_jobs": total,
         "sql_calls_this_connection": field.sql_calls,
         "rows_returned_this_connection": field.rows_returned,
         "database_bytes": field.path.stat().st_size,

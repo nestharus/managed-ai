@@ -13,16 +13,18 @@ _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO / "src") not in sys.path:
     sys.path.insert(0, str(_REPO / "src"))
 
-from managed_ai_information.core.storage import exclusive  # noqa: E402
+from managed_ai_information.core.storage import MAX_BYTES, exclusive  # noqa: E402
 from managed_ai_information.store.ingest import (  # noqa: E402
     DIGEST_REL_DIR,
     apply_desired_records,
+    apply_desired_records_chunked,
     canonical_bytes,
     compute_digest_basis,
     dump_json,
     file_digest_entry,
     git_head_sha,
     load_existing_records,
+    partition_ingest_operations,
     record_matches_desired,
     slugify_id,
 )
@@ -351,6 +353,136 @@ class StoreIngestTests(unittest.TestCase):
                     pending_digests={"rec-evil": basis_bytes},
                     dry_run=False,
                 )
+
+    def test_apply_desired_records_chunked_byte_budget_checkpoint_and_resume(self) -> None:
+        import json
+
+        store_root = self._init_store("ingest-chunked")
+        desired = [
+            {
+                "id": f"bulk-{idx:04d}",
+                "kind": "note",
+                "content": {"summary": f"Row {idx}", "blob": "X" * 1024},
+                "relations": [],
+                "basis": [],
+                "active": True,
+            }
+            for idx in range(25)
+        ]
+        basis_map = {rec["id"]: {} for rec in desired}
+        ckpt = self.tmp / "ingest-progress.json"
+
+        # Byte-budget validation: must be strictly < MAX_BYTES and positive
+        with self.assertRaises(ValueError):
+            partition_ingest_operations([], chunk_size=0)
+        with self.assertRaises(ValueError):
+            partition_ingest_operations([], max_batch_bytes=MAX_BYTES)
+
+        with System(store_root) as sys_obj:
+            # Dry-run computes exact chunk count under tight byte budget (4 KiB per chunk)
+            dry = apply_desired_records_chunked(
+                sys_obj,
+                desired,
+                basis_map,
+                batch_prefix="bulk-migrate",
+                dry_run=True,
+                chunk_size=10,
+                max_batch_bytes=4096,
+            )
+            self.assertFalse(dry["applied"])
+            self.assertGreater(dry["chunk_count"], 5)
+
+            # Simulate interruption after 2 chunks via on_chunk callback
+            seen_chunks: list[dict[str, object]] = []
+
+            def fail_after_two(progress: dict[str, object]) -> None:
+                seen_chunks.append(dict(progress))
+                if len(seen_chunks) == 2:
+                    raise RuntimeError("simulated mid-migration crash")
+
+            with self.assertRaisesRegex(RuntimeError, "simulated mid-migration crash"):
+                apply_desired_records_chunked(
+                    sys_obj,
+                    desired,
+                    basis_map,
+                    batch_prefix="bulk-migrate",
+                    chunk_size=10,
+                    max_batch_bytes=4096,
+                    checkpoint_path=ckpt,
+                    on_chunk=fail_after_two,
+                )
+            self.assertTrue(ckpt.is_file())
+            ckpt_doc = json.loads(ckpt.read_text(encoding="utf-8"))
+            self.assertFalse(ckpt_doc["complete"])
+            first_written = int(ckpt_doc["cumulative_written_count"])
+            self.assertGreater(first_written, 0)
+            self.assertLess(first_written, 25)
+
+            # Deterministic resume skips already-committed records and finishes the rest
+            resumed_chunks: list[dict[str, object]] = []
+            res = apply_desired_records_chunked(
+                sys_obj,
+                desired,
+                basis_map,
+                batch_prefix="bulk-migrate",
+                chunk_size=10,
+                max_batch_bytes=4096,
+                checkpoint_path=ckpt,
+                on_chunk=resumed_chunks.append,
+            )
+            self.assertTrue(res["applied"])
+            self.assertEqual(res["unchanged_count"], first_written)
+            self.assertEqual(res["written_count"], 25 - first_written)
+            self.assertEqual(len(res["batch_ids"]), res["chunk_count"])
+            self.assertTrue(json.loads(ckpt.read_text(encoding="utf-8"))["complete"])
+
+            # Subsequent rerun is 100% idempotent (0 chunks, 0 writes)
+            noop = apply_desired_records_chunked(
+                sys_obj,
+                desired,
+                basis_map,
+                batch_prefix="bulk-migrate",
+                chunk_size=10,
+                max_batch_bytes=4096,
+            )
+            self.assertFalse(noop["applied"])
+            self.assertEqual(noop["chunk_count"], 0)
+            self.assertEqual(noop["unchanged_count"], 25)
+
+    def test_write_checkpoint_rejects_symlink_or_reparse_ancestor_before_mkdir(self) -> None:
+        import os as _os
+        import subprocess as _sub
+        import tempfile as _tempfile
+
+        from managed_ai_information.store.ingest import _write_checkpoint
+
+        with _tempfile.TemporaryDirectory(prefix="mai-ingest-ckpt-") as tmp:
+            base = Path(tmp)
+            real_dir = base / "real-ckpt-target"
+            real_dir.mkdir()
+            link_dir = base / "link-ckpt-dir"
+            if _os.name == "nt":
+                proc = _sub.run(
+                    ["cmd", "/c", "mklink", "/J", str(link_dir), str(real_dir)],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                try:
+                    nested_ckpt = link_dir / "new-subdir" / "ckpt.json"
+                    with self.assertRaisesRegex(
+                        ValueError, "ordinary checkpoint directory required"
+                    ):
+                        _write_checkpoint(nested_ckpt, {"ok": True})
+                    self.assertFalse((real_dir / "new-subdir").exists())
+                finally:
+                    _sub.run(["cmd", "/c", "rmdir", str(link_dir)], capture_output=True)
+            else:
+                link_dir.symlink_to(real_dir)
+                nested_ckpt = link_dir / "new-subdir" / "ckpt.json"
+                with self.assertRaisesRegex(ValueError, "ordinary checkpoint directory required"):
+                    _write_checkpoint(nested_ckpt, {"ok": True})
+                self.assertFalse((real_dir / "new-subdir").exists())
 
 
 if __name__ == "__main__":

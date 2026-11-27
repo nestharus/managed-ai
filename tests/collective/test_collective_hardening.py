@@ -145,6 +145,74 @@ class CollectiveHardeningTests(unittest.TestCase):
             if is_nt_junc:
                 subprocess.run(["cmd", "/c", "rmdir", str(alias_dir)], capture_output=True)
 
+    def test_legacy_sqlite_refused_and_json_v1_upgrades_cleanly(self):
+        legacy_sql = self.root / "legacy_bin.sqlite"
+        legacy_sql.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+        code, out, _ = self.run_cli("changes", db=legacy_sql)
+        self.assertEqual(code, 3)
+        self.assertIn("Legacy binary SQLite", out["error"])
+
+        v1_path = self.root / "v1_store.json"
+        v1_state = database._empty_state(database.PREVIOUS_FORMAT)
+        v1_state.pop("impact_reviews")
+        v1_state.pop("use_sources")
+        v1_state["artifacts"]["ready-use"] = contract.encoded(
+            {
+                "id": "ready-use",
+                "revision": 1,
+                "owner": "bench",
+                "body": {"format": "g60-receiver-use/1", "disposition": "ready"},
+                "sha256": "0" * 64,
+                "basis": [{"id": "src-1", "revision": 1, "sha256": "1" * 64}],
+                "reconsider_from": [],
+                "accepted_at": 1.0,
+                "previous": None,
+            }
+        )
+        v1_path.write_text(contract.encoded(v1_state) + "\n", encoding="utf-8")
+
+        code_up, out_up, _ = self.run_cli("upgrade", db=v1_path)
+        self.assertEqual(code_up, 0)
+        self.assertTrue(out_up["changed"])
+        self.assertEqual(out_up["format"], database.FORMAT)
+
+        code_up2, out_up2, _ = self.run_cli("upgrade", db=v1_path)
+        self.assertEqual(code_up2, 0)
+        self.assertFalse(out_up2["changed"])
+
+    def test_corrupt_schema_raises_value_error_and_mirror_outage_keeps_commit(self):
+
+        prod = Path(__file__).resolve().parents[2] / "src" / "managed_ai_information" / "collective"
+        bad_store = self.root / "corrupt_schema.json"
+        bad_store.write_text(
+            json.dumps({"format": database.FORMAT, "artifacts": {}}),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "Corrupt collective store"):
+            database.CollectiveDatabase(bad_store, prod)
+
+        bad_notice = database._empty_state(database.FORMAT)
+        bad_notice["notices"] = [{"bad": "entry"}]
+        bad_store.write_text(contract.encoded(bad_notice) + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "invalid notice entry"):
+            database.CollectiveDatabase(bad_store, prod)
+
+        # Mirror failure after commit records error without corrupting local state or receipt
+        class _FailingBackend:
+            def put_record(self, *_args, **_kwargs):
+                raise OSError("remote membus temporarily unreachable")
+
+        ok_path = self.root / "mirror_fail.json"
+        database.CollectiveDatabase.initialize(ok_path, prod)
+        db = database.CollectiveDatabase(ok_path, prod, backend=_FailingBackend())
+        res = db.execute(
+            {"actor": "alice", "command": "c1", "op": "noop"},
+            lambda _st: {"noop": lambda _req: {"ok": True}},
+        )
+        self.assertEqual(res["status"], "accepted")
+        self.assertIn("unreachable", db.last_mirror_error or "")
+        self.assertEqual(db.receipt("alice", "c1")["status"], "accepted")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
