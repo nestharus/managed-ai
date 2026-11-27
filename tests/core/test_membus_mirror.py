@@ -596,7 +596,7 @@ class MembusLiveMirrorTests(unittest.TestCase):
                         "availability": "sealed",
                         "active": True,
                         "revision": 1,
-                        "content": {"summary": "live-sealed-unindexed-phrase"},
+                        "content": {"summary": "zxqsealedcanary9917"},
                     }
                 )
             )
@@ -669,7 +669,7 @@ class MembusLiveMirrorTests(unittest.TestCase):
                             "--endpoint",
                             daemon.base_url,
                             "--search",
-                            "live-sealed-unindexed-phrase",
+                            "zxqsealedcanary9917",
                             "--search-mode",
                             mode,
                         ]
