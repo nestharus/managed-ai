@@ -208,6 +208,47 @@ class StoreIngestTests(unittest.TestCase):
             self.assertEqual(res2["written_count"], 0)
             self.assertEqual(res2["unchanged_count"], 2)
 
+            # C78A-O2: JSON type drift (1 vs True) is detected; non-bool active fails closed
+            existing_int = {
+                "kind": "note",
+                "active": True,
+                "content": {"flag": 1},
+                "relations": [],
+                "basis": [],
+            }
+            desired_bool = {
+                "kind": "note",
+                "active": True,
+                "content": {"flag": True},
+                "relations": [],
+                "basis": [],
+            }
+            self.assertFalse(record_matches_desired(existing_int, desired_bool, {}))
+            for bad_active in (1, "yes", None):
+                with self.assertRaises(ValueError):
+                    record_matches_desired(
+                        existing_int,
+                        {"kind": "note", "active": bad_active, "content": {"flag": 1}},
+                        {},
+                    )
+                with self.assertRaises(ValueError):
+                    apply_desired_records(
+                        sys_obj,
+                        [
+                            {
+                                "id": "rec-bad-active",
+                                "kind": "note",
+                                "active": bad_active,
+                                "content": {"summary": "bad"},
+                                "relations": [],
+                                "basis": [],
+                            }
+                        ],
+                        {"rec-bad-active": {}},
+                        batch_prefix="ingest-bad-active",
+                        dry_run=True,
+                    )
+
             # 4. Updating basis file updates ONLY rec-alpha (rec-beta stays unchanged)
             f_path.write_bytes(b"version-2\n")
             f_entry2 = file_digest_entry(src_root, "alpha/one.txt")
@@ -226,6 +267,20 @@ class StoreIngestTests(unittest.TestCase):
             self.assertEqual(res3["updated"], ["rec-alpha"])
             self.assertEqual(res3["unchanged_count"], 1)
             self.assertEqual(sys_obj.show("rec-alpha")["revision"], 2)
+
+            # C78A-O1: size-mismatch digest pin overwrites cleanly without reading stale body
+            dest_pin = sys_obj.work / rel_basis
+            dest_pin.write_bytes(b"{" + b" " * 512 + b"}")
+            res_pin = apply_desired_records(
+                sys_obj,
+                desired,
+                {"rec-alpha": {rel_basis: basis_sha}, "rec-beta": {}},
+                batch_prefix="ingest-pin-reset",
+                pending_digests={"rec-alpha": basis_bytes},
+                dry_run=False,
+            )
+            self.assertTrue(res_pin["applied"])
+            self.assertEqual(dest_pin.read_bytes(), basis_bytes)
 
             # 5. Dangling relation is detected in lint_anomalies
             dangling = [

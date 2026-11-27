@@ -70,13 +70,17 @@ def git_head_sha(repo_root: Path) -> str:
     git_bin = shutil.which("git")
     if git_bin is None or not (repo_root / ".git").exists():
         return "unknown"
-    proc = subprocess.run(  # noqa: S603
-        [git_bin, "-C", str(repo_root), "rev-parse", "HEAD"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=False,
-    )
+    try:
+        proc = subprocess.run(  # noqa: S603
+            [git_bin, "-C", str(repo_root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return "unknown"
     return (proc.stdout.strip() or "unknown") if proc.returncode == 0 else "unknown"
 
 
@@ -192,7 +196,7 @@ def write_digest_basis_bytes(
     if info is not None:
         if not is_ordinary_file_stat(info):
             raise ValueError(f"ordinary non-symlink digest pin file required: {dest}")
-        if dest.read_bytes() == encoded:
+        if info.st_size == len(encoded) and dest.read_bytes() == encoded:
             return rel_path, False, new_sha
 
     resolved_dest = checked_dir.resolve(strict=True) / f"{safe_id}.json"
@@ -231,17 +235,25 @@ def load_existing_records(system: Any) -> dict[str, dict[str, Any]]:
     return {str(rec["id"]): rec for rec in system.records()}
 
 
+def _require_bool_active(record: Mapping[str, Any]) -> bool:
+    val = record.get("active", True)
+    if type(val) is not bool:
+        raise ValueError("record active field must be a boolean")
+    return val
+
+
 def record_matches_desired(
     existing: dict[str, Any] | None,
     desired: dict[str, Any],
     desired_basis_shas: dict[str, str],
 ) -> bool:
     """Return True if existing record matches desired kind, content, relations, active, basis."""
+    desired_active = _require_bool_active(desired)
     if existing is None or existing.get("kind") != desired["kind"]:
         return False
-    if bool(existing.get("active", True)) != bool(desired.get("active", True)):
+    if _require_bool_active(existing) != desired_active:
         return False
-    if existing.get("content") != desired["content"]:
+    if canonical_bytes(existing.get("content")) != canonical_bytes(desired["content"]):
         return False
     if normalize_relations(existing.get("relations", [])) != normalize_relations(
         desired.get("relations", [])
@@ -303,7 +315,7 @@ def _plan_ingest_ops(
                 "content": rec["content"],
                 "relations": normalize_relations(rec.get("relations", [])),
                 "basis": basis_list,
-                "active": bool(rec.get("active", True)),
+                "active": _require_bool_active(rec),
             },
         }
         if prev is not None:
