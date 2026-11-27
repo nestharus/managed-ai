@@ -9,7 +9,6 @@ record-level sealed markers are ALWAYS written with SearchVisibility='Sealed' us
 metadata-only custody envelope — sealed payload bytes are never indexed into Tantivy.
 """
 
-import tempfile
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -34,6 +33,7 @@ from managed_ai_information.core.storage_backend import (
     StorageBackend,
 )
 from managed_ai_information.core.storage_backend_protocol import (
+    InMemoryMirrorBackend,
     ensure_ordinary_dir,
     validate_identifier,
 )
@@ -493,66 +493,59 @@ class MembusStoreMirror:
             }
         )
 
-        temp_ctx: tempfile.TemporaryDirectory[str] | None = None
-        if local_route_dir is None:
-            temp_ctx = tempfile.TemporaryDirectory(prefix="membus-mirror-route-a-")
-            route_a_dir = Path(temp_ctx.name)
-        else:
-            route_a_dir = ensure_ordinary_dir(local_route_dir)
-
-        try:
-            route_a = EmbeddedFileBackend(route_a_dir)
-            with MultiRouteBackend(route_a, backend, mode="single", route_b_timeout_ms=10_000) as (
-                router
-            ):
-                controller = SchemaMigrationController(router=router, catalog_backend=backend)
-                controller.begin_expand(
-                    ns,
-                    from_version=from_version,
-                    target_version=target_version,
-                    target_sha256=sha(target_schema),
-                    target_schema_bytes=target_schema,
+        route_a: StorageBackend = (
+            InMemoryMirrorBackend()
+            if local_route_dir is None
+            else EmbeddedFileBackend(ensure_ordinary_dir(local_route_dir))
+        )
+        with MultiRouteBackend(route_a, backend, mode="single", route_b_timeout_ms=10_000) as (
+            router
+        ):
+            controller = SchemaMigrationController(router=router, catalog_backend=backend)
+            controller.begin_expand(
+                ns,
+                from_version=from_version,
+                target_version=target_version,
+                target_sha256=sha(target_schema),
+                target_schema_bytes=target_schema,
+            )
+            try:
+                controller.enable_dual_write(routing_mode="dual-sync")
+                rec_written, blob_written, blob_skipped = self._mirror_records_and_blobs(
+                    root, plan, router, backend
                 )
-                try:
-                    controller.enable_dual_write(routing_mode="dual-sync")
-                    rec_written, blob_written, blob_skipped = self._mirror_records_and_blobs(
-                        root, plan, router, backend
+                route_parity = router.parity_summary(recent_limit=5)
+                verify_report = self.verify_parity(
+                    root, backend, config, plan=plan, verify_blob_bytes=verify_blob_bytes
+                )
+                mismatches = int(route_parity["counts"]["mismatched_ops"]) + int(
+                    route_parity["counts"]["route_b_errors"]
+                )
+                anomalies = sum(
+                    len(verify_report[k])
+                    for k in (
+                        "missing_records",
+                        "mismatched_records",
+                        "missing_blobs",
+                        "mismatched_blobs",
                     )
-                    route_parity = router.parity_summary(recent_limit=5)
-                    verify_report = self.verify_parity(
-                        root, backend, config, plan=plan, verify_blob_bytes=verify_blob_bytes
+                )
+                if mismatches != 0 or anomalies != 0:
+                    raise ValueError(
+                        f"mirror parity failed: mismatches={mismatches}, anomalies={anomalies}"
                     )
-                    mismatches = int(route_parity["counts"]["mismatched_ops"]) + int(
-                        route_parity["counts"]["route_b_errors"]
-                    )
-                    anomalies = sum(
-                        len(verify_report[k])
-                        for k in (
-                            "missing_records",
-                            "mismatched_records",
-                            "missing_blobs",
-                            "mismatched_blobs",
-                        )
-                    )
-                    if mismatches != 0 or anomalies != 0:
-                        raise ValueError(
-                            f"mirror parity failed: mismatches={mismatches}, anomalies={anomalies}"
-                        )
-                    live_seq = int(backend.health().get("latest_seq", 0))
-                    final_state = controller.record_verification(
-                        verified_through=live_seq, mismatch_count=0, anomalies=0
-                    )
-                    if contract_cutover:
-                        final_state = controller.commit_cutover(cutover_seq=live_seq)
-                    final_router_mode = router.mode
-                except Exception as exc:
-                    st = controller.state
-                    if st is not None and st.phase in ("expanding", "dual-write", "verified"):
-                        controller.abort_rollback(str(exc) or type(exc).__name__)
-                    raise
-        finally:
-            if temp_ctx is not None:
-                temp_ctx.cleanup()
+                live_seq = int(backend.health().get("latest_seq", 0))
+                final_state = controller.record_verification(
+                    verified_through=live_seq, mismatch_count=0, anomalies=0
+                )
+                if contract_cutover:
+                    final_state = controller.commit_cutover(cutover_seq=live_seq)
+                final_router_mode = router.mode
+            except Exception as exc:
+                st = controller.state
+                if st is not None and st.phase in ("expanding", "dual-write", "verified"):
+                    controller.abort_rollback(str(exc) or type(exc).__name__)
+                raise
 
         elapsed_ms = round((time.monotonic() - started) * 1000.0, 2)
         return {

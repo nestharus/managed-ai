@@ -27,6 +27,7 @@ from managed_ai_information.core.storage_backend_protocol import (
     BackendContendedError,
     BackendRecord,
     BackendUnavailableError,
+    KeepAliveHTTPPool,
     LeaseGrant,
     SearchHit,
     SearchVisibility,
@@ -323,6 +324,17 @@ class MembusV2Backend:
     def __init__(self, base_url: str, *, token: str | None = None, timeout: float = 15.0) -> None:
         self._parsed = validate_endpoint_url(base_url)
         self.base_url, self._token, self.timeout = base_url.rstrip("/"), token, timeout
+        self._pool = KeepAliveHTTPPool(self._open_connection)
+
+    def close(self) -> None:
+        """Close all idle persistent HTTP connections held by this client."""
+        self._pool.close()
+
+    def __enter__(self) -> MembusV2Backend:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
 
     def _headers(self, extra: Mapping[str, str] | None = None) -> dict[str, str]:
         out = {"Authorization": f"Bearer {self._token}"} if self._token is not None else {}
@@ -354,22 +366,9 @@ class MembusV2Backend:
     ) -> tuple[int, bytes]:
         extra = {"Content-Type": content_type} if content_type else None
         full_path = f"{self._parsed.path.rstrip('/')}{path}"
-        conn = self._open_connection()
-        try:
-            conn.request(method, full_path, body=body, headers=self._headers(extra))
-            resp = conn.getresponse()
-            if resp.status >= 400:
-                raise map_http_error(resp.status, resp.read(65536))
-            data = resp.read(max_bytes + 1)
-            if len(data) > max_bytes:
-                raise StorageBackendError("membus response exceeds byte limit", code="overflow")
-            return resp.status, data
-        except StorageBackendError:
-            raise
-        except (http.client.HTTPException, TimeoutError, OSError) as err:
-            raise BackendUnavailableError(str(err), status=0, code="unavailable") from None
-        finally:
-            conn.close()
+        return self._pool.request(
+            method, full_path, headers=self._headers(extra), body=body, max_bytes=max_bytes
+        )
 
     def _request_json(self, method: str, path: str, payload: Any | None = None) -> Any:
         body = None if payload is None else json.dumps(payload, allow_nan=False).encode("utf-8")

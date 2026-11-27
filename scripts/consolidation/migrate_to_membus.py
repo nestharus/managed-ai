@@ -170,15 +170,15 @@ def _execute_args(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     mirror = MembusStoreMirror()
 
     if args.search is not None:
-        backend = _require_backend(args)
-        report = mirror.search(
-            backend,
-            args.search,
-            namespace=args.namespace,
-            kind=args.kind,
-            mode=args.search_mode,
-            limit=args.limit,
-        )
+        with _require_backend(args) as backend:
+            report = mirror.search(
+                backend,
+                args.search,
+                namespace=args.namespace,
+                kind=args.kind,
+                mode=args.search_mode,
+                limit=args.limit,
+            )
         return 0, report
 
     store_root = _require_store(args)
@@ -193,24 +193,24 @@ def _execute_args(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     )
 
     if args.apply:
-        backend = _require_backend(args)
-        report = mirror.apply(
-            store_root,
-            backend,
-            config,
-            contract_cutover=not args.no_cutover,
-            verify_blob_bytes=args.verify_blob_bytes,
-        )
+        with _require_backend(args) as backend:
+            report = mirror.apply(
+                store_root,
+                backend,
+                config,
+                contract_cutover=not args.no_cutover,
+                verify_blob_bytes=args.verify_blob_bytes,
+            )
         return 0, report
 
     if args.verify_parity:
-        backend = _require_backend(args)
-        report = mirror.verify_parity(
-            store_root,
-            backend,
-            config,
-            verify_blob_bytes=args.verify_blob_bytes,
-        )
+        with _require_backend(args) as backend:
+            report = mirror.verify_parity(
+                store_root,
+                backend,
+                config,
+                verify_blob_bytes=args.verify_blob_bytes,
+            )
         return (0 if report["status"] == "passed" else 1), report
 
     plan = mirror.plan(store_root, config)

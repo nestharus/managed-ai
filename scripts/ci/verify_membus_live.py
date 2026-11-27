@@ -191,14 +191,14 @@ class EphemeralMembusDaemon:
             )
 
         self.base_url = f"http://{listen_addr[0]}"
-        client = MembusV2Backend(self.base_url, timeout=5.0)
-        while time.monotonic() < deadline:
-            try:
-                health = client.health()
-                if isinstance(health, dict) and "epoch" in health:
-                    return self
-            except Exception:
-                time.sleep(0.05)
+        with MembusV2Backend(self.base_url, timeout=5.0) as client:
+            while time.monotonic() < deadline:
+                try:
+                    health = client.health()
+                    if isinstance(health, dict) and "epoch" in health:
+                        return self
+                except Exception:
+                    time.sleep(0.05)
 
         self.stop()
         raise RuntimeError(f"membus HTTP listener at {self.base_url} failed health readiness")
@@ -645,18 +645,18 @@ def _check_multi_route_and_migration(client: MembusV2Backend, scratch_dir: Path)
 
 def run_live_verification(base_url: str, scratch_dir: Path) -> dict[str, Any]:
     """Run the full live Membus v2 integration suite against an isolated running daemon."""
-    client = MembusV2Backend(base_url, timeout=10.0)
     t0 = time.perf_counter()
-    checks: dict[str, Any] = {
-        "health": _check_health(client),
-        "kv_cas_and_delete": _check_kv_cas_and_delete(client),
-        "blobs_cas": _check_blobs_cas(client),
-        "search_visibility_isolation": _check_search_visibility_isolation(client),
-        "fenced_leases": _check_fenced_leases(client),
-        "sse_signals": _check_sse_signals(client),
-        "coordination_facade": _check_coordination_facade(client, scratch_dir),
-        "multi_route_and_migration": _check_multi_route_and_migration(client, scratch_dir),
-    }
+    with MembusV2Backend(base_url, timeout=10.0) as client:
+        checks: dict[str, Any] = {
+            "health": _check_health(client),
+            "kv_cas_and_delete": _check_kv_cas_and_delete(client),
+            "blobs_cas": _check_blobs_cas(client),
+            "search_visibility_isolation": _check_search_visibility_isolation(client),
+            "fenced_leases": _check_fenced_leases(client),
+            "sse_signals": _check_sse_signals(client),
+            "coordination_facade": _check_coordination_facade(client, scratch_dir),
+            "multi_route_and_migration": _check_multi_route_and_migration(client, scratch_dir),
+        }
     return {
         "format": REPORT_FORMAT,
         "ok": True,

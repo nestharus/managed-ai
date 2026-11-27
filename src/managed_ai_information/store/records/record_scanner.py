@@ -449,8 +449,7 @@ def open_verified_index_view(store: Any, *, max_workers: int = 16) -> VerifiedIn
         return None
     try:
         raw_idents = store.ids()
-        # Sort by UTF-8 bare ID for O(N) merge-walk while preserving raw_idents on live_ids.
-        sorted_idents = sorted(raw_idents, key=lambda ident: ident.encode("utf-8"))
+        sorted_idents = sorted(raw_idents, key=str.encode)
         overrides: dict[str, dict] = {}
         if sorted_idents:
             with _open_scan_ops(store) as ops:
@@ -458,6 +457,7 @@ def open_verified_index_view(store: Any, *, max_workers: int = 16) -> VerifiedIn
                     sorted_idents,
                     lambda c: _verify_view_chunk(view, ops, c),
                     max_workers=min(max_workers, 8),
+                    min_parallel=512,
                 )
             overrides = dict(pairs)
         removed: set[str] = set()
@@ -532,7 +532,10 @@ def indexed_summaries_with_format(
         return {}, index_format
     with _open_scan_ops(store) as ops:
         pairs = chunk_map(
-            idents, lambda c: _check_indexed_chunk(indexed, ops, c), max_workers=min(max_workers, 8)
+            idents,
+            lambda c: _check_indexed_chunk(indexed, ops, c),
+            max_workers=min(max_workers, 8),
+            min_parallel=512,
         )
     return dict(pairs), index_format
 
