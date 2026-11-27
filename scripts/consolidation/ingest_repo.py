@@ -329,7 +329,7 @@ def build_repo_records(
         desired.append(
             {
                 "id": "pkg-companions",
-                "kind": "component",
+                "kind": "software-component",
                 "content": {
                     "name": "companions",
                     "description": "Top-level companion packages and shared companion contracts.",

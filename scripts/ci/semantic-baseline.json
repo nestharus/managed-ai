@@ -28,7 +28,7 @@
       "max_cc": 26
     },
     "src/managed_ai_information/companions/representation/check_representation.py": {
-      "working_set_tokens": 296599
+      "working_set_tokens": 296623
     },
     "src/managed_ai_information/companions/representation/representation.py": {
       "lines": 715
@@ -59,20 +59,20 @@
       "lines": 733
     },
     "src/managed_ai_information/deployment/cli.py": {
-      "working_set_tokens": 300034
+      "working_set_tokens": 300058
     },
     "src/managed_ai_information/deployment/controller.py": {
-      "working_set_tokens": 301608
+      "working_set_tokens": 301632
     },
     "src/managed_ai_information/deployment/isolation.py": {
-      "working_set_tokens": 291563
+      "working_set_tokens": 291587
     },
     "src/managed_ai_information/deployment/select_deployment.py": {
-      "working_set_tokens": 301027
+      "working_set_tokens": 301051
     },
     "src/managed_ai_information/deployment/selection.py": {
       "lines": 688,
-      "working_set_tokens": 298219
+      "working_set_tokens": 298243
     },
     "src/managed_ai_information/host/continuing_work/capture_native.py": {
       "lines": 926
@@ -106,10 +106,10 @@
       "lines": 835
     },
     "src/managed_ai_information/library/cli.py": {
-      "working_set_tokens": 312269
+      "working_set_tokens": 312293
     },
     "src/managed_ai_information/store/cli/command_dispatch.py": {
-      "working_set_tokens": 212559
+      "working_set_tokens": 212583
     },
     "src/managed_ai_information/store/composition/composition.py": {
       "lines": 777,
@@ -127,10 +127,10 @@
       "working_set_tokens": 157570
     },
     "src/managed_ai_information/store/domain_api.py": {
-      "working_set_tokens": 288364
+      "working_set_tokens": 288388
     },
     "src/managed_ai_information/store/manage_store.py": {
-      "working_set_tokens": 287321
+      "working_set_tokens": 287345
     },
     "src/managed_ai_information/store/query/context_discovery.py": {
       "working_set_tokens": 122029
@@ -171,7 +171,7 @@
     },
     "src/managed_ai_information/store/system.py": {
       "lines": 907,
-      "working_set_tokens": 286715
+      "working_set_tokens": 286739
     },
     "src/managed_ai_information/store/turns/capture_inputs.py": {
       "lines": 699,
@@ -196,12 +196,12 @@
   },
   "summary": {
     "module_count": 188,
-    "total_lines": 60036,
-    "total_tokens": 553757,
+    "total_lines": 60038,
+    "total_tokens": 553781,
     "max_file_lines": 938,
     "max_cc": 36,
     "max_depth": 6,
-    "max_working_set_tokens": 312269,
+    "max_working_set_tokens": 312293,
     "module_scc_count": 0,
     "subpackage_scc_count": 0,
     "package_scc_count": 0,

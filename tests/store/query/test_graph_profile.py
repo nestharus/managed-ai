@@ -619,6 +619,25 @@ class GraphProfileTests(unittest.TestCase):
         self.assertIn("research-claim", shipped_rep["calibration"]["claim_kinds"])
         self.assertIn("qualified-by", shipped_rep["calibration"]["qualifying_predicates"])
 
+        # Inverse contradicted-by edge without mediator is flagged as an unresolved cluster
+        _put(
+            self.system,
+            "cb-a",
+            "claim",
+            relations=[
+                {"relation": "maps-to", "target": "goal"},
+                {"relation": "contradicted-by", "target": "cb-b"},
+            ],
+        )
+        _put(self.system, "cb-b", "claim", relations=[{"relation": "maps-to", "target": "goal"}])
+        self.system.reindex()
+        cb_rep = self.system.graph_profile()
+        cb_contra = cb_rep["density_and_qualification"]["contradicts"]
+        self.assertEqual(cb_contra["unresolved_contradicts_cluster_count"], 1)
+        self.assertEqual(
+            cb_contra["unresolved_contradicts_clusters"][0]["node_ids"], ["cb-a", "cb-b"]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

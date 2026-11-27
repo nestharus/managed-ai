@@ -173,6 +173,8 @@ def _compute_unresolved_contradicts(
                 continue
             if pred == "contradicts":
                 contradict_edges.append((u, v))
+            elif pred == "contradicted-by":
+                contradict_edges.append((v, u))
             elif pred in resolution_preds:
                 res_neighbors[u].add(v)
                 res_neighbors[v].add(u)

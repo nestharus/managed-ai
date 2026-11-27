@@ -241,8 +241,10 @@ class ConsolidationETLTests(unittest.TestCase):
         self.assertNotIn("mod-companions", orphans)
         self.assertNotIn("facade-companions", orphans)
         self.assertNotIn("mod-companions-contracts", orphans)
+        pkg_comp = System(comp_store).show("pkg-companions")
+        self.assertEqual(pkg_comp["kind"], "software-component")
         self.assertEqual(
-            System(comp_store).show("pkg-companions")["relations"],
+            pkg_comp["relations"],
             [{"relation": "maps-to", "target": "managed-ai-architecture"}],
         )
 
