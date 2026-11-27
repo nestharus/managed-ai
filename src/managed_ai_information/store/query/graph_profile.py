@@ -18,6 +18,7 @@ from managed_ai_information.store.query.graph_profile_alerts import (
     compute_phantom_cochange,
     evaluate_graph_alerts,
     load_graph_baseline,
+    load_graph_profile_config,
     resolve_calibration,
     write_graph_baseline,
 )
@@ -32,6 +33,7 @@ from managed_ai_information.store.query.graph_profile_metrics import (
 )
 
 GRAPH_PROFILE_FORMAT = "managed-ai-graph-profile/1"
+load_profile_config = load_graph_profile_config
 _MAX_SAMPLE_ITEMS = 25
 _MAX_BYPASS_SAMPLES = 50
 

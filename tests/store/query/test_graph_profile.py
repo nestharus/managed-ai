@@ -627,14 +627,35 @@ class GraphProfileTests(unittest.TestCase):
         alert_rules = {a["rule"] for a in inv_rep["alerts"]}
         self.assertNotIn("superseded_head_bypass_detected", alert_rules)
 
-        # Verify shipped research calibration profile config loads & validates cleanly
-        shipped_cfg = (
-            Path(__file__).resolve().parents[3]
-            / "scripts/consolidation/profiles/research_graph_profile.json"
+        # Verify domain-neutral calibration profile config loads & validates cleanly
+        from managed_ai_information.store.query.graph_profile import load_profile_config
+
+        sample_cfg = self.base / "domain_profile_config.json"
+        sample_cfg.write_text(
+            json.dumps(
+                {
+                    "format": GRAPH_PROFILE_CONFIG_FORMAT,
+                    "root_kinds": ["goal", "field", "frontier"],
+                    "claim_kinds": ["domain-claim", "claim", "synthesis"],
+                    "navigational_kinds": ["question", "topic-map", "index"],
+                    "structural_predicates": ["depends-on", "maps-to", "supersedes"],
+                    "qualifying_predicates": ["qualified-by", "evidenced-by", "supports"],
+                    "bypass_exempt_predicates": [
+                        "supersedes",
+                        "consolidated-into",
+                        "grounded in original edition",
+                    ],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
         )
-        shipped_rep = self.system.graph_profile(profile_config_path=shipped_cfg)
-        self.assertIn("research-claim", shipped_rep["calibration"]["claim_kinds"])
-        self.assertIn("qualified-by", shipped_rep["calibration"]["qualifying_predicates"])
+        loaded_cfg = load_profile_config(sample_cfg)
+        self.assertEqual(loaded_cfg["format"], GRAPH_PROFILE_CONFIG_FORMAT)
+        sample_rep = self.system.graph_profile(profile_config_path=sample_cfg)
+        self.assertIn("domain-claim", sample_rep["calibration"]["claim_kinds"])
+        self.assertIn("qualified-by", sample_rep["calibration"]["qualifying_predicates"])
 
         # Inverse contradicted-by edge without mediator is flagged as an unresolved cluster
         _put(

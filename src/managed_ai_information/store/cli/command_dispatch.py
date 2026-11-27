@@ -277,6 +277,10 @@ def _act_graph(system: Any, args: argparse.Namespace) -> dict[str, Any]:
             structural_predicates=_csv_list("structural_predicates"),
             bypass_exempt_predicates=_csv_list("bypass_exempt_predicates"),
         )
+    if args.graph_action == "repair":
+        from managed_ai_information.store.query import graph_repair
+
+        return graph_repair.dispatch_repair(system, args, lint_fn=graph_query.lint)
     return graph_query.lint(system)
 
 

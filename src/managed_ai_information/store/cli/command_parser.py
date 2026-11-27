@@ -21,10 +21,20 @@ READONLY_ACTIONS = frozenset(
         "recover",
         "recover-transport",
         "audit-objects",
-        "graph",
         "impact",
     }
 )
+_SUBACTION_READONLY: dict[str, tuple[str, frozenset[str]]] = {
+    "transfer": ("transfer_action", frozenset({"inspect", "export"})),
+    "feedback": ("feedback_action", frozenset({"inspect"})),
+    "info": ("information_action", frozenset({"inspect"})),
+    "inquiry": ("inquiry_action", frozenset({"stages"})),
+    "deduplicate-originals": ("dedup_action", frozenset({"plan"})),
+    "compact-objects": ("compact_action", frozenset({"plan"})),
+    "archive-records": ("archive_action", frozenset({"plan"})),
+    "retire-turns": ("retire_turns_action", frozenset({"plan"})),
+    "backend": ("backend_action", frozenset({"status"})),
+}
 
 
 def is_readonly_action(args: argparse.Namespace) -> bool:
@@ -32,28 +42,16 @@ def is_readonly_action(args: argparse.Namespace) -> bool:
     action = args.action
     if action in READONLY_ACTIONS:
         return True
-
-    if action == "transfer":
-        return getattr(args, "transfer_action", None) in {"inspect", "export"}
-    if action == "feedback":
-        return getattr(args, "feedback_action", None) == "inspect"
-    if action == "info":
-        return getattr(args, "information_action", None) == "inspect"
-    if action == "inquiry":
-        return getattr(args, "inquiry_action", None) == "stages"
-    if action == "deduplicate-originals":
-        return getattr(args, "dedup_action", None) == "plan"
-    if action == "compact-objects":
-        return getattr(args, "compact_action", None) == "plan"
+    if action == "graph":
+        return (
+            not getattr(args, "apply", False)
+            if getattr(args, "graph_action", None) == "repair"
+            else True
+        )
     if action == "pack-objects":
         return not getattr(args, "apply", False)
-    if action == "archive-records":
-        return getattr(args, "archive_action", None) == "plan"
-    if action == "retire-turns":
-        return getattr(args, "retire_turns_action", None) == "plan"
-    if action == "backend":
-        return getattr(args, "backend_action", None) == "status"
-    return False
+    spec = _SUBACTION_READONLY.get(action)
+    return getattr(args, spec[0], None) in spec[1] if spec is not None else False
 
 
 def _file_argument(value: str) -> str:
@@ -136,11 +134,8 @@ def _store_core_commands(sub: Any) -> None:
         help="Accepted for CLI symmetry; batch returns its receipt",
     )
 
-    show = sub.add_parser("show", allow_abbrev=False)
-    show.add_argument("id")
-
-    pin = sub.add_parser("pin", allow_abbrev=False)
-    pin.add_argument("id")
+    sub.add_parser("show", allow_abbrev=False).add_argument("id")
+    sub.add_parser("pin", allow_abbrev=False).add_argument("id")
 
     history = sub.add_parser("history", allow_abbrev=False)
     history.add_argument("id")
@@ -148,14 +143,10 @@ def _store_core_commands(sub: Any) -> None:
     history.add_argument("--cursor", type=Path, help="cursor JSON from the preceding page")
 
     sub.add_parser(
-        "index-head",
-        allow_abbrev=False,
-        help="verify and register one large legacy head for scope scans",
+        "index-head", allow_abbrev=False, help="verify and register one large legacy head for scans"
     ).add_argument("id")
     sub.add_parser(
-        "reindex",
-        allow_abbrev=False,
-        help="rebuild the HMAC-verified store-local head index",
+        "reindex", allow_abbrev=False, help="rebuild the HMAC-verified store-local head index"
     )
 
     status = sub.add_parser("status", allow_abbrev=False)
@@ -169,6 +160,12 @@ def _store_core_commands(sub: Any) -> None:
         action="store_true",
         help="Return a compact status summary (counts, current goal, gaps) instead of full arrays",
     )
+
+
+def _add_plan_exec_args(cmd: Any) -> None:
+    cmd.add_argument("--plan", required=True, type=Path)
+    cmd.add_argument("--expected-plan", required=True)
+    cmd.add_argument("--reason", required=True)
 
 
 def _store_maintenance_commands(sub: Any) -> None:
@@ -186,22 +183,17 @@ def _store_maintenance_commands(sub: Any) -> None:
             "(defaults to selected domain configuration)"
         ),
     )
-    dedup_exec = dedup.add_parser("execute", allow_abbrev=False)
-    dedup_exec.add_argument("--plan", required=True, type=Path)
-    dedup_exec.add_argument("--expected-plan", required=True)
-    dedup_exec.add_argument("--reason", required=True)
+    _add_plan_exec_args(dedup.add_parser("execute", allow_abbrev=False))
 
     compact = sub.add_parser(
         "compact-objects",
         allow_abbrev=False,
         help="plan or execute transparent DEFLATE compaction of exchange/objects",
     ).add_subparsers(dest="compact_action", required=True)
-    compact_plan = compact.add_parser("plan", allow_abbrev=False)
-    compact_plan.add_argument("--min-savings-bytes", type=int, default=64)
-    compact_exec = compact.add_parser("execute", allow_abbrev=False)
-    compact_exec.add_argument("--plan", required=True, type=Path)
-    compact_exec.add_argument("--expected-plan", required=True)
-    compact_exec.add_argument("--reason", required=True)
+    compact.add_parser("plan", allow_abbrev=False).add_argument(
+        "--min-savings-bytes", type=int, default=64
+    )
+    _add_plan_exec_args(compact.add_parser("execute", allow_abbrev=False))
 
     archive = sub.add_parser(
         "archive-records",
@@ -211,10 +203,7 @@ def _store_maintenance_commands(sub: Any) -> None:
     archive_plan = archive.add_parser("plan", allow_abbrev=False)
     archive_plan.add_argument("--id", action="append", default=[], dest="ids")
     archive_plan.add_argument("--kind", action="append", default=[], dest="kinds")
-    archive_exec = archive.add_parser("execute", allow_abbrev=False)
-    archive_exec.add_argument("--plan", required=True, type=Path)
-    archive_exec.add_argument("--expected-plan", required=True)
-    archive_exec.add_argument("--reason", required=True)
+    _add_plan_exec_args(archive.add_parser("execute", allow_abbrev=False))
     archive_restore = archive.add_parser("restore", allow_abbrev=False)
     archive_restore.add_argument("--id", action="append", required=True, dest="ids")
     archive_restore.add_argument("--reason", required=True)
@@ -224,14 +213,13 @@ def _store_maintenance_commands(sub: Any) -> None:
         allow_abbrev=False,
         help="read-only 9-layer transitive reachability audit over exchange/objects",
     )
-    gc = sub.add_parser(
-        "gc-objects",
-        allow_abbrev=False,
-        help="explicitly prune verified unreachable objects from a reviewed audit plan",
+    _add_plan_exec_args(
+        sub.add_parser(
+            "gc-objects",
+            allow_abbrev=False,
+            help="explicitly prune verified unreachable objects from a reviewed audit plan",
+        )
     )
-    gc.add_argument("--plan", required=True, type=Path)
-    gc.add_argument("--expected-plan", required=True)
-    gc.add_argument("--reason", required=True)
 
     pack = sub.add_parser(
         "pack-objects",
@@ -274,36 +262,53 @@ def _store_graph_commands(sub: Any) -> None:
     g_nb.add_argument("id")
     g_nb.add_argument("--direction", choices=("in", "out", "both"), default="both")
     g_nb.add_argument("--hops", type=int, default=1)
-    g_nb.add_argument("--relation", action="append", default=[], dest="relations")
-    g_nb.add_argument("--active-only", action="store_true")
     g_nb.add_argument("--records-only", action="store_true")
 
     g_links = graph.add_parser("links", allow_abbrev=False)
     g_links.add_argument("--target", required=True)
-    g_links.add_argument("--relation", action="append", default=[], dest="relations")
-    g_links.add_argument("--active-only", action="store_true")
 
     g_path = graph.add_parser("path", allow_abbrev=False)
     g_path.add_argument("src")
     g_path.add_argument("dst")
     g_path.add_argument("--max-hops", type=int, default=6)
-    g_path.add_argument("--relation", action="append", default=[], dest="relations")
-    g_path.add_argument("--active-only", action="store_true")
+
+    for subcmd in (g_nb, g_links, g_path):
+        subcmd.add_argument("--relation", action="append", default=[], dest="relations")
+        subcmd.add_argument("--active-only", action="store_true")
 
     graph.add_parser("lint", allow_abbrev=False)
 
     g_prof = graph.add_parser("profile", allow_abbrev=False, help="profile knowledge-graph health")
-    g_prof.add_argument("--roots", nargs="+", action="extend", default=[])
-    g_prof.add_argument("--claim-kinds", nargs="+", action="extend", default=[])
-    g_prof.add_argument("--navigational-kinds", nargs="+", action="extend", default=[])
-    g_prof.add_argument("--qualifying-predicates", nargs="+", action="extend", default=[])
-    g_prof.add_argument("--structural-predicates", nargs="+", action="extend", default=[])
-    g_prof.add_argument("--bypass-exempt-predicates", nargs="+", action="extend", default=[])
-    g_prof.add_argument("--profile-config", type=Path, default=None)
-    g_prof.add_argument("--include-cochange", action="store_true")
-    g_prof.add_argument("--baseline", type=Path, default=None)
-    g_prof.add_argument("--write-baseline", type=Path, default=None)
-    g_prof.add_argument("--check-alerts", action="store_true")
+    for flag in (
+        "--roots",
+        "--claim-kinds",
+        "--navigational-kinds",
+        "--qualifying-predicates",
+        "--structural-predicates",
+        "--bypass-exempt-predicates",
+    ):
+        g_prof.add_argument(flag, nargs="+", action="extend", default=[])
+    for flag in ("--profile-config", "--baseline", "--write-baseline"):
+        g_prof.add_argument(flag, type=Path, default=None)
+    for flag in ("--include-cochange", "--check-alerts"):
+        g_prof.add_argument(flag, action="store_true")
+
+    g_rep = graph.add_parser("repair", allow_abbrev=False, help="plan or apply graph repairs")
+    for flag in (
+        "--apply",
+        "--no-self-loops",
+        "--no-repoint-bypasses",
+        "--no-retire-stranded-questions",
+        "--retire-retired-prefix-questions",
+        "--delegate-redundant-hub-edges",
+    ):
+        g_rep.add_argument(flag, action="store_true")
+    for flag in ("--profile-config", "--receipt", "--rollback"):
+        g_rep.add_argument(flag, type=Path, default=None)
+    for flag in ("--roots", "--hub-ids"):
+        g_rep.add_argument(flag, nargs="+", action="extend", default=[])
+    g_rep.add_argument("--link-spec", "--link-file", dest="link_spec", type=Path, default=None)
+    g_rep.add_argument("--account", default=None)
 
 
 def _store_backend_commands(sub: Any) -> None:
@@ -510,10 +515,7 @@ def _turn_lifecycle_commands(sub: Any) -> None:
         action="store_true",
         help="Audit every working copy directory under work/.system/turns/",
     )
-    retire_exec = retire.add_parser("execute", allow_abbrev=False)
-    retire_exec.add_argument("--plan", required=True, type=Path)
-    retire_exec.add_argument("--expected-plan", required=True)
-    retire_exec.add_argument("--reason", required=True)
+    _add_plan_exec_args(retire.add_parser("execute", allow_abbrev=False))
 
 
 def _turn_commands(sub: Any) -> None:
@@ -641,8 +643,8 @@ def _inquiry_feedback_information_commands(sub: Any) -> None:
 
     info = sub.add_parser("info", allow_abbrev=False)
     info_actions = info.add_subparsers(dest="information_action", required=True)
-    inspect = info_actions.add_parser("inspect", allow_abbrev=False)
-    inspect.add_argument("id")
+    info_actions.add_parser("inspect", allow_abbrev=False).add_argument("id")
     for name in ("wrap", "migrate"):
-        action = info_actions.add_parser(name, allow_abbrev=False)
-        action.add_argument("--spec", required=True, type=Path)
+        info_actions.add_parser(name, allow_abbrev=False).add_argument(
+            "--spec", required=True, type=Path
+        )
