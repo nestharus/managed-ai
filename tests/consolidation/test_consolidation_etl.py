@@ -646,6 +646,117 @@ class ConsolidationETLTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             plan_consolidation(store, repo, mode="crw", include_tests=True)
 
+    def test_external_graph_edges_ingestion_and_validation(self) -> None:
+        repo = _make_sample_repo(self.tmp / "ext-edges-repo")
+        store = self._init_store("ext-edges-store")
+        edges_payload = {
+            "schema_version": 1,
+            "repo_label": "demo-ext",
+            "commit": "3ec6c76",
+            "node_count": 3,
+            "edge_count": 5,
+            "nodes": [],
+            "edges": [
+                {
+                    "kind": "declares_mod",
+                    "from": "src/demo/__init__.py",
+                    "to": "src/demo/app.py",
+                    "weight": 1,
+                    "label": None,
+                },
+                {
+                    "kind": "imports",
+                    "from": "src/demo/app.py",
+                    "to": "src/demo/leaf.py",
+                    "weight": 1,
+                    "label": None,
+                },
+                {
+                    "kind": "bypasses",
+                    "from": "src/demo/app.py",
+                    "to": "src/demo/leaf.py",
+                    "weight": 1,
+                    "label": "layer_skip",
+                },
+                {
+                    "kind": "shares_write_target",
+                    "from": "src/demo/app.py",
+                    "to": "src/demo/leaf.py",
+                    "weight": 2,
+                    "label": "state.json",
+                },
+                {
+                    "kind": "in_scc",
+                    "from": "src/demo/missing.py",
+                    "to": "src/demo/leaf.py",
+                    "weight": 1,
+                    "label": "scc-1",
+                },
+            ],
+        }
+        edges_file = self.tmp / "graph-edges.json"
+        edges_file.write_text(json.dumps(edges_payload, indent=2) + "\n", encoding="utf-8")
+
+        applied = apply_consolidation(
+            store,
+            repo,
+            mode="repo",
+            package_rel="src/demo",
+            external_graph_edges=edges_file,
+        )
+        self.assertTrue(applied["applied"])
+        self.assertEqual(applied["lint_anomalies"], 0)
+
+        sys_obj = System(store)
+        init_rec = sys_obj.show("mod-demo")
+        self.assertIn({"relation": "depends-on", "target": "mod-app"}, init_rec["relations"])
+        app_rec = sys_obj.show("mod-app")
+        self.assertIn({"relation": "depends-on", "target": "mod-leaf"}, app_rec["relations"])
+        self.assertIn({"relation": "bears-on", "target": "mod-leaf"}, app_rec["relations"])
+        sigs = app_rec["content"]["external_graph_signals"]
+        self.assertEqual([s["kind"] for s in sigs], ["bypasses", "shares_write_target"])
+        head = sys_obj.show("profile-head")
+        ext_sum = head["content"]["external_graph_edges"]
+        self.assertEqual(ext_sum["total_edges"], 5)
+        self.assertEqual(ext_sum["mapped_edges"], 4)
+        self.assertEqual(ext_sum["unmapped_edges"], 1)
+
+        # Idempotent plan reports 0 pending changes
+        plan_again = plan_consolidation(
+            store,
+            repo,
+            mode="repo",
+            package_rel="src/demo",
+            external_graph_edges=edges_file,
+        )
+        self.assertEqual(plan_again["added"], [])
+        self.assertEqual(plan_again["changed"], [])
+        self.assertEqual(plan_again["retired"], [])
+
+        # Fail closed on unsupported edge kind or --mode crw
+        bad_edges = self.tmp / "bad-edges.json"
+        bad_edges.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "edges": [
+                        {
+                            "kind": "unknown_kind",
+                            "from": "src/demo/app.py",
+                            "to": "src/demo/leaf.py",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, "unsupported external graph edge kind"):
+            ingest_repository(
+                repo, store, package_rel="src/demo", external_graph_edges=bad_edges, dry_run=True
+            )
+        with self.assertRaises(ValueError):
+            plan_consolidation(store, repo, mode="crw", external_graph_edges=edges_file)
+
 
 if __name__ == "__main__":
     unittest.main()

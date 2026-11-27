@@ -19,6 +19,7 @@ from managed_ai_information.core.storage import MAX_BYTES, read_bytes, sha  # no
 from managed_ai_information.platform import (  # noqa: E402
     check_ordinary_ancestors,
     is_ordinary_file_stat,
+    strict_json_loads,
 )
 from managed_ai_information.store.system import System  # noqa: E402
 from scripts.ci.semantic_profile import (  # noqa: E402
@@ -41,6 +42,88 @@ from scripts.consolidation.test_value_analyzer import (  # noqa: E402
 )
 
 INGEST_REPO_FORMAT = "managed-ai-repo-ingest/1"
+_EXTERNAL_STRUCTURAL_EDGE_KINDS: frozenset[str] = frozenset({"imports", "declares_mod"})
+_EXTERNAL_SIGNAL_EDGE_KINDS: frozenset[str] = frozenset(
+    {"bypasses", "bypass", "in_scc", "shares_write_target", "phantom_cochanges"}
+)
+_ALL_EXTERNAL_EDGE_KINDS: frozenset[str] = (
+    _EXTERNAL_STRUCTURAL_EDGE_KINDS | _EXTERNAL_SIGNAL_EDGE_KINDS
+)
+
+
+def load_external_graph_edges(
+    edges_path: Path,
+    mod_ids_by_path: dict[str, str],
+) -> tuple[dict[str, list[dict[str, str]]], dict[str, list[dict[str, Any]]], dict[str, Any]]:
+    """Load nestharus/semantic-profiler --emit-graph-edges JSON cleanly into record relations."""
+    checked = check_ordinary_ancestors(
+        edges_path, expect_dir=False, error_prefix="ordinary external graph edges file required"
+    ).resolve(strict=True)
+    if not is_ordinary_file_stat(checked.lstat()):
+        raise ValueError(f"ordinary external graph edges file required: {checked}")
+    doc = strict_json_loads(read_bytes(checked, MAX_BYTES), label=checked.name)
+    if not isinstance(doc, dict) or doc.get("schema_version") != 1:
+        raise ValueError("external graph edges must be a schema_version=1 JSON object")
+    edges = doc.get("edges")
+    if not isinstance(edges, list):
+        raise ValueError("external graph edges 'edges' field must be a list")
+
+    extra_rels: dict[str, list[dict[str, str]]] = {}
+    seen_rels: dict[str, set[tuple[str, str]]] = {}
+    signals_by_mod: dict[str, list[dict[str, Any]]] = {}
+    by_kind: dict[str, int] = {}
+    mapped_count = 0
+    unmapped_count = 0
+
+    for row in edges:
+        if not isinstance(row, dict):
+            raise ValueError("external graph edge entry must be an object")
+        kind = str(row.get("kind", "")).strip()
+        if kind not in _ALL_EXTERNAL_EDGE_KINDS:
+            raise ValueError(f"unsupported external graph edge kind: {kind!r}")
+        src_path = str(row.get("from", "")).strip().replace("\\", "/")
+        dst_path = str(row.get("to", "")).strip().replace("\\", "/")
+        by_kind[kind] = by_kind.get(kind, 0) + 1
+        src_id = mod_ids_by_path.get(src_path)
+        dst_id = mod_ids_by_path.get(dst_path)
+        if src_id is None or dst_id is None or src_id == dst_id:
+            unmapped_count += 1
+            continue
+        mapped_count += 1
+        relation = "depends-on" if kind in _EXTERNAL_STRUCTURAL_EDGE_KINDS else "bears-on"
+        key = (relation, dst_id)
+        bucket_seen = seen_rels.setdefault(src_id, set())
+        if key not in bucket_seen:
+            bucket_seen.add(key)
+            extra_rels.setdefault(src_id, []).append({"relation": relation, "target": dst_id})
+        if kind in _EXTERNAL_SIGNAL_EDGE_KINDS:
+            weight = row.get("weight", 1)
+            signals_by_mod.setdefault(src_id, []).append(
+                {
+                    "kind": "bypasses" if kind == "bypass" else kind,
+                    "target": dst_id,
+                    "target_path": dst_path,
+                    "weight": int(weight) if isinstance(weight, int) else 1,
+                    "label": row.get("label"),
+                }
+            )
+
+    for rels in extra_rels.values():
+        rels.sort(key=lambda r: (r["relation"], r["target"]))
+    for sigs in signals_by_mod.values():
+        sigs.sort(key=lambda s: (str(s["kind"]), str(s["target"]), str(s.get("label") or "")))
+
+    summary = {
+        "schema_version": 1,
+        "repo_label": str(doc.get("repo_label", "")),
+        "commit": doc.get("commit"),
+        "total_edges": len(edges),
+        "mapped_edges": mapped_count,
+        "unmapped_edges": unmapped_count,
+        "by_kind": dict(sorted(by_kind.items())),
+    }
+    return extra_rels, signals_by_mod, summary
+
 
 _PACKAGE_TO_COMPONENT_ID: dict[str, str] = {
     "platform": "pkg-platform",
@@ -227,6 +310,9 @@ def _build_one_module_bundle(
     commit: str,
     exports: list[str],
     digest_entry: dict[str, Any],
+    *,
+    extra_rels: list[dict[str, str]] | None = None,
+    external_signals: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes]]:
     mod_name: str = mod["module"]
     rel_path: str = mod["path"]
@@ -252,6 +338,13 @@ def _build_one_module_bundle(
     comp_id = _parent_component_id(mod_name, existing_ids)
     if comp_id is not None:
         mod_rels.append({"relation": "maps-to", "target": comp_id})
+    if extra_rels:
+        seen_pairs = {(r["relation"], r["target"]) for r in mod_rels}
+        for rel in extra_rels:
+            pair = (rel["relation"], rel["target"])
+            if pair not in seen_pairs:
+                seen_pairs.add(pair)
+                mod_rels.append(rel)
 
     if is_facade:
         facade_id = _facade_record_id(mod_name)
@@ -277,33 +370,37 @@ def _build_one_module_bundle(
         )
         basis_shas[facade_id] = dict(mod_basis_map)
 
+    mod_content: dict[str, Any] = {
+        "module": mod_name,
+        "path": rel_path,
+        "lines": mod["lines"],
+        "tokens": mod["tokens"],
+        "functions": mod["functions"],
+        "max_cc": mod["max_cc"],
+        "max_cc_function": mod["max_cc_function"],
+        "max_depth": mod["max_depth"],
+        "max_depth_function": mod["max_depth_function"],
+        "fan_in": mod["fan_in"],
+        "fan_out": mod["fan_out"],
+        "nexus_score": mod["nexus_score"],
+        "blast_radius": mod["blast_radius"],
+        "working_set_tokens": mod["working_set_tokens"],
+        "bypass_out": mod["bypass_out"],
+        "bypass_in": mod["bypass_in"],
+        "is_facade": is_facade,
+        "is_primitive": mod["is_primitive"],
+        "public_exports": exports,
+        "source_sha256": digest_entry["sha256"],
+        "commit": commit,
+    }
+    if external_signals:
+        mod_content["external_graph_signals"] = external_signals
+
     records.append(
         {
             "id": mod_id,
             "kind": "code-module",
-            "content": {
-                "module": mod_name,
-                "path": rel_path,
-                "lines": mod["lines"],
-                "tokens": mod["tokens"],
-                "functions": mod["functions"],
-                "max_cc": mod["max_cc"],
-                "max_cc_function": mod["max_cc_function"],
-                "max_depth": mod["max_depth"],
-                "max_depth_function": mod["max_depth_function"],
-                "fan_in": mod["fan_in"],
-                "fan_out": mod["fan_out"],
-                "nexus_score": mod["nexus_score"],
-                "blast_radius": mod["blast_radius"],
-                "working_set_tokens": mod["working_set_tokens"],
-                "bypass_out": mod["bypass_out"],
-                "bypass_in": mod["bypass_in"],
-                "is_facade": is_facade,
-                "is_primitive": mod["is_primitive"],
-                "public_exports": exports,
-                "source_sha256": digest_entry["sha256"],
-                "commit": commit,
-            },
+            "content": mod_content,
             "relations": mod_rels,
             "basis": basis_list,
             "active": True,
@@ -442,6 +539,7 @@ def build_repo_records(
     include_tests: bool = False,
     tests_rel: str = "tests",
     existing_ids: set[str] | None = None,
+    external_graph_edges: Path | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes], dict[str, Any]]:
     """Purely compute desired repo records and in-memory digest pins (zero disk writes)."""
     checked_repo = check_ordinary_ancestors(
@@ -464,20 +562,33 @@ def build_repo_records(
     mod_ids_by_name = {
         mod["module"]: _module_record_id(mod["module"]) for mod in profile["modules"]
     }
+    mod_ids_by_path = {mod["path"]: mod_ids_by_name[mod["module"]] for mod in profile["modules"]}
+    ext_rels: dict[str, list[dict[str, str]]] = {}
+    ext_signals: dict[str, list[dict[str, Any]]] = {}
+    ext_summary: dict[str, Any] | None = None
+    if external_graph_edges is not None:
+        ext_rels, ext_signals, ext_summary = load_external_graph_edges(
+            external_graph_edges, mod_ids_by_path
+        )
+        profile["external_graph_edges_summary"] = ext_summary
+
     profile_rels: list[dict[str, str]] = []
     if "managed-ai-architecture" in resolved_existing:
         profile_rels.append({"relation": "maps-to", "target": "managed-ai-architecture"})
+    profile_content: dict[str, Any] = {
+        "format": profile["format"],
+        "package_dir": package_rel,
+        "commit": commit,
+        "summary": profile["summary"],
+        "relationship_summary": relationships["summary"],
+    }
+    if ext_summary is not None:
+        profile_content["external_graph_edges"] = ext_summary
     desired: list[dict[str, Any]] = [
         {
             "id": "profile-head",
             "kind": "profile-snapshot",
-            "content": {
-                "format": profile["format"],
-                "package_dir": package_rel,
-                "commit": commit,
-                "summary": profile["summary"],
-                "relationship_summary": relationships["summary"],
-            },
+            "content": profile_content,
             "relations": profile_rels,
             "basis": [],
             "active": True,
@@ -542,6 +653,7 @@ def build_repo_records(
             }
             if mod_reexports:
                 precomputed_reexports.update(mod_reexports)
+        mod_id_cur = mod_ids_by_name[mod["module"]]
         bundle_records, bundle_basis, bundle_digests = _build_one_module_bundle(
             checked_repo,
             mod,
@@ -552,6 +664,8 @@ def build_repo_records(
             commit,
             exports,
             digest_entry,
+            extra_rels=ext_rels.get(mod_id_cur),
+            external_signals=ext_signals.get(mod_id_cur),
         )
         desired.extend(bundle_records)
         basis_shas.update(bundle_basis)
@@ -583,6 +697,7 @@ def ingest_repository(
     package_rel: str = "src/managed_ai_information",
     include_tests: bool = False,
     tests_rel: str = "tests",
+    external_graph_edges: Path | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Ingest a Python repository into store_root idempotently."""
@@ -596,6 +711,7 @@ def ingest_repository(
         package_rel=package_rel,
         include_tests=include_tests,
         tests_rel=tests_rel,
+        external_graph_edges=external_graph_edges,
     )
     receipt = apply_desired_records(
         system,
@@ -617,6 +733,8 @@ def ingest_repository(
     }
     if include_tests:
         report["test_value_summary"] = profile.get("test_value_summary")
+    if external_graph_edges is not None:
+        report["external_graph_edges"] = profile.get("external_graph_edges_summary")
     return report
 
 
@@ -630,6 +748,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--package-dir", default="src/managed_ai_information")
     parser.add_argument("--include-tests", action="store_true")
     parser.add_argument("--tests-dir", default="tests")
+    parser.add_argument("--external-graph-edges", type=Path, default=None)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -648,6 +767,7 @@ def main(argv: list[str] | None = None) -> int:
             package_rel=args.package_dir,
             include_tests=args.include_tests,
             tests_rel=args.tests_dir,
+            external_graph_edges=args.external_graph_edges,
             dry_run=dry_run,
         )
         print(dump_json(report))

@@ -210,6 +210,44 @@ class TestValueAnalyzerTests(unittest.TestCase):
         err = json.loads(bad.stderr)
         self.assertEqual(err["status"], "error")
 
+    def test_live_daemon_suite_classifies_mixed_not_mock_heavy(self) -> None:
+        repo = _write_files(
+            self.tmp / "daemon-sample",
+            {
+                "src/demo/__init__.py": "",
+                "src/demo/mirror.py": "def run_mirror() -> str:\n    return 'ok'\n",
+                "tests/test_mirror_with_daemon.py": (
+                    "import unittest\n"
+                    "from http.server import BaseHTTPRequestHandler\n"
+                    "from demo.mirror import run_mirror\n\n"
+                    "class _MockSrv(BaseHTTPRequestHandler):\n"
+                    "    pass\n\n"
+                    "class EphemeralMembusDaemon:\n"
+                    "    pass\n\n"
+                    "class MirrorTests(unittest.TestCase):\n"
+                    "    def test_mock_one(self) -> None:\n"
+                    "        _s = _MockSrv()\n"
+                    "        self.assertEqual(run_mirror(), 'ok')\n"
+                    "    def test_mock_two(self) -> None:\n"
+                    "        _s = _MockSrv()\n"
+                    "        self.assertEqual(run_mirror(), 'ok')\n"
+                    "    def test_live_daemon(self) -> None:\n"
+                    "        _d = EphemeralMembusDaemon()\n"
+                    "        self.assertEqual(run_mirror(), 'ok')\n"
+                ),
+            },
+        )
+        report = analyze_test_value(repo, package_rel="src/demo", tests_rel="tests")
+        suite = report["suites"][0]
+        self.assertEqual(suite["boundary_class"], "mixed")
+        self.assertEqual(report["summary"]["mock_only_module_count"], 0)
+
+    def test_live_repo_has_zero_mock_only_modules(self) -> None:
+        report = analyze_test_value(_REPO)
+        self.assertEqual(report["summary"]["mock_only_module_count"], 0)
+        by_id = {s["suite_id"]: s for s in report["suites"]}
+        self.assertEqual(by_id["test-core-test_membus_mirror"]["boundary_class"], "mixed")
+
 
 if __name__ == "__main__":
     unittest.main()
