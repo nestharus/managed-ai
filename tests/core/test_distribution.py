@@ -7,8 +7,12 @@ import unittest
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[2]
-if str(_REPO) not in sys.path:
-    sys.path.insert(0, str(_REPO))
+for _p in (_REPO / "src", _REPO):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+from managed_ai_information.core.exchange.transport.collector import (  # noqa: E402
+    name as validate_collector_name,
+)
 from tests._paths import ENGINE as ROOT  # noqa: E402
 
 
@@ -38,6 +42,9 @@ class DistributionContract(unittest.TestCase):
             p = self.call("--root", str(Path(temp) / "runtime"), "list")
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertEqual(p.stdout.strip(), "[]")
+        self.assertEqual(validate_collector_name("job-alpha", "job"), "job-alpha")
+        with self.assertRaises(ValueError):
+            validate_collector_name("   ", "job")
 
 
 if __name__ == "__main__":
