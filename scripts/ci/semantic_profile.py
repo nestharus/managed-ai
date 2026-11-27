@@ -41,8 +41,11 @@ DEFAULT_RELATIONSHIP_BUDGETS: dict[str, int] = {
     "max_subpackage_sccs": 0,
     "max_package_sccs": 0,
     "max_cross_package_private_imports": 0,
+    "max_cross_subpackage_shortcuts": 0,
     "max_non_primitive_nexus": 80,
 }
+
+_OPTIONAL_RELATIONSHIP_BUDGET_KEYS: frozenset[str] = frozenset({"max_cross_subpackage_shortcuts"})
 
 _METRIC_TO_BUDGET_KEY: tuple[tuple[str, str], ...] = (
     ("lines", "max_file_lines"),
@@ -56,6 +59,7 @@ _REL_METRIC_TO_BUDGET_KEY: tuple[tuple[str, str], ...] = (
     ("subpackage_scc_count", "max_subpackage_sccs"),
     ("package_scc_count", "max_package_sccs"),
     ("cross_package_private_imports", "max_cross_package_private_imports"),
+    ("cross_subpackage_shortcut_count", "max_cross_subpackage_shortcuts"),
     ("max_non_primitive_nexus", "max_non_primitive_nexus"),
 )
 
@@ -596,6 +600,7 @@ def _build_profile_report(
         "subpackage_scc_count": rel_summary["subpackage_scc_count"],
         "package_scc_count": rel_summary["package_scc_count"],
         "cross_package_private_imports": rel_summary["cross_package_private_imports"],
+        "cross_subpackage_shortcut_count": rel_summary["cross_subpackage_shortcut_count"],
         "max_non_primitive_nexus": max_non_prim_nexus,
     }
 
@@ -867,9 +872,16 @@ def build_baseline(
     for key in DEFAULT_BUDGETS:
         _validate_positive_int(resolved_budgets.get(key), f"budgets.{key}")
 
-    rel_targets = dict(
-        DEFAULT_RELATIONSHIP_BUDGETS if relationship_budgets is None else relationship_budgets
-    )
+    rel_targets = dict(DEFAULT_RELATIONSHIP_BUDGETS)
+    if relationship_budgets is not None:
+        unknown_rel = set(relationship_budgets) - set(DEFAULT_RELATIONSHIP_BUDGETS)
+        if unknown_rel:
+            raise ValueError(f"unknown relationship_budgets keys: {sorted(unknown_rel)}")
+        required_rel = set(DEFAULT_RELATIONSHIP_BUDGETS) - _OPTIONAL_RELATIONSHIP_BUDGET_KEYS
+        missing_rel = required_rel - set(relationship_budgets)
+        if missing_rel:
+            raise ValueError(f"missing relationship_budgets keys: {sorted(missing_rel)}")
+        rel_targets.update(relationship_budgets)
     rel_summary = profile.get("relationships", {}).get("summary", {})
     resolved_rel_budgets: dict[str, int] = {}
     for metric_key, budget_key in _REL_METRIC_TO_BUDGET_KEY:
@@ -916,14 +928,20 @@ def load_baseline(path: Path) -> dict[str, Any]:
     rel_raw = data.get("relationship_budgets")
     rel_budgets: dict[str, int] | None = None
     if rel_raw is not None:
-        if not isinstance(rel_raw, dict) or set(rel_raw) != set(DEFAULT_RELATIONSHIP_BUDGETS):
+        required_rel = set(DEFAULT_RELATIONSHIP_BUDGETS) - _OPTIONAL_RELATIONSHIP_BUDGET_KEYS
+        if (
+            not isinstance(rel_raw, dict)
+            or not required_rel.issubset(rel_raw)
+            or not set(rel_raw).issubset(DEFAULT_RELATIONSHIP_BUDGETS)
+        ):
             raise ValueError(
-                "baseline relationship_budgets must define exact keys: "
+                "baseline relationship_budgets must define valid keys: "
                 f"{sorted(DEFAULT_RELATIONSHIP_BUDGETS)}"
             )
         rel_budgets = {
             key: _validate_non_negative_int(rel_raw[key], f"relationship_budgets.{key}")
             for key in DEFAULT_RELATIONSHIP_BUDGETS
+            if key in rel_raw
         }
 
     allow_raw = data.get("allowances")
@@ -1012,6 +1030,8 @@ def check_budget(profile: dict[str, Any], baseline: dict[str, Any]) -> dict[str,
     if rel_budgets is not None:
         rel_summary = profile.get("relationships", {}).get("summary", {})
         for metric_key, budget_key in _REL_METRIC_TO_BUDGET_KEY:
+            if budget_key not in rel_budgets:
+                continue
             actual = int(rel_summary.get(metric_key, 0))
             ceiling = rel_budgets[budget_key]
             if actual > ceiling:

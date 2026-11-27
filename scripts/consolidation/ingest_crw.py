@@ -95,6 +95,7 @@ def _build_family_and_constituent_records(
     dict[str, bytes],
     list[str],
     dict[str, str],
+    dict[str, str],
 ]:
     obs_raw = _read_text(crw_root, "risk-axis-reviewers/observer-dimensions.json")
     constituents = strict_json_loads(
@@ -118,13 +119,16 @@ def _build_family_and_constituent_records(
     family_ids: list[str] = []
     fam_id_by_slug: dict[str, str] = {}
     dim_id_by_rel: dict[str, str] = {}
+    dim_id_by_slug: dict[str, str] = {}
 
     for item in constituents:
         if not isinstance(item, dict) or not isinstance(item.get("id"), str):
             raise ValueError("invalid constituent entry in observer-dimensions.json")
         rel = f"risk-axis-reviewers/{item['id']}"
         dim_slug = Path(item["id"]).stem.removesuffix(".prompt")
-        dim_id_by_rel[rel] = slugify_id("crw-dim", dim_slug)
+        dim_id = slugify_id("crw-dim", dim_slug)
+        dim_id_by_rel[rel] = dim_id
+        dim_id_by_slug[dim_slug] = dim_id
 
     for fam_path in family_files:
         rel = fam_path.relative_to(crw_root).as_posix()
@@ -200,13 +204,76 @@ def _build_family_and_constituent_records(
             }
         )
 
-    return desired, basis_shas, pending_digests, family_ids, fam_id_by_slug
+    return desired, basis_shas, pending_digests, family_ids, fam_id_by_slug, dim_id_by_slug
+
+
+CRW_COVERAGE_MANIFEST_FORMAT = "crw-control-coverage/1"
+
+
+def _validate_slug_list(raw: Any, label: str) -> list[str]:
+    if not isinstance(raw, list) or any(not isinstance(v, str) or not v.strip() for v in raw):
+        raise ValueError(f"{label} must be a list of non-empty strings")
+    return [v.strip() for v in raw]
+
+
+def _load_coverage_manifest(
+    crw_root: Path,
+    ctrl_rel: str,
+) -> tuple[dict[str, dict[str, Any]], str | None]:
+    manifest_rel = f"{ctrl_rel}/coverage-manifest.json"
+    candidate = crw_root / manifest_rel
+    if not candidate.exists() and not candidate.is_symlink():
+        return {}, None
+    raw = _read_text(crw_root, manifest_rel)
+    doc = strict_json_loads(raw, label="coverage-manifest.json")
+    if not isinstance(doc, dict) or doc.get("format") != CRW_COVERAGE_MANIFEST_FORMAT:
+        raise ValueError(
+            f"coverage-manifest.json must be a JSON object with format "
+            f"{CRW_COVERAGE_MANIFEST_FORMAT!r}"
+        )
+    controls_raw = doc.get("controls")
+    if not isinstance(controls_raw, dict):
+        raise ValueError("coverage-manifest.json 'controls' must be a JSON object")
+
+    parsed: dict[str, dict[str, Any]] = {}
+    for ctrl_id, entry in controls_raw.items():
+        if not isinstance(ctrl_id, str) or not ctrl_id.strip():
+            raise ValueError("coverage-manifest.json control IDs must be non-empty strings")
+        if not isinstance(entry, dict):
+            raise ValueError(f"coverage-manifest.json entry for {ctrl_id!r} must be an object")
+        unknown_keys = set(entry) - {"families", "constituents", "escape_class"}
+        if unknown_keys:
+            raise ValueError(
+                f"coverage-manifest.json entry {ctrl_id!r} has unknown keys: {sorted(unknown_keys)}"
+            )
+        fams = _validate_slug_list(entry.get("families", []), f"controls[{ctrl_id!r}].families")
+        dims = _validate_slug_list(
+            entry.get("constituents", []), f"controls[{ctrl_id!r}].constituents"
+        )
+        esc = entry.get("escape_class")
+        if esc is not None and (not isinstance(esc, str) or not esc.strip()):
+            raise ValueError(
+                f"controls[{ctrl_id!r}].escape_class must be a non-empty string when present"
+            )
+        parsed[ctrl_id] = {
+            "families": fams,
+            "constituents": dims,
+            "escape_class": esc.strip() if isinstance(esc, str) else None,
+        }
+    return parsed, manifest_rel
 
 
 def _build_control_records(
     crw_root: Path,
     commit: str,
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes]]:
+    fam_id_by_slug: dict[str, str],
+    dim_id_by_slug: dict[str, str],
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, dict[str, str]],
+    dict[str, bytes],
+    dict[str, Any],
+]:
     ctrl_rel = "risk-axis-reviewers/evals/organization-boundary-controls-v1"
     cases_rel = f"{ctrl_rel}/cases.json"
     cases = strict_json_loads(
@@ -215,19 +282,63 @@ def _build_control_records(
     if not isinstance(cases, list) or not cases:
         raise ValueError("organization-boundary-controls-v1/cases.json must be a non-empty array")
 
+    manifest_controls, manifest_rel = _load_coverage_manifest(crw_root, ctrl_rel)
     desired: list[dict[str, Any]] = []
     basis_shas: dict[str, dict[str, str]] = {}
     pending_digests: dict[str, bytes] = {}
+    covered_dim_ids: set[str] = set()
+    mapped_controls = 0
+
     for entry in sorted(cases, key=lambda x: str(x.get("id", ""))):
         if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
             raise ValueError("invalid O-control case in cases.json")
         raw_id = entry["id"]
         rec_id = slugify_id("crw-ctrl", raw_id)
         pin_files = [cases_rel]
+        if manifest_rel is not None and raw_id in manifest_controls:
+            pin_files.append(manifest_rel)
         for leaf in ("README.md", "assignment.md"):
             cand = f"{ctrl_rel}/{raw_id}/{leaf}"
             if (crw_root / cand).is_file():
                 pin_files.append(cand)
+
+        rels: list[dict[str, str]] = [
+            {"relation": "supports", "target": "crw-catalog"},
+            {"relation": "evidenced-by", "target": "crw-esc-protocol"},
+        ]
+        content: dict[str, Any] = {
+            "control_id": raw_id,
+            "purpose": str(entry.get("purpose", "")),
+            "contract": str(entry.get("contract", "")),
+            "expected": entry.get("expected"),
+            "files": pin_files,
+            "commit": commit,
+        }
+        cov = manifest_controls.get(raw_id)
+        if cov is not None:
+            mapped_controls += 1
+            for fam_slug in cov["families"]:
+                fam_id = fam_id_by_slug.get(fam_slug)
+                if fam_id is None:
+                    raise ValueError(
+                        f"coverage-manifest.json control {raw_id!r} references unknown family "
+                        f"{fam_slug!r}"
+                    )
+                rels.append({"relation": "supports", "target": fam_id})
+            for dim_slug in cov["constituents"]:
+                dim_id = dim_id_by_slug.get(dim_slug)
+                if dim_id is None:
+                    raise ValueError(
+                        f"coverage-manifest.json control {raw_id!r} references unknown constituent "
+                        f"{dim_slug!r}"
+                    )
+                rels.append({"relation": "supports", "target": dim_id})
+                covered_dim_ids.add(dim_id)
+            content["families"] = list(cov["families"])
+            content["constituents"] = list(cov["constituents"])
+            if cov["escape_class"] is not None:
+                content["escape_class"] = cov["escape_class"]
+
         b_list, b_map, b_bytes = _pin_basis(crw_root, rec_id, pin_files)
         basis_shas[rec_id] = b_map
         pending_digests[rec_id] = b_bytes
@@ -235,23 +346,24 @@ def _build_control_records(
             {
                 "id": rec_id,
                 "kind": "crw-control",
-                "content": {
-                    "control_id": raw_id,
-                    "purpose": str(entry.get("purpose", "")),
-                    "contract": str(entry.get("contract", "")),
-                    "expected": entry.get("expected"),
-                    "files": pin_files,
-                    "commit": commit,
-                },
-                "relations": [
-                    {"relation": "supports", "target": "crw-catalog"},
-                    {"relation": "evidenced-by", "target": "crw-esc-protocol"},
-                ],
+                "content": content,
+                "relations": rels,
                 "basis": b_list,
                 "active": True,
             }
         )
-    return desired, basis_shas, pending_digests
+
+    zero_ctrl_dims = (
+        sorted(set(dim_id_by_slug.values()) - covered_dim_ids) if manifest_rel is not None else []
+    )
+    coverage_info: dict[str, Any] = {
+        "manifest_present": manifest_rel is not None,
+        "manifest_path": manifest_rel,
+        "mapped_controls": mapped_controls,
+        "covered_constituents": len(covered_dim_ids),
+        "zero_control_constituents": zero_ctrl_dims,
+    }
+    return desired, basis_shas, pending_digests, coverage_info
 
 
 def _build_catalog_record(
@@ -260,6 +372,7 @@ def _build_catalog_record(
     family_ids: list[str],
     constituent_count: int,
     control_count: int,
+    coverage_info: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, str], bytes]:
     # Families and crw-contract-shared point one-directionally (`maps-to -> crw-catalog`)
     # so the taxonomy stays acyclic (`structural_scc_count == 0`).
@@ -268,14 +381,22 @@ def _build_catalog_record(
         {"relation": "maps-to", "target": "crw-cal-routing"},
         {"relation": "maps-to", "target": "crw-tool-semantic-profiler"},
     ]
-    cat_basis, cat_map, cat_bytes = _pin_basis(
-        checked_crw,
-        "crw-catalog",
-        [
-            "risk-axis-reviewers/review-dimensions.md",
-            "risk-axis-reviewers/observer-dimensions.json",
-        ],
-    )
+    cat_files = [
+        "risk-axis-reviewers/review-dimensions.md",
+        "risk-axis-reviewers/observer-dimensions.json",
+    ]
+    if coverage_info.get("manifest_path"):
+        cat_files.append(str(coverage_info["manifest_path"]))
+    cat_basis, cat_map, cat_bytes = _pin_basis(checked_crw, "crw-catalog", cat_files)
+    coverage_block: dict[str, Any] = {
+        "commit": commit,
+        "families": len(family_ids),
+        "constituents": constituent_count,
+        "controls": control_count,
+        "mapped_controls": int(coverage_info["mapped_controls"]),
+        "covered_constituents": int(coverage_info["covered_constituents"]),
+        "zero_control_constituent_count": len(coverage_info["zero_control_constituents"]),
+    }
     record = {
         "id": "crw-catalog",
         "kind": "architecture-composition",
@@ -291,13 +412,8 @@ def _build_catalog_record(
             "relations": [],
             "premises": [],
             "opportunities": [],
-            "coverage": {
-                "commit": commit,
-                "families": len(family_ids),
-                "constituents": constituent_count,
-                "controls": control_count,
-            },
-            "unknowns": [],
+            "coverage": coverage_block,
+            "unknowns": list(coverage_info["zero_control_constituents"]),
         },
         "relations": catalog_rels,
         "basis": cat_basis,
@@ -308,17 +424,19 @@ def _build_catalog_record(
 
 def build_crw_records(
     crw_root: Path,
-) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes], dict[str, int]]:
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes], dict[str, Any]]:
     """Purely compute deterministic CRW records and in-memory digest pins (zero disk writes)."""
     checked_crw = check_ordinary_ancestors(
         crw_root, expect_dir=True, error_prefix="ordinary CRW repository root required"
     ).resolve(strict=True)
     commit = git_head_sha(checked_crw)
 
-    fam_dim_records, basis_shas, pending_digests, family_ids, fam_by_slug = (
+    fam_dim_records, basis_shas, pending_digests, family_ids, fam_by_slug, dim_by_slug = (
         _build_family_and_constituent_records(checked_crw, commit)
     )
-    ctrl_records, ctrl_basis, ctrl_digests = _build_control_records(checked_crw, commit)
+    ctrl_records, ctrl_basis, ctrl_digests, coverage_info = _build_control_records(
+        checked_crw, commit, fam_by_slug, dim_by_slug
+    )
     basis_shas.update(ctrl_basis)
     pending_digests.update(ctrl_digests)
 
@@ -386,6 +504,7 @@ def build_crw_records(
         family_ids,
         constituent_count,
         len(ctrl_records),
+        coverage_info,
     )
     basis_shas["crw-catalog"] = cat_map
     pending_digests["crw-catalog"] = cat_bytes
@@ -393,10 +512,13 @@ def build_crw_records(
 
     desired.extend(fam_dim_records)
     desired.extend(ctrl_records)
-    counts = {
+    counts: dict[str, Any] = {
         "families": len(family_ids),
         "constituents": constituent_count,
         "controls": len(ctrl_records),
+        "mapped_controls": int(coverage_info["mapped_controls"]),
+        "covered_constituents": int(coverage_info["covered_constituents"]),
+        "zero_control_constituents": list(coverage_info["zero_control_constituents"]),
         "total_records": len(desired),
     }
     return desired, basis_shas, pending_digests, counts
