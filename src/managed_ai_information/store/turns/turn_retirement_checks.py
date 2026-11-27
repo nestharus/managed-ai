@@ -121,6 +121,58 @@ def _check_packet_and_return(
     return packet_dir, binding, request, returned
 
 
+def _verify_declared_publications(
+    turn: str,
+    packet_dir: Path,
+    request: dict[str, Any],
+    returned: dict[str, Any],
+    refuse: Callable[..., None],
+) -> tuple[list[str], list[str]]:
+    declared_targets = [row["path"] for row in request.get("targets", [])]
+    proposal_paths = {row["path"] for row in returned.get("proposals", [])}
+    unreturned = [t for t in declared_targets if t not in proposal_paths]
+    if unreturned:
+        refuse("unreturned_targets", unreturned)
+
+    publications, reconciliations, unreadable = publication_inventory(packet_dir)
+    if unreadable:
+        refuse(
+            "unreadable_publication_records",
+            {name: str(err) for name, err in sorted(unreadable.items())},
+        )
+    if reconciliations:
+        refuse("reconciled_publication_unestablished", sorted(reconciliations))
+
+    complete_set: set[str] = set()
+    bad_pubs: list[str] = []
+    for slot_name, (pub_record, _) in sorted(publications.items()):
+        target = pub_record.get("path")
+        try:
+            if not isinstance(target, str) or slot_name != publication_name(target):
+                raise ValueError(f"non-canonical publication slot: {slot_name}")
+            require(
+                publication_matches(turn, request, pub_record, returned),
+                f"publication binding mismatch: {slot_name}",
+            )
+            validate_publication_record(pub_record)
+        except (ValueError, KeyError, TypeError) as exc:
+            bad_pubs.append(f"{slot_name}: {exc}")
+            continue
+
+        if pub_record.get("phase") != "complete":
+            bad_pubs.append(f"{target}: phase={pub_record.get('phase')}")
+            continue
+        complete_set.add(target)
+
+    if bad_pubs:
+        refuse("incomplete_or_invalid_publications", bad_pubs)
+
+    unpublished = [t for t in declared_targets if t not in complete_set]
+    if unpublished:
+        refuse("unpublished_targets", unpublished)
+    return declared_targets, [t for t in declared_targets if t in complete_set]
+
+
 def _check_publications(
     turn: str,
     turn_dir: Path,
@@ -150,52 +202,12 @@ def _check_publications(
         except (OSError, ValueError, KeyError, TypeError) as exc:
             refuse("unreadable_preparation_marker", str(exc))
 
-    declared_targets: list[str] = []
-    complete_targets: list[str] = []
     if request is not None and returned is not None:
-        declared_targets = [row["path"] for row in request.get("targets", [])]
-        proposal_paths = {row["path"] for row in returned.get("proposals", [])}
-        unreturned = [t for t in declared_targets if t not in proposal_paths]
-        if unreturned:
-            refuse("unreturned_targets", unreturned)
-
-        publications, reconciliations, unreadable = publication_inventory(packet_dir)
-        if unreadable:
-            refuse(
-                "unreadable_publication_records",
-                {name: str(err) for name, err in sorted(unreadable.items())},
-            )
-        if reconciliations:
-            refuse("reconciled_publication_unestablished", sorted(reconciliations))
-
-        complete_set: set[str] = set()
-        bad_pubs: list[str] = []
-        for slot_name, (pub_record, _) in sorted(publications.items()):
-            target = pub_record.get("path")
-            try:
-                if not isinstance(target, str) or slot_name != publication_name(target):
-                    raise ValueError(f"non-canonical publication slot: {slot_name}")
-                require(
-                    publication_matches(turn, request, pub_record, returned),
-                    f"publication binding mismatch: {slot_name}",
-                )
-                validate_publication_record(pub_record)
-            except (ValueError, KeyError, TypeError) as exc:
-                bad_pubs.append(f"{slot_name}: {exc}")
-                continue
-
-            if pub_record.get("phase") != "complete":
-                bad_pubs.append(f"{target}: phase={pub_record.get('phase')}")
-                continue
-            complete_set.add(target)
-
-        if bad_pubs:
-            refuse("incomplete_or_invalid_publications", bad_pubs)
-
-        unpublished = [t for t in declared_targets if t not in complete_set]
-        if unpublished:
-            refuse("unpublished_targets", unpublished)
-        complete_targets = [t for t in declared_targets if t in complete_set]
+        declared_targets, complete_targets = _verify_declared_publications(
+            turn, packet_dir, request, returned, refuse
+        )
+    else:
+        declared_targets, complete_targets = [], []
 
     return prep_state, declared_targets, complete_targets
 
@@ -338,6 +350,96 @@ def _expected_captured_files(
     return expected_captured, full_view_object
 
 
+def _verify_working_request_file(
+    system: Any,
+    turn_dir: Path,
+    request: dict[str, Any],
+    declared_targets: list[str],
+    expected_captured: dict[str, str],
+    modified_files: list[str],
+) -> dict[str, Any] | None:
+    try:
+        work_request_doc = _read_strict_file(turn_dir / "request.json")
+        require(
+            isinstance(work_request_doc, dict)
+            and set(work_request_doc) <= _TURN_REQUEST_ALLOWED_FIELDS
+            and work_request_doc.get("consumer") == request.get("consumer")
+            and work_request_doc.get("targets") == declared_targets
+            and work_request_doc.get("returns")
+            == [r["origin"]["packet"] for r in request.get("returns", [])]
+            and work_request_doc.get("artifacts")
+            == [
+                f"{r['origin']['packet']}:{r['origin']['proposal_path']}"
+                for r in request.get("artifacts", [])
+            ],
+            "working request.json disagrees with packet request",
+        )
+        brief_sha = expected_captured.get("brief.md")
+        if brief_sha and isinstance(work_request_doc.get("task"), str):
+            brief_text = system.ex.objects.read(brief_sha, retained=True).decode("utf-8")
+            expected_prefix = "# Current receiving task\n\n" + work_request_doc["task"] + "\n"
+            require(
+                brief_text.startswith(expected_prefix),
+                "working request.json task disagrees with captured brief.md",
+            )
+        return work_request_doc
+    except OSError, ValueError, KeyError, TypeError, UnicodeDecodeError:
+        modified_files.append("request.json")
+        return None
+
+
+def _verify_working_selection_file(
+    turn: str,
+    turn_dir: Path,
+    full_view_object: str | None,
+    work_request_doc: dict[str, Any] | None,
+    modified_files: list[str],
+) -> None:
+    try:
+        sel_doc = _read_strict_file(turn_dir / "selection.json")
+        exact_fields(
+            sel_doc, {"request", "view", "attention_feedback"}, {"format"}, "selection.json"
+        )
+        validate_optional_format(sel_doc, TURN_SELECTION_FORMAT, "selection.json")
+        require(
+            sel_doc["attention_feedback"] == feedback_id(turn),
+            "selection.json feedback differs",
+        )
+        require(
+            isinstance(full_view_object, str) and sha(encode(sel_doc["view"])) == full_view_object,
+            "selection.json view differs from captured full_view_object",
+        )
+        if work_request_doc is not None:
+            require(
+                encode(sel_doc["request"]) == encode(work_request_doc),
+                "selection.json request differs from working request.json",
+            )
+    except OSError, ValueError, KeyError, TypeError:
+        modified_files.append("selection.json")
+
+
+def _verify_working_attention_spec(
+    system: Any,
+    file_hashes: dict[str, str],
+    work_request_doc: dict[str, Any] | None,
+    allowed_files: set[str],
+    modified_files: list[str],
+    uncaptured_entries: list[str],
+) -> None:
+    if not (isinstance(work_request_doc, dict) and "attention" in work_request_doc):
+        uncaptured_entries.append("attention-spec.json")
+        return
+    allowed_files.add("attention-spec.json")
+    expected_att_sha = sha(encode(work_request_doc["attention"]))
+    if file_hashes["attention-spec.json"] != expected_att_sha:
+        modified_files.append("attention-spec.json")
+        return
+    try:
+        system.ex.objects.read(expected_att_sha, retained=True)
+    except OSError, ValueError:
+        modified_files.append("attention-spec.json")
+
+
 def _verify_metadata_working_files(
     system: Any,
     turn: str,
@@ -367,74 +469,22 @@ def _verify_metadata_working_files(
     work_request_doc = None
     if "request.json" in file_hashes:
         allowed_files.add("request.json")
-        try:
-            work_request_doc = _read_strict_file(turn_dir / "request.json")
-            require(
-                isinstance(work_request_doc, dict)
-                and set(work_request_doc) <= _TURN_REQUEST_ALLOWED_FIELDS
-                and work_request_doc.get("consumer") == request.get("consumer")
-                and work_request_doc.get("targets") == declared_targets
-                and work_request_doc.get("returns")
-                == [r["origin"]["packet"] for r in request.get("returns", [])]
-                and work_request_doc.get("artifacts")
-                == [
-                    f"{r['origin']['packet']}:{r['origin']['proposal_path']}"
-                    for r in request.get("artifacts", [])
-                ],
-                "working request.json disagrees with packet request",
-            )
-            brief_sha = expected_captured.get("brief.md")
-            if brief_sha and isinstance(work_request_doc.get("task"), str):
-                brief_text = system.ex.objects.read(brief_sha, retained=True).decode("utf-8")
-                expected_prefix = "# Current receiving task\n\n" + work_request_doc["task"] + "\n"
-                require(
-                    brief_text.startswith(expected_prefix),
-                    "working request.json task disagrees with captured brief.md",
-                )
-        except OSError, ValueError, KeyError, TypeError, UnicodeDecodeError:
-            modified_files.append("request.json")
-            work_request_doc = None
+        work_request_doc = _verify_working_request_file(
+            system, turn_dir, request, declared_targets, expected_captured, modified_files
+        )
 
     if "selection.json" in file_hashes:
         allowed_files.add("selection.json")
-        try:
-            sel_doc = _read_strict_file(turn_dir / "selection.json")
-            exact_fields(
-                sel_doc, {"request", "view", "attention_feedback"}, {"format"}, "selection.json"
-            )
-            validate_optional_format(sel_doc, TURN_SELECTION_FORMAT, "selection.json")
-            require(
-                sel_doc["attention_feedback"] == feedback_id(turn),
-                "selection.json feedback differs",
-            )
-            require(
-                isinstance(full_view_object, str)
-                and sha(encode(sel_doc["view"])) == full_view_object,
-                "selection.json view differs from captured full_view_object",
-            )
-            if work_request_doc is not None:
-                require(
-                    encode(sel_doc["request"]) == encode(work_request_doc),
-                    "selection.json request differs from working request.json",
-                )
-        except OSError, ValueError, KeyError, TypeError:
-            modified_files.append("selection.json")
+        _verify_working_selection_file(
+            turn, turn_dir, full_view_object, work_request_doc, modified_files
+        )
     elif "request.json" in file_hashes:
         modified_files.append("request.json")
 
     if "attention-spec.json" in file_hashes:
-        if isinstance(work_request_doc, dict) and "attention" in work_request_doc:
-            allowed_files.add("attention-spec.json")
-            expected_att_sha = sha(encode(work_request_doc["attention"]))
-            if file_hashes["attention-spec.json"] != expected_att_sha:
-                modified_files.append("attention-spec.json")
-            else:
-                try:
-                    system.ex.objects.read(expected_att_sha, retained=True)
-                except OSError, ValueError:
-                    modified_files.append("attention-spec.json")
-        else:
-            uncaptured_entries.append("attention-spec.json")
+        _verify_working_attention_spec(
+            system, file_hashes, work_request_doc, allowed_files, modified_files, uncaptured_entries
+        )
 
 
 def _check_working_copy_integrity(

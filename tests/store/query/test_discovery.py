@@ -770,6 +770,89 @@ class DiscoveryChecks(unittest.TestCase):
                 else:
                     self.assertEqual(actual, expected)
 
+    def test_w16_lexical_hyphen_underscore_equivalence(self) -> None:
+        """Dogfooding fix: hyphen/underscore queries match across '-' and '_' separators."""
+        self.system.put(
+            {
+                "id": "mod-core-multi_route",
+                "kind": "module",
+                "content": {"summary": "Handles multi_route_adapter dispatch"},
+                "active": True,
+            },
+            0,
+        )
+        self.system.put(
+            {
+                "id": "guide-multi-route",
+                "kind": "doc",
+                "content": {"summary": "Explains multi-route architecture"},
+                "active": True,
+            },
+            0,
+        )
+        self.system.put(
+            {
+                "id": "unrelated-item",
+                "kind": "doc",
+                "content": {"summary": "Something about multi_other routing"},
+                "active": True,
+            },
+            0,
+        )
+
+        def check_all(mode: str) -> None:
+            # Metadata channel: "multi-route" matches both hyphen and underscore IDs
+            res_hyphen_meta = Discovery(self.system).search(
+                {"query": "multi-route", "content": False, "scopes": ["records"]}
+            )
+            self.assertEqual(
+                {c["ref"] for c in res_hyphen_meta["candidates"]},
+                {"record:mod-core-multi_route", "record:guide-multi-route"},
+                msg=mode,
+            )
+
+            # Metadata channel: "multi_route" matches both underscore and hyphen IDs
+            res_under_meta = Discovery(self.system).search(
+                {"query": "multi_route", "content": False, "scopes": ["records"]}
+            )
+            self.assertEqual(
+                {c["ref"] for c in res_under_meta["candidates"]},
+                {"record:mod-core-multi_route", "record:guide-multi-route"},
+                msg=mode,
+            )
+
+            # Complete-body channel: hyphen query matches underscore body token & vice versa
+            res_hyphen_body = Discovery(self.system).search(
+                {"query": "multi-route-adapter", "content": True, "scopes": ["records"]}
+            )
+            self.assertEqual(
+                [c["ref"] for c in res_hyphen_body["candidates"]],
+                ["record:mod-core-multi_route"],
+                msg=mode,
+            )
+            res_under_body = Discovery(self.system).search(
+                {"query": "multi_route architecture", "content": True, "scopes": ["records"]}
+            )
+            self.assertEqual(
+                [c["ref"] for c in res_under_body["candidates"]],
+                ["record:guide-multi-route"],
+                msg=mode,
+            )
+
+            # Non-matching query still misses unrelated records
+            res_other = Discovery(self.system).search(
+                {"query": "multi-other", "content": True, "scopes": ["records"]}
+            )
+            self.assertEqual(
+                [c["ref"] for c in res_other["candidates"]],
+                ["record:unrelated-item"],
+                msg=mode,
+            )
+
+        check_all("unindexed")
+        self.system.record_store.reindex()
+        check_all("head-index-v3")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

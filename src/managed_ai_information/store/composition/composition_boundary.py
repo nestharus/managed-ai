@@ -76,6 +76,55 @@ def measuring_contract(
     return definition
 
 
+def _validate_observation_row(
+    row: Any,
+    declared: set[tuple[str, str]],
+    definition: dict[str, Any] | None,
+    allowed: set[int] | None,
+) -> tuple[str, str, tuple[int, ...], int]:
+    if not isinstance(row, dict):
+        raise ValueError("invalid observation")
+    variant = _text(row.get("variant"), "variant")
+    context = _text(row.get("context"), "receiver setting")
+    if (variant, context) not in declared:
+        raise ValueError("undeclared variant or receiver setting")
+
+    message, effect = row.get("message"), row.get("effect")
+    if (
+        not isinstance(message, list)
+        or len(message) > 64
+        or any(type(x) is not int or x.bit_length() > 63 for x in message)
+    ):
+        raise ValueError("the measured message must contain at most 64 integer coordinates")
+    if type(effect) is not int or effect.bit_length() > 63:
+        raise ValueError(
+            "the measured receiving effect must be an integer under the declared instrument"
+        )
+
+    if definition:
+        require(
+            len(message) == len(definition["coordinates"]),
+            "message width differs from measuring contract",
+        )
+        require(allowed is None or effect in allowed, "effect outside contract codebook")
+
+    _text(row.get("witness"), "observation provenance")
+    return variant, context, tuple(message), effect
+
+
+def _find_divergent_pair(
+    by_outcome: dict[tuple[str, int], int],
+) -> tuple[tuple[str, int], tuple[str, int]] | None:
+    first = next(iter(by_outcome))
+    others = list(by_outcome)
+    pair = next(((first, x) for x in others if first[0] != x[0] and first[1] != x[1]), None)
+    if pair is not None:
+        return pair
+    left = next((x for x in others if x[0] != first[0]), None)
+    right = next((x for x in others if x[1] != first[1]), None)
+    return (left, right) if left and right else None
+
+
 def analyze(
     trial: dict[str, Any],
     limit: int,
@@ -112,34 +161,9 @@ def analyze(
     declared = {(v, c) for v in variants for c in contexts}
 
     for n, row in enumerate(samples, 1):
-        if not isinstance(row, dict):
-            raise ValueError("invalid observation")
-        variant = _text(row.get("variant"), "variant")
-        context = _text(row.get("context"), "receiver setting")
-        if (variant, context) not in declared:
-            raise ValueError("undeclared variant or receiver setting")
-
-        message, effect = row.get("message"), row.get("effect")
-        if (
-            not isinstance(message, list)
-            or len(message) > 64
-            or any(type(x) is not int or x.bit_length() > 63 for x in message)
-        ):
-            raise ValueError("the measured message must contain at most 64 integer coordinates")
-        if type(effect) is not int or effect.bit_length() > 63:
-            raise ValueError(
-                "the measured receiving effect must be an integer under the declared instrument"
-            )
-
-        if definition:
-            require(
-                len(message) == len(definition["coordinates"]),
-                "message width differs from measuring contract",
-            )
-            require(allowed is None or effect in allowed, "effect outside contract codebook")
-
-        _text(row.get("witness"), "observation provenance")
-        signal = tuple(message)
+        variant, context, signal, effect = _validate_observation_row(
+            row, declared, definition, allowed
+        )
         observed.setdefault((variant, context), set()).add((signal, effect))
         groups.setdefault((context, signal), {}).setdefault((variant, effect), n)
 
@@ -152,16 +176,8 @@ def analyze(
         if len({v for v, _ in by_outcome}) < 2:
             continue
         compared += 1
-
-        first = next(iter(by_outcome))
-        others = list(by_outcome)
-        pair = next(((first, x) for x in others if first[0] != x[0] and first[1] != x[1]), None)
-        if pair is None:
-            left = next((x for x in others if x[0] != first[0]), None)
-            right = next((x for x in others if x[1] != first[1]), None)
-            if left and right:
-                pair = left, right
-        if pair:
+        pair = _find_divergent_pair(by_outcome)
+        if pair is not None:
             a, b = pair
             failures.append(
                 {

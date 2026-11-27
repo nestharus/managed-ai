@@ -65,6 +65,23 @@ def _append_content_link_edges(
                 discovery.edges.append(edge)
 
 
+def _resolve_relation_target(
+    discovery: Any, raw_target: Any, ref: str, *, records_only: bool
+) -> str | None:
+    if not records_only:
+        return discovery._resolve(raw_target, ref)
+    if not isinstance(raw_target, str) or not raw_target:
+        return None
+    candidate_ref = (
+        raw_target
+        if raw_target.startswith("record:")
+        else ("record:" + raw_target if ":" not in raw_target else None)
+    )
+    if candidate_ref is None or candidate_ref not in discovery.entries:
+        return None
+    return candidate_ref
+
+
 def extract_record_edges(discovery: Any, item: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract declared relation edges (and optional content links) from one inspected record."""
     ref = item["ref"]
@@ -73,6 +90,7 @@ def extract_record_edges(discovery: Any, item: dict[str, Any]) -> list[dict[str,
 
     result: list[dict] = []
     excluded = set(discovery.req.get("exclude_relation_labels", ()))
+    allowed_labels = discovery.req["relation_labels"]
     records_only = bool(discovery.req.get("records_only", False))
     record = (
         discovery._ensure_record_loaded(item)
@@ -100,27 +118,14 @@ def extract_record_edges(discovery: Any, item: dict[str, Any]) -> list[dict[str,
             continue
 
         label = relation["relation"]
-        if label in excluded:
-            continue
-        if discovery.req["relation_labels"] and label not in discovery.req["relation_labels"]:
+        if label in excluded or (allowed_labels and label not in allowed_labels):
             continue
 
-        raw_target = relation.get("target")
-        if records_only:
-            if not isinstance(raw_target, str) or not raw_target:
-                continue
-            candidate_ref = (
-                raw_target
-                if raw_target.startswith("record:")
-                else ("record:" + raw_target if ":" not in raw_target else None)
-            )
-            if candidate_ref is None or candidate_ref not in discovery.entries:
-                continue
-            target = candidate_ref
-        else:
-            target = discovery._resolve(raw_target, ref)
-            if target is None:
-                continue
+        target = _resolve_relation_target(
+            discovery, relation.get("target"), ref, records_only=records_only
+        )
+        if target is None:
+            continue
 
         edge = {
             "from": ref,
@@ -154,6 +159,65 @@ def build_incoming_edges(discovery: Any) -> dict[str, list[dict[str, Any]]]:
     return discovery.incoming
 
 
+def _add_rev_edge_sources(
+    view: Any,
+    edges: list[tuple[str, int]],
+    label_ok: Any,
+    skip_base: set[str],
+    src_ids: set[str],
+) -> None:
+    for label, src_slot in edges:
+        if not label_ok(label):
+            continue
+        ident = view.slot_id(src_slot)
+        if ident not in skip_base:
+            src_ids.add(ident)
+
+
+def _scan_base_content_link_sources(
+    view: Any,
+    bare: str,
+    label_ok: Any,
+    skip_base: set[str],
+    src_ids: set[str],
+) -> None:
+    for slot in range(view.record_count):
+        _, _, _, slot_flags = view.slot_stat_fast(slot)
+        if not (slot_flags & FLAG_HAS_CONTENT_LINKS):
+            continue
+        ident = view.slot_id(slot)
+        if ident in skip_base or ident in src_ids:
+            continue
+        clinks = view.slot_graph_aux(slot, slot_flags)["content_links"]
+        if any(label_ok("content:" + name) and bare in vals for name, vals in clinks.items()):
+            src_ids.add(ident)
+
+
+def _scan_overlay_incoming_sources(
+    overlay: dict[str, dict[str, Any]],
+    dels: set[str],
+    match_targets: set[str],
+    bare: str | None,
+    include_content_links: bool,
+    label_ok: Any,
+    src_ids: set[str],
+) -> None:
+    for ident, entry in overlay.items():
+        if ident in dels:
+            continue
+        raw_graph = entry.get("graph")
+        graph: dict[str, Any] = raw_graph if isinstance(raw_graph, dict) else {}
+        if any(
+            tgt in match_targets and label_ok(label) for label, tgt in graph.get("relations", ())
+        ):
+            src_ids.add(ident)
+            continue
+        if include_content_links and bare is not None:
+            clinks = graph.get("content_links") or {}
+            if any(label_ok("content:" + name) and bare in vals for name, vals in clinks.items()):
+                src_ids.add(ident)
+
+
 def _collect_indexed_incoming_sources(discovery: Any, target_ref: str) -> list[str]:
     """Use HeadIndex v3 Reverse CSR (+ delta/overrides) to locate incoming source IDs."""
     verified = discovery._verified_index
@@ -163,9 +227,7 @@ def _collect_indexed_incoming_sources(discovery: Any, target_ref: str) -> list[s
     include_content_links = bool(discovery.req.get("include_content_links"))
 
     def label_ok(label: str) -> bool:
-        if label in excluded:
-            return False
-        return not allowed_labels or label in allowed_labels
+        return label not in excluded and (not allowed_labels or label in allowed_labels)
 
     dels = verified.removed | view.delta_dels
     overlay = dict(view.delta_puts)
@@ -174,56 +236,20 @@ def _collect_indexed_incoming_sources(discovery: Any, target_ref: str) -> list[s
 
     src_ids: set[str] = set()
     bare = target_ref[7:] if target_ref.startswith("record:") else None
-
-    for label, src_slot in view.ext_rev_edges(target_ref):
-        if label_ok(label):
-            ident = view.slot_id(src_slot)
-            if ident not in skip_base:
-                src_ids.add(ident)
+    _add_rev_edge_sources(view, view.ext_rev_edges(target_ref), label_ok, skip_base, src_ids)
 
     if bare is not None:
         target_slot = view.slot_for_id(bare)
         if target_slot >= 0:
-            for label, src_slot in view.rev_edges(target_slot):
-                if label_ok(label):
-                    ident = view.slot_id(src_slot)
-                    if ident not in skip_base:
-                        src_ids.add(ident)
-        for label, src_slot in view.ext_rev_edges(bare):
-            if label_ok(label):
-                ident = view.slot_id(src_slot)
-                if ident not in skip_base:
-                    src_ids.add(ident)
-
+            _add_rev_edge_sources(view, view.rev_edges(target_slot), label_ok, skip_base, src_ids)
+        _add_rev_edge_sources(view, view.ext_rev_edges(bare), label_ok, skip_base, src_ids)
         if include_content_links:
-            for slot in range(view.record_count):
-                _, _, _, slot_flags = view.slot_stat_fast(slot)
-                if not (slot_flags & FLAG_HAS_CONTENT_LINKS):
-                    continue
-                ident = view.slot_id(slot)
-                if ident in skip_base or ident in src_ids:
-                    continue
-                clinks = view.slot_graph_aux(slot, slot_flags)["content_links"]
-                for field_name, vals in clinks.items():
-                    if label_ok("content:" + field_name) and bare in vals:
-                        src_ids.add(ident)
-                        break
+            _scan_base_content_link_sources(view, bare, label_ok, skip_base, src_ids)
 
     match_targets = {target_ref} if bare is None else {target_ref, bare}
-    for ident, entry in overlay.items():
-        if ident in dels:
-            continue
-        graph = entry.get("graph") if isinstance(entry.get("graph"), dict) else {}
-        for label, tgt in graph.get("relations", ()):
-            if tgt in match_targets and label_ok(label):
-                src_ids.add(ident)
-                break
-        else:
-            if include_content_links and bare is not None:
-                for field_name, vals in (graph.get("content_links") or {}).items():
-                    if label_ok("content:" + field_name) and bare in vals:
-                        src_ids.add(ident)
-                        break
+    _scan_overlay_incoming_sources(
+        overlay, dels, match_targets, bare, include_content_links, label_ok, src_ids
+    )
 
     if discovery._record_order_rank is None:
         discovery._record_order_rank = {

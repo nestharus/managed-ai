@@ -487,12 +487,21 @@ class Discovery:
         zero_progress_skips += 1
         return zero_progress_skips >= _MAX_ZERO_PROGRESS_RECORD_BYTE_SKIPS, zero_progress_skips
 
+    @staticmethod
+    def _terms_match(terms: list[str], raw_text: str) -> bool:
+        if all(t in raw_text for t in terms):
+            return True
+        if not any("-" in t or "_" in t for t in terms):
+            return False
+        norm_text = raw_text.replace("_", "-")
+        return all((t in raw_text) or (t.replace("_", "-") in norm_text) for t in terms)
+
     def _match_lexical_item(self, ref: str, item: dict[str, Any], terms: list[str]) -> None:
         metadata = item["metadata"].casefold()
-        metadata_match = all(t in metadata for t in terms)
+        metadata_match = self._terms_match(terms, metadata)
         body = self._body(ref) if (terms and not metadata_match and self.req["content"]) else None
         searchable = metadata + ("\n" + body.casefold() if body is not None else "")
-        if all(term in searchable for term in terms):
+        if metadata_match or self._terms_match(terms, searchable):
             self._candidate(
                 item,
                 {

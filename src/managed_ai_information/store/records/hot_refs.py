@@ -119,6 +119,27 @@ def packet_is_open(system: Any, pkt_dir: Path, pkt_name: str, req: dict[str, Any
     return bool((declared_targets & proposed_targets) - completed_targets)
 
 
+def _record_scan_error(msg: str, *, fail_closed: bool, errors: list[str]) -> None:
+    if fail_closed:
+        raise ValueError(msg)
+    errors.append(msg)
+
+
+def _extract_evidence_path(
+    ev: Any, filename: str, *, fail_closed: bool, errors: list[str]
+) -> str | None:
+    if isinstance(ev, str):
+        return ev
+    if isinstance(ev, dict) and isinstance(ev.get("path"), str):
+        return ev["path"]
+    _record_scan_error(
+        f"malformed evidence entry in interpretation {filename}",
+        fail_closed=fail_closed,
+        errors=errors,
+    )
+    return None
+
+
 def scan_interpretation_refs(
     system: Any,
     extractor: Callable[[Any], str | None],
@@ -137,7 +158,6 @@ def scan_interpretation_refs(
     for path in sorted(interp_dir.iterdir(), key=lambda p: p.name):
         if path.name.startswith(".") or not path.name.endswith(".json"):
             continue
-
         try:
             if not is_ordinary_file_stat(path.lstat()):
                 raise ValueError(f"symlink interpretation file: {path.name}")
@@ -150,37 +170,65 @@ def scan_interpretation_refs(
 
         evidence = doc.get("evidence", [])
         if not isinstance(evidence, list):
-            msg = f"malformed evidence list in interpretation {path.name}"
-            if fail_closed:
-                raise ValueError(msg)
-            errors.append(msg)
+            _record_scan_error(
+                f"malformed evidence list in interpretation {path.name}",
+                fail_closed=fail_closed,
+                errors=errors,
+            )
             continue
 
         for ev in evidence:
-            if isinstance(ev, dict):
-                ev_path = ev.get("path")
-                if not isinstance(ev_path, str):
-                    msg = f"malformed evidence entry in interpretation {path.name}"
-                    if fail_closed:
-                        raise ValueError(msg)
-                    errors.append(msg)
-                    continue
-            elif isinstance(ev, str):
-                ev_path = ev
-            else:
-                msg = f"malformed evidence entry in interpretation {path.name}"
-                if fail_closed:
-                    raise ValueError(msg)
-                errors.append(msg)
-                continue
-
-            target = extractor(ev_path)
-            if target is not None:
+            ev_path = _extract_evidence_path(ev, path.name, fail_closed=fail_closed, errors=errors)
+            target = extractor(ev_path) if ev_path is not None else None
+            if target is not None and ev_path is not None:
                 refs.setdefault(target, []).append({"interpretation": path.name, "path": ev_path})
 
     for rows in refs.values():
         rows.sort(key=lambda r: (r["interpretation"], r["path"]))
     return refs, errors
+
+
+def _classify_packet_entry(entry_name: str) -> tuple[str, bool] | None:
+    if entry_name.startswith(".sealed-"):
+        return entry_name[len(".sealed-") :], True
+    if entry_name.startswith(".prepare-"):
+        return entry_name, True
+    if entry_name.startswith("."):
+        return None
+    return entry_name, False
+
+
+def _scan_packet_role_refs(
+    request: dict[str, Any],
+    entry_name: str,
+    pkt_name: str,
+    extractor: Callable[[Any], str | None],
+    *,
+    skip_self_packet: bool,
+    fail_closed: bool,
+    refs: dict[str, list[dict[str, str]]],
+    errors: list[str],
+) -> None:
+    for role in ("brief", "methods", "materials", "targets"):
+        rows = (
+            [request[role]]
+            if role == "brief" and isinstance(request.get("brief"), dict)
+            else request.get(role, [])
+        )
+        if not isinstance(rows, list):
+            _record_scan_error(
+                f"malformed {role} in packet {entry_name}", fail_closed=fail_closed, errors=errors
+            )
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            raw_path = row.get("path")
+            target = extractor(raw_path)
+            if target is not None and (not skip_self_packet or target != pkt_name):
+                refs.setdefault(target, []).append(
+                    {"packet": entry_name, "role": role, "path": str(raw_path)}
+                )
 
 
 def scan_packet_refs(
@@ -203,23 +251,15 @@ def scan_packet_refs(
 
     for pkt_dir in sorted(packets_root.iterdir(), key=lambda p: p.name):
         entry_name = pkt_dir.name
-        staged = False
-        if entry_name.startswith(".sealed-"):
-            pkt_name = entry_name[len(".sealed-") :]
-            staged = True
-        elif entry_name.startswith(".prepare-"):
-            pkt_name = entry_name
-            staged = True
-        elif entry_name.startswith("."):
+        classified = _classify_packet_entry(entry_name)
+        if classified is None:
             continue
-        else:
-            pkt_name = entry_name
+        pkt_name, staged = classified
 
         if not is_ordinary_dir_stat(pkt_dir.lstat()):
-            msg = f"non-directory packet entry: {entry_name}"
-            if fail_closed:
-                raise ValueError(msg)
-            errors.append(msg)
+            _record_scan_error(
+                f"non-directory packet entry: {entry_name}", fail_closed=fail_closed, errors=errors
+            )
             continue
 
         req_path = pkt_dir / "request.json"
@@ -228,10 +268,11 @@ def scan_packet_refs(
             and not req_path.exists()
             and not req_path.is_symlink()
         ):
-            msg = f"in-flight packet staging directory present: {entry_name}"
-            if fail_closed:
-                raise ValueError(msg)
-            errors.append(msg)
+            _record_scan_error(
+                f"in-flight packet staging directory present: {entry_name}",
+                fail_closed=fail_closed,
+                errors=errors,
+            )
             continue
 
         try:
@@ -250,36 +291,58 @@ def scan_packet_refs(
         if open_only and not staged and not packet_is_open(system, pkt_dir, entry_name, request):
             continue
 
-        for role in ("brief", "methods", "materials", "targets"):
-            rows = (
-                [request[role]]
-                if role == "brief" and isinstance(request.get("brief"), dict)
-                else request.get(role, [])
-            )
-            if not isinstance(rows, list):
-                msg = f"malformed {role} in packet {entry_name}"
-                if fail_closed:
-                    raise ValueError(msg)
-                errors.append(msg)
-                continue
-
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                raw_path = row.get("path")
-                target = extractor(raw_path)
-                if target is not None and (not skip_self_packet or target != pkt_name):
-                    refs.setdefault(target, []).append(
-                        {
-                            "packet": entry_name,
-                            "role": role,
-                            "path": str(raw_path),
-                        }
-                    )
+        _scan_packet_role_refs(
+            request,
+            entry_name,
+            pkt_name,
+            extractor,
+            skip_self_packet=skip_self_packet,
+            fail_closed=fail_closed,
+            refs=refs,
+            errors=errors,
+        )
 
     for rows in refs.values():
         rows.sort(key=lambda r: (r["packet"], r["role"], r["path"]))
     return refs, committed, errors
+
+
+def _scan_attention_products(
+    system: Any,
+    state: dict[str, Any],
+    active_items: set[str],
+    extractor: Callable[[Any], str | None],
+    refs: dict[str, list[dict[str, str]]],
+) -> None:
+    current = system.attention._current(state)
+    receipt_cache: dict[int, dict[str, Any]] = {}
+    latest_map = current.get("latest", {})
+
+    for item_id in sorted(active_items):
+        bases = latest_map.get(item_id, {})
+        if not isinstance(bases, dict):
+            raise ValueError(f"malformed attention latest entries for {item_id}")
+
+        for basis_key in sorted(bases):
+            pos, offset = bases[basis_key]
+            if pos not in receipt_cache:
+                receipt_cache[pos] = system.attention._get(state["receipts"][pos])
+            receipt_doc = receipt_cache[pos]
+            products = receipt_doc["assessments"][offset].get("products", [])
+            if not isinstance(products, list):
+                raise ValueError(f"malformed attention assessment products for {item_id}")
+            for product in products:
+                prod_path = product.get("path") if isinstance(product, dict) else product
+                target = extractor(prod_path)
+                if target is not None:
+                    refs.setdefault(target, []).append(
+                        {
+                            "owner": "attention.assessment.product",
+                            "item": item_id,
+                            "receipt": str(receipt_doc.get("id", "")),
+                            "path": str(prod_path),
+                        }
+                    )
 
 
 def scan_attention_refs(
@@ -312,45 +375,11 @@ def scan_attention_refs(
                 target = extractor(path)
                 if target is not None:
                     refs.setdefault(target, []).append(
-                        {
-                            "owner": "attention.item",
-                            "item": item_id,
-                            "path": path,
-                        }
+                        {"owner": "attention.item", "item": item_id, "path": path}
                     )
 
         if active_items and state.get("receipts"):
-            current = system.attention._current(state)
-            receipt_cache: dict[int, dict[str, Any]] = {}
-            latest_map = current.get("latest", {})
-
-            for item_id in sorted(active_items):
-                bases = latest_map.get(item_id, {})
-                if not isinstance(bases, dict):
-                    raise ValueError(f"malformed attention latest entries for {item_id}")
-
-                for basis_key in sorted(bases):
-                    pos, offset = bases[basis_key]
-                    if pos not in receipt_cache:
-                        receipt_cache[pos] = system.attention._get(state["receipts"][pos])
-                    receipt_doc = receipt_cache[pos]
-                    assessment = receipt_doc["assessments"][offset]
-                    products = assessment.get("products", [])
-                    if not isinstance(products, list):
-                        raise ValueError(f"malformed attention assessment products for {item_id}")
-
-                    for product in products:
-                        prod_path = product.get("path") if isinstance(product, dict) else product
-                        target = extractor(prod_path)
-                        if target is not None:
-                            refs.setdefault(target, []).append(
-                                {
-                                    "owner": "attention.assessment.product",
-                                    "item": item_id,
-                                    "receipt": str(receipt_doc.get("id", "")),
-                                    "path": str(prod_path),
-                                }
-                            )
+            _scan_attention_products(system, state, active_items, extractor, refs)
     except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
         if fail_closed:
             raise
@@ -359,6 +388,39 @@ def scan_attention_refs(
     for rows in refs.values():
         rows.sort(key=lambda r: (r["owner"], r.get("item", ""), r.get("receipt", ""), r["path"]))
     return refs, None
+
+
+def _scan_uncommitted_record_ids(
+    req: dict[str, Any], other: str, refs: dict[str, list[dict[str, str]]]
+) -> None:
+    for rid in req.get("records", ()):
+        if isinstance(rid, str) and rid:
+            refs.setdefault(rid, []).append(
+                {"uncommitted_turn": other, "field": "records", "path": f"records/{rid}.json"}
+            )
+    for comp in req.get("compositions", ()):
+        if isinstance(comp, dict) and isinstance(comp.get("record"), str) and comp["record"]:
+            rid = comp["record"]
+            refs.setdefault(rid, []).append(
+                {"uncommitted_turn": other, "field": "compositions", "path": f"records/{rid}.json"}
+            )
+
+
+def _record_uncommitted_path_ref(
+    val: Any,
+    other: str,
+    field: str,
+    extractor: Callable[[Any], str | None],
+    *,
+    skip_self_turn: bool,
+    refs: dict[str, list[dict[str, str]]],
+) -> None:
+    raw_path = val.get("path") if isinstance(val, dict) else val
+    target = extractor(raw_path)
+    if target is not None and (not skip_self_turn or target != other):
+        refs.setdefault(target, []).append(
+            {"uncommitted_turn": other, "field": field, "path": str(raw_path)}
+        )
 
 
 def _scan_uncommitted_request_file(
@@ -387,52 +449,19 @@ def _scan_uncommitted_request_file(
         return
 
     if include_record_ids:
-        for rid in req.get("records", ()):
-            if isinstance(rid, str) and rid:
-                refs.setdefault(rid, []).append(
-                    {
-                        "uncommitted_turn": other,
-                        "field": "records",
-                        "path": f"records/{rid}.json",
-                    }
-                )
-        for comp in req.get("compositions", ()):
-            if isinstance(comp, dict) and isinstance(comp.get("record"), str) and comp["record"]:
-                rid = comp["record"]
-                refs.setdefault(rid, []).append(
-                    {
-                        "uncommitted_turn": other,
-                        "field": "compositions",
-                        "path": f"records/{rid}.json",
-                    }
-                )
+        _scan_uncommitted_record_ids(req, other, refs)
 
     for field in ("sources", "targets", "methods", "materials"):
         values = req.get(field, [])
         if isinstance(values, list):
             for val in values:
-                raw_path = val.get("path") if isinstance(val, dict) else val
-                target = extractor(raw_path)
-                if target is not None and (not skip_self_turn or target != other):
-                    refs.setdefault(target, []).append(
-                        {
-                            "uncommitted_turn": other,
-                            "field": field,
-                            "path": str(raw_path),
-                        }
-                    )
+                _record_uncommitted_path_ref(
+                    val, other, field, extractor, skip_self_turn=skip_self_turn, refs=refs
+                )
 
-    brief_val = req.get("brief")
-    brief_path = brief_val.get("path") if isinstance(brief_val, dict) else brief_val
-    brief_target = extractor(brief_path)
-    if brief_target is not None and (not skip_self_turn or brief_target != other):
-        refs.setdefault(brief_target, []).append(
-            {
-                "uncommitted_turn": other,
-                "field": "brief",
-                "path": str(brief_path),
-            }
-        )
+    _record_uncommitted_path_ref(
+        req.get("brief"), other, "brief", extractor, skip_self_turn=skip_self_turn, refs=refs
+    )
 
 
 def _scan_uncommitted_selection_file(

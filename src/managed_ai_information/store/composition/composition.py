@@ -99,6 +99,128 @@ def _bounded_profile_bytes(body: dict[str, Any]) -> int:
     return exact
 
 
+def _validate_collection_row(collection: str, ident: str, row: dict[str, Any]) -> int:
+    if "account" in row:
+        _text(row["account"], collection + " account")
+    if collection == "elements":
+        _text(row.get("account"), "element account")
+        return 0
+    if collection == "relations":
+        refs = sum(len(_strings(row.get(k, []), "relation " + k)) for k in ("from", "to", "basis"))
+        _text(row.get("prediction"), "relation prediction")
+        observation = row.get("observation", "unassessed")
+        if observation not in ("unassessed", "supported", "contradicted"):
+            raise ValueError(
+                f"relation {ident!r} field 'observation' must be unassessed, "
+                "supported or contradicted; "
+                "put the explanatory observation in this relation's 'account' field"
+            )
+        if observation != "unassessed":
+            _text(
+                row.get("account"),
+                f"relation {ident!r} field 'account' for an asserted observation",
+            )
+        return refs
+    if collection == "premises":
+        _text(row.get("account"), "premise account")
+        if row.get("disposition", "unassessed") not in ("available", "unavailable", "unassessed"):
+            raise ValueError("premise disposition must be available, unavailable or unassessed")
+        return len(_strings(row.get("basis", []), "premise basis"))
+
+    _text(row.get("contribution"), "opportunity contribution")
+    refs = sum(
+        len(_strings(row.get(k, []), "opportunity " + k))
+        for k in ("at", "reads", "writes", "conflicts")
+    )
+    if row.get("disposition", "open") not in ("open", "held", "complete"):
+        raise ValueError("opportunity disposition must be open, held or complete")
+    if row.get("footprint", "unknown") not in ("declared", "unknown"):
+        raise ValueError("opportunity footprint must be declared or unknown")
+    _text(row.get("phase", "unknown"), "opportunity phase")
+    alternatives = row.get("requires", [])
+    if not isinstance(alternatives, list):
+        raise ValueError("opportunity requires must be a list of alternative premise lists")
+    return refs + sum(len(_strings(g, "opportunity premise alternative")) for g in alternatives)
+
+
+def _finish_basis_observation(
+    raw: bytes, row: dict[str, Any], used: int, observed: dict[str, Any]
+) -> int:
+    observed["current_sha256"] = hashlib.sha256(raw).hexdigest()
+    observed["current_bytes"] = len(raw)
+    observed["status"] = "current" if row.get("sha256") == observed["current_sha256"] else "changed"
+    return used + len(raw)
+
+
+def _observe_exchange_basis(
+    objects: Any,
+    row: dict[str, Any],
+    prefixes: tuple[str, ...],
+    used: int,
+    observed: dict[str, Any],
+) -> int:
+    from managed_ai_information.store.protocol.basis_pins import is_content_addressed_basis
+
+    if not (
+        objects is not None
+        and is_content_addressed_basis(row, prefixes=prefixes)
+        and objects.has(row["sha256"])
+    ):
+        observed["status"] = "missing"
+        return used
+    size = row["bytes"]
+    if size > MAX_PROFILE_BYTES or used + size > MAX_BASIS_BYTES:
+        observed["status"] = (
+            "per-source-byte-bound" if size > MAX_PROFILE_BYTES else "total-source-byte-bound"
+        )
+        return used
+    raw = objects.read(row["sha256"], retained=True, expected_bytes=size)
+    observed["custody"] = "exchange-object"
+    return _finish_basis_observation(raw, row, used, observed)
+
+
+def _observe_file_basis(
+    path: Any, info: Any, row: dict[str, Any], used: int, observed: dict[str, Any]
+) -> int:
+    if info.st_size > MAX_PROFILE_BYTES or used + info.st_size > MAX_BASIS_BYTES:
+        observed["status"] = (
+            "per-source-byte-bound"
+            if info.st_size > MAX_PROFILE_BYTES
+            else "total-source-byte-bound"
+        )
+        return used
+    with path.open("rb") as source:
+        raw = source.read(MAX_PROFILE_BYTES + 1)
+    if len(raw) > MAX_PROFILE_BYTES or used + len(raw) > MAX_BASIS_BYTES:
+        observed["status"] = "source-byte-bound"
+        return used
+    return _finish_basis_observation(raw, row, used, observed)
+
+
+def _pair_interaction_reasons(
+    l_id: str,
+    l_reads: frozenset[str],
+    l_writes: frozenset[str],
+    l_conflicts: frozenset[str],
+    r_id: str,
+    r_reads: frozenset[str],
+    r_writes: frozenset[str],
+    r_conflicts: frozenset[str],
+) -> list[dict[str, Any]]:
+    reasons: list[dict[str, Any]] = []
+    if r_id in l_conflicts or l_id in r_conflicts:
+        reasons.append({"kind": "explicit-conflict"})
+    for kind, left_set, right_set in (
+        ("write-write", l_writes, r_writes),
+        ("left-write-right-read", l_writes, r_reads),
+        ("left-read-right-write", l_reads, r_writes),
+    ):
+        common = left_set & right_set if left_set and right_set else None
+        if common:
+            reasons.append({"kind": kind, "resources": sorted(common)})
+    return reasons
+
+
 class Composition:
     def __init__(self, system: Any) -> None:
         self.system = system
@@ -168,56 +290,8 @@ class Composition:
                 ident = _text(row.get("id"), collection + " id")
                 if ident in rows[collection]:
                     raise ValueError("duplicate " + collection + " id: " + ident)
-
                 rows[collection][ident] = row
-                if "account" in row:
-                    _text(row["account"], collection + " account")
-
-                if collection == "elements":
-                    _text(row.get("account"), "element account")
-                elif collection == "relations":
-                    for key in ("from", "to", "basis"):
-                        references += len(_strings(row.get(key, []), "relation " + key))
-                    _text(row.get("prediction"), "relation prediction")
-                    observation = row.get("observation", "unassessed")
-                    if observation not in ("unassessed", "supported", "contradicted"):
-                        raise ValueError(
-                            f"relation {ident!r} field 'observation' must be unassessed, "
-                            "supported or contradicted; "
-                            "put the explanatory observation in this relation's 'account' field"
-                        )
-                    if observation != "unassessed":
-                        _text(
-                            row.get("account"),
-                            f"relation {ident!r} field 'account' for an asserted observation",
-                        )
-                elif collection == "premises":
-                    _text(row.get("account"), "premise account")
-                    if row.get("disposition", "unassessed") not in (
-                        "available",
-                        "unavailable",
-                        "unassessed",
-                    ):
-                        raise ValueError(
-                            "premise disposition must be available, unavailable or unassessed"
-                        )
-                    references += len(_strings(row.get("basis", []), "premise basis"))
-                else:
-                    _text(row.get("contribution"), "opportunity contribution")
-                    for key in ("at", "reads", "writes", "conflicts"):
-                        references += len(_strings(row.get(key, []), "opportunity " + key))
-                    if row.get("disposition", "open") not in ("open", "held", "complete"):
-                        raise ValueError("opportunity disposition must be open, held or complete")
-                    if row.get("footprint", "unknown") not in ("declared", "unknown"):
-                        raise ValueError("opportunity footprint must be declared or unknown")
-                    _text(row.get("phase", "unknown"), "opportunity phase")
-                    alternatives = row.get("requires", [])
-                    if not isinstance(alternatives, list):
-                        raise ValueError(
-                            "opportunity requires must be a list of alternative premise lists"
-                        )
-                    for group in alternatives:
-                        references += len(_strings(group, "opportunity premise alternative"))
+                references += _validate_collection_row(collection, ident, row)
 
         if sum(len(table) for table in rows.values()) > MAX_ROWS:
             raise ValueError("composition exceeds the 2000 total declared-row bound")
@@ -225,10 +299,36 @@ class Composition:
             raise ValueError("composition exceeds the 20000 declared-reference bound")
         return body, rows, input_bytes, references
 
-    def _basis(self, record: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], int]:
+    def _observe_basis_row(
+        self, row: dict[str, Any], objects: Any, prefixes: tuple[str, ...], used: int
+    ) -> tuple[dict[str, Any], int]:
         from managed_ai_information.core.storage import is_ordinary_file_stat
-        from managed_ai_information.store.protocol.basis_pins import is_content_addressed_basis
 
+        name = row["path"]
+        observed: dict[str, Any] = {
+            "path": name,
+            "captured_sha256": row.get("sha256"),
+            "current_sha256": None,
+            "status": "unavailable",
+        }
+        try:
+            path = None if name.startswith("object:") else self.system.ex.path(name)
+            info = None
+            if path is not None:
+                try:
+                    st = path.lstat()
+                    info = st if is_ordinary_file_stat(st) else None
+                except OSError:
+                    info = None
+            if info is None or path is None:
+                used = _observe_exchange_basis(objects, row, prefixes, used, observed)
+            else:
+                used = _observe_file_basis(path, info, row, used, observed)
+        except (OSError, ValueError) as exc:
+            observed["error"] = str(exc)
+        return observed, used
+
+    def _basis(self, record: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], int]:
         captured: dict[str, dict[str, Any]] = {}
         used = 0
         declared = record.get("basis", [])
@@ -236,6 +336,11 @@ class Composition:
             raise ValueError("record basis must be a list of at most 2000 captured paths")
 
         objects = getattr(self.system.ex, "objects", None)
+        prefixes = getattr(
+            getattr(self.system, "record_store", None),
+            "content_addressed_basis_prefixes",
+            (),
+        )
         with (
             objects.pack_session()
             if objects is not None and hasattr(objects, "pack_session")
@@ -244,82 +349,10 @@ class Composition:
             for row in declared:
                 if not isinstance(row, dict) or not isinstance(row.get("path"), str):
                     raise ValueError("record basis must contain captured path objects")
-
                 name = row["path"]
                 if name in captured:
                     raise ValueError("duplicate captured record basis path: " + name)
-
-                observed: dict[str, Any] = {
-                    "path": name,
-                    "captured_sha256": row.get("sha256"),
-                    "current_sha256": None,
-                    "status": "unavailable",
-                }
-
-                try:
-                    path = None if name.startswith("object:") else self.system.ex.path(name)
-                    info = None
-                    if path is not None:
-                        try:
-                            st = path.lstat()
-                            if is_ordinary_file_stat(st):
-                                info = st
-                        except OSError:
-                            info = None
-
-                    if info is None or path is None:
-                        prefixes = getattr(
-                            getattr(self.system, "record_store", None),
-                            "content_addressed_basis_prefixes",
-                            (),
-                        )
-                        if (
-                            objects is not None
-                            and is_content_addressed_basis(row, prefixes=prefixes)
-                            and objects.has(row["sha256"])
-                        ):
-                            size = row["bytes"]
-                            if size > MAX_PROFILE_BYTES:
-                                observed["status"] = "per-source-byte-bound"
-                            elif used + size > MAX_BASIS_BYTES:
-                                observed["status"] = "total-source-byte-bound"
-                            else:
-                                raw = objects.read(
-                                    row["sha256"], retained=True, expected_bytes=size
-                                )
-                                used += len(raw)
-                                observed["current_sha256"] = hashlib.sha256(raw).hexdigest()
-                                observed["current_bytes"] = len(raw)
-                                observed["status"] = (
-                                    "current"
-                                    if row.get("sha256") == observed["current_sha256"]
-                                    else "changed"
-                                )
-                                observed["custody"] = "exchange-object"
-                        else:
-                            observed["status"] = "missing"
-                    elif info.st_size > MAX_PROFILE_BYTES:
-                        observed["status"] = "per-source-byte-bound"
-                    elif used + info.st_size > MAX_BASIS_BYTES:
-                        observed["status"] = "total-source-byte-bound"
-                    else:
-                        with path.open("rb") as source:
-                            raw = source.read(MAX_PROFILE_BYTES + 1)
-                        if len(raw) > MAX_PROFILE_BYTES or used + len(raw) > MAX_BASIS_BYTES:
-                            observed["status"] = "source-byte-bound"
-                        else:
-                            used += len(raw)
-                            observed["current_sha256"] = hashlib.sha256(raw).hexdigest()
-                            observed["current_bytes"] = len(raw)
-                            observed["status"] = (
-                                "current"
-                                if row.get("sha256") == observed["current_sha256"]
-                                else "changed"
-                            )
-                except (OSError, ValueError) as exc:
-                    observed["error"] = str(exc)
-
-                captured[name] = observed
+                captured[name], used = self._observe_basis_row(row, objects, prefixes, used)
 
         return captured, used
 
@@ -566,27 +599,16 @@ class Composition:
                     break
 
                 right = all_opportunities[j]
-                reasons: list[dict[str, Any]] = []
-                if right["id"] in l_conflicts or l_id in conflicts_sets[j]:
-                    reasons.append({"kind": "explicit-conflict"})
-
-                r_reads, r_writes = reads_sets[j], writes_sets[j]
-                if l_writes and r_writes:
-                    common = l_writes & r_writes
-                    if common:
-                        reasons.append({"kind": "write-write", "resources": sorted(common)})
-                if l_writes and r_reads:
-                    common = l_writes & r_reads
-                    if common:
-                        reasons.append(
-                            {"kind": "left-write-right-read", "resources": sorted(common)}
-                        )
-                if l_reads and r_writes:
-                    common = l_reads & r_writes
-                    if common:
-                        reasons.append(
-                            {"kind": "left-read-right-write", "resources": sorted(common)}
-                        )
+                reasons = _pair_interaction_reasons(
+                    l_id,
+                    l_reads,
+                    l_writes,
+                    l_conflicts,
+                    right["id"],
+                    reads_sets[j],
+                    writes_sets[j],
+                    conflicts_sets[j],
+                )
 
                 unknown = l_unknown or right["footprint"] == "unknown"
                 pair = {
@@ -618,43 +640,15 @@ class Composition:
 
         return pairs, byte_saturated
 
-    def inspect(
-        self,
-        record_id: str,
-        focus: str | None = None,
-        limit: int = 20,
-        pair_limit: int = 200,
-    ) -> dict[str, Any]:
-        _integer(limit, "composition limit", 200)
-        _integer(pair_limit, "composition pair_limit", 20000, minimum=0)
-        if focus is not None:
-            _text(focus, "composition focus")
-        record = self.system.show(record_id)
-        body, rows, input_bytes, reference_count = self.profile(record)
-        basis, basis_bytes = self._basis(record)
-        known = {PREFIXES[c] + ":" + ident for c in COLLECTIONS for ident in rows[c]}
-        # Unambiguously resolve a bare ID supplied to --focus
-        # (e.g. 'pkg-engine-store' -> 'element:pkg-engine-store').
-        if focus is not None and ":" not in focus:
-            matches = [PREFIXES[c] + ":" + focus for c in COLLECTIONS if focus in rows[c]]
-            if len(matches) == 1:
-                focus = matches[0]
-        unresolved: list[dict[str, str]] = []
-        unresolved_keys: set[tuple[str, str]] = set()
-
-        def missing(ref: str, owner: str) -> str:
-            item = {"ref": ref, "declared_in": owner}
-            if (ref, owner) not in unresolved_keys:
-                unresolved_keys.add((ref, owner))
-                unresolved.append(item)
-            return ref
-
-        if focus is not None and focus not in known:
-            missing(focus, "requested-focus")
-        premises = self._evaluate_premises(rows, basis)
-        relations = self._evaluate_relations(rows, basis, known, missing)
-        opportunities = self._evaluate_opportunities(rows, premises, known, missing)
-
+    @staticmethod
+    def _select_focused_collections(
+        rows: dict[str, dict[str, dict[str, Any]]],
+        relations: dict[str, dict[str, Any]],
+        premises: dict[str, dict[str, Any]],
+        opportunities: dict[str, dict[str, Any]],
+        focus: str | None,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]], dict[str, dict[str, Any]]]:
         focus_refs = {focus} if focus is not None else set()
         if focus is not None and focus.startswith("element:"):
             element = focus.partition(":")[2]
@@ -706,6 +700,46 @@ class Composition:
                 "shown": len(shown),
                 "omitted_refs": [row["ref"] for row in items if row["ref"] not in shown],
             }
+        return all_opportunities, collections, coverage
+
+    def inspect(
+        self,
+        record_id: str,
+        focus: str | None = None,
+        limit: int = 20,
+        pair_limit: int = 200,
+    ) -> dict[str, Any]:
+        _integer(limit, "composition limit", 200)
+        _integer(pair_limit, "composition pair_limit", 20000, minimum=0)
+        if focus is not None:
+            _text(focus, "composition focus")
+        record = self.system.show(record_id)
+        body, rows, input_bytes, reference_count = self.profile(record)
+        basis, basis_bytes = self._basis(record)
+        known = {PREFIXES[c] + ":" + ident for c in COLLECTIONS for ident in rows[c]}
+        # Unambiguously resolve a bare ID supplied to --focus
+        # (e.g. 'pkg-engine-store' -> 'element:pkg-engine-store').
+        if focus is not None and ":" not in focus:
+            matches = [PREFIXES[c] + ":" + focus for c in COLLECTIONS if focus in rows[c]]
+            if len(matches) == 1:
+                focus = matches[0]
+        unresolved: list[dict[str, str]] = []
+        unresolved_keys: set[tuple[str, str]] = set()
+
+        def missing(ref: str, owner: str) -> str:
+            if (ref, owner) not in unresolved_keys:
+                unresolved_keys.add((ref, owner))
+                unresolved.append({"ref": ref, "declared_in": owner})
+            return ref
+
+        if focus is not None and focus not in known:
+            missing(focus, "requested-focus")
+        premises = self._evaluate_premises(rows, basis)
+        relations = self._evaluate_relations(rows, basis, known, missing)
+        opportunities = self._evaluate_opportunities(rows, premises, known, missing)
+        all_opportunities, collections, coverage = self._select_focused_collections(
+            rows, relations, premises, opportunities, focus, limit
+        )
 
         pairs: list[dict[str, Any]] = []
         count = len(all_opportunities) * (len(all_opportunities) - 1) // 2

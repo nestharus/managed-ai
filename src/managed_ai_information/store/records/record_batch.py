@@ -448,6 +448,18 @@ def _prevalidate_batch_operations(
     return prepared
 
 
+def _pin_batch_predecessor(
+    store: Any, previous: dict[str, Any] | None, previous_raw: bytes | None
+) -> str | None:
+    if previous is None:
+        return None
+    if previous_raw is None:
+        return store.pin(previous)["object"]
+    if len(previous_raw) <= MAX_BYTES:
+        return store.objects.put(previous_raw)
+    return store.objects.put_retained(previous_raw, max_bytes=len(previous_raw))
+
+
 def _commit_batch_operations(
     store: Any,
     receipt: Path,
@@ -482,18 +494,11 @@ def _commit_batch_operations(
                 if candidate is None:
                     raise RuntimeError(f"missing prepared candidate for batch record: {op['id']}")
 
-                pinned_object = None
-                if pin_predecessors and previous is not None:
-                    if previous_raw is not None:
-                        if len(previous_raw) <= MAX_BYTES:
-                            pinned_object = store.objects.put(previous_raw)
-                        else:
-                            pinned_object = store.objects.put_retained(
-                                previous_raw, max_bytes=len(previous_raw)
-                            )
-                    else:
-                        pinned_object = store.pin(previous)["object"]
-
+                pinned_object = (
+                    _pin_batch_predecessor(store, previous, previous_raw)
+                    if pin_predecessors
+                    else None
+                )
                 before_rev = previous["revision"] if previous is not None else 0
                 before_sha = previous["sha256"] if previous is not None else None
                 pending = {
