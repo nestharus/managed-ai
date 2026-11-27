@@ -41,7 +41,7 @@ from managed_ai_information.core.storage import (
 from managed_ai_information.core.storage import now as now
 from managed_ai_information.core.storage import sha as sha
 from managed_ai_information.core.storage import write_json as write_json
-from managed_ai_information.store.cli.command_parser import is_readonly_action, parser
+from managed_ai_information.store.cli.command_dispatch import is_readonly_action, parser
 from managed_ai_information.store.governance.feedback import Feedback
 from managed_ai_information.store.governance.goals import GoalUse
 from managed_ai_information.store.governance.projects import ProjectSelection
@@ -290,16 +290,12 @@ class System:
         return self.record_store.path(ident)
 
     def put(self, record: dict, expected: int) -> dict:
-        committed = self.record_store.put(record, expected)
-        self.backend_bridge.mirror_record(committed)
-        return committed
+        return self.record_store.put(record, expected)
 
     def put_batch(self, spec: dict) -> dict:
         from managed_ai_information.store.records.record_batch import put_batch
 
-        receipt = put_batch(self, spec)
-        self.backend_bridge.mirror_batch_receipt(receipt)
-        return receipt
+        return put_batch(self, spec)
 
     def reindex(self) -> dict:
         return self.record_store.reindex()

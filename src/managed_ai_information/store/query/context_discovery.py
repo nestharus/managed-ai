@@ -550,6 +550,12 @@ class Discovery:
     def _run_text_search(self) -> None:
         query = self.req["query"].strip()
         bridge = getattr(self._system, "backend_bridge", None)
+        if (
+            self.search_mode == "bm25"
+            and "records" in self.req["scopes"]
+            and (bridge is None or not bridge.is_membus)
+        ):
+            raise ValueError("search_mode='bm25' requires a configured membus-v2 backend")
         if not (
             query
             and self.search_mode in ("bm25", "auto")

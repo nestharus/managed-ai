@@ -1,12 +1,8 @@
 """Store-to-Membus v2 mirror, parity verifier, and governed migration engine.
 
-Pure-stdlib core module (zero imports from store/deployment/library/host/companions) that
-mirrors a managed-ai-information store (records + CAS exchange objects) into a Membus v2
-backend via MultiRouteBackend + SchemaMigrationController.
-
-Sealed custody invariant: entries matching explicit sealed IDs/prefixes/kinds or carrying
-record-level sealed markers are ALWAYS written with SearchVisibility='Sealed' using an opaque
-metadata-only custody envelope — sealed payload bytes are never indexed into Tantivy.
+Pure-stdlib core module mirroring records + CAS exchange objects into Membus v2 via
+MultiRouteBackend + SchemaMigrationController. Sealed entries always emit opaque
+SearchVisibility='Sealed' custody envelopes (never indexed into Tantivy).
 """
 
 import time
@@ -15,7 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from managed_ai_information.core.multi_route import MultiRouteBackend, SchemaMigrationController
+from managed_ai_information.core.multi_route import (
+    MultiRouteBackend,
+    RoutingMode,
+    SchemaMigrationController,
+)
 from managed_ai_information.core.storage import (
     MAX_BYTES,
     OCC_SEALED,
@@ -27,14 +27,18 @@ from managed_ai_information.core.storage import (
     strict_json_loads,
 )
 from managed_ai_information.core.storage_backend import (
+    BackendUnavailableError,
     EmbeddedFileBackend,
+    MembusV2Backend,
     SearchHit,
     SearchVisibility,
     StorageBackend,
+    StorageBackendError,
 )
 from managed_ai_information.core.storage_backend_protocol import (
     InMemoryMirrorBackend,
     ensure_ordinary_dir,
+    validate_endpoint_url,
     validate_identifier,
 )
 
@@ -44,11 +48,20 @@ SEALED_CUSTODY_FORMAT = "managed-ai-sealed-custody/1"
 __all__ = [
     "MIRROR_REPORT_FORMAT",
     "SEALED_CUSTODY_FORMAT",
+    "BackendUnavailableError",
+    "InMemoryMirrorBackend",
     "MembusStoreMirror",
+    "MembusV2Backend",
     "MirrorConfig",
     "MirrorInventoryItem",
     "MirrorPlan",
+    "MultiRouteBackend",
+    "RoutingMode",
+    "SearchHit",
+    "StorageBackendError",
     "classify_record_visibility",
+    "validate_endpoint_url",
+    "validate_identifier",
 ]
 
 

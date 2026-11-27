@@ -8,6 +8,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from managed_ai_information.store.cli.command_parser import (
+    is_readonly_action as is_readonly_action,
+)
+from managed_ai_information.store.cli.command_parser import parser as parser
 from managed_ai_information.store.governance.feedback import Feedback
 from managed_ai_information.store.protocol.inputs import read, strings, text
 from managed_ai_information.store.query.information import Information

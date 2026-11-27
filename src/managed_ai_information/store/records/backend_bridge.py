@@ -1,45 +1,39 @@
 """Selectable Membus v2 backend bridge for System writes, Tantivy BM25 discovery, and cutover.
 
-Embedded local files remain the zero-daemon default whenever system.json omits 'backend' or sets
-'backend.type' to 'embedded'. When 'backend.type' is 'membus-v2', this bridge routes live record
-and non-sealed object writes via MultiRouteBackend + KeepAliveHTTPPool, enforces strict
-SearchVisibility='Sealed' custody envelopes (never leaking sealed text to Tantivy), powers
-sub-millisecond Tantivy BM25 discovery with graceful fallback, and governs CLI
-status/sync/cutover/rollback transitions.
+Embedded local files remain the zero-daemon default unless backend.type='membus-v2' is set.
 """
 
 import os
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Generator, Iterable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from managed_ai_information.core.membus_mirror import (
     SEALED_CUSTODY_FORMAT,
+    BackendUnavailableError,
+    InMemoryMirrorBackend,
     MembusStoreMirror,
+    MembusV2Backend,
     MirrorConfig,
+    MultiRouteBackend,
+    RoutingMode,
+    SearchHit,
+    StorageBackendError,
     build_mirror_config,
     classify_record_visibility,
+    validate_endpoint_url,
+    validate_identifier,
 )
-from managed_ai_information.core.multi_route import MultiRouteBackend, RoutingMode
 from managed_ai_information.core.storage import (
     MAX_BYTES,
     OCC_SEALED,
     encode,
+    is_ordinary_file_stat,
     read_bytes,
     strict_json_loads,
     write_json,
-)
-from managed_ai_information.core.storage_backend import (
-    BackendUnavailableError,
-    MembusV2Backend,
-    SearchHit,
-    StorageBackendError,
-)
-from managed_ai_information.core.storage_backend_protocol import (
-    InMemoryMirrorBackend,
-    validate_endpoint_url,
-    validate_identifier,
 )
 
 BACKEND_STATUS_FORMAT = "managed-ai-backend-status/1"
@@ -183,6 +177,32 @@ class StoreBackendBridge:
         self.config: BackendConfig = parse_backend_config(system.descriptor.get("backend"))
         self._client: MembusV2Backend | None = None
         self._router: MultiRouteBackend | None = None
+        self._defer_replace_depth = 0
+        self._wrapped_store_id: int | None = None
+        self._install_record_store_hook()
+
+    def _install_record_store_hook(self) -> None:
+        store = getattr(self._system, "record_store", None)
+        orig_replace = getattr(store, "_replace", None)
+        if store is None or orig_replace is None or self._wrapped_store_id == id(store):
+            return
+
+        def _mirrored_replace(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            committed: dict[str, Any] = orig_replace(*args, **kwargs)
+            if self._defer_replace_depth == 0:
+                self.mirror_record(committed)
+            return committed
+
+        self._wrapped_store_id = id(store)
+        store._replace = _mirrored_replace
+
+    @contextmanager
+    def defer_replace_mirror(self) -> Generator[None]:
+        self._defer_replace_depth += 1
+        try:
+            yield
+        finally:
+            self._defer_replace_depth -= 1
 
     @property
     def is_membus(self) -> bool:
@@ -260,10 +280,22 @@ class StoreBackendBridge:
         raw = b""
         if vis != "Sealed":
             rec_path = self._system.record_store.path(record_id)
-            raw = read_bytes(rec_path, MAX_BYTES) if rec_path.is_file() else encode(record)
-            if len(raw) > MAX_BYTES:
-                return
-            full_record = strict_json_loads(raw, rec_path.name) if rec_path.is_file() else record
+            try:
+                info = rec_path.lstat()
+            except FileNotFoundError:
+                info = None
+            if info is not None:
+                if not is_ordinary_file_stat(info):
+                    raise ValueError(f"ordinary record file required: {rec_path}")
+                if info.st_size > MAX_BYTES:
+                    return
+                raw = read_bytes(rec_path, MAX_BYTES)
+                full_record = strict_json_loads(raw, rec_path.name)
+            else:
+                raw = encode(record)
+                if len(raw) > MAX_BYTES:
+                    return
+                full_record = record
             kind = str(full_record.get("kind", kind))
             vis, _ = classify_record_visibility(record_id, full_record, cfg)
 
@@ -360,12 +392,8 @@ class StoreBackendBridge:
             "hits": parsed_hits,
         }
 
-    def status(
-        self, *, check_parity: bool = True, verify_blob_bytes: bool = False
-    ) -> dict[str, Any]:
-        return backend_status(
-            self._system, check_parity=check_parity, verify_blob_bytes=verify_blob_bytes
-        )
+    def status(self, **kwargs: Any) -> dict[str, Any]:
+        return backend_status(self._system, **kwargs)
 
     def sync(self, **kwargs: Any) -> dict[str, Any]:
         return backend_sync(self._system, **kwargs)
@@ -379,13 +407,17 @@ class StoreBackendBridge:
 
 def _persist_backend_block(system: Any, config: BackendConfig) -> None:
     updated = dict(system.persisted_descriptor)
-    if config.is_membus:
-        updated["backend"] = config.to_descriptor()
+    block = config.to_descriptor() if config.is_membus else None
+    if block is not None:
+        updated["backend"] = block
     else:
         updated.pop("backend", None)
     write_json(system.root / "system.json", updated)
     system.persisted_descriptor = updated
-    system.descriptor = updated
+    if block is not None:
+        system.descriptor["backend"] = dict(block)
+    else:
+        system.descriptor.pop("backend", None)
     system.backend_bridge.reload()
 
 
@@ -405,8 +437,7 @@ def _resolve_target_config(
         "namespace": namespace if namespace is not None else cur.namespace,
         "mode": mode if mode is not None else (cur.mode if cur.is_membus else default_mode),
     }
-    tok = token_env if token_env is not None else cur.token_env
-    if tok is not None:
+    if (tok := token_env if token_env is not None else cur.token_env) is not None:
         raw["token_env"] = tok
     for key in _STRING_LIST_KEYS:
         if vals := getattr(cur, key):
@@ -426,7 +457,6 @@ def _mirror_config_for(system: Any, cfg: BackendConfig, *, include_blobs: bool) 
         metadata_only_ids=cfg.metadata_only_ids,
         metadata_only_kinds=cfg.metadata_only_kinds,
         include_blobs=include_blobs,
-        include_inactive=True,
     )
 
 
@@ -435,46 +465,48 @@ def backend_status(
 ) -> dict[str, Any]:
     """Report active store backend configuration, live Membus health, and route parity."""
     cfg = system.backend_bridge.config
-    if not cfg.is_membus or cfg.url is None or cfg.namespace is None:
-        return {
-            "format": BACKEND_STATUS_FORMAT,
-            "action": "status",
-            "store_root": str(system.root),
-            "backend": cfg.to_descriptor(),
-            "healthy": True,
-        }
-
-    health: dict[str, Any] | None = None
-    parity: dict[str, Any] | None = None
-    error: str | None = None
-    healthy = False
-    with MembusV2Backend(cfg.url, token=cfg.resolve_token(), timeout=10.0) as client:
-        try:
-            health = client.health()
-            healthy = True
-            if check_parity:
-                mcfg = _mirror_config_for(system, cfg, include_blobs=True)
-                parity = MembusStoreMirror().verify_parity(
-                    system.root, client, mcfg, verify_blob_bytes=verify_blob_bytes
-                )
-        except (BackendUnavailableError, StorageBackendError, OSError, ValueError) as exc:
-            error = str(exc)
-
     result: dict[str, Any] = {
         "format": BACKEND_STATUS_FORMAT,
         "action": "status",
         "store_root": str(system.root),
         "backend": cfg.to_descriptor(),
-        "healthy": healthy,
-        "health": health,
+        "healthy": True,
     }
-    if parity is not None:
-        result["parity"] = parity
-    if error is not None:
-        result["error"] = error
+    if not cfg.is_membus or cfg.url is None or cfg.namespace is None:
+        return result
+
+    result["healthy"] = False
+    result["health"] = None
+    with MembusV2Backend(cfg.url, token=cfg.resolve_token(), timeout=10.0) as client:
+        try:
+            result["health"] = client.health()
+            result["healthy"] = True
+            if check_parity:
+                mcfg = _mirror_config_for(system, cfg, include_blobs=True)
+                result["parity"] = MembusStoreMirror().verify_parity(
+                    system.root, client, mcfg, verify_blob_bytes=verify_blob_bytes
+                )
+        except (BackendUnavailableError, StorageBackendError, OSError, ValueError) as exc:
+            result["error"] = str(exc)
+
     if system.backend_bridge._router is not None:
         result["live_route_parity"] = system.backend_bridge._router.parity_summary(recent_limit=5)
     return result
+
+
+def _abort_open_migration(client: MembusV2Backend, ns: str, action: str) -> None:
+    existing = client.get_collection(ns)
+    if not isinstance(existing, Mapping):
+        return
+    mig_state = existing.get("migration_state")
+    migrating = mig_state.get("Migrating") if isinstance(mig_state, Mapping) else None
+    active = migrating or existing.get("migration") or existing.get("active_migration")
+    if isinstance(active, Mapping) and active.get("target_version") is not None:
+        client.abort_migration(
+            ns,
+            target_version=int(active["target_version"]),
+            reason=f"superseded by backend {action}",
+        )
 
 
 def _apply_transition(
@@ -497,27 +529,19 @@ def _apply_transition(
         token_env=token_env,
         default_mode="primary" if is_cutover else "dual-sync",
     )
-    if target.url is None:
-        raise ValueError("membus-v2 backend requires a nonempty url")
+    if target.url is None or target.namespace is None:
+        raise ValueError("membus-v2 backend requires a nonempty url and namespace")
     mcfg = _mirror_config_for(system, target, include_blobs=include_blobs)
     with MembusV2Backend(target.url, token=target.resolve_token(), timeout=10.0) as client:
-        existing = client.get_collection(target.namespace or "")
-        if isinstance(existing, Mapping):
-            active_mig = existing.get("migration") or existing.get("active_migration")
-            if isinstance(active_mig, Mapping) and active_mig.get("target_version") is not None:
-                client.abort_migration(
-                    target.namespace or "",
-                    target_version=int(active_mig["target_version"]),
-                    reason=f"superseded by backend {action}",
-                )
+        _abort_open_migration(client, target.namespace, action)
         report = MembusStoreMirror().apply(
             system.root,
             client,
             mcfg,
-            contract_cutover=True,
+            contract_cutover=is_cutover,
             verify_blob_bytes=verify_blob_bytes,
         )
-    if is_cutover or mode is not None or (url is not None and not system.backend_bridge.is_membus):
+    if is_cutover or target != system.backend_bridge.config:
         _persist_backend_block(system, target)
     return {
         "format": BACKEND_STATUS_FORMAT,

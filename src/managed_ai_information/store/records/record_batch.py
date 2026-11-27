@@ -568,8 +568,15 @@ def put_batch(system: Any, spec: dict[str, Any]) -> dict[str, Any]:
     if old is None:
         write_json(receipt, dict(result, complete=False))
 
-    _commit_batch_operations(store, receipt, result, old, prepared, pin_predecessors)
+    bridge = getattr(system, "backend_bridge", None)
+    if bridge is not None:
+        with bridge.defer_replace_mirror():
+            _commit_batch_operations(store, receipt, result, old, prepared, pin_predecessors)
+    else:
+        _commit_batch_operations(store, receipt, result, old, prepared, pin_predecessors)
 
     result["complete"] = True
     write_json(receipt, result)
+    if bridge is not None:
+        bridge.mirror_batch_receipt(result)
     return result

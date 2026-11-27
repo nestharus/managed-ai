@@ -21,6 +21,7 @@ from scripts.ci.verify_membus_live import (  # noqa: E402
 
 from managed_ai_information.core.formats import BATCH_FORMAT  # noqa: E402
 from managed_ai_information.core.storage import (  # noqa: E402
+    MAX_BYTES,
     encode,
     exclusive,
     read_json,
@@ -40,6 +41,9 @@ from managed_ai_information.store.records.backend_bridge import (  # noqa: E402
     backend_status,
     backend_sync,
     parse_backend_config,
+)
+from managed_ai_information.store.records.record_batch import (  # noqa: E402
+    put_batch as direct_put_batch,
 )
 from managed_ai_information.store.system import System  # noqa: E402
 
@@ -161,9 +165,11 @@ class BackendBridgeUnitTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 sys_obj.discover({"query": "alpha", "scopes": ["records"], "search_mode": "bogus"})
 
-            # Explicit bm25 on embedded store fails closed
+            # Explicit bm25 on embedded store fails closed (even when query is empty)
             with self.assertRaises(ValueError):
                 sys_obj.discover({"query": "alpha", "scopes": ["records"], "search_mode": "bm25"})
+            with self.assertRaises(ValueError):
+                sys_obj.discover({"query": "", "scopes": ["records"], "search_mode": "bm25"})
 
             # Auto on embedded store runs local lexical seamlessly
             res_auto = sys_obj.discover(
@@ -223,10 +229,34 @@ class BackendBridgeUnitTests(unittest.TestCase):
             self.assertFalse(st["healthy"])
             self.assertIn("error", st)
 
-            # rollback cleanly restores embedded mode
+            # rollback cleanly restores embedded mode while preserving non-backend descriptor keys
+            sys_obj.descriptor["deployment_overlay_marker"] = "preserve-me"
             rb = backend_rollback(sys_obj, reason="daemon offline")
             self.assertEqual(rb["backend"], {"type": "embedded"})
             self.assertNotIn("backend", read_json(root / "system.json"))
+            self.assertEqual(sys_obj.descriptor.get("deployment_overlay_marker"), "preserve-me")
+
+    def test_mirror_record_oversize_and_non_ordinary_guards(self) -> None:
+        root = _init_store(self.tmp / "guard-store")
+        dead_port = _unused_loopback_port()
+        desc = read_json(root / "system.json")
+        desc["backend"] = {
+            "type": "membus-v2",
+            "url": f"http://127.0.0.1:{dead_port}",
+            "namespace": "guard_ns",
+            "mode": "shadow-async",
+        }
+        write_json(root / "system.json", desc)
+        with System(root) as sys_obj:
+            # Oversize record file (> MAX_BYTES) skips cleanly before read_bytes without crashing
+            big_path = root / "work/records/oversize-rec.json"
+            big_path.write_bytes(b"{" + b" " * (MAX_BYTES + 64) + b"}")
+            sys_obj.backend_bridge.mirror_record({"id": "oversize-rec", "kind": "note"})
+            # Non-ordinary target (directory at record path) fails closed with ValueError
+            dir_path = root / "work/records/dir-rec.json"
+            dir_path.mkdir()
+            with self.assertRaises(ValueError):
+                sys_obj.backend_bridge.mirror_record({"id": "dir-rec", "kind": "note"})
 
     def test_cli_backend_parser_readonly_classification(self) -> None:
         cli = parser()
@@ -339,10 +369,12 @@ class LiveMembusPrimaryBackendTests(unittest.TestCase):
             sync_rep = json.loads(p_sync.stdout)
             self.assertEqual(sync_rep["backend"]["mode"], "dual-sync")
             self.assertEqual(sync_rep["mirror"]["status"], "passed")
+            self.assertEqual(sync_rep["mirror"]["migration"]["final_phase"], "verified")
             self.assertGreaterEqual(sync_rep["mirror"]["visibility_counts"]["Sealed"], 1)
             self.assertEqual(sync_rep["mirror"]["parity_verification"]["status"], "passed")
 
-            # 3. Live `System.put` + `System.put_batch` automatically mirror to live membus
+            # 3. Live writes (System.put, RecordStore.put, System.put_batch, direct put_batch)
+            # all automatically mirror to live membus without double-mirroring
             with System(root) as sys_obj:
                 with exclusive(sys_obj.ex.root / "owner.lock"):
                     sys_obj.put(
@@ -353,6 +385,20 @@ class LiveMembusPrimaryBackendTests(unittest.TestCase):
                             "content": {
                                 "title": "Live dual-sync put verification",
                                 "summary": "Quasar telemetry routing token verified live.",
+                            },
+                            "relations": [],
+                            "basis": [],
+                        },
+                        0,
+                    )
+                    sys_obj.record_store.put(
+                        {
+                            "id": "note-direct-store-put",
+                            "kind": "note",
+                            "active": True,
+                            "content": {
+                                "title": "Direct record_store put",
+                                "summary": "Pulsar beacon written via RecordStore._replace hook.",
                             },
                             "relations": [],
                             "basis": [],
@@ -399,6 +445,31 @@ class LiveMembusPrimaryBackendTests(unittest.TestCase):
                             ],
                         }
                     )
+                    direct_put_batch(
+                        sys_obj,
+                        {
+                            "format": BATCH_FORMAT,
+                            "id": "w19-live-direct-batch-2",
+                            "instance_id": sys_obj.instance_id,
+                            "operations": [
+                                {
+                                    "id": "note-direct-batch",
+                                    "expected_revision": 0,
+                                    "mode": "replace",
+                                    "record": {
+                                        "kind": "note",
+                                        "active": True,
+                                        "content": {
+                                            "title": "Direct module put_batch",
+                                            "summary": "Magnetar comet committed via record_batch.",
+                                        },
+                                        "relations": [],
+                                        "basis": [],
+                                    },
+                                }
+                            ],
+                        },
+                    )
 
                 # Verify 100% live parity (put + put_batch records + blob match exact SHA)
                 st_live = backend_status(sys_obj, verify_blob_bytes=True)
@@ -421,6 +492,22 @@ class LiveMembusPrimaryBackendTests(unittest.TestCase):
                 self.assertEqual(auto_batch["backend_search"]["engine"], "membus-bm25")
                 self.assertEqual(
                     [c["ref"] for c in auto_batch["candidates"]], ["record:note-live-batch"]
+                )
+
+                # Direct record_store.put + direct record_batch.put_batch hits are live in Tantivy
+                direct_store_hit = sys_obj.discover(
+                    {"query": "pulsar", "scopes": ["records"], "search_mode": "bm25"}
+                )
+                self.assertEqual(
+                    [c["ref"] for c in direct_store_hit["candidates"]],
+                    ["record:note-direct-store-put"],
+                )
+                direct_batch_hit = sys_obj.discover(
+                    {"query": "magnetar", "scopes": ["records"], "search_mode": "bm25"}
+                )
+                self.assertEqual(
+                    [c["ref"] for c in direct_batch_hit["candidates"]],
+                    ["record:note-direct-batch"],
                 )
 
                 # Kind filter excludes non-matching kinds
@@ -510,12 +597,20 @@ class LiveMembusPrimaryBackendTests(unittest.TestCase):
             self.assertEqual(p_st_after.returncode, 0, p_st_after.stderr)
             self.assertEqual(json.loads(p_st_after.stdout)["backend"], {"type": "embedded"})
 
-            # Direct Python helper cutover + rollback smoke check
+            # Direct Python helper: sync (verified) -> re-target namespace -> cutover -> rollback
             with System(root) as sys_obj, exclusive(sys_obj.ex.root / "owner.lock"):
                 sync2 = backend_sync(sys_obj, url=daemon.base_url, namespace=ns)
                 self.assertEqual(sync2["mirror"]["status"], "passed")
-                cut2 = backend_cutover(sys_obj, url=daemon.base_url, namespace=ns, mode="dual-sync")
+                self.assertEqual(sync2["mirror"]["migration"]["final_phase"], "verified")
+                ns2 = "w19_live_retargeted"
+                sync_retarget = backend_sync(sys_obj, namespace=ns2)
+                self.assertEqual(sync_retarget["backend"]["namespace"], ns2)
+                self.assertEqual(read_json(root / "system.json")["backend"]["namespace"], ns2)
+                cut2 = backend_cutover(
+                    sys_obj, url=daemon.base_url, namespace=ns2, mode="dual-sync"
+                )
                 self.assertEqual(cut2["backend"]["mode"], "dual-sync")
+                self.assertEqual(cut2["mirror"]["migration"]["final_phase"], "committed")
                 rb2 = backend_rollback(sys_obj)
                 self.assertEqual(rb2["backend"], {"type": "embedded"})
 
