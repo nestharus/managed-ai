@@ -129,6 +129,7 @@ def _discover_request(args: argparse.Namespace) -> dict[str, Any]:
         for val in (
             getattr(args, "query", None),
             getattr(args, "scopes", None),
+            getattr(args, "kinds", None),
             getattr(args, "anchors", None),
             getattr(args, "content", False),
             getattr(args, "direction", None),
@@ -144,6 +145,15 @@ def _discover_request(args: argparse.Namespace) -> dict[str, Any]:
         req["query"] = args.query
     if getattr(args, "scopes", None):
         req["scopes"] = list(dict.fromkeys(args.scopes))
+    if getattr(args, "kinds", None):
+        parsed_kinds = list(
+            dict.fromkeys(
+                part.strip() for item in args.kinds for part in str(item).split(",") if part.strip()
+            )
+        )
+        if not parsed_kinds:
+            raise ValueError("kinds must contain at least one nonempty kind name")
+        req["kinds"] = parsed_kinds
     if getattr(args, "anchors", None):
         req["anchors"] = list(dict.fromkeys(args.anchors))
     if getattr(args, "content", False):

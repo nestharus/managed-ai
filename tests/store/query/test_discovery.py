@@ -853,6 +853,126 @@ class DiscoveryChecks(unittest.TestCase):
         self.system.record_store.reindex()
         check_all("head-index-v3")
 
+    def test_w17_discover_kind_filter(self) -> None:
+        """Discover --kind filters lexical, inventory, traversal, and CLI queries."""
+        from managed_ai_information.store.cli.command_dispatch import _discover_request
+        from managed_ai_information.store.cli.command_parser import parser as build_parser
+
+        self.system.put(
+            {
+                "id": "crw-ctrl-o01",
+                "kind": "crw-control",
+                "content": {"summary": "Boundary ownership control"},
+                "relations": [{"relation": "maps-to", "target": "crw-dim-boundary"}],
+                "active": True,
+            },
+            0,
+        )
+        self.system.put(
+            {
+                "id": "crw-fam-boundary",
+                "kind": "crw-family",
+                "content": {"summary": "Boundary family index"},
+                "relations": [{"relation": "contains", "target": "crw-dim-boundary"}],
+                "active": True,
+            },
+            0,
+        )
+        self.system.put(
+            {
+                "id": "crw-dim-boundary",
+                "kind": "crw-constituent",
+                "content": {"summary": "Boundary integrity risk dimension"},
+                "active": True,
+            },
+            0,
+        )
+
+        def check_all(mode: str) -> None:
+            # Lexical search filtered by single kind returns only matching constituent
+            res_single = Discovery(self.system).search(
+                {
+                    "query": "boundary",
+                    "content": True,
+                    "scopes": ["records"],
+                    "kinds": ["crw-constituent"],
+                }
+            )
+            self.assertEqual(
+                [c["ref"] for c in res_single["candidates"]],
+                ["record:crw-dim-boundary"],
+                msg=mode,
+            )
+
+            # Inventory mode filtered by multiple kinds
+            res_multi = Discovery(self.system).search(
+                {"scopes": ["records"], "kinds": ["crw-family", "crw-constituent"]}
+            )
+            self.assertEqual(
+                {c["ref"] for c in res_multi["candidates"]},
+                {"record:crw-fam-boundary", "record:crw-dim-boundary"},
+                msg=mode,
+            )
+
+            # Anchor traversal still traverses intermediate kinds, returning only matching kind
+            res_trav = Discovery(self.system).search(
+                {
+                    "anchors": ["record:crw-ctrl-o01"],
+                    "scopes": ["records"],
+                    "hops": 2,
+                    "kinds": ["crw-constituent"],
+                }
+            )
+            self.assertEqual(
+                [c["ref"] for c in res_trav["candidates"]],
+                ["record:crw-dim-boundary"],
+                msg=mode,
+            )
+
+            # Techniques scope kind filter
+            res_tech = Discovery(self.system).search(
+                {"scopes": ["techniques"], "kinds": ["source-document"]}
+            )
+            self.assertEqual(
+                [c["ref"] for c in res_tech["candidates"]],
+                ["technique:document:older.md"],
+                msg=mode,
+            )
+            res_tech_miss = Discovery(self.system).search(
+                {"scopes": ["techniques"], "kinds": ["nonexistent-kind"]}
+            )
+            self.assertEqual(res_tech_miss["candidates"], [], msg=mode)
+
+        check_all("unindexed")
+        self.system.record_store.reindex()
+        check_all("head-index-v3")
+
+        # CLI repeatable & comma-separated --kind parsing
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "--root",
+                str(self.root),
+                "discover",
+                "--scope",
+                "records",
+                "--kind",
+                "crw-constituent,crw-family",
+                "--kind",
+                "crw-constituent",
+                "--query",
+                "boundary",
+            ]
+        )
+        built = _discover_request(args)
+        self.assertEqual(built["kinds"], ["crw-constituent", "crw-family"])
+
+        bad_args = parser.parse_args(
+            ["--root", str(self.root), "discover", "--scope", "records", "--kind", " , "]
+        )
+        with self.assertRaises(ValueError):
+            _discover_request(bad_args)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

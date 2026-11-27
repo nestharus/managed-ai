@@ -17,6 +17,7 @@ FIELDS = {
     "query",
     "content",
     "scopes",
+    "kinds",
     "anchors",
     "relation_labels",
     "direction",
@@ -175,6 +176,9 @@ def request(value: Any, deployed: bool) -> dict[str, Any]:
         normalized["exclude_relation_labels"] = exclude_labels
     if value.get("include_content_links"):
         normalized["include_content_links"] = True
+    kinds = strings(value.get("kinds", []), "kinds")
+    if kinds:
+        normalized["kinds"] = kinds
     return normalized
 
 

@@ -655,6 +655,121 @@ class GraphProfileTests(unittest.TestCase):
             cb_contra["unresolved_contradicts_clusters"][0]["node_ids"], ["cb-a", "cb-b"]
         )
 
+    def test_w17_symmetric_inverse_sccs_prefix_qualification_and_claim_deserts(self) -> None:
+        # Build symmetric peer loop, inverse structural pair, prose-prefixed claim,
+        # high-fan-in non-claim question, and evidenced-by mediated contradiction.
+        _put(
+            self.system,
+            "gap-a",
+            "gap",
+            relations=[
+                {"relation": "maps-to", "target": "goal"},
+                {"relation": "related-gap", "target": "gap-b"},
+                {"relation": "instantiated-by", "target": "frontier-1"},
+            ],
+        )
+        _put(
+            self.system,
+            "gap-b",
+            "gap",
+            relations=[
+                {"relation": "maps-to", "target": "goal"},
+                {"relation": "depends-on", "target": "gap-a"},
+            ],
+        )
+        _put(
+            self.system,
+            "frontier-1",
+            "frontier",
+            relations=[{"relation": "instantiates", "target": "gap-a"}],
+        )
+        _put(
+            self.system,
+            "claim-prose",
+            "claim",
+            relations=[
+                {"relation": "maps-to", "target": "goal"},
+                {"relation": "compares prior empirical bound", "target": "gap-a"},
+            ],
+        )
+        _put(
+            self.system,
+            "question-hub",
+            "question",
+            relations=[{"relation": "maps-to", "target": "goal"}],
+        )
+        for idx in range(3):
+            _put(
+                self.system,
+                f"cite-{idx}",
+                "claim",
+                relations=[
+                    {"relation": "maps-to", "target": "claim-prose"},
+                    {"relation": "maps-to", "target": "question-hub"},
+                ],
+            )
+        _put(
+            self.system,
+            "med-claim",
+            "claim",
+            relations=[
+                {"relation": "maps-to", "target": "goal"},
+                {"relation": "contradicted-by", "target": "dir-old"},
+                {"relation": "evidenced-by", "target": "dir-new"},
+            ],
+        )
+        _put(
+            self.system,
+            "dir-old",
+            "claim",
+            relations=[{"relation": "maps-to", "target": "goal"}],
+        )
+        _put(
+            self.system,
+            "dir-new",
+            "claim",
+            relations=[
+                {"relation": "maps-to", "target": "goal"},
+                {"relation": "supersedes", "target": "dir-old"},
+            ],
+        )
+        self.system.reindex()
+
+        cfg_path = self.base / "w17-cal.json"
+        cfg_path.write_text(
+            json.dumps(
+                {
+                    "format": GRAPH_PROFILE_CONFIG_FORMAT,
+                    "claim_kinds": ["claim"],
+                    "navigational_kinds": ["gap", "frontier"],
+                    "structural_predicates": [
+                        "depends-on",
+                        "maps-to",
+                        "instantiates",
+                        "instantiated-by",
+                        "related-gap",
+                    ],
+                    "symmetric_predicates": ["related-gap"],
+                    "inverse_structural_predicates": ["instantiated-by"],
+                    "qualifying_predicates": ["qualifies", "evidenced-by", "contradicted-by"],
+                    "qualifying_predicate_prefixes": ["compares "],
+                    "contradict_resolution_predicates": ["qualifies", "evidenced-by", "supersedes"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        rep = self.system.graph_profile(profile_config_path=cfg_path)
+        self.assertEqual(rep["bottlenecks"]["structural_scc_count"], 0)
+        dens = rep["density_and_qualification"]
+        self.assertEqual(
+            dens["per_predicate"]["compares prior empirical bound"]["category"], "qualifying"
+        )
+        # claim-prose is qualified via prefix; question-hub is non-claim so excluded from deserts.
+        desert_ids = [d["id"] for d in dens["qualification_deserts"]]
+        self.assertNotIn("claim-prose", desert_ids)
+        self.assertNotIn("question-hub", desert_ids)
+        self.assertEqual(dens["contradicts"]["unresolved_contradicts_cluster_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

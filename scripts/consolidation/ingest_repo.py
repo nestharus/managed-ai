@@ -30,6 +30,7 @@ from scripts.consolidation._common import (  # noqa: E402
     load_existing_records,
     slugify_id,
 )
+from scripts.consolidation.test_value_analyzer import analyze_test_value  # noqa: E402
 
 INGEST_REPO_FORMAT = "managed-ai-repo-ingest/1"
 
@@ -268,11 +269,115 @@ def _build_one_module_bundle(
     return records, basis_shas, pending_digests
 
 
+def _build_test_value_records(
+    checked_repo: Path,
+    package_rel: str,
+    tests_rel: str,
+    mod_ids_by_name: dict[str, str],
+    mod_basis_by_id: dict[str, dict[str, str]],
+    effective_existing: set[str],
+    commit: str,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes], dict[str, Any]]:
+    report = analyze_test_value(checked_repo, package_rel=package_rel, tests_rel=tests_rel)
+    records: list[dict[str, Any]] = []
+    basis_shas: dict[str, dict[str, str]] = {}
+    pending_digests: dict[str, bytes] = {}
+    cluster_members = {c["cluster_id"]: c["members"] for c in report["overlap_clusters"]}
+
+    for suite in report["suites"]:
+        suite_id = str(suite["suite_id"])
+        rel_path = str(suite["path"])
+        digest_entry = file_digest_entry(checked_repo, rel_path)
+        basis_rel, basis_bytes, basis_sha = compute_digest_basis(
+            suite_id, source_repo=checked_repo.name, files=[digest_entry]
+        )
+        basis_shas[suite_id] = {basis_rel: basis_sha}
+        pending_digests[suite_id] = basis_bytes
+
+        rels: list[dict[str, str]] = [{"relation": "evidenced-by", "target": "profile-head"}]
+        comp_targets: set[str] = set()
+        for mod_name in suite["exercises_modules"]:
+            mod_id = mod_ids_by_name.get(mod_name)
+            if mod_id is not None:
+                rels.append({"relation": "qualifies", "target": mod_id})
+            comp_id = _parent_component_id(mod_name, effective_existing)
+            if comp_id is not None:
+                comp_targets.add(comp_id)
+        for comp_id in sorted(comp_targets):
+            rels.append({"relation": "maps-to", "target": comp_id})
+
+        cid = suite["overlap_cluster_id"]
+        overlap_peers = [m for m in cluster_members.get(cid, ()) if m != suite_id] if cid else []
+        records.append(
+            {
+                "id": suite_id,
+                "kind": "test-suite",
+                "content": {
+                    "path": rel_path,
+                    "test_method_count": suite["test_method_count"],
+                    "assertion_count": suite["assertion_count"],
+                    "assertion_density": suite["assertion_density"],
+                    "boundary_class": suite["boundary_class"],
+                    "exercises_modules": suite["exercises_modules"],
+                    "asserts_contract": suite["asserts_contract"],
+                    "mocks_boundary": suite["mocks_boundary"],
+                    "mock_site_count": suite["mock_site_count"],
+                    "overlap_cluster_id": cid,
+                    "overlap_peers": overlap_peers,
+                    "source_sha256": digest_entry["sha256"],
+                    "commit": commit,
+                },
+                "relations": rels,
+                "basis": [basis_rel],
+                "active": True,
+            }
+        )
+
+    for unk in report["verification_unknowns"]:
+        unk_id = str(unk["unknown_id"])
+        mod_name = str(unk["module"])
+        mod_id = str(unk["module_id"])
+        mod_basis = dict(mod_basis_by_id.get(mod_id, {}))
+        rels = [
+            {"relation": "bears-on", "target": mod_id},
+            {"relation": "evidenced-by", "target": "profile-head"},
+        ]
+        comp_id = _parent_component_id(mod_name, effective_existing)
+        if comp_id is not None:
+            rels.append({"relation": "maps-to", "target": comp_id})
+        records.append(
+            {
+                "id": unk_id,
+                "kind": "verification-unknown",
+                "content": {
+                    "module": mod_name,
+                    "module_id": mod_id,
+                    "path": unk["path"],
+                    "lines": unk["lines"],
+                    "is_facade": unk["is_facade"],
+                    "reason": unk["reason"],
+                    "transitive_only": unk["transitive_only"],
+                    "exercising_suites": unk["exercising_suites"],
+                    "mock_heavy_suites": unk["mock_heavy_suites"],
+                    "commit": commit,
+                },
+                "relations": rels,
+                "basis": sorted(mod_basis),
+                "active": True,
+            }
+        )
+        basis_shas[unk_id] = mod_basis
+
+    return records, basis_shas, pending_digests, report["summary"]
+
+
 def build_repo_records(
     repo_root: Path,
     system: System,
     *,
     package_rel: str = "src/managed_ai_information",
+    include_tests: bool = False,
+    tests_rel: str = "tests",
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes], dict[str, Any]]:
     """Purely compute desired repo records and in-memory digest pins (zero disk writes)."""
     checked_repo = check_ordinary_ancestors(
@@ -357,6 +462,21 @@ def build_repo_records(
         basis_shas.update(bundle_basis)
         pending_digests.update(bundle_digests)
 
+    if include_tests:
+        test_recs, test_basis, test_digests, test_summary = _build_test_value_records(
+            checked_repo,
+            package_rel,
+            tests_rel,
+            mod_ids_by_name,
+            basis_shas,
+            effective_existing,
+            commit,
+        )
+        desired.extend(test_recs)
+        basis_shas.update(test_basis)
+        pending_digests.update(test_digests)
+        profile["test_value_summary"] = test_summary
+
     return desired, basis_shas, pending_digests, profile
 
 
@@ -365,6 +485,8 @@ def ingest_repository(
     store_root: Path,
     *,
     package_rel: str = "src/managed_ai_information",
+    include_tests: bool = False,
+    tests_rel: str = "tests",
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Ingest a Python repository into store_root idempotently."""
@@ -376,6 +498,8 @@ def ingest_repository(
         repo_root,
         system,
         package_rel=package_rel,
+        include_tests=include_tests,
+        tests_rel=tests_rel,
     )
     receipt = apply_desired_records(
         system,
@@ -385,15 +509,19 @@ def ingest_repository(
         pending_digests=pending_digests,
         dry_run=dry_run,
     )
-    return {
+    report: dict[str, Any] = {
         "format": INGEST_REPO_FORMAT,
         "repo": str(repo_root),
         "store": str(checked_store),
         "package_dir": package_rel,
+        "include_tests": include_tests,
         "desired_record_count": len(desired),
         "summary": profile["summary"],
         **receipt,
     }
+    if include_tests:
+        report["test_value_summary"] = profile.get("test_value_summary")
+    return report
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -404,6 +532,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repo", type=Path, default=REPO_ROOT)
     parser.add_argument("--store", type=Path, required=True)
     parser.add_argument("--package-dir", default="src/managed_ai_information")
+    parser.add_argument("--include-tests", action="store_true")
+    parser.add_argument("--tests-dir", default="tests")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -420,6 +550,8 @@ def main(argv: list[str] | None = None) -> int:
             args.repo,
             args.store,
             package_rel=args.package_dir,
+            include_tests=args.include_tests,
+            tests_rel=args.tests_dir,
             dry_run=dry_run,
         )
         print(dump_json(report))

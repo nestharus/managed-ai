@@ -546,6 +546,12 @@ def _source_and_composition_commands(sub: Any) -> None:
         help="Limit discovery scope (repeatable)",
     )
     discovery.add_argument(
+        "--kind",
+        action="append",
+        dest="kinds",
+        help="Limit returned candidates to matching kind(s) (repeatable or comma-separated)",
+    )
+    discovery.add_argument(
         "--anchor",
         action="append",
         dest="anchors",

@@ -346,6 +346,7 @@ class Discovery:
                 "ref": ref,
                 "scope": scope,
                 "id": ident,
+                "kind": row.get("kind"),
                 "source": src,
                 "title": row.get("title", ident),
                 "metadata": metadata,
@@ -450,7 +451,16 @@ class Discovery:
         self.bodies[ref] = body
         return body
 
+    def _kind_allowed(self, item: dict[str, Any]) -> bool:
+        kinds = self.req.get("kinds")
+        if not kinds:
+            return True
+        item_kind = item.get("kind")
+        return isinstance(item_kind, str) and item_kind in kinds
+
     def _candidate(self, item: dict[str, Any], match: dict[str, Any]) -> None:
+        if not self._kind_allowed(item):
+            return
         ref = item["ref"]
         if ref not in self.candidates:
             self.candidates[ref] = {k: item[k] for k in ("ref", "title", "source")}
@@ -497,6 +507,8 @@ class Discovery:
         return all((t in raw_text) or (t.replace("_", "-") in norm_text) for t in terms)
 
     def _match_lexical_item(self, ref: str, item: dict[str, Any], terms: list[str]) -> None:
+        if not self._kind_allowed(item):
+            return
         metadata = item["metadata"].casefold()
         metadata_match = self._terms_match(terms, metadata)
         body = self._body(ref) if (terms and not metadata_match and self.req["content"]) else None

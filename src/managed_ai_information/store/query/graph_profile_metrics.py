@@ -102,13 +102,30 @@ class GraphProfileCalibration:
     claim_kinds: frozenset[str] = QUALIFICATION_TARGET_KINDS
     navigational_kinds: frozenset[str] = DEFAULT_NAVIGATIONAL_KINDS
     structural_predicates: frozenset[str] = STRUCTURAL_PREDICATES
+    symmetric_predicates: frozenset[str] = frozenset()
+    inverse_structural_predicates: frozenset[str] = frozenset()
     qualifying_predicates: frozenset[str] = QUALIFYING_PREDICATES
+    qualifying_predicate_prefixes: tuple[str, ...] = ()
     contradict_resolution_predicates: frozenset[str] = CONTRADICT_RESOLUTION_PREDICATES
     bypass_exempt_predicates: frozenset[str] = BYPASS_EXEMPT_PREDICATES
     default_roots: tuple[str, ...] = ()
     desert_min_fan_in: int = 3
     desert_min_qual_ratio: float = 0.2
     sources: tuple[str, ...] = ("defaults",)
+
+    def directional_structural_predicates(self) -> frozenset[str]:
+        return (
+            self.structural_predicates
+            - self.symmetric_predicates
+            - self.inverse_structural_predicates
+        )
+
+    def is_qualifying_predicate(self, pred: str) -> bool:
+        if pred in self.qualifying_predicates:
+            return True
+        return bool(self.qualifying_predicate_prefixes) and pred.startswith(
+            self.qualifying_predicate_prefixes
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -117,7 +134,10 @@ class GraphProfileCalibration:
             "claim_kinds": sorted(self.claim_kinds),
             "navigational_kinds": sorted(self.navigational_kinds),
             "structural_predicates": sorted(self.structural_predicates),
+            "symmetric_predicates": sorted(self.symmetric_predicates),
+            "inverse_structural_predicates": sorted(self.inverse_structural_predicates),
             "qualifying_predicates": sorted(self.qualifying_predicates),
+            "qualifying_predicate_prefixes": list(self.qualifying_predicate_prefixes),
             "contradict_resolution_predicates": sorted(self.contradict_resolution_predicates),
             "bypass_exempt_predicates": sorted(self.bypass_exempt_predicates),
             "desert_min_fan_in": self.desert_min_fan_in,
@@ -295,7 +315,6 @@ def _collect_edge_stats(
     struct_incident = [0] * snap.n
     counts = {"structural": 0, "qualifying": 0, "other": 0}
     struct_preds = cal.structural_predicates
-    qual_preds = cal.qualifying_predicates
 
     for u in active_indices:
         ukind = snap.kinds[u]
@@ -311,7 +330,7 @@ def _collect_edge_stats(
                 struct_incident[u] += 1
                 struct_incident[v] += 1
                 kind_struct[ukind] += 1
-            elif pred in qual_preds:
+            elif cal.is_qualifying_predicate(pred):
                 counts["qualifying"] += 1
                 qual_incident[u] += 1
                 qual_incident[v] += 1
@@ -335,12 +354,12 @@ def _collect_edge_stats(
 def _find_qualification_deserts(
     snap: Any,
     active_indices: list[int],
+    target_nodes: list[int],
     fan_in: list[int],
     qual_incident: list[int],
     struct_incident: list[int],
     cal: GraphProfileCalibration,
 ) -> tuple[list[dict[str, Any]], int]:
-    excluded = cal.navigational_kinds | cal.root_kinds
     nav_count = sum(1 for u in active_indices if snap.kinds[u] in cal.navigational_kinds)
     min_fi = cal.desert_min_fan_in
     min_ratio = cal.desert_min_qual_ratio
@@ -354,12 +373,9 @@ def _find_qualification_deserts(
             "structural_edges": struct_incident[u],
             "size_bytes": snap.sizes[u],
         }
-        for u in active_indices
-        if snap.kinds[u] not in excluded
-        and (
-            (fan_in[u] >= min_fi and qual_incident[u] == 0)
-            or (fan_in[u] >= ratio_fi and qual_incident[u] / fan_in[u] < min_ratio)
-        )
+        for u in target_nodes
+        if (fan_in[u] >= min_fi and qual_incident[u] == 0)
+        or (fan_in[u] >= ratio_fi and qual_incident[u] / fan_in[u] < min_ratio)
     ]
     deserts.sort(key=lambda row: (-row["fan_in"], row["qualifying_edges"], row["id"]))
     return deserts, nav_count
@@ -398,7 +414,7 @@ def compute_density_and_qualification(
     def _cat(pred: str) -> str:
         if pred in calibration.structural_predicates:
             return "structural"
-        return "qualifying" if pred in calibration.qualifying_predicates else "other"
+        return "qualifying" if calibration.is_qualifying_predicate(pred) else "other"
 
     kind_totals = Counter(snap.kinds)
     kind_active = Counter(snap.kinds[i] for i in active_indices)
@@ -431,6 +447,7 @@ def compute_density_and_qualification(
         for i in active_indices
         if snap.kinds[i] in calibration.claim_kinds
         and snap.kinds[i] not in calibration.navigational_kinds
+        and snap.kinds[i] not in calibration.root_kinds
     ]
     target_scope = "claim_and_synthesis_kinds"
     if not target_nodes:
@@ -442,6 +459,7 @@ def compute_density_and_qualification(
     deserts, nav_count = _find_qualification_deserts(
         snap,
         active_indices,
+        target_nodes,
         stats["fan_in"],
         qual_incident,
         stats["struct_incident"],

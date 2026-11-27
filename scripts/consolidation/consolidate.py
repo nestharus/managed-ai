@@ -147,19 +147,35 @@ def _stale_record_ids(system: System, records: dict[str, dict[str, Any]]) -> lis
     return stale
 
 
+_TEST_MANAGED_KINDS: frozenset[str] = frozenset({"test-suite", "verification-unknown"})
+
+
+def _managed_kinds(mode: str, *, include_tests: bool) -> frozenset[str]:
+    base = _MANAGED_KINDS_BY_MODE[mode]
+    return base | _TEST_MANAGED_KINDS if (mode == "repo" and include_tests) else base
+
+
 def _build_mode_records(
     mode: str,
     repo_root: Path,
     system: System,
     *,
     package_rel: str,
+    include_tests: bool = False,
+    tests_rel: str = "tests",
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]], dict[str, bytes]]:
     if mode == "repo":
         desired, basis_shas, pending_digests, _ = build_repo_records(
-            repo_root, system, package_rel=package_rel
+            repo_root,
+            system,
+            package_rel=package_rel,
+            include_tests=include_tests,
+            tests_rel=tests_rel,
         )
         return desired, basis_shas, pending_digests
     if mode == "crw":
+        if include_tests:
+            raise ValueError("--include-tests is only supported with --mode repo")
         desired, basis_shas, pending_digests, _ = build_crw_records(repo_root)
         return desired, basis_shas, pending_digests
     raise ValueError(f"unsupported consolidation mode: {mode}")
@@ -171,12 +187,21 @@ def plan_consolidation(
     *,
     mode: str = "repo",
     package_rel: str = "src/managed_ai_information",
+    include_tests: bool = False,
+    tests_rel: str = "tests",
 ) -> dict[str, Any]:
     """Read-only Code -> Store reconciliation plan using native basis_changes() + desired state."""
     system = _open_store(store_root)
     existing = load_existing_records(system)
     stale_basis = _stale_record_ids(system, existing)
-    desired, basis_shas, _ = _build_mode_records(mode, repo_root, system, package_rel=package_rel)
+    desired, basis_shas, _ = _build_mode_records(
+        mode,
+        repo_root,
+        system,
+        package_rel=package_rel,
+        include_tests=include_tests,
+        tests_rel=tests_rel,
+    )
 
     desired_by_id = {rec["id"]: rec for rec in desired}
     added: list[str] = []
@@ -193,7 +218,7 @@ def plan_consolidation(
         else:
             unchanged.append(rec_id)
 
-    managed_kinds = _MANAGED_KINDS_BY_MODE[mode]
+    managed_kinds = _managed_kinds(mode, include_tests=include_tests)
     retired = sorted(
         rec_id
         for rec_id, rec in existing.items()
@@ -205,6 +230,7 @@ def plan_consolidation(
     return {
         "format": CONSOLIDATION_PLAN_FORMAT,
         "mode": mode,
+        "include_tests": include_tests,
         "store": str(system.root),
         "repo": str(repo_root),
         "added": added,
@@ -221,15 +247,22 @@ def apply_consolidation(
     *,
     mode: str = "repo",
     package_rel: str = "src/managed_ai_information",
+    include_tests: bool = False,
+    tests_rel: str = "tests",
 ) -> dict[str, Any]:
     """Sync digests, apply changed/added records, soft-retire deleted ones, reindex + lint."""
     system = _open_store(store_root)
     existing = load_existing_records(system)
     desired, basis_shas, pending_digests = _build_mode_records(
-        mode, repo_root, system, package_rel=package_rel
+        mode,
+        repo_root,
+        system,
+        package_rel=package_rel,
+        include_tests=include_tests,
+        tests_rel=tests_rel,
     )
     desired_ids = {rec["id"] for rec in desired}
-    managed_kinds = _MANAGED_KINDS_BY_MODE[mode]
+    managed_kinds = _managed_kinds(mode, include_tests=include_tests)
 
     retired_ids: list[str] = []
     for rec_id, rec in sorted(existing.items()):
@@ -582,6 +615,8 @@ def _build_parser() -> argparse.ArgumentParser:
         p_cmd.add_argument("--repo", type=Path, required=True)
         p_cmd.add_argument("--mode", choices=("repo", "crw"), default="repo")
         p_cmd.add_argument("--package-dir", default="src/managed_ai_information")
+        p_cmd.add_argument("--include-tests", action="store_true")
+        p_cmd.add_argument("--tests-dir", default="tests")
 
     p_po = sub.add_parser("plan-obligations", allow_abbrev=False)
     p_po.add_argument("--store", type=Path, required=True)
@@ -609,11 +644,21 @@ def main(argv: list[str] | None = None) -> int:
             report = sync_digests(args.store, args.repo)
         elif args.command == "plan":
             report = plan_consolidation(
-                args.store, args.repo, mode=args.mode, package_rel=args.package_dir
+                args.store,
+                args.repo,
+                mode=args.mode,
+                package_rel=args.package_dir,
+                include_tests=args.include_tests,
+                tests_rel=args.tests_dir,
             )
         elif args.command == "apply":
             report = apply_consolidation(
-                args.store, args.repo, mode=args.mode, package_rel=args.package_dir
+                args.store,
+                args.repo,
+                mode=args.mode,
+                package_rel=args.package_dir,
+                include_tests=args.include_tests,
+                tests_rel=args.tests_dir,
             )
         elif args.command == "plan-obligations":
             report = plan_obligations(

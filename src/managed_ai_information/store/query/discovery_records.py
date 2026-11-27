@@ -255,6 +255,7 @@ def inspect_record(discovery: Any, ref: str, ident: str) -> dict[str, Any] | Non
             "ref": ref,
             "scope": "records",
             "id": ident,
+            "kind": kind,
             "source": {
                 "scope": "records",
                 "id": ident,
@@ -289,6 +290,7 @@ def inspect_record(discovery: Any, ref: str, ident: str) -> dict[str, Any] | Non
         "ref": ref,
         "scope": "records",
         "id": ident,
+        "kind": str(record.get("kind", "")),
         "source": {
             "scope": "records",
             "id": ident,

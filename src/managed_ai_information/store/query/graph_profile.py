@@ -354,7 +354,7 @@ def _compute_bottlenecks(
     include_cochange: bool,
     calibration: GraphProfileCalibration,
 ) -> dict[str, Any]:
-    struct_preds = calibration.structural_predicates
+    struct_preds = calibration.directional_structural_predicates()
     bypass_exempt = calibration.bypass_exempt_predicates
     active_successors = _trace_active_successors(snap)
     struct_adj: dict[int, list[int]] = {}

@@ -32,7 +32,10 @@ _CONFIG_ALLOWED_KEYS = frozenset(
         "claim_kinds",
         "navigational_kinds",
         "structural_predicates",
+        "symmetric_predicates",
+        "inverse_structural_predicates",
         "qualifying_predicates",
+        "qualifying_predicate_prefixes",
         "contradict_resolution_predicates",
         "bypass_exempt_predicates",
         "desert_min_fan_in",
@@ -46,7 +49,10 @@ _CONFIG_LIST_KEYS = frozenset(
         "claim_kinds",
         "navigational_kinds",
         "structural_predicates",
+        "symmetric_predicates",
+        "inverse_structural_predicates",
         "qualifying_predicates",
+        "qualifying_predicate_prefixes",
         "contradict_resolution_predicates",
         "bypass_exempt_predicates",
     }
@@ -250,7 +256,10 @@ def resolve_calibration(
     claims = base.claim_kinds
     navs = base.navigational_kinds
     struct = base.structural_predicates
+    sym_preds = base.symmetric_predicates
+    inv_struct = base.inverse_structural_predicates
     qual = base.qualifying_predicates
+    qual_prefixes = base.qualifying_predicate_prefixes
     contra_res = base.contradict_resolution_predicates
     bypass_ex = base.bypass_exempt_predicates
     default_roots = base.default_roots
@@ -269,8 +278,14 @@ def resolve_calibration(
             navs = frozenset(cfg["navigational_kinds"])
         if "structural_predicates" in cfg:
             struct = frozenset(cfg["structural_predicates"])
+        if "symmetric_predicates" in cfg:
+            sym_preds = frozenset(cfg["symmetric_predicates"])
+        if "inverse_structural_predicates" in cfg:
+            inv_struct = frozenset(cfg["inverse_structural_predicates"])
         if "qualifying_predicates" in cfg:
             qual = frozenset(cfg["qualifying_predicates"])
+        if "qualifying_predicate_prefixes" in cfg:
+            qual_prefixes = tuple(dict.fromkeys(cfg["qualifying_predicate_prefixes"]))
         if "contradict_resolution_predicates" in cfg:
             contra_res = frozenset(cfg["contradict_resolution_predicates"])
         if "bypass_exempt_predicates" in cfg:
@@ -312,7 +327,10 @@ def resolve_calibration(
         claim_kinds=claims,
         navigational_kinds=navs,
         structural_predicates=struct,
+        symmetric_predicates=sym_preds,
+        inverse_structural_predicates=inv_struct,
         qualifying_predicates=qual,
+        qualifying_predicate_prefixes=qual_prefixes,
         contradict_resolution_predicates=contra_res,
         bypass_exempt_predicates=bypass_ex,
         default_roots=default_roots,

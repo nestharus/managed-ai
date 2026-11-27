@@ -486,6 +486,74 @@ class ConsolidationETLTests(unittest.TestCase):
             rec_res,
         )
 
+    def test_include_tests_ingest_idempotent_lint_clean_and_soft_retire(self) -> None:
+        repo = _write_files(
+            self.tmp / "tests-etl-repo",
+            {
+                "src/demo/__init__.py": "",
+                "src/demo/covered.py": "def inc(n: int) -> int:\n    return n + 1\n",
+                "src/demo/uncovered.py": "def dec(n: int) -> int:\n    return n - 1\n",
+                "tests/test_covered.py": (
+                    "import unittest\n"
+                    "from demo.covered import inc\n\n"
+                    "class CoveredTests(unittest.TestCase):\n"
+                    "    def test_inc(self) -> None:\n"
+                    "        self.assertEqual(inc(1), 2)\n"
+                ),
+            },
+        )
+        store = self._init_store("tests-etl-store")
+
+        first = apply_consolidation(
+            store, repo, mode="repo", package_rel="src/demo", include_tests=True
+        )
+        self.assertTrue(first["applied"])
+        self.assertEqual(first["lint_anomalies"], 0)
+        self.assertIn("test-test_covered", first["added"])
+        self.assertIn("unknown-cov-uncovered", first["added"])
+
+        sys_obj = System(store)
+        suite_rec = sys_obj.show("test-test_covered")
+        self.assertEqual(suite_rec["kind"], "test-suite")
+        self.assertIn({"relation": "qualifies", "target": "mod-covered"}, suite_rec["relations"])
+        self.assertIn(
+            {"relation": "evidenced-by", "target": "profile-head"}, suite_rec["relations"]
+        )
+        unk_rec = sys_obj.show("unknown-cov-uncovered")
+        self.assertEqual(unk_rec["kind"], "verification-unknown")
+        self.assertIn({"relation": "bears-on", "target": "mod-uncovered"}, unk_rec["relations"])
+
+        # 100% idempotent on plan & apply
+        plan_again = plan_consolidation(
+            store, repo, mode="repo", package_rel="src/demo", include_tests=True
+        )
+        self.assertEqual(plan_again["added"], [])
+        self.assertEqual(plan_again["changed"], [])
+        self.assertEqual(plan_again["retired"], [])
+
+        # Adding a real test for uncovered.py soft-retires unknown-cov-uncovered!
+        (repo / "tests/test_uncovered.py").write_text(
+            "import unittest\n"
+            "from demo.uncovered import dec\n\n"
+            "class UncoveredTests(unittest.TestCase):\n"
+            "    def test_dec(self) -> None:\n"
+            "        self.assertEqual(dec(2), 1)\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        second = apply_consolidation(
+            store, repo, mode="repo", package_rel="src/demo", include_tests=True
+        )
+        self.assertTrue(second["applied"])
+        self.assertEqual(second["lint_anomalies"], 0)
+        self.assertIn("test-test_uncovered", second["added"])
+        self.assertIn("unknown-cov-uncovered", second["retired"])
+        self.assertFalse(System(store).show("unknown-cov-uncovered")["active"])
+
+        # Reject --include-tests with --mode crw
+        with self.assertRaises(ValueError):
+            plan_consolidation(store, repo, mode="crw", include_tests=True)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -484,6 +484,156 @@ class RepairGraphHealthTests(unittest.TestCase):
             )
             self.assertEqual(abbrev_proc.returncode, 2)
 
+    def test_w17_retired_prefix_questions_and_hub_edge_delegation(self) -> None:
+        with TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            store_root = base / "store"
+            System.initialize(store_root, {"contribution": "Test Wave 17 opt-in repairs."})
+            system = System(store_root)
+            with exclusive(system.ex.root / "owner.lock"):
+                # Hub -> topic-map -> leaf-covered, plus direct hub -> leaf-covered (redundant)
+                # and hub -> leaf-uncovered (must stay!).
+                system.put(
+                    {
+                        "id": "leaf-covered",
+                        "kind": "research-claim",
+                        "content": {"summary": "Covered by topic-map."},
+                        "relations": [],
+                        "basis": [],
+                        "active": True,
+                    },
+                    0,
+                )
+                system.put(
+                    {
+                        "id": "leaf-uncovered",
+                        "kind": "research-claim",
+                        "content": {"summary": "Only tracked by hub."},
+                        "relations": [],
+                        "basis": [],
+                        "active": True,
+                    },
+                    0,
+                )
+                system.put(
+                    {
+                        "id": "map-1",
+                        "kind": "research-topic-map",
+                        "content": {"summary": "Active topic map."},
+                        "relations": [{"relation": "maps-to", "target": "leaf-covered"}],
+                        "basis": [],
+                        "active": True,
+                    },
+                    0,
+                )
+                system.put(
+                    {
+                        "id": "selector-hub",
+                        "kind": "index",
+                        "content": {"summary": "Hub tracking maps and leaves."},
+                        "relations": [
+                            {"relation": "serves", "target": "goal"},
+                            {"relation": "tracks-topic-map", "target": "map-1"},
+                            {"relation": "tracks-claim", "target": "leaf-covered"},
+                            {"relation": "tracks-claim", "target": "leaf-uncovered"},
+                        ],
+                        "basis": [],
+                        "active": True,
+                    },
+                    0,
+                )
+                # Retired study issue + 1 open_conditional stub (retire) + 1 open stub (spare!).
+                system.put(
+                    {
+                        "id": "g60-named-demo-study-20261121-deadbeef",
+                        "kind": "research-issue",
+                        "content": {"summary": "Retired named study."},
+                        "relations": [],
+                        "basis": [],
+                        "active": False,
+                    },
+                    0,
+                )
+                system.put(
+                    {
+                        "id": "g60-named-demo-study-20261121-question-2-aaaa",
+                        "kind": "question",
+                        "content": {
+                            "selection": "open_conditional",
+                            "summary": "Conditional stub.",
+                        },
+                        "relations": [],
+                        "basis": [],
+                        "active": True,
+                    },
+                    0,
+                )
+                system.put(
+                    {
+                        "id": "g60-named-demo-study-20261121-question-1-bbbb",
+                        "kind": "question",
+                        "content": {"selection": "open", "summary": "Explicitly open question."},
+                        "relations": [],
+                        "basis": [],
+                        "active": True,
+                    },
+                    0,
+                )
+                system.reindex()
+
+            # Default run (opt-ins False) touches 0 records.
+            default_plan = repair_graph_health(store_root, apply=False)
+            self.assertEqual(default_plan["records_to_patch"], 0)
+
+            # Opt-in flags retire ONLY open_conditional stub and delegate ONLY covered hub edge.
+            receipt_path = base / "w17-receipt.json"
+            applied = repair_graph_health(
+                store_root,
+                apply=True,
+                receipt_path=receipt_path,
+                retire_retired_prefix_questions=True,
+                delegate_redundant_hub_edges=True,
+            )
+            self.assertEqual(applied["retired_prefix_questions_retired"], 1)
+            self.assertEqual(applied["hub_edges_delegated"], 1)
+            self.assertEqual(applied["written_count"], 2)
+
+            reloaded = System(store_root)
+            self.assertFalse(
+                reloaded.record_store.show("g60-named-demo-study-20261121-question-2-aaaa")[
+                    "active"
+                ]
+            )
+            self.assertTrue(
+                reloaded.record_store.show("g60-named-demo-study-20261121-question-1-bbbb")[
+                    "active"
+                ]
+            )
+            hub_rels = {
+                (r["relation"], r["target"])
+                for r in reloaded.record_store.show("selector-hub")["relations"]
+            }
+            self.assertNotIn(("tracks-claim", "leaf-covered"), hub_rels)
+            self.assertIn(("tracks-claim", "leaf-uncovered"), hub_rels)
+            self.assertIn(("tracks-topic-map", "map-1"), hub_rels)
+
+            # Rollback restores both cleanly.
+            rb = rollback_graph_repair(store_root, receipt_path, apply=True)
+            self.assertEqual(rb["written_count"], 2)
+            restored = System(store_root)
+            self.assertTrue(
+                restored.record_store.show("g60-named-demo-study-20261121-question-2-aaaa")[
+                    "active"
+                ]
+            )
+            self.assertIn(
+                ("tracks-claim", "leaf-covered"),
+                {
+                    (r["relation"], r["target"])
+                    for r in restored.record_store.show("selector-hub")["relations"]
+                },
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

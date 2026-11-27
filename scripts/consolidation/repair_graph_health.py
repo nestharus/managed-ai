@@ -50,6 +50,20 @@ LINK_SPEC_FORMAT = "managed-ai-graph-health-links/1"
 SUCCESSOR_OUT_PREDICATES: frozenset[str] = frozenset({"consolidated-into", "superseded-by"})
 SUCCESSOR_IN_PREDICATES: frozenset[str] = frozenset({"supersedes"})
 RETIRE_ALLOWED_KINDS: frozenset[str] = frozenset({"question"})
+HUB_MAP_PREDICATES: frozenset[str] = frozenset(
+    {"tracks-topic-map", "indexes-synthesis", "indexes-causal-ancestor"}
+)
+HUB_DELEGATABLE_PREDICATES: frozenset[str] = frozenset(
+    {
+        "tracks-direction",
+        "tracks-claim",
+        "tracks-gap",
+        "tracks-novel-issue",
+        "tracks-frontier-family",
+        "tracks-frontier-question",
+        "tracks-scoped-finding",
+    }
+)
 DEFAULT_ACCOUNT = "repair_graph_health: mechanical zero-loss graph-health maintenance"
 
 
@@ -571,6 +585,145 @@ def _plan_stranded_question_retirements(
     return retired
 
 
+def _plan_retired_prefix_question_retirements(
+    system: System,
+    topo: _Topology,
+    reachable: set[int],
+    undirected: list[set[int]],
+    protected_ids: frozenset[str],
+    linked_ids: set[str],
+    patches: dict[str, _RecordPatch],
+    rec_cache: dict[str, dict[str, Any]],
+    actions: list[dict[str, Any]],
+) -> int:
+    inactive_issues = [
+        topo.ids[i]
+        for i in range(topo.n)
+        if not topo.active[i] and topo.kinds[i] == "research-issue"
+    ]
+    active_issues = [
+        topo.ids[i] for i in range(topo.n) if topo.active[i] and topo.kinds[i] == "research-issue"
+    ]
+    retired = 0
+    for idx in range(topo.n):
+        if not topo.active[idx] or idx in reachable or undirected[idx]:
+            continue
+        if topo.kinds[idx] not in RETIRE_ALLOWED_KINDS:
+            continue
+        rid = topo.ids[idx]
+        if rid in protected_ids or rid in linked_ids:
+            continue
+        if rid in patches and patches[rid].set_active is False:
+            continue
+        if not rid.startswith("g60-named-") or "-question-" not in rid:
+            continue
+        study_prefix = rid.split("-question-", 1)[0] + "-"
+        matched_retired = sorted(m for m in inactive_issues if m.startswith(study_prefix))
+        if not matched_retired or any(m.startswith(study_prefix) for m in active_issues):
+            continue
+        rec = rec_cache.get(rid)
+        if rec is None:
+            rec = system.record_store.show(rid)
+            rec_cache[rid] = rec
+        content = rec.get("content")
+        if int(rec["revision"]) != 1 or not isinstance(content, dict):
+            continue
+        if content.get("selection") != "open_conditional":
+            continue
+        patch, _ = _get_or_create_patch(system, patches, rec_cache, rid)
+        patch.set_active = False
+        actions.append(
+            {
+                "action": "retire_retired_prefix_question_stub",
+                "record_id": rid,
+                "kind": topo.kinds[idx],
+                "study_prefix": study_prefix.rstrip("-"),
+                "retired_issues": matched_retired,
+                "note": (
+                    "Soft-retired isolated rev=1 open_conditional question stub whose parent "
+                    "named study research-issue is already inactive (zero content deleted)."
+                ),
+            }
+        )
+        retired += 1
+    return retired
+
+
+def _plan_redundant_hub_delegations(
+    system: System,
+    topo: _Topology,
+    undirected: list[set[int]],
+    hub_ids: list[str],
+    patches: dict[str, _RecordPatch],
+    rec_cache: dict[str, dict[str, Any]],
+    actions: list[dict[str, Any]],
+) -> int:
+    if hub_ids:
+        hub_idxs: list[int] = []
+        for hid in hub_ids:
+            idx = topo.id_to_idx.get(hid)
+            if idx is None or not topo.active[idx]:
+                raise ValueError(f"hub record must exist and be active: {hid}")
+            if idx not in hub_idxs:
+                hub_idxs.append(idx)
+    else:
+        hub_idxs = [
+            u
+            for u in range(topo.n)
+            if topo.active[u]
+            and any(topo.active[v] and pred == "tracks-topic-map" for v, pred in topo.out_edges[u])
+        ]
+
+    working_undirected = [set(neighbors) for neighbors in undirected]
+    delegated = 0
+    for h_idx in sorted(hub_idxs, key=lambda i: topo.ids[i]):
+        map_idxs = {
+            v for v, pred in topo.out_edges[h_idx] if topo.active[v] and pred in HUB_MAP_PREDICATES
+        }
+        if not map_idxs:
+            continue
+        covered_by_maps: set[int] = set()
+        for m_idx in map_idxs:
+            covered_by_maps.update(working_undirected[m_idx])
+        covered_by_maps.discard(h_idx)
+        covered_by_maps.difference_update(map_idxs)
+        if not covered_by_maps:
+            continue
+
+        hid = topo.ids[h_idx]
+        rec = rec_cache.get(hid)
+        if rec is None:
+            rec = system.record_store.show(hid)
+            rec_cache[hid] = rec
+        for rel in rec.get("relations", []):
+            pred = str(rel.get("relation", ""))
+            target = str(rel.get("target", ""))
+            if pred not in HUB_DELEGATABLE_PREDICATES:
+                continue
+            t_idx = topo.id_to_idx.get(target)
+            if t_idx is None or t_idx not in covered_by_maps:
+                continue
+            covering_maps = sorted(topo.ids[m] for m in map_idxs if t_idx in working_undirected[m])
+            if not covering_maps:
+                continue
+            patch, _ = _get_or_create_patch(system, patches, rec_cache, hid)
+            _append_unique_rel(patch.remove_relations, rel)
+            working_undirected[h_idx].discard(t_idx)
+            working_undirected[t_idx].discard(h_idx)
+            actions.append(
+                {
+                    "action": "delegate_redundant_hub_edge",
+                    "record_id": hid,
+                    "relation": pred,
+                    "target": target,
+                    "covered_by_maps": covering_maps,
+                    "removed_relation": copy.deepcopy(rel),
+                }
+            )
+            delegated += 1
+    return delegated
+
+
 def _build_batch_operations(patches: dict[str, _RecordPatch]) -> list[dict[str, Any]]:
     operations: list[dict[str, Any]] = []
     for rid in sorted(patches):
@@ -599,6 +752,9 @@ def _plan_repairs(
     remove_self_loops: bool,
     repoint_actionable_bypasses: bool,
     retire_stranded_questions: bool,
+    retire_retired_prefix_questions: bool,
+    delegate_redundant_hub_edges: bool,
+    hub_ids: list[str],
     links: list[dict[str, str]],
 ) -> tuple[dict[str, _RecordPatch], dict[str, Any]]:
     topo = _load_topology(system)
@@ -636,6 +792,34 @@ def _plan_repairs(
         if retire_stranded_questions
         else 0
     )
+    retired_prefix_questions = (
+        _plan_retired_prefix_question_retirements(
+            system,
+            topo,
+            reachable,
+            undirected,
+            protected,
+            linked_ids,
+            patches,
+            rec_cache,
+            actions,
+        )
+        if retire_retired_prefix_questions
+        else 0
+    )
+    hub_edges_delegated = (
+        _plan_redundant_hub_delegations(
+            system,
+            topo,
+            undirected,
+            hub_ids,
+            patches,
+            rec_cache,
+            actions,
+        )
+        if delegate_redundant_hub_edges
+        else 0
+    )
 
     summary = {
         "indexed": topo.indexed,
@@ -647,6 +831,8 @@ def _plan_repairs(
         "bypasses_skipped_ambiguous_count": len(skipped_ambiguous),
         "bypasses_skipped_ambiguous": skipped_ambiguous[:25],
         "stranded_questions_retired": stranded_retired,
+        "retired_prefix_questions_retired": retired_prefix_questions,
+        "hub_edges_delegated": hub_edges_delegated,
         "explicit_links_added": links_added,
         "explicit_links_already_present": already_linked,
         "records_to_patch": len(_build_batch_operations(patches)),
@@ -665,11 +851,15 @@ def repair_graph_health(
     remove_self_loops: bool = True,
     repoint_actionable_bypasses: bool = True,
     retire_stranded_questions: bool = True,
+    retire_retired_prefix_questions: bool = False,
+    delegate_redundant_hub_edges: bool = False,
+    hub_ids: list[str] | tuple[str, ...] = (),
     account: str = DEFAULT_ACCOUNT,
 ) -> dict[str, Any]:
     """Plan (dry-run default) or atomically apply zero-loss mechanical graph-health repairs."""
     system = _open_store(store_root)
     explicit_roots = strings(list(roots), "roots") if roots else []
+    explicit_hubs = strings(list(hub_ids), "hub_ids") if hub_ids else []
     links = _load_link_spec(link_file) if link_file is not None else []
 
     if not apply:
@@ -679,6 +869,9 @@ def repair_graph_health(
             remove_self_loops=remove_self_loops,
             repoint_actionable_bypasses=repoint_actionable_bypasses,
             retire_stranded_questions=retire_stranded_questions,
+            retire_retired_prefix_questions=retire_retired_prefix_questions,
+            delegate_redundant_hub_edges=delegate_redundant_hub_edges,
+            hub_ids=explicit_hubs,
             links=links,
         )
         operations = _build_batch_operations(patches)
@@ -702,6 +895,9 @@ def repair_graph_health(
             remove_self_loops=remove_self_loops,
             repoint_actionable_bypasses=repoint_actionable_bypasses,
             retire_stranded_questions=retire_stranded_questions,
+            retire_retired_prefix_questions=retire_retired_prefix_questions,
+            delegate_redundant_hub_edges=delegate_redundant_hub_edges,
+            hub_ids=explicit_hubs,
             links=links,
         )
         operations = _build_batch_operations(patches)
@@ -776,6 +972,8 @@ def repair_graph_health(
                 "self_loops_removed": summary["self_loops_removed"],
                 "bypasses_repointed": summary["bypasses_repointed"],
                 "stranded_questions_retired": summary["stranded_questions_retired"],
+                "retired_prefix_questions_retired": summary["retired_prefix_questions_retired"],
+                "hub_edges_delegated": summary["hub_edges_delegated"],
                 "explicit_links_added": summary["explicit_links_added"],
                 "lint_anomalies": lint_anomalies,
             },
@@ -925,6 +1123,28 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip stranded retired-parent question soft-retirement.",
     )
     parser.add_argument(
+        "--retire-retired-prefix-questions",
+        action="store_true",
+        help=(
+            "Opt-in: soft-retire isolated rev=1 open_conditional g60-named-* question stubs "
+            "whose parent named research-issue is already inactive (sparing selection='open')."
+        ),
+    )
+    parser.add_argument(
+        "--delegate-redundant-hub-edges",
+        action="store_true",
+        help=(
+            "Opt-in: trim redundant flat tracks-* leaf edges from hubs when the target is "
+            "already 1-hop reachable via one of that hub's tracked topic-maps."
+        ),
+    )
+    parser.add_argument(
+        "--hub-ids",
+        nargs="*",
+        default=[],
+        help="Optional explicit hub IDs for --delegate-redundant-hub-edges.",
+    )
+    parser.add_argument(
         "--rollback",
         default=None,
         help="Path to a repair receipt JSON to preview (or invert with --apply).",
@@ -956,6 +1176,9 @@ def main(argv: list[str] | None = None) -> int:
                 remove_self_loops=not bool(args.no_self_loops),
                 repoint_actionable_bypasses=not bool(args.no_repoint_bypasses),
                 retire_stranded_questions=not bool(args.no_retire_stranded_questions),
+                retire_retired_prefix_questions=bool(args.retire_retired_prefix_questions),
+                delegate_redundant_hub_edges=bool(args.delegate_redundant_hub_edges),
+                hub_ids=list(args.hub_ids),
                 account=str(args.account),
             )
     except (OSError, ValueError) as exc:
