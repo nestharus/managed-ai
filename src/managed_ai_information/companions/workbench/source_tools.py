@@ -18,48 +18,6 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from managed_ai_information.companions.workbench.source_search import (
-    _LEDGER_CATEGORIES,
-    PROTECTED_PREFIXES,
-    VERSION,
-    SearchImplementation,
-    _assemble_ledger_bytes,
-    need,
-    read_receipt_ledger,
-    relative,
-    validate_use_artifacts,
-)
-from managed_ai_information.companions.workbench.source_search import (
-    _MAX_SEARCH_FILE_BYTES as _MAX_SEARCH_FILE_BYTES,
-)
-from managed_ai_information.companions.workbench.source_search import (
-    _MAX_SEARCH_FILES as _MAX_SEARCH_FILES,
-)
-from managed_ai_information.companions.workbench.source_search import (
-    _RUNTIME_ENTRY as _RUNTIME_ENTRY,
-)
-from managed_ai_information.companions.workbench.source_search import (
-    _SCHEMA_VALUE_BYTES as _SCHEMA_VALUE_BYTES,
-)
-from managed_ai_information.companions.workbench.source_search import (
-    _SEARCH_CACHE as _SEARCH_CACHE,
-)
-from managed_ai_information.companions.workbench.source_search import (
-    _SEARCH_CACHE_LOCK as _SEARCH_CACHE_LOCK,
-)
-from managed_ai_information.companions.workbench.source_search import (
-    _default_runtime_entry as _default_runtime_entry,
-)
-from managed_ai_information.companions.workbench.source_search import (
-    _library_root_for as _library_root_for,
-)
-from managed_ai_information.companions.workbench.source_search import (
-    _matches_cached_pins as _matches_cached_pins,
-)
-from managed_ai_information.companions.workbench.source_search import (
-    _search_bytes as _search_bytes,
-)
-
 from .io_utils import (
     canonical_bytes as encoded,
 )
@@ -73,6 +31,50 @@ from .io_utils import (
 )
 from .io_utils import (
     sha256_bytes as digest,
+)
+from .source_search import (
+    _LEDGER_CATEGORIES,
+    PROTECTED_PREFIXES,
+    VERSION,
+    SearchImplementation,
+    _assemble_ledger_bytes,
+    need,
+    read_receipt_ledger,
+    relative,
+    validate_use_artifacts,
+)
+from .source_search import (
+    _MAX_SEARCH_FILE_BYTES as _MAX_SEARCH_FILE_BYTES,
+)
+from .source_search import (
+    _MAX_SEARCH_FILES as _MAX_SEARCH_FILES,
+)
+from .source_search import (
+    _RUNTIME_ENTRY as _RUNTIME_ENTRY,
+)
+from .source_search import (
+    _SCHEMA_VALUE_BYTES as _SCHEMA_VALUE_BYTES,
+)
+from .source_search import (
+    _SEARCH_CACHE as _SEARCH_CACHE,
+)
+from .source_search import (
+    _SEARCH_CACHE_LOCK as _SEARCH_CACHE_LOCK,
+)
+from .source_search import (
+    _default_runtime_entry as _default_runtime_entry,
+)
+from .source_search import (
+    _library_root_for as _library_root_for,
+)
+from .source_search import (
+    _matches_cached_pins as _matches_cached_pins,
+)
+from .source_search import (
+    _search_bytes as _search_bytes,
+)
+from .source_search import (
+    module_bytes as _search_module_bytes,
 )
 
 DEFAULT_EXCLUDED = {
@@ -156,7 +158,12 @@ class SourceService:
 
         self.selector = {
             "service": VERSION,
-            "implementation_sha256": digest(Path(__file__).read_bytes()),
+            "implementation_sha256": identity(
+                {
+                    "source_tools.py": digest(Path(__file__).read_bytes()),
+                    "source_search.py": digest(_search_module_bytes()),
+                }
+            ),
             "acquired_search_sha256": implementation.entry_pin["sha256"],
             "search_code": search_code,
             "backend": "native FtsAnalyzer, contentless body_docs",

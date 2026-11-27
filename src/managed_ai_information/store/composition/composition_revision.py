@@ -6,14 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from managed_ai_information.core.formats import (
-    RECOMPOSITION_FORMAT,
-    RECOMPOSITION_VIEW_FORMAT,
-    TRANSFER_FORMAT,
-)
-from managed_ai_information.core.ownership import NativeLayout
-from managed_ai_information.core.storage import sha
-
+from ...core.formats import RECOMPOSITION_FORMAT, RECOMPOSITION_VIEW_FORMAT, TRANSFER_FORMAT
+from ...core.ownership import NativeLayout
+from ...core.storage import sha
 from ..protocol.identities import (
     exact_fields,
     identity,
@@ -25,7 +20,7 @@ from ..protocol.identities import (
 from ..query.discovery_report import canonical
 from ..query.discovery_report import request as discovery_request
 from ..query.information import pointer
-from .composition import Composition
+from .composition import MAX_VIEW_BYTES, Composition
 from .revision_projection import (
     BasisAuthority,
     EvidenceHeadMap,
@@ -264,6 +259,7 @@ def revise(
             selected_basis or (),
             transfers,
             evidence_heads=evidence_heads,
+            max_view_bytes=MAX_VIEW_BYTES,
         )
         del evidence_heads
         review["consumer_scope"] = scope
@@ -273,10 +269,7 @@ def revise(
     with ExitStack() as stack:
         bound: Any = None
         if "proof_preservation" in req:
-            from managed_ai_information.store.composition.composition_opportunities import (
-                BoundOpportunities,
-                guarded_inventory,
-            )
+            from .composition_opportunities import BoundOpportunities, guarded_inventory
 
             try:
                 before = original["content"]["content"]

@@ -11,6 +11,9 @@
     "workbench/model_bridges.py": {
       "source": "workbench/model_bridges.py"
     },
+    "workbench/source_search.py": {
+      "source": "workbench/source_search.py"
+    },
     "workbench/source_tools.py": {
       "source": "workbench/source_tools.py"
     },

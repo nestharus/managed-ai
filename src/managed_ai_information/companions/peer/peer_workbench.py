@@ -60,6 +60,7 @@ _COMPONENT_ROLES = (
     "io_utils",
     "config",
     "model_bridges",
+    "source_search",
     "source_tools",
     "evidence_support",
     "agent_runtime",
@@ -434,7 +435,12 @@ def _setup_peer_workbench(
     code_files = {
         **{
             name: identity((HERE / name).read_bytes())
-            for name in ("peer_workbench.py", "peer_protocol.py", "COMPONENTS.json")
+            for name in (
+                "peer_workbench.py",
+                "peer_protocol.py",
+                "peer_tools.py",
+                "COMPONENTS.json",
+            )
         },
         **{name: identity(_contract_file(name).read_bytes()) for name in CONTRACT_FILES},
     }

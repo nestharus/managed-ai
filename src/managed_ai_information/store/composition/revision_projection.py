@@ -284,6 +284,7 @@ class _ConsumerInspector:
         max_bytes: int,
         selected_basis: Sequence[BasisAuthority],
         transfers: TransferMap | None,
+        max_view_bytes: int = MAX_VIEW_BYTES,
     ) -> None:
         self.system = system
         self.ids = ids
@@ -292,6 +293,7 @@ class _ConsumerInspector:
         self.keys = keys
         self.scan_limit = scan_limit
         self.max_bytes = max_bytes
+        self.max_view_bytes = max_view_bytes
         self.selected_basis = list(selected_basis)
         self.transfers: TransferMap = transfers or {}
         self.positions = {
@@ -309,7 +311,8 @@ class _ConsumerInspector:
     def charge(self, fragment: Any) -> None:
         self.view_bytes += len(canonical(fragment)) + 1
         require(
-            self.view_bytes <= MAX_VIEW_BYTES, "consumer scope exceeds composition view byte bound"
+            self.view_bytes <= self.max_view_bytes,
+            "consumer scope exceeds composition view byte bound",
         )
 
     def _project_retained(
@@ -489,6 +492,7 @@ def inspect_consumers(
     transfers: TransferMap | None = None,
     *,
     evidence_heads: EvidenceHeadMap | None = None,
+    max_view_bytes: int = MAX_VIEW_BYTES,
 ) -> dict[str, Any]:
     """Locate authored same-instance row uses within the explicitly supplied records."""
     require(
@@ -511,6 +515,7 @@ def inspect_consumers(
         max_bytes,
         selected_basis,
         transfers,
+        max_view_bytes=max_view_bytes,
     )
     checked: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
@@ -529,7 +534,7 @@ def inspect_consumers(
     if inspector.objects:
         scope["retained_objects"] = list(inspector.objects.values())
         require(
-            len(canonical(scope)) <= MAX_VIEW_BYTES,
+            len(canonical(scope)) <= max_view_bytes,
             "consumer scope exceeds composition view byte bound",
         )
     return scope

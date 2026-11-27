@@ -10,14 +10,14 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import ModuleType
 from typing import Any
 
-from managed_ai_information.companions.workbench.io_utils import (
+from .io_utils import (
     canonical_bytes as encoded,
 )
-from managed_ai_information.companions.workbench.io_utils import (
+from .io_utils import (
     is_reparse_or_symlink,
     loads_strict,
 )
-from managed_ai_information.companions.workbench.io_utils import (
+from .io_utils import (
     sha256_bytes as digest,
 )
 
@@ -32,6 +32,11 @@ _MAX_SEARCH_FILE_BYTES = 256 * 1024
 
 _SEARCH_CACHE_LOCK = threading.Lock()
 _SEARCH_CACHE: dict[str, SearchImplementation] = {}
+
+
+def module_bytes() -> bytes:
+    """Return the exact source bytes of this module for selector identity pinning."""
+    return Path(__file__).read_bytes()
 
 
 def need(condition: Any, message: str) -> None:
