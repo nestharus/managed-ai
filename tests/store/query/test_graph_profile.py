@@ -270,6 +270,8 @@ class GraphProfileTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             self.system.graph_profile(roots=["does-not-exist"])
+        with self.assertRaises(ValueError):
+            self.system.graph_profile(roots=["old-head"])
 
     def test_phantom_cochange_coupling_from_batch_receipts(self) -> None:
         _put(
@@ -396,11 +398,21 @@ class GraphProfileTests(unittest.TestCase):
         )
         self.system.reindex()
 
-        proc_fail = _run_cli("--baseline", str(baseline_file), "--check-alerts")
+        baseline_before = baseline_file.read_bytes()
+        proc_fail = _run_cli(
+            "--baseline",
+            str(baseline_file),
+            "--write-baseline",
+            str(baseline_file),
+            "--check-alerts",
+        )
         self.assertEqual(
             proc_fail.returncode, 1, f"stdout={proc_fail.stdout}\nstderr={proc_fail.stderr}"
         )
         out_fail = json.loads(proc_fail.stdout)
+        self.assertIsNone(out_fail["baseline_written"])
+        self.assertEqual(out_fail["baseline_write_skipped_reason"], "alerts_triggered")
+        self.assertEqual(baseline_file.read_bytes(), baseline_before)
         self.assertFalse(out_fail["alerts_passed"])
         self.assertGreater(out_fail["alert_count"], 0)
         rules = {a["rule"] for a in out_fail["alerts"]}

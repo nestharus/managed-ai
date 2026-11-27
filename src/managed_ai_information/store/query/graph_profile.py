@@ -159,6 +159,8 @@ def _select_roots(
             idx = snap.id_to_idx.get(rid)
             if idx is None:
                 raise ValueError("root record not found in hot graph: " + rid)
+            if not snap.active[idx]:
+                raise ValueError("root record is inactive in hot graph: " + rid)
             if idx not in seen:
                 seen.add(idx)
                 root_idxs.append(idx)
@@ -393,6 +395,7 @@ def _profile_snapshot(
     include_cochange: bool = False,
     baseline_path: Path | None = None,
     write_baseline_path: Path | None = None,
+    check_alerts: bool = False,
 ) -> dict[str, Any]:
     explicit_roots = strings(list(roots), "roots") if roots else []
     active_indices = [i for i in range(snap.n) if snap.active[i]]
@@ -436,8 +439,12 @@ def _profile_snapshot(
     report["alerts_passed"] = len(alerts) == 0
 
     if write_baseline_path is not None:
-        write_graph_baseline(write_baseline_path, report)
-        report["baseline_written"] = str(write_baseline_path)
+        if check_alerts and alerts:
+            report["baseline_written"] = None
+            report["baseline_write_skipped_reason"] = "alerts_triggered"
+        else:
+            write_graph_baseline(write_baseline_path, report)
+            report["baseline_written"] = str(write_baseline_path)
     return report
 
 
@@ -491,6 +498,7 @@ def profile(
     include_cochange: bool = False,
     baseline_path: Path | None = None,
     write_baseline_path: Path | None = None,
+    check_alerts: bool = False,
 ) -> dict[str, Any]:
     """Compute knowledge-graph health metrics over HeadIndex v3 mmap or scan_records fallback."""
     return _profile_snapshot(
@@ -500,4 +508,5 @@ def profile(
         include_cochange=include_cochange,
         baseline_path=baseline_path,
         write_baseline_path=write_baseline_path,
+        check_alerts=check_alerts,
     )

@@ -252,6 +252,7 @@ def _act_graph(system: Any, args: argparse.Namespace) -> dict[str, Any]:
             include_cochange=bool(getattr(args, "include_cochange", False)),
             baseline_path=getattr(args, "baseline", None),
             write_baseline_path=getattr(args, "write_baseline", None),
+            check_alerts=bool(getattr(args, "check_alerts", False)),
         )
     return graph_query.lint(system)
 
