@@ -25,6 +25,8 @@ from scripts.consolidation.consolidate import (  # noqa: E402
 from scripts.consolidation.ingest_crw import ingest_crw  # noqa: E402
 from scripts.consolidation.ingest_repo import ingest_repository  # noqa: E402
 
+from managed_ai_information.core.storage import sha  # noqa: E402
+from managed_ai_information.store.selection import store_configuration  # noqa: E402
 from managed_ai_information.store.system import System  # noqa: E402
 
 CONSOLIDATE_CLI = _REPO / "scripts/consolidation/consolidate.py"
@@ -135,12 +137,16 @@ class ConsolidationETLTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.tmp = Path(self._tmp.name)
 
-    def _init_store(self, name: str) -> Path:
+    def _init_store(
+        self, name: str, *, domains: tuple[Path, ...] = (), prepared: bool = False
+    ) -> Path:
         store = self.tmp / name
         System.initialize(
             store,
             {"contribution": f"Test consolidation store {name}."},
             instance_id=name,
+            domains=domains,
+            prepared=prepared,
         )
         return store
 
@@ -250,7 +256,58 @@ class ConsolidationETLTests(unittest.TestCase):
 
     def test_crw_ingest_synthetic_and_live_if_present(self) -> None:
         crw = _make_sample_crw(self.tmp / "sample-crw")
-        store = self._init_store("crw-store")
+        # Mount strict additionalProperties:false code-workflows domain.json on synthetic store
+        sample_domain = {
+            "format": "managed-ai-domain/1",
+            "engine_api": "managed-ai-runtime/1",
+            "id": "code-workflows",
+            "version": "1.0.0",
+            "title": "Synthetic CRW",
+            "summary": "Strict schema fixture.",
+            "source_root": ".",
+            "requires_domains": [],
+            "schemas": {
+                "crw-family": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["slug", "title", "prompt_source_id", "constituent_slugs"],
+                    "properties": {
+                        "slug": {"type": "string", "minLength": 1},
+                        "title": {"type": "string", "minLength": 1},
+                        "prompt_source_id": {"type": "string", "minLength": 1},
+                        "procedure_source_id": {"type": "string", "minLength": 1},
+                        "constituent_slugs": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {"type": "string", "minLength": 1},
+                        },
+                        "summary": {"type": "string", "minLength": 1},
+                    },
+                },
+                "crw-constituent": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["slug", "family", "concern", "cue", "prompt_source_id"],
+                    "properties": {
+                        "slug": {"type": "string", "minLength": 1},
+                        "family": {"type": "string", "minLength": 1},
+                        "concern": {"type": "string", "minLength": 1},
+                        "cue": {"type": "string", "minLength": 1},
+                        "prompt_source_id": {"type": "string", "minLength": 1},
+                        "cross_constituent_slugs": {
+                            "type": "array",
+                            "items": {"type": "string", "minLength": 1},
+                        },
+                    },
+                },
+            },
+        }
+        sample_domain_path = crw / "domain.json"
+        sample_domain_path.write_text(json.dumps(sample_domain, indent=2) + "\n", encoding="utf-8")
+        (crw / "risk-axis-reviewers/families/procedure.md").write_text(
+            "# Procedure\n", encoding="utf-8"
+        )
+        store = self._init_store("crw-store", domains=(sample_domain_path,))
 
         first = ingest_crw(crw, store, dry_run=False)
         self.assertTrue(first["applied"])
@@ -264,9 +321,28 @@ class ConsolidationETLTests(unittest.TestCase):
         self.assertFalse(second["applied"])
         self.assertEqual(second["written_count"], 0)
 
-        # Verify cross-prompt link edge was captured cleanly and CRW graph has 0 structural SCCs
+        # Verify strict code-workflows schema fields + cross-prompt link edge + 0 structural SCCs
         sys_obj = System(store)
+        fam_rec = sys_obj.show("crw-fam-organization-and-communication")
+        self.assertEqual(fam_rec["content"]["slug"], "organization-and-communication")
+        self.assertEqual(fam_rec["content"]["constituent_slugs"], ["entity-identity-risk"])
+        self.assertEqual(
+            fam_rec["content"]["prompt_source_id"],
+            "code-workflows/risk-axis-reviewers/families/organization-and-communication.prompt.md",
+        )
+        self.assertEqual(
+            fam_rec["content"]["procedure_source_id"],
+            "code-workflows/risk-axis-reviewers/families/procedure.md",
+        )
         install_rec = sys_obj.show("crw-dim-install-friction-risk")
+        self.assertEqual(install_rec["content"]["slug"], "install-friction-risk")
+        self.assertEqual(
+            install_rec["content"]["prompt_source_id"],
+            "code-workflows/risk-axis-reviewers/delivery/install-friction-risk.prompt.md",
+        )
+        self.assertEqual(
+            install_rec["content"]["cross_constituent_slugs"], ["entity-identity-risk"]
+        )
         self.assertIn(
             {"relation": "bears-on", "target": "crw-dim-entity-identity-risk"},
             install_rec["relations"],
@@ -274,7 +350,8 @@ class ConsolidationETLTests(unittest.TestCase):
         crw_prof = sys_obj.graph_profile(roots=["crw-catalog"])
         self.assertEqual(crw_prof["bottlenecks"]["structural_scc_count"], 0)
 
-        # If sibling real CRW checkout exists locally, verify 12/40/54 ingest + coverage manifest!
+        # If sibling real CRW checkout exists locally, mount real code-workflows/domain.json
+        # and verify 12/40/66+ ingest passes strict additionalProperties:false schema validation!
         real_crw = next(
             (
                 p / "code-review-workflows" / "trunk"
@@ -291,6 +368,16 @@ class ConsolidationETLTests(unittest.TestCase):
         )
         if real_crw is not None:
             real_store = self._init_store("real-crw-store")
+            real_domain = real_crw / "domain.json"
+            if real_domain.is_file():
+                store_configuration.configure(
+                    System(real_store),
+                    {
+                        "expected_sha256": sha((real_store / "system.json").read_bytes()),
+                        "account": "Mount live code-workflows/domain.json for strict schema test.",
+                        "domains": [str(real_domain)],
+                    },
+                )
             real_res = ingest_crw(real_crw, real_store, dry_run=False)
             self.assertTrue(real_res["applied"])
             self.assertGreaterEqual(real_res["counts"]["families"], 12)
@@ -307,6 +394,30 @@ class ConsolidationETLTests(unittest.TestCase):
             real_sys = System(real_store)
             real_prof = real_sys.graph_profile(roots=["crw-catalog"])
             self.assertEqual(real_prof["bottlenecks"]["structural_scc_count"], 0)
+            real_fam = real_sys.show("crw-fam-organization-and-communication")
+            self.assertIn(
+                "relationship-choreography-risk", real_fam["content"]["constituent_slugs"]
+            )
+            real_dim = real_sys.show("crw-dim-relationship-choreography-risk")
+            self.assertEqual(real_dim["content"]["slug"], "relationship-choreography-risk")
+            if real_domain.is_file():
+                with self.assertRaises(ValueError):
+                    real_sys.put(
+                        {
+                            "id": "crw-fam-schema-probe",
+                            "kind": "crw-family",
+                            "content": {
+                                "slug": "schema-probe",
+                                "title": "Probe",
+                                "prompt_source_id": "code-workflows/probe.md",
+                                "constituent_slugs": ["probe-risk"],
+                                "commit": "unexpected-extra-field",
+                            },
+                            "relations": [],
+                            "active": True,
+                        },
+                        0,
+                    )
             o01 = real_sys.show("crw-ctrl-o01")
             self.assertIn(
                 {"relation": "supports", "target": "crw-fam-organization-and-communication"},

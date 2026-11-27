@@ -1,4 +1,4 @@
-"""Component and symbol-level blast-radius impact analysis over repo AST and native stores."""
+"""Component and symbol-level blast-radius impact analysis."""
 
 import ast
 import os
@@ -485,7 +485,7 @@ def _analyze_crw_risks(
             ):
                 ctrls_by_dim[tgt].append(rec)
 
-    dim_fields = ("concern", "cue", "family", "title", "dimension_id")
+    dim_fields = ("slug", "concern", "cue", "family", "title", "dimension_id")
     scored: list[tuple[int, str, dict[str, Any]]] = []
     for rec_id, rec in sorted(crw_recs.items()):
         if rec.get("kind") != "crw-constituent":

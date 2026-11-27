@@ -120,37 +120,53 @@ def _build_family_and_constituent_records(
     fam_id_by_slug: dict[str, str] = {}
     dim_id_by_rel: dict[str, str] = {}
     dim_id_by_slug: dict[str, str] = {}
+    dim_slug_by_id: dict[str, str] = {}
+    constituents_by_family: dict[str, list[str]] = {}
 
     for item in constituents:
         if not isinstance(item, dict) or not isinstance(item.get("id"), str):
             raise ValueError("invalid constituent entry in observer-dimensions.json")
+        if not isinstance(item.get("family"), str) or not item["family"].strip():
+            raise ValueError(f"constituent {item['id']!r} missing non-empty family slug")
         rel = f"risk-axis-reviewers/{item['id']}"
         dim_slug = Path(item["id"]).stem.removesuffix(".prompt")
         dim_id = slugify_id("crw-dim", dim_slug)
         dim_id_by_rel[rel] = dim_id
         dim_id_by_slug[dim_slug] = dim_id
+        dim_slug_by_id[dim_id] = dim_slug
+        constituents_by_family.setdefault(item["family"].strip(), []).append(dim_slug)
+
+    procedure_rel = "risk-axis-reviewers/families/procedure.md"
+    has_procedure = (crw_root / procedure_rel).is_file()
 
     for fam_path in family_files:
         rel = fam_path.relative_to(crw_root).as_posix()
         fam_slug = fam_path.stem.removesuffix(".prompt")
         fam_id = slugify_id("crw-fam", fam_slug)
+        fam_constituents = sorted(set(constituents_by_family.get(fam_slug, ())))
+        if not fam_constituents:
+            raise ValueError(
+                f"CRW family {fam_slug!r} has no constituents in observer-dimensions.json"
+            )
         family_ids.append(fam_id)
         fam_id_by_slug[fam_slug] = fam_id
         text = _read_text(crw_root, rel)
         b_list, b_map, b_bytes = _pin_basis(crw_root, fam_id, [rel])
         basis_shas[fam_id] = b_map
         pending_digests[fam_id] = b_bytes
+        fam_content: dict[str, Any] = {
+            "slug": fam_slug,
+            "title": _first_heading(text, fam_slug),
+            "prompt_source_id": f"code-workflows/{rel}",
+            "constituent_slugs": fam_constituents,
+        }
+        if has_procedure:
+            fam_content["procedure_source_id"] = f"code-workflows/{procedure_rel}"
         desired.append(
             {
                 "id": fam_id,
                 "kind": "crw-family",
-                "content": {
-                    "slug": fam_slug,
-                    "title": _first_heading(text, fam_slug),
-                    "path": rel,
-                    "lines": len(text.splitlines()),
-                    "commit": commit,
-                },
+                "content": fam_content,
                 "relations": [
                     {"relation": "maps-to", "target": "crw-catalog"},
                     {"relation": "qualifies", "target": "crw-contract-shared"},
@@ -163,7 +179,8 @@ def _build_family_and_constituent_records(
     for item in sorted(constituents, key=lambda x: str(x["id"])):
         rel = f"risk-axis-reviewers/{item['id']}"
         dim_id = dim_id_by_rel[rel]
-        family_slug = str(item["family"])
+        dim_slug = dim_slug_by_id[dim_id]
+        family_slug = str(item["family"]).strip()
         parent_fam_id = fam_id_by_slug.get(family_slug)
         text = _read_text(crw_root, rel)
         cross_targets = _extract_prompt_cross_links(crw_root, rel, text, dim_id_by_rel)
@@ -173,9 +190,12 @@ def _build_family_and_constituent_records(
             rels.append({"relation": "refines", "target": parent_fam_id})
         else:
             rels.append({"relation": "maps-to", "target": "crw-catalog"})
+        cross_slugs: list[str] = []
         for target_id in cross_targets:
             if target_id != dim_id:
                 rels.append({"relation": "bears-on", "target": target_id})
+                if target_id in dim_slug_by_id:
+                    cross_slugs.append(dim_slug_by_id[target_id])
 
         b_list, b_map, b_bytes = _pin_basis(
             crw_root,
@@ -184,20 +204,20 @@ def _build_family_and_constituent_records(
         )
         basis_shas[dim_id] = b_map
         pending_digests[dim_id] = b_bytes
+        dim_content: dict[str, Any] = {
+            "slug": dim_slug,
+            "family": family_slug,
+            "concern": str(item.get("concern", "")).strip() or dim_slug,
+            "cue": str(item.get("cue", "")).strip() or dim_slug,
+            "prompt_source_id": f"code-workflows/{rel}",
+        }
+        if cross_slugs:
+            dim_content["cross_constituent_slugs"] = sorted(set(cross_slugs))
         desired.append(
             {
                 "id": dim_id,
                 "kind": "crw-constituent",
-                "content": {
-                    "dimension_id": item["id"],
-                    "family": family_slug,
-                    "concern": str(item.get("concern", "")),
-                    "cue": str(item.get("cue", "")),
-                    "title": _first_heading(text, str(item.get("concern", dim_id))),
-                    "path": rel,
-                    "lines": len(text.splitlines()),
-                    "commit": commit,
-                },
+                "content": dim_content,
                 "relations": rels,
                 "basis": b_list,
                 "active": True,
