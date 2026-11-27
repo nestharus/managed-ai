@@ -1,9 +1,7 @@
 """Unit and live Membus v2 end-to-end tests for store-to-Membus mirroring."""
 
 import base64
-import contextlib
 import http.server
-import io
 import json
 import os
 import shutil
@@ -25,7 +23,6 @@ from scripts.ci.verify_membus_live import (  # noqa: E402
     EphemeralMembusDaemon,
     find_membus_binary,
 )
-from scripts.consolidation import migrate_to_membus  # noqa: E402
 
 from managed_ai_information.core.membus_mirror import (  # noqa: E402
     MIRROR_REPORT_FORMAT,
@@ -439,76 +436,23 @@ class MembusMirrorUnitTests(unittest.TestCase):
                 self.assertEqual(bad_parity["status"], "failed")
                 self.assertEqual(bad_parity["mismatched_records"], ["pub-doc-1"])
 
-                # CLI end-to-end check (--dry-run, --apply, --verify-parity, --search, error rc=2)
+                # Second namespace dry-run, apply, verify-parity, and search round-trip
                 server.state.tamper_next_get_key = None
-                rc_dry, out_dry = migrate_to_membus.run_cli(
-                    [
-                        "--store",
-                        str(store_root),
-                        "--namespace",
-                        "cli_ns",
-                        "--sealed-id",
-                        "explicit-sealed-1",
-                    ]
-                )
-                self.assertEqual(rc_dry, 0)
+                second_cfg = build_mirror_config("second_ns", sealed_ids=["explicit-sealed-1"])
+                out_dry = mirror.plan(store_root, second_cfg).to_report()
                 self.assertEqual(out_dry["mode"], "dry-run")
 
-                rc_app, out_app = migrate_to_membus.run_cli(
-                    [
-                        "--store",
-                        str(store_root),
-                        "--namespace",
-                        "cli_ns",
-                        "--endpoint",
-                        server.base_url,
-                        "--apply",
-                        "--sealed-id",
-                        "explicit-sealed-1",
-                    ]
-                )
-                self.assertEqual(rc_app, 0)
+                out_app = mirror.apply(store_root, backend, second_cfg)
                 self.assertEqual(out_app["status"], "passed")
 
-                rc_ver, out_ver = migrate_to_membus.run_cli(
-                    [
-                        "--store",
-                        str(store_root),
-                        "--namespace",
-                        "cli_ns",
-                        "--endpoint",
-                        server.base_url,
-                        "--verify-parity",
-                        "--sealed-id",
-                        "explicit-sealed-1",
-                    ]
-                )
-                self.assertEqual(rc_ver, 0)
+                out_ver = mirror.verify_parity(store_root, backend, second_cfg)
                 self.assertEqual(out_ver["status"], "passed")
 
-                rc_s, out_s = migrate_to_membus.run_cli(
-                    [
-                        "--namespace",
-                        "cli_ns",
-                        "--endpoint",
-                        server.base_url,
-                        "--search",
-                        "boundary",
-                    ]
-                )
-                self.assertEqual(rc_s, 0)
+                out_s = mirror.search(backend, "boundary", namespace="second_ns")
                 self.assertEqual(out_s["hit_count"], 1)
 
-                # Missing --endpoint on --apply returns exit 2 + structured JSON error
-                err_buf = io.StringIO()
-                with contextlib.redirect_stderr(err_buf):
-                    rc_err = migrate_to_membus.main(
-                        ["--store", str(store_root), "--namespace", "x", "--apply"]
-                    )
-                self.assertEqual(rc_err, 2)
-                err_doc = json.loads(err_buf.getvalue())
-                self.assertFalse(err_doc["ok"])
-                self.assertIn("--endpoint", err_doc["error"])
+                with self.assertRaises(ValueError):
+                    build_mirror_config("   ")
 
     def test_packed_occ_sealed_blob_skipped_and_mid_mirror_error_aborts_cleanly(self) -> None:
         """C71A-1 & C71A-2: skip OCC_SEALED packed blobs; abort migration on mid-mirror error."""
@@ -580,12 +524,12 @@ class MembusLiveMirrorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="membus-crw-mirror-") as tmp:
             copy_store = Path(tmp) / "crw-copy"
             live_crw = _find_crw_store()
-            sealed_flags: list[str] = []
+            sealed_ids: list[str] = []
             if live_crw is not None:
                 shutil.copytree(live_crw, copy_store)
             else:
                 _write_fixture_store(copy_store, include_crw_terms=True)
-                sealed_flags = ["--sealed-id", "explicit-sealed-1"]
+                sealed_ids = ["explicit-sealed-1"]
 
             # Inject a sealed canary into the isolated temp copy to prove Sealed isolation
             (copy_store / "work" / "records" / "sealed-canary-entry.json").write_bytes(
@@ -601,80 +545,42 @@ class MembusLiveMirrorTests(unittest.TestCase):
                 )
             )
 
+            mirror = MembusStoreMirror()
+            cfg = build_mirror_config("crw_live_mirror", sealed_ids=sealed_ids)
             with EphemeralMembusDaemon(_MEMBUS_V2_BIN) as daemon:
-                rc_app, app_rep = migrate_to_membus.run_cli(
-                    [
-                        "--store",
-                        str(copy_store),
-                        "--namespace",
-                        "crw_live_mirror",
-                        "--endpoint",
-                        daemon.base_url,
-                        "--apply",
-                        "--verify-blob-bytes",
-                        *sealed_flags,
-                    ]
-                )
-                self.assertEqual(rc_app, 0)
+                backend = MembusV2Backend(daemon.base_url, timeout=15.0)
+                app_rep = mirror.apply(copy_store, backend, cfg, verify_blob_bytes=True)
                 self.assertEqual(app_rep["status"], "passed")
                 self.assertEqual(app_rep["migration"]["final_phase"], "committed")
                 self.assertGreaterEqual(app_rep["visibility_counts"]["Sealed"], 1)
                 self.assertEqual(app_rep["route_parity"]["mismatched_ops"], 0)
                 self.assertEqual(app_rep["route_parity"]["route_b_errors"], 0)
 
-                rc_par, par_rep = migrate_to_membus.run_cli(
-                    [
-                        "--store",
-                        str(copy_store),
-                        "--namespace",
-                        "crw_live_mirror",
-                        "--endpoint",
-                        daemon.base_url,
-                        "--verify-parity",
-                        "--verify-blob-bytes",
-                        *sealed_flags,
-                    ]
-                )
-                self.assertEqual(rc_par, 0)
+                par_rep = mirror.verify_parity(copy_store, backend, cfg, verify_blob_bytes=True)
                 self.assertEqual(par_rep["status"], "passed")
                 self.assertGreaterEqual(par_rep["sealed_verified"], 1)
 
                 # Real Tantivy BM25 search finds all 4 required CRW engineering terms
                 for term in ("migration", "symlink", "install", "boundary"):
-                    rc_q, q_rep = migrate_to_membus.run_cli(
-                        [
-                            "--namespace",
-                            "crw_live_mirror",
-                            "--endpoint",
-                            daemon.base_url,
-                            "--search",
-                            term,
-                            "--search-mode",
-                            "Bm25",
-                            "--limit",
-                            "10",
-                        ]
+                    q_rep = mirror.search(
+                        backend,
+                        term,
+                        namespace="crw_live_mirror",
+                        mode="Bm25",
+                        limit=10,
                     )
-                    self.assertEqual(rc_q, 0)
                     self.assertGreaterEqual(
                         q_rep["hit_count"], 1, msg=f"expected Tantivy BM25 hits for {term!r}"
                     )
 
                 # Sealed canary MUST NEVER surface in BM25 or LiteralSubstring Tantivy search
                 for mode in ("Bm25", "LiteralSubstring"):
-                    rc_s, s_rep = migrate_to_membus.run_cli(
-                        [
-                            "--namespace",
-                            "crw_live_mirror",
-                            "--endpoint",
-                            daemon.base_url,
-                            "--search",
-                            "zxqsealedcanary9917",
-                            "--search-mode",
-                            mode,
-                        ]
+                    s_rep = mirror.search(
+                        backend,
+                        "zxqsealedcanary9917",
+                        namespace="crw_live_mirror",
+                        mode=mode,
                     )
-                    self.assertEqual(rc_s, 0)
                     self.assertEqual(s_rep["hit_count"], 0, msg=f"sealed leaked in {mode}")
 
 

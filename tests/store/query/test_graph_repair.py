@@ -1,30 +1,55 @@
-"""Unit and CLI tests for scripts/consolidation/repair_graph_health.py."""
+"""Unit and CLI tests for managed-ai-information graph repair and reversible rollback."""
 
 import json
+import os
 import subprocess
 import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-_REPO = Path(__file__).resolve().parents[2]
-for _entry in (str(_REPO), str(_REPO / "src")):
-    if _entry not in sys.path:
-        sys.path.insert(0, _entry)
+_REPO = Path(__file__).resolve().parents[3]
+_SRC = _REPO / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
-from scripts.consolidation.repair_graph_health import (  # noqa: E402
+from managed_ai_information.core.storage import exclusive  # noqa: E402
+from managed_ai_information.store.cli.command_parser import is_readonly_action  # noqa: E402
+from managed_ai_information.store.cli.command_parser import parser as cli_parser  # noqa: E402
+from managed_ai_information.store.query import graph_query  # noqa: E402
+from managed_ai_information.store.query.graph_profile import (  # noqa: E402
+    GRAPH_PROFILE_CONFIG_FORMAT,
+)
+from managed_ai_information.store.query.graph_repair import (  # noqa: E402
     LINK_SPEC_FORMAT,
     REPAIR_PLAN_FORMAT,
     REPAIR_RECEIPT_FORMAT,
-    repair_graph_health,
+    repair_graph,
     rollback_graph_repair,
 )
-
-from managed_ai_information.core.storage import exclusive  # noqa: E402
-from managed_ai_information.store.query import graph_query  # noqa: E402
 from managed_ai_information.store.system import System  # noqa: E402
 
-REPAIR_CLI = _REPO / "scripts/consolidation/repair_graph_health.py"
+
+def _run_cli(store_root: Path, *extra_args: str) -> subprocess.CompletedProcess[str]:
+    env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONPATH"] = str(_SRC)
+    return subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            "-m",
+            "managed_ai_information.store.manage_store",
+            "--root",
+            str(store_root),
+            *extra_args,
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        check=False,
+    )
 
 
 def _seed_store(store_root: Path, *, reindex: bool = True) -> System:
@@ -36,7 +61,7 @@ def _seed_store(store_root: Path, *, reindex: bool = True) -> System:
             {
                 "id": "topic-hub",
                 "kind": "topic",
-                "content": {"summary": "Active research hub."},
+                "content": {"summary": "Active hub."},
                 "relations": [
                     {"relation": "serves", "target": "goal"},
                     {"relation": "revises native navigation from", "target": "topic-hub"},
@@ -73,7 +98,7 @@ def _seed_store(store_root: Path, *, reindex: bool = True) -> System:
         system.put(
             {
                 "id": "claim-unambiguous",
-                "kind": "research-claim",
+                "kind": "claim",
                 "content": {"summary": "Claim citing superseded question."},
                 "relations": [
                     {"relation": "serves", "target": "topic-hub"},
@@ -88,7 +113,7 @@ def _seed_store(store_root: Path, *, reindex: bool = True) -> System:
         system.put(
             {
                 "id": "claim-dedup",
-                "kind": "research-claim",
+                "kind": "claim",
                 "content": {"summary": "Claim citing both old and new question."},
                 "relations": [
                     {"relation": "serves", "target": "topic-hub"},
@@ -130,7 +155,7 @@ def _seed_store(store_root: Path, *, reindex: bool = True) -> System:
         system.put(
             {
                 "id": "claim-ambiguous",
-                "kind": "research-claim",
+                "kind": "claim",
                 "content": {"summary": "Claim citing ambiguous split."},
                 "relations": [
                     {"relation": "serves", "target": "topic-hub"},
@@ -156,7 +181,7 @@ def _seed_store(store_root: Path, *, reindex: bool = True) -> System:
         system.put(
             {
                 "id": "claim-historical",
-                "kind": "research-claim",
+                "kind": "claim",
                 "content": {"summary": "Claim citing historical closed question."},
                 "relations": [
                     {"relation": "serves", "target": "topic-hub"},
@@ -172,18 +197,18 @@ def _seed_store(store_root: Path, *, reindex: bool = True) -> System:
             {
                 "id": "stranded-q",
                 "kind": "question",
-                "content": {"summary": "Stranded question from retired issue."},
+                "content": {"summary": "Stranded question from retired parent."},
                 "relations": [],
                 "basis": [],
                 "active": True,
             },
             0,
         )
-        # Non-question orphan whose parent retired (MUST be spared!).
+        # Non-question orphan whose parent retired (MUST be spared).
         system.put(
             {
                 "id": "orphan-claim",
-                "kind": "research-claim",
+                "kind": "claim",
                 "content": {"summary": "Orphan claim must never be auto-retired."},
                 "relations": [],
                 "basis": [],
@@ -195,7 +220,7 @@ def _seed_store(store_root: Path, *, reindex: bool = True) -> System:
         system.put(
             {
                 "id": "retired-issue",
-                "kind": "research-issue",
+                "kind": "issue",
                 "content": {"summary": "Retired issue."},
                 "relations": [
                     {"relation": "leaves open", "target": "stranded-q"},
@@ -206,7 +231,7 @@ def _seed_store(store_root: Path, *, reindex: bool = True) -> System:
             },
             0,
         )
-        # Zero-edge question with NO retired parent (MUST be spared!).
+        # Zero-edge question with NO retired parent (MUST be spared).
         system.put(
             {
                 "id": "unparented-q",
@@ -218,7 +243,7 @@ def _seed_store(store_root: Path, *, reindex: bool = True) -> System:
             },
             0,
         )
-        # Active 2-node island (MUST be spared from retirement; linkable via --link-file).
+        # Active 2-node island (MUST be spared from retirement; linkable via --link-spec).
         system.put(
             {
                 "id": "island-obs",
@@ -246,7 +271,7 @@ def _seed_store(store_root: Path, *, reindex: bool = True) -> System:
     return system
 
 
-class RepairGraphHealthTests(unittest.TestCase):
+class GraphRepairTests(unittest.TestCase):
     def test_dry_run_zero_mutation_apply_idempotency_and_rollback(self) -> None:
         with TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -275,7 +300,7 @@ class RepairGraphHealthTests(unittest.TestCase):
 
             # 1. Dry-run produces full plan with ZERO mutations and ZERO receipt write.
             before_revs = {r["id"]: r["revision"] for r in system.records()}
-            plan = repair_graph_health(store_root, apply=False, link_file=link_path)
+            plan = repair_graph(system, apply=False, link_spec_path=link_path)
             self.assertEqual(plan["format"], REPAIR_PLAN_FORMAT)
             self.assertTrue(plan["dry_run"])
             self.assertFalse(plan["applied"])
@@ -291,8 +316,12 @@ class RepairGraphHealthTests(unittest.TestCase):
             self.assertEqual(before_revs, after_dry_revs)
 
             # 2. Apply commits atomically under owner.lock, writes receipt, lint=0.
-            applied = repair_graph_health(
-                store_root, apply=True, receipt_path=receipt_path, link_file=link_path
+            applied = repair_graph(
+                system,
+                apply=True,
+                receipt_path=receipt_path,
+                link_spec_path=link_path,
+                lint_fn=graph_query.lint,
             )
             self.assertEqual(applied["format"], REPAIR_RECEIPT_FORMAT)
             self.assertTrue(applied["applied"])
@@ -301,10 +330,8 @@ class RepairGraphHealthTests(unittest.TestCase):
             self.assertTrue(receipt_path.exists())
 
             reloaded = System(store_root)
-            # Self-loop removed, non-self preserved.
             hub = reloaded.record_store.show("topic-hub")
             self.assertEqual(hub["relations"], [{"relation": "serves", "target": "goal"}])
-            # Unambiguous bypass re-pointed; dedup bypass did not duplicate.
             c_unamb = reloaded.record_store.show("claim-unambiguous")
             self.assertEqual(
                 [(r["relation"], r["target"]) for r in c_unamb["relations"]],
@@ -315,43 +342,39 @@ class RepairGraphHealthTests(unittest.TestCase):
                 [(r["relation"], r["target"]) for r in c_dedup["relations"]],
                 [("serves", "topic-hub"), ("bears-on", "new-q")],
             )
-            # Ambiguous & historical bypasses untouched.
             c_ambig = reloaded.record_store.show("claim-ambiguous")
             self.assertIn({"relation": "bears-on", "target": "ambig-old"}, c_ambig["relations"])
             c_hist = reloaded.record_store.show("claim-historical")
             self.assertIn(
                 {"relation": "bears-on", "target": "historical-dead"}, c_hist["relations"]
             )
-            # Stranded retired-parent question soft-retired with ZERO content loss.
             stranded = reloaded.record_store.show("stranded-q")
             self.assertFalse(stranded["active"])
             self.assertEqual(
-                stranded["content"], {"summary": "Stranded question from retired issue."}
+                stranded["content"], {"summary": "Stranded question from retired parent."}
             )
-            # Non-question orphan, unparented question, and active island all spared.
             self.assertTrue(reloaded.record_store.show("orphan-claim")["active"])
             self.assertTrue(reloaded.record_store.show("unparented-q")["active"])
             island_q = reloaded.record_store.show("island-q")
             self.assertTrue(island_q["active"])
             self.assertIn(
-                (
-                    "serves",
-                    "topic-hub",
-                ),
+                ("serves", "topic-hub"),
                 [(r["relation"], r["target"]) for r in island_q["relations"]],
             )
 
             # 3. Idempotency: 2nd run writes 0 records.
-            second = repair_graph_health(store_root, apply=True, link_file=link_path)
+            second = repair_graph(reloaded, apply=True, link_spec_path=link_path)
             self.assertFalse(second["applied"])
             self.assertEqual(second["written_count"], 0)
             self.assertEqual(second["explicit_links_already_present"], 1)
 
             # 4. Rollback preview (dry-run) + apply restores original state cleanly.
-            rb_plan = rollback_graph_repair(store_root, receipt_path, apply=False)
+            rb_plan = rollback_graph_repair(reloaded, receipt_path, apply=False)
             self.assertTrue(rb_plan["dry_run"])
             self.assertEqual(len(rb_plan["rollback_ids"]), 5)
-            rb_applied = rollback_graph_repair(store_root, receipt_path, apply=True)
+            rb_applied = rollback_graph_repair(
+                reloaded, receipt_path, apply=True, lint_fn=graph_query.lint
+            )
             self.assertTrue(rb_applied["applied"])
             self.assertEqual(rb_applied["written_count"], 5)
             self.assertEqual(rb_applied["lint_anomalies"], 0)
@@ -371,13 +394,119 @@ class RepairGraphHealthTests(unittest.TestCase):
             )
             # Re-running rollback on already-rolled-back heads fails closed cleanly.
             with self.assertRaisesRegex(ValueError, "cannot rollback"):
-                rollback_graph_repair(store_root, receipt_path, apply=False)
+                rollback_graph_repair(restored, receipt_path, apply=False)
 
-    def test_validation_guards_and_cli_help(self) -> None:
+    def test_profile_config_and_strict_json_bool_rejection(self) -> None:
         with TemporaryDirectory() as tmp:
             base = Path(tmp)
             store_root = base / "store"
-            _seed_store(store_root)
+            system = _seed_store(store_root)
+
+            # Custom profile config exempts 'bears-on' from bypass repointing.
+            cfg_path = base / "profile.json"
+            cfg_path.write_text(
+                json.dumps(
+                    {
+                        "format": GRAPH_PROFILE_CONFIG_FORMAT,
+                        "root_kinds": ["goal"],
+                        "bypass_exempt_predicates": [
+                            "supersedes",
+                            "superseded-by",
+                            "consolidated-into",
+                            "bears-on",
+                        ],
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            plan = repair_graph(system, apply=False, profile_config_path=cfg_path)
+            self.assertEqual(plan["bypasses_repointed"], 0)
+            self.assertEqual(plan["self_loops_removed"], 1)
+            self.assertEqual(plan["stranded_questions_retired"], 1)
+            self.assertEqual(plan["profile_config"], str(cfg_path))
+
+            # Strict JSON bool rejection on link spec fields.
+            bool_link = base / "bool_link.json"
+            bool_link.write_text(
+                json.dumps(
+                    {
+                        "format": LINK_SPEC_FORMAT,
+                        "links": [{"from": True, "relation": "serves", "target": "topic-hub"}],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "nonempty string"):
+                repair_graph(system, apply=False, link_spec_path=bool_link)
+
+            # Strict JSON bool rejection on rollback receipt after_revision & active flags.
+            bad_receipt = base / "bool_receipt.json"
+            bad_receipt.write_text(
+                json.dumps(
+                    {
+                        "format": REPAIR_RECEIPT_FORMAT,
+                        "instance_id": system.instance_id,
+                        "batch_id": "bad-batch",
+                        "records": [
+                            {
+                                "id": "topic-hub",
+                                "after_revision": True,
+                                "after_sha256": "0" * 64,
+                                "previous_active": True,
+                                "new_active": True,
+                                "added_relations": [],
+                                "removed_relations": [],
+                            }
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "integer"):
+                rollback_graph_repair(system, bad_receipt, apply=False)
+
+            bad_active = base / "bad_active_receipt.json"
+            bad_active.write_text(
+                json.dumps(
+                    {
+                        "format": REPAIR_RECEIPT_FORMAT,
+                        "instance_id": system.instance_id,
+                        "batch_id": "bad-batch-2",
+                        "records": [
+                            {
+                                "id": "topic-hub",
+                                "after_revision": 1,
+                                "after_sha256": "0" * 64,
+                                "previous_active": "false",
+                                "new_active": True,
+                                "added_relations": [],
+                                "removed_relations": [],
+                            }
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "boolean"):
+                rollback_graph_repair(system, bad_active, apply=False)
+
+    def test_validation_guards_and_native_cli_roundtrip(self) -> None:
+        with TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            store_root = base / "store"
+            system = _seed_store(store_root)
+
+            # Verify parser readonly classification for lock admission.
+            p = cli_parser()
+            dry_ns = p.parse_args(["--root", str(store_root), "graph", "repair"])
+            apply_ns = p.parse_args(["--root", str(store_root), "graph", "repair", "--apply"])
+            self.assertTrue(is_readonly_action(dry_ns))
+            self.assertFalse(is_readonly_action(apply_ns))
 
             # Reject self-loop in link spec.
             bad_link = base / "bad_link.json"
@@ -394,7 +523,7 @@ class RepairGraphHealthTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "self-loop"):
-                repair_graph_health(store_root, apply=False, link_file=bad_link)
+                repair_graph(system, apply=False, link_spec_path=bad_link)
 
             # Reject inactive target in link spec.
             inactive_link = base / "inactive_link.json"
@@ -409,94 +538,115 @@ class RepairGraphHealthTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "active"):
-                repair_graph_health(store_root, apply=False, link_file=inactive_link)
+                repair_graph(system, apply=False, link_spec_path=inactive_link)
 
             # Reject directory masquerading as receipt output path BEFORE mutating store.
             before_revs = {r["id"]: r["revision"] for r in System(store_root).records()}
             dir_receipt = base / "not_a_file.json"
             dir_receipt.mkdir()
             with self.assertRaisesRegex(ValueError, "ordinary"):
-                repair_graph_health(store_root, apply=True, receipt_path=dir_receipt)
+                repair_graph(system, apply=True, receipt_path=dir_receipt)
             after_revs = {r["id"]: r["revision"] for r in System(store_root).records()}
             self.assertEqual(before_revs, after_revs)
 
             # Unindexed fallback produces identical repair plan.
             unindexed_root = base / "unindexed_store"
-            _seed_store(unindexed_root, reindex=False)
-            unindexed_plan = repair_graph_health(unindexed_root, apply=False)
+            unindexed_sys = _seed_store(unindexed_root, reindex=False)
+            unindexed_plan = repair_graph(unindexed_sys, apply=False)
             self.assertFalse(unindexed_plan["indexed"])
             self.assertEqual(unindexed_plan["self_loops_removed"], 1)
             self.assertEqual(unindexed_plan["bypasses_repointed"], 2)
             self.assertEqual(unindexed_plan["stranded_questions_retired"], 1)
 
             # CLI --help exits 0 on stdout; dry-run CLI prints valid JSON.
-            help_proc = subprocess.run(
-                [sys.executable, "-B", str(REPAIR_CLI), "--help"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                check=False,
-            )
-            self.assertEqual(help_proc.returncode, 0)
-            self.assertIn("repair_graph_health.py", help_proc.stdout)
+            help_proc = _run_cli(store_root, "graph", "repair", "--help")
+            self.assertEqual(help_proc.returncode, 0, help_proc.stderr)
+            self.assertIn("--profile-config", help_proc.stdout)
+            self.assertIn("--link-spec", help_proc.stdout)
 
-            dry_proc = subprocess.run(
-                [sys.executable, "-B", str(REPAIR_CLI), "--store", str(store_root)],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                check=False,
-            )
+            dry_proc = _run_cli(store_root, "graph", "repair")
             self.assertEqual(dry_proc.returncode, 0, dry_proc.stderr)
             parsed = json.loads(dry_proc.stdout)
             self.assertTrue(parsed["dry_run"])
             self.assertEqual(parsed["format"], REPAIR_PLAN_FORMAT)
 
-            # C69B-O1/O2: structured JSON stderr + exit 2 on invalid flags/errors.
-            bad_combo = subprocess.run(
-                [
-                    sys.executable,
-                    "-B",
-                    str(REPAIR_CLI),
-                    "--store",
-                    str(store_root),
-                    "--rollback",
-                    str(base / "missing.json"),
-                    "--link-file",
-                    str(bad_link),
-                ],
-                capture_output=True,
-                text=True,
+            # CLI --apply + --receipt + --link-spec commits cleanly without lock deadlock.
+            link_path = base / "cli_links.json"
+            link_path.write_text(
+                json.dumps(
+                    {
+                        "format": LINK_SPEC_FORMAT,
+                        "links": [
+                            {"from": "island-q", "relation": "serves", "target": "topic-hub"}
+                        ],
+                    }
+                )
+                + "\n",
                 encoding="utf-8",
-                check=False,
+            )
+            cli_receipt = base / "cli_receipt.json"
+            apply_proc = _run_cli(
+                store_root,
+                "graph",
+                "repair",
+                "--apply",
+                "--receipt",
+                str(cli_receipt),
+                "--link-spec",
+                str(link_path),
+            )
+            self.assertEqual(apply_proc.returncode, 0, apply_proc.stderr)
+            apply_doc = json.loads(apply_proc.stdout)
+            self.assertTrue(apply_doc["applied"])
+            self.assertEqual(apply_doc["written_count"], 5)
+            self.assertEqual(apply_doc["lint_anomalies"], 0)
+            self.assertTrue(cli_receipt.is_file())
+
+            # CLI --rollback --apply restores original state cleanly.
+            rb_proc = _run_cli(
+                store_root,
+                "graph",
+                "repair",
+                "--rollback",
+                str(cli_receipt),
+                "--apply",
+            )
+            self.assertEqual(rb_proc.returncode, 0, rb_proc.stderr)
+            rb_doc = json.loads(rb_proc.stdout)
+            self.assertTrue(rb_doc["applied"])
+            self.assertEqual(rb_doc["written_count"], 5)
+            self.assertEqual(rb_doc["lint_anomalies"], 0)
+
+            # Invalid flag combination exits 2 with structured JSON error on stderr.
+            bad_combo = _run_cli(
+                store_root,
+                "graph",
+                "repair",
+                "--rollback",
+                str(base / "missing.json"),
+                "--link-spec",
+                str(bad_link),
             )
             self.assertEqual(bad_combo.returncode, 2)
             err_doc = json.loads(bad_combo.stderr)
-            self.assertFalse(err_doc["ok"])
+            self.assertEqual(err_doc["status"], "unresolved")
             self.assertIn("--rollback", err_doc["error"])
 
-            abbrev_proc = subprocess.run(
-                [sys.executable, "-B", str(REPAIR_CLI), "--sto", str(store_root)],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                check=False,
-            )
+            # Abbreviated flags rejected (allow_abbrev=False).
+            abbrev_proc = _run_cli(store_root, "graph", "repair", "--app")
             self.assertEqual(abbrev_proc.returncode, 2)
 
-    def test_w17_retired_prefix_questions_and_hub_edge_delegation(self) -> None:
+    def test_retired_prefix_questions_and_hub_edge_delegation(self) -> None:
         with TemporaryDirectory() as tmp:
             base = Path(tmp)
             store_root = base / "store"
-            System.initialize(store_root, {"contribution": "Test Wave 17 opt-in repairs."})
+            System.initialize(store_root, {"contribution": "Test opt-in repairs."})
             system = System(store_root)
             with exclusive(system.ex.root / "owner.lock"):
-                # Hub -> topic-map -> leaf-covered, plus direct hub -> leaf-covered (redundant)
-                # and hub -> leaf-uncovered (must stay!).
                 system.put(
                     {
                         "id": "leaf-covered",
-                        "kind": "research-claim",
+                        "kind": "claim",
                         "content": {"summary": "Covered by topic-map."},
                         "relations": [],
                         "basis": [],
@@ -507,7 +657,7 @@ class RepairGraphHealthTests(unittest.TestCase):
                 system.put(
                     {
                         "id": "leaf-uncovered",
-                        "kind": "research-claim",
+                        "kind": "claim",
                         "content": {"summary": "Only tracked by hub."},
                         "relations": [],
                         "basis": [],
@@ -518,7 +668,7 @@ class RepairGraphHealthTests(unittest.TestCase):
                 system.put(
                     {
                         "id": "map-1",
-                        "kind": "research-topic-map",
+                        "kind": "topic-map",
                         "content": {"summary": "Active topic map."},
                         "relations": [{"relation": "maps-to", "target": "leaf-covered"}],
                         "basis": [],
@@ -542,11 +692,11 @@ class RepairGraphHealthTests(unittest.TestCase):
                     },
                     0,
                 )
-                # Retired study issue + 1 open_conditional stub (retire) + 1 open stub (spare!).
+                # Retired parent + 1 open_conditional stub (retire) + 1 open stub (spare).
                 system.put(
                     {
-                        "id": "g60-named-demo-study-20261121-deadbeef",
-                        "kind": "research-issue",
+                        "id": "study-demo-20261121-deadbeef",
+                        "kind": "issue",
                         "content": {"summary": "Retired named study."},
                         "relations": [],
                         "basis": [],
@@ -556,7 +706,7 @@ class RepairGraphHealthTests(unittest.TestCase):
                 )
                 system.put(
                     {
-                        "id": "g60-named-demo-study-20261121-question-2-aaaa",
+                        "id": "study-demo-20261121-question-2-aaaa",
                         "kind": "question",
                         "content": {
                             "selection": "open_conditional",
@@ -570,7 +720,7 @@ class RepairGraphHealthTests(unittest.TestCase):
                 )
                 system.put(
                     {
-                        "id": "g60-named-demo-study-20261121-question-1-bbbb",
+                        "id": "study-demo-20261121-question-1-bbbb",
                         "kind": "question",
                         "content": {"selection": "open", "summary": "Explicitly open question."},
                         "relations": [],
@@ -581,18 +731,17 @@ class RepairGraphHealthTests(unittest.TestCase):
                 )
                 system.reindex()
 
-            # Default run (opt-ins False) touches 0 records.
-            default_plan = repair_graph_health(store_root, apply=False)
+            default_plan = repair_graph(system, apply=False)
             self.assertEqual(default_plan["records_to_patch"], 0)
 
-            # Opt-in flags retire ONLY open_conditional stub and delegate ONLY covered hub edge.
-            receipt_path = base / "w17-receipt.json"
-            applied = repair_graph_health(
-                store_root,
+            receipt_path = base / "optin-receipt.json"
+            applied = repair_graph(
+                system,
                 apply=True,
                 receipt_path=receipt_path,
                 retire_retired_prefix_questions=True,
                 delegate_redundant_hub_edges=True,
+                lint_fn=graph_query.lint,
             )
             self.assertEqual(applied["retired_prefix_questions_retired"], 1)
             self.assertEqual(applied["hub_edges_delegated"], 1)
@@ -600,14 +749,10 @@ class RepairGraphHealthTests(unittest.TestCase):
 
             reloaded = System(store_root)
             self.assertFalse(
-                reloaded.record_store.show("g60-named-demo-study-20261121-question-2-aaaa")[
-                    "active"
-                ]
+                reloaded.record_store.show("study-demo-20261121-question-2-aaaa")["active"]
             )
             self.assertTrue(
-                reloaded.record_store.show("g60-named-demo-study-20261121-question-1-bbbb")[
-                    "active"
-                ]
+                reloaded.record_store.show("study-demo-20261121-question-1-bbbb")["active"]
             )
             hub_rels = {
                 (r["relation"], r["target"])
@@ -617,14 +762,11 @@ class RepairGraphHealthTests(unittest.TestCase):
             self.assertIn(("tracks-claim", "leaf-uncovered"), hub_rels)
             self.assertIn(("tracks-topic-map", "map-1"), hub_rels)
 
-            # Rollback restores both cleanly.
-            rb = rollback_graph_repair(store_root, receipt_path, apply=True)
+            rb = rollback_graph_repair(reloaded, receipt_path, apply=True, lint_fn=graph_query.lint)
             self.assertEqual(rb["written_count"], 2)
             restored = System(store_root)
             self.assertTrue(
-                restored.record_store.show("g60-named-demo-study-20261121-question-2-aaaa")[
-                    "active"
-                ]
+                restored.record_store.show("study-demo-20261121-question-2-aaaa")["active"]
             )
             self.assertIn(
                 ("tracks-claim", "leaf-covered"),
