@@ -104,29 +104,48 @@ def run_worker_bounded(
         daemon=True,
     )
 
-    feeder.start()
-    out_reader.start()
-    err_reader.start()
-
+    started: list[threading.Thread] = []
     timed_out = False
     timeout_error: str | None = None
 
     try:
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        timed_out = True
-        timeout_error = str(exc)
-        with contextlib.suppress(OSError):
-            proc.kill()
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            proc.wait(timeout=5.0)
+        for thread in (feeder, out_reader, err_reader):
+            thread.start()
+            started.append(thread)
 
-    join_wait = 0.5 if timed_out else max(1.0, min(float(timeout), 5.0))
-    deadline = time.monotonic() + join_wait
-    for reader in (out_reader, err_reader):
-        remaining = max(0.0, deadline - time.monotonic())
-        reader.join(timeout=remaining)
-    feeder.join(timeout=0.5)
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            timed_out = True
+            timeout_error = str(exc)
+            with contextlib.suppress(OSError):
+                proc.kill()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=5.0)
+
+        join_wait = 0.5 if timed_out else max(1.0, min(float(timeout), 5.0))
+        deadline = time.monotonic() + join_wait
+        for reader in (out_reader, err_reader):
+            remaining = max(0.0, deadline - time.monotonic())
+            reader.join(timeout=remaining)
+        feeder.join(timeout=0.5)
+    finally:
+        if proc.poll() is None:
+            with contextlib.suppress(OSError):
+                proc.kill()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=2.0)
+        for thread in started:
+            if thread.is_alive():
+                thread.join(timeout=0.25)
+        for stream, owner in (
+            (proc.stdin, feeder),
+            (proc.stdout, out_reader),
+            (proc.stderr, err_reader),
+        ):
+            if stream is not None and not stream.closed and not owner.is_alive():
+                with contextlib.suppress(OSError):
+                    stream.close()
 
     return WorkerRunResult(
         returncode=None if timed_out else proc.returncode,

@@ -7,11 +7,14 @@ or follow-up command execution is provided. See docs/engine/core/README.md for t
 """
 
 import argparse
+import atexit
 import base64
+import contextlib
 import json
 import os
 import subprocess
 import sys
+import threading
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -43,6 +46,69 @@ from managed_ai_information.core.storage import (
 from managed_ai_information.platform import check_unfollowed_ancestors, detached_subprocess_kwargs
 
 native_owner = NativeLayout.owner_of
+
+_DETACHED_WORKERS_LOCK = threading.Lock()
+_DETACHED_WORKERS: list[subprocess.Popen[Any]] = []
+_DETACHED_SHUTDOWN = False
+_MAX_DETACHED_WORKERS = 64
+
+
+def _detach_popen(proc: subprocess.Popen[Any]) -> None:
+    """Release local Popen ownership for an intentionally detached background worker."""
+    proc._child_created = False  # noqa: SLF001
+    handle = getattr(proc, "_handle", None)
+    if handle is not None:
+        with contextlib.suppress(OSError):
+            handle.Close()
+
+
+def _reap_detached_workers_locked(*, detach_remaining: bool = False) -> None:
+    still_running: list[subprocess.Popen[Any]] = []
+    for proc in _DETACHED_WORKERS:
+        try:
+            running = proc.poll() is None
+        except OSError:
+            running = False
+        if running:
+            if detach_remaining:
+                _detach_popen(proc)
+            else:
+                still_running.append(proc)
+    while len(still_running) > _MAX_DETACHED_WORKERS:
+        _detach_popen(still_running.pop(0))
+    _DETACHED_WORKERS[:] = still_running
+
+
+def _shutdown_detached_workers() -> None:
+    global _DETACHED_SHUTDOWN
+    with _DETACHED_WORKERS_LOCK:
+        _DETACHED_SHUTDOWN = True
+        _reap_detached_workers_locked(detach_remaining=True)
+
+
+def _register_detached_worker(proc: subprocess.Popen[Any]) -> None:
+    """Track an intentionally detached worker so exited children are reaped without warnings."""
+    if sys.platform == "win32":
+        # Windows detached processes do not leave POSIX zombies; close the local
+        # process handle immediately so long-lived hosts never retain handles.
+        _detach_popen(proc)
+        return
+    with _DETACHED_WORKERS_LOCK:
+        _reap_detached_workers_locked(detach_remaining=False)
+        if _DETACHED_SHUTDOWN:
+            _detach_popen(proc)
+            return
+        try:
+            still_running = proc.poll() is None
+        except OSError:
+            still_running = False
+        if still_running:
+            _DETACHED_WORKERS.append(proc)
+            if len(_DETACHED_WORKERS) > _MAX_DETACHED_WORKERS:
+                _detach_popen(_DETACHED_WORKERS.pop(0))
+
+
+atexit.register(_shutdown_detached_workers)
 
 
 def name(value: str, label: str) -> str:
@@ -253,6 +319,7 @@ class Collector:
                         env=worker_env,
                         **detached_subprocess_kwargs(),
                     )
+                _register_detached_worker(process)
                 reports.append(
                     {
                         "job_id": request["job_id"],
