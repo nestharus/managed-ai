@@ -55,7 +55,7 @@ _MAX_DETACHED_WORKERS = 64
 
 def _detach_popen(proc: subprocess.Popen[Any]) -> None:
     """Release local Popen ownership for an intentionally detached background worker."""
-    proc._child_created = False  # noqa: SLF001
+    proc._child_created = False
     handle = getattr(proc, "_handle", None)
     if handle is not None:
         with contextlib.suppress(OSError):
@@ -88,7 +88,7 @@ def _shutdown_detached_workers() -> None:
 
 def _register_detached_worker(proc: subprocess.Popen[Any]) -> None:
     """Track an intentionally detached worker so exited children are reaped without warnings."""
-    if sys.platform == "win32":
+    if getattr(proc, "_handle", None) is not None:
         # Windows detached processes do not leave POSIX zombies; close the local
         # process handle immediately so long-lived hosts never retain handles.
         _detach_popen(proc)
